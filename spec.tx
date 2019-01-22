@@ -1,0 +1,30 @@
+title { `Specification of BigWebThing` }
+author { `True Ghiassi` }
+body {
+`BigWebThing is a personal data and communication manager. All the user's data is kept in a single database. It is a plain-text file with admin data, and a bunch of files that it refers to.`
+header 1 num langSpec { `Language specification` }
+header 2 { `Types` }
+`Types can be passed to and returned from functions in the same ways that values are. Types can be refined by combining them with a boolean condition. The types are checked before the program is run, and it will not run if the typechecker fails.`
+header 2 { `All data is immutable` }
+header 2 { `Python-like syntax` }
+header 2 { `Separation of pure and impure code` }
+`There are two different ways of defining functions, one for those that do IO and another for doing pure computations. It is not possible to call IO functions from inside pure functions.`
+header 2 { `A very clean namespace` }
+list {
+{ `There can be many namespaces within a file.` }
+{ `There are few restrictions on the characters allowed in names.` }
+{ `There is a very small standard library.` }
+}
+header 1 num langInt { `Language interpreter` }
+`It takes a BWT program and builds a document from it.`
+header 1 num publicMsg { `Public messages` }
+`Upload a message to a public HTTP server.`
+header 1 num secretMsg { `Secret messages` }
+`Send a secret message to another member.`
+header 2 num invite { `(Un)invite` }
+`Invite someone to be a member, or revoke an existing invitation.`
+header 2 num search { `Search` }
+`Ask someone else for information on a topic. This is done by sending some tags and a search string as JSON to the all the known contacts. These respond with what they know.`
+header 1 num editData { `Edit personal data` }
+`Everyone keeps their own data, and can edit it as they wish.`
+}
