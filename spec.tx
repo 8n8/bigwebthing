@@ -1,10 +1,25 @@
 title { `Specification of BigWebThing` }
 author { `True Ghiassi` }
 body {
-`BigWebThing is a personal data and communication manager. All the user's data is kept in a single database. It is a plain-text file with admin data, and a bunch of files that it refers to.`
+`BigWebThing is a programming language, interpreter and tooling for creating and sharing programmable documents.`
 header 1 num langSpec { `Language specification` }
 header 2 { `Types` }
-`Types can be passed to and returned from functions in the same ways that values are. Types can be refined by combining them with a boolean condition. The types are checked before the program is run, and it will not run if the typechecker fails.`
+`The interpreter checks the types for consistency before trying to run the program. The built-in types are:`
+list {
+{ `Signed and unsigned integers in these sizes: 8, 16, 32, 64, 128.` }
+{ `Floating point numbers in sizes 32 and 64.` }
+{ `Unicode characters.` }
+{ `Unicode strings.` }
+{ `Tuple. Its length and the order of the elements are part of the type. The elements can be any mixture of types.` }
+{ `Array. All the elements are the same type, and the length is part of the type and is fixed.` }
+{ `Vector. Like an array, but can be of a variable length.` }
+{ `Map. For key-value data. All the keys are one type and all the values are one type.` }
+{ `Type. The type of a type. A type is a set of values, i.e. a set of things that are not types.` }
+{ `Function. Its type is a list of input types and an output type.` }
+{ `Set. An unordered collection of values of a particular type.` }
+{ `Atom. Any unused bit of the namespace, like "Red" (without quotes) or "tt" etc. Atoms can also include other types, like "Red 2" or "age 24 9.66".` }
+}
+`A custom type can be created by assigning a name to a set of values. A simple example is that a 'Bool' type could be defined as the set of the atoms 'True' and 'False'.`
 header 2 { `All data is immutable` }
 header 2 { `Python-like syntax` }
 header 2 { `Separation of pure and impure code` }
