@@ -1,0 +1,19 @@
+namespace a exporting (hello, world) {
+hello str = "hello"
+world str = "world"
+}
+
+namespace b {
+import a
+print(a.hello + a.world)
+}
+
+namespace b {
+import a as c
+print(c.hello + c.world)
+}
+
+namespace c {
+import a (hello, world)
+print(hello + world)
+}

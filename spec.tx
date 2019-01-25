@@ -2,9 +2,11 @@ title { `Specification of BigWebThing` }
 author { `True Ghiassi` }
 body {
 `BigWebThing is a programming language, interpreter and tooling for creating and sharing programmable documents.`
-header 1 num langSpec { `Language specification` }
-header 2 { `Types` }
-`The interpreter checks the types for consistency before trying to run the program. The built-in types are:`
+tableofcontents
+header 1 langSpec { `Language specification` }
+header 2 types { `Types` }
+`The interpreter checks the types for consistency before trying to run the program. A type is a set of values so, for example, 'i32' is the set of 32-bit integers.`
+header 3 basicTypes { `Basic types` }
 list {
 { `Signed and unsigned integers in these sizes: 8, 16, 32, 64, 128.` }
 { `Floating point numbers in sizes 32 and 64.` }
@@ -14,32 +16,78 @@ list {
 { `Array. All the elements are the same type, and the length is part of the type and is fixed.` }
 { `Vector. Like an array, but can be of a variable length.` }
 { `Map. For key-value data. All the keys are one type and all the values are one type.` }
-{ `Type. The type of a type. A type is a set of values, i.e. a set of things that are not types.` }
+{ `Type. The type of a type. A type is a set of values.` }
 { `Function. Its type is a list of input types and an output type.` }
 { `Set. An unordered collection of values of a particular type.` }
+{ `Mutable variables and queues. These are used for communicating between threads safely.` }
 { `Atom. Any unused bit of the namespace, like "Red" (without quotes) or "tt" etc. Atoms can also include other types, like "Red 2" or "age 24 9.66".` }
 }
-`A custom type can be created by assigning a name to a set of values. A simple example is that a 'Bool' type could be defined as the set of the atoms 'True' and 'False'.`
-header 2 { `All data is immutable` }
-header 2 { `Python-like syntax` }
-header 2 { `Separation of pure and impure code` }
-`There are two different ways of defining functions, one for those that do IO and another for doing pure computations. It is not possible to call IO functions from inside pure functions.`
-header 2 { `A very clean namespace` }
+header 3 customTypes { `Custom types` }
+`A custom type can be created by assigning a name to a set of values. A simple example is that a 'Bool' type could be defined as the set of the atoms 'True' and 'False'. Another example is a type that contains only the three integers 1, 2 and 3:`
+code `syntax/customType`
+`Custom types can mix basic types, as in this mix of atoms, integers and strings:`
+code `syntax/mixedCustomType`
+header 3 interfaces { `Interfaces` }
+
+`Generic functions can be created by using interfaces. An interface is a named set of function signatures. The interface name can then be used instead of a type, to makes types more general. So an interface name instead of a type means "Any type that has these functions implemented for it."`
+p
+`An interface has a name and a set of function signatures. Here is an example:`
+code `syntax/interface`
+`So the interface "smallPower" can be used as a type, and means 'all types that have functions "squared" and "cubed"', which in this case are f64 and i32. So the 'cubedSquared' function will work with both i32 and f64. Note that the variable 'a' in the interface declaration represents any type.`
+header 2 pureFunction { `Functions` }
+`There are three types of functions:`
 list {
-{ `There can be many namespaces within a file.` }
-{ `There are few restrictions on the characters allowed in names.` }
-{ `There is a very small standard library.` }
+{ `Pure, referentially transparent functions, i.e. functions that can be replaced by their output value without affecting the program.` }
+{ `Functions for changing mutable variables and queues in a thread-safe way.` }
+{ `Functions for doing IO, for example reading from a file.` }
 }
-header 1 num langInt { `Language interpreter` }
-`It takes a BWT program and builds a document from it.`
-header 1 num publicMsg { `Public messages` }
+`This is a pure function called 'f' that squares a 32-bit integer integer:`
+code `syntax/pureFunction`
+`This is an IO function called 'g' that prints a string:`
+code `syntax/ioFunction`
+`This is a mutation function called 'h' that alters a mutable variable, multiplying it by six:`
+code `syntax/mutationFunction`
+`Rules:`
+bullets {
+{ `IO functions can only be used inside other IO functions.` }
+{ `Mutation functions can be used inside IO functions and inside other mutation functions, but not in pure functions.` }
+{ `Pure functions can be used anywhere` }
+}
+header 2 variables { `Variables` }
+`Create a variable called 'x', with type string and value "hello":`
+code `syntax/variable`
+`The variable type can often be omitted and the interpreter will try to deduce it from the context.`
+header 2 loops { `Loops` }
+`There are no loops because data is immutable. The alternatives are fold, map or recursion.`
+header 2 namespaces { `Namespaces` }
+`A namespace is a piece of code that excludes all names defined outside it, unless they are explicitly imported. It also prevents its names being accessible from outside, unless they are explicitly exported. There is no limit to the number namespaces in a file, and they can be nested inside each other. The syntax is like this:`
+code `syntax/namespace`
+header 2 structs { `Structs` }
+`A struct is a type that contains named fields. The syntax is as follows:`
+code `syntax/struct`
+`This code declares a struct called ` t `person` `, initiates a ` t `person` ` variable called ` t `p` `, and sets another variable ` t `n` ` to the value of the ` t `name` ` field of ` t `p` `.`
+header 2 queuesVars { `Queues and mutable variables` }
+`An example illustrates the syntax:`
+code `syntax/queues`
+`Evaluating function 'main' will result in '24' being printed. Queues are similar to mutable variables, except that they can take many values, with the first value put in to a queue being the last value to be taken out.`
+header 2 separateIO { `Separation of pure and impure code` }
+`There are two different ways of defining functions, one for those that do IO and another for doing pure computations. It is not possible to call IO functions from inside pure functions.`
+header 2 concurrency { `Concurrency` }
+`It is possible to run an IO function concurrently by prefixing it with the word 'go', like ` t `go nameOfFunction(arg)` `. The result of the function is ignored. Concurrent functions can communicate with each other with thread-safe queues and mutable variables.`
+header 1 guilib { `GUI library` }
+`The main purpose of the language is for creating programs with GUIs, so there is a built-in GUI library. The GUI is made up of elements that are positioned in a Cartesian plane. These elements are collected together in a list, with elements nearer the front being on top of elements nearer the end. The function for constructing the GUI has this type signature: ` code `syntax/viewSig` `It takes in the list of elements and generates the GUI. It also takes a queue to put the messages in when events such as mouse clicks on buttons happen.`
+p
+`Elements that can generate input, like buttons, are given functions for constructing messages. These messages, when generated by clicks etc, are put into a `
+header 1 langInt { `Language interpreter` }
+`It takes a program and builds a document from it. The program is a human-readable plain-text file.`
+header 1 publicMsg { `Public messages` }
 `Upload a message to a public HTTP server.`
-header 1 num secretMsg { `Secret messages` }
+header 1 secretMsg { `Secret messages` }
 `Send a secret message to another member.`
-header 2 num invite { `(Un)invite` }
+header 2 invite { `(Un)invite` }
 `Invite someone to be a member, or revoke an existing invitation.`
-header 2 num search { `Search` }
+header 2 search { `Search` }
 `Ask someone else for information on a topic. This is done by sending some tags and a search string as JSON to the all the known contacts. These respond with what they know.`
-header 1 num editData { `Edit personal data` }
+header 1 editData { `Edit personal data` }
 `Everyone keeps their own data, and can edit it as they wish.`
 }

@@ -1,0 +1,18 @@
+interface smallPower a:
+    def squared(a) -> a
+    def cubed(a) -> a
+
+def squared(x i32) -> i32:
+    return x*x
+
+def cubed(x i32) -> i32:
+    return x*x*x
+
+def squared(x f64) -> f64:
+    return x*x
+
+def cubed(x f64) -> f64:
+    return x*x*x
+
+def cubedSquared(x smallPower) -> smallPower:
+    return cubed(x) * squared(x)

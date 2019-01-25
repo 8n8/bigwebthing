@@ -1,0 +1,2 @@
+dtm timesSix(x mut int):
+    x = x * 6

@@ -1,0 +1,7 @@
+dio main():
+    x mut int = 4
+    timesSix(x)
+    print(x)
+
+dtm timesSix(x mut int):
+    x = x * 6
