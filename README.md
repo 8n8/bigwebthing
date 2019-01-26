@@ -1,11 +1,6 @@
 BigWebThing will be a programming language, interpreter and tooling for creating and sharing programmable documents.
 
-The project is in the early stages.  Here is the current TODO list:
-
-1. CURRENT Write as full a specification as possible.
-2. TODO Research implementation options and write plan for the implementation.
-3. TODO Update the specification if necessary.
-3. TODO Implement.
+The project is in the early stages, the current task being to write an initial specification.
 
 # Installation (Ubuntu Linux 18.04)
 
