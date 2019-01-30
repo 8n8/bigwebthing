@@ -88,6 +88,11 @@ list {
 { `Do a type-check on the internal representation, failing if the types don't match.` }
 { `Run the program.` }
 }
+header 2 internalRep { `Internal representation of program` }
+`The types used for representing the program internally are:`
+code `internalRep`
+`FunctionCall contains the string name of the function and a list of its arguments. The parser creates a map of function name (as string) to Element.` 
+header 2 execution { `Program execution` }
 header 1 tooling { `Tooling` }
 `The main binary includes a text editor with syntax highlighting and Vim and Emacs modes.`
 header 1 publicMsg { `Public messages` }

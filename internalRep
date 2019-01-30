@@ -1,0 +1,11 @@
+data Element
+    = Bind Element Element
+    | ReadFile Element
+    | other basic functions...
+    | Evaluated Value
+    | CustomFunc String [Element]
+
+data Value
+    = I Int
+    | S String
+    | other basic types ...
