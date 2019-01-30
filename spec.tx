@@ -89,10 +89,28 @@ list {
 { `Run the program.` }
 }
 header 2 internalRep { `Internal representation of program` }
-`The types used for representing the program internally are:`
-code `internalRep`
-`FunctionCall contains the string name of the function and a list of its arguments. The parser creates a map of function name (as string) to Element.` 
-header 2 execution { `Program execution` }
+`A name to expression lookup map for storing expressions that have names. An expression can be any one of the following:`
+bullets {
+{ `Any value of the basic built-in types.` }
+{ `Nothing, that is, the return value of a function that does not return anything.` }
+{ `A function. This is a list of the names of the input arguments, and an expression tha uses those names.` }
+{ `A let-in expression. This has two parts: a little namespace binding names to expressions, and an expression that has access to the namespace.` }
+{ `An instruction to look up a named expression in the namespace and evaluate it. This includes a list of expressions to pass as arguments to the looked-up expression.` }
+}
+header 2 evaluation { `Program evaluation` }
+`The program is evaluated by evaluating the 'main' function in the internal representation made by the parser. The evaluation function needs these inputs:`
+list {
+{ `A namespace containing all the necessary named expressions.` }
+{ `The expression to evaluate.` }
+args { `A list of expressions, which when evaluated will provide arguments to the expression.` }
+}
+`The various types of expression are evaluated as follows:`
+bullets {
+{ `A basic built-in type, or nothing, needs no evaluation.` }
+{ `Functions: zip together the argument list (see ` ref args ` above) with the argument name list in the function definition to make a little namespace. Then call the evaluation function recursively, giving it the combination of the old and new namespaces and the function body expression.` }
+{ `A let-in expression comes with its own namespace. This should be added to the main one and the evaluation function called recursively on the expression in the 'in' part.` }
+{ `For a name look-up, it first recursively evaluates the arguments. If the name is a built-in basic function, like '+', it just evaluates the expression directly. Otherwise, it looks up the name in the namespace and recursively calls the evaluate function on it.` }
+}
 header 1 tooling { `Tooling` }
 `The main binary includes a text editor with syntax highlighting and Vim and Emacs modes.`
 header 1 publicMsg { `Public messages` }
