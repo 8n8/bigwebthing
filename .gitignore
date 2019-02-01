@@ -1,2 +1,4 @@
 spec.pdf
 *.swp
+bigwebthing.cabal
+.stack-work/

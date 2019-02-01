@@ -89,13 +89,27 @@ list {
 { `Run the program.` }
 }
 header 2 internalRep { `Internal representation of program` }
-`A name to expression lookup map for storing expressions that have names. An expression can be any one of the following:`
+`A name to expression lookup map for storing expressions that have names. Each named expression is accompanied by its intended type, as specified in the source code. An expression can be any one of the following:`
 bullets {
 { `Any value of the basic built-in types.` }
 { `Nothing, that is, the return value of a function that does not return anything.` }
-{ `A function. This is a list of the names of the input arguments, and an expression tha uses those names.` }
-{ `A let-in expression. This has two parts: a little namespace binding names to expressions, and an expression that has access to the namespace.` }
+{ `A function. This is a list of the names of the input arguments and a name to expression map that uses those names. The expression named 'return' is evaluated first, so it is like the 'main' function of the program as a whole.` }
 { `An instruction to look up a named expression in the namespace and evaluate it. This includes a list of expressions to pass as arguments to the looked-up expression.` }
+}
+header 2 typeCheck { `Type checker` }
+`It loops over the values in the internal representation of the named expressions in the program. For each one, it evaluates the type of the expression and compares it with the type specified in the source code. It raises an error if they do not match.`
+p
+`The function that evaluates the type of an expression needs these inputs:`
+list {
+{ `A namespace containing all the necessary named expressions.` }
+{ `The expression to evaluate.` }
+{ `The type of the expression to evaluate, as specified in the source code.` }
+}
+`The types of the various types of expression are calculated as follows:`
+bullets {
+{ `A basic built-in type will have its type decided by the parser.` }
+{ `Functions. Recursively call the type check function on all the elements in the function's namespace.` }
+{ `A name lookup and evaluation: Evaluate the types of the arguments, then look up the name in the namespace and read off the type, checking that the arguments are the correct types.` }
 }
 header 2 evaluation { `Program evaluation` }
 `The program is evaluated by evaluating the 'main' function in the internal representation made by the parser. The evaluation function needs these inputs:`
@@ -107,8 +121,7 @@ args { `A list of expressions, which when evaluated will provide arguments to th
 `The various types of expression are evaluated as follows:`
 bullets {
 { `A basic built-in type, or nothing, needs no evaluation.` }
-{ `Functions: zip together the argument list (see ` ref args ` above) with the argument name list in the function definition to make a little namespace. Then call the evaluation function recursively, giving it the combination of the old and new namespaces and the function body expression.` }
-{ `A let-in expression comes with its own namespace. This should be added to the main one and the evaluation function called recursively on the expression in the 'in' part.` }
+{ `Functions: zip together the argument list (see ` ref args ` above) with the argument name list in the function definition and the function's own namespace. Then call the evaluation function recursively on the "return" expression in the namespace.` }
 { `For a name look-up, it first recursively evaluates the arguments. If the name is a built-in basic function, like '+', it just evaluates the expression directly. Otherwise, it looks up the name in the namespace and recursively calls the evaluate function on it.` }
 }
 header 1 tooling { `Tooling` }
