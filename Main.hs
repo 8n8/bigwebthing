@@ -36,9 +36,7 @@ data Expression where
     Evaluate :: T.Text -> [Expression] -> Expression
 
 parseFloat :: Parser Expression
-parseFloat = do
-    num <- parseDigits <|> parseLongFloat
-    return $ F $ read num
+parseFloat = F . read <$> (parseDigits <|> parseLongFloat)
 
 parseLongFloat :: Parser String
 parseLongFloat = try $ do
@@ -47,9 +45,7 @@ parseLongFloat = try $ do
     return $ beforePoint ++ '.':afterPoint
 
 parseDecimal :: Parser String
-parseDecimal = do
-    _ <- char '.'
-    parseDigits
+parseDecimal = char '.' >> parseDigits
 
 parseInt :: Parser Expression
 parseInt = fmap (I . read) parseDigits
