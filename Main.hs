@@ -35,6 +35,16 @@ data Expression where
     Function :: [T.Text] -> Namespace -> Expression
     Evaluate :: T.Text -> [Expression] -> Expression
 
+parseOrdinaryString :: Parser Expression
+parseOrdinaryString = do
+    _ <- char '"'
+    pos <- unPos . sourceColumn <$> getSourcePos
+    str <- some $ noneOf "\"\\" 
+    let end = void (char '"') >> return str
+    <|> 
+    
+     
+
 parseFloat :: Parser Expression
 parseFloat = F . read <$> (parseDigits <|> parseLongFloat)
 
@@ -54,7 +64,7 @@ parseDigits :: Parser String
 parseDigits = do
     int <- try $ some digitChar
     parseOneWhiteSpace
-    return int 
+    return int
 
 parseOneWhiteSpace :: Parser ()
 parseOneWhiteSpace = void (try $ char ' ') <|> void (try newline)
@@ -62,4 +72,3 @@ parseOneWhiteSpace = void (try $ char ' ') <|> void (try newline)
 main :: IO ()
 main = do
   putStrLn "hello world"
-
