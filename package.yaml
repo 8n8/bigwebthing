@@ -1,0 +1,19 @@
+name: bigwebthing
+version: 0.0.0
+synopsis: A programming language and interpreter for creating programmable documents.
+maintainer: True Ghiassi <true@ghiassitrio.co.uk>
+license: MIT
+
+ghc-options: -Wall -O2
+
+dependencies:
+  - base >= 4.7 && < 5
+  - containers
+  - megaparsec
+  - stm
+  - text
+
+executables:
+  bigwebthing:
+    main: Main.hs
+    source-dirs: . 
