@@ -1,0 +1,2 @@
+dio elephant(a int) -> int:
+    return 33

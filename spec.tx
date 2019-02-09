@@ -15,8 +15,7 @@ list {
 { `Tuple. Its length and the order of the elements are part of the type. The elements can be any mixture of types.` }
 { `List. All the elements are of the same type.` }
 { `Map. For key-value data. All the keys are one type and all the values are one type.` }
-{ `Type. The type of a type. A type is a set of values.` }
-{ `Function. Its type is a list of input types and an output type.` }
+{ `Function. A has one input and one output.` }
 { `Set. An unordered collection of values of a particular type.` }
 { `Mutable variables and queues. These are used for communicating between threads safely.` }
 { `Atom. Any unused bit of the namespace, like "Red" (without quotes) or "tt" etc.` }
@@ -91,7 +90,13 @@ header 2 parser { `Parser` }
 header 3 parseNum { `Numbers` }
 `There is more than one number type. The type is decided by the type annotation, not by the way the number is written. So a float does not have to have a decimal point.`
 header 3 parseString { `Strings` }
-`A string is delimited with double quotes. Everything between the quotes is included in the string, including newlines. If double quotes are needed in the string, then double double quotes can be used to delimit it. If two consecutive double quotes are required in the string, then the string can be delimited with triple double quotes, etc. Consecutive strings are automatically joined together.`
+`A string is delimited with either a single double quote or a triple double quote. In the first case, if a double quote is required inside the string then it must be preceded by a backslash, and a literal backslash is written as two backslashes. Strings separated by whitespace are automatically joined together.`
+header 3 funcNames { `Function name rules` }
+`It must:`
+list {
+{ `Only contain: a-z, A-Z, 0-9, and ` t `!£$&_?;'@#~` }
+{ `Not be only numeric characters.` }
+}
 header 2 internalRep { `Internal representation of program` }
 `A name to expression lookup map for storing expressions that have names. Each named expression is accompanied by its intended type, as specified in the source code. An expression can be any one of the following:`
 bullets {
