@@ -1,2 +1,5 @@
-dio elephant(a int) -> int:
-    return 33
+dio !():
+    return 888
+
+dio £():
+    return !()

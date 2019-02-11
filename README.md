@@ -1,6 +1,6 @@
 BigWebThing will be a programming language, interpreter and tooling for creating and sharing programmable documents.
 
-The project is in the early stages, the current task being to write an initial specification.
+The project is in the early stages.
 
 # Installation (Ubuntu Linux 18.04)
 

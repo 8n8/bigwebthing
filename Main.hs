@@ -13,7 +13,7 @@ import Data.Void (Void)
 import System.Environment (getArgs)
 import Text.Megaparsec
 import Text.Megaparsec.Char
-import Text.Megaparsec.Debug (dbg)
+-- import Text.Megaparsec.Debug (dbg)
 
 type Parser = Parsec Void T.Text
 
@@ -49,7 +49,7 @@ data Expression where
         -> [(Maybe Name, Expression)] -- Local name bindings.
         -> Expression -- The return expression.
         -> Expression
-    -- Evaluate :: T.Text -> [Expression] -> Expression
+    Evaluate :: T.Text -> [Expression] -> Expression
     deriving (Show)
 
 parseSingleString :: Parser Expression
@@ -85,16 +85,16 @@ parseDecimal :: Parser String
 parseDecimal = char '.' >> parseDigits
 
 parseInt :: Parser Expression
-parseInt = fmap (I . read) parseDigits
+parseInt = try $ fmap (I . read) parseDigits
 
 parseDigits :: Parser String
 parseDigits = do
     int <- try $ some digitChar
-    parseOneWhiteSpace
+    lookAhead $ parseOneWhiteSpace
     return int
 
 parseIoFunc :: Int -> Parser (Name, Expression)
-parseIoFunc level = dbg "parseIoFunc" $ try $ do
+parseIoFunc level = try $ do
     indents <- parseNIndents
     when (indents /= level) (fail "Bad indentation.")
     _ <- string "dio "
@@ -108,29 +108,29 @@ parseIoFunc level = dbg "parseIoFunc" $ try $ do
            )
 
 parseMaybeIoFunc :: Int -> Parser (Maybe Name, Expression)
-parseMaybeIoFunc level = dbg "parseMaybeIoFunc" $ try $ do
+parseMaybeIoFunc level = try $ do
     (name, expr) <- parseIoFunc level
     return (Just name, expr)
         
 parseFuncDeclaration :: Parser (NameStr, [NameStr], Type)
-parseFuncDeclaration = dbg "parseFuncDeclaration" $ do
+parseFuncDeclaration = do
     name <- parseName
     _ <- char '('
-    args <- some parseFuncArg  
+    args <- many parseFuncArg  
     _ <- char ')'
     returnType <- parseReturnType
     let funcType = concat (map snd args) ++ returnType
     return (NameStr name, map fst args, funcType)
 
 parseReturnExpr :: Int -> Parser Expression
-parseReturnExpr level = dbg "parseReturnExpr" $ do
+parseReturnExpr level = do
     indents <- parseNIndents
     when (indents /= level) (fail "Bad indentation.")
     _ <- string "return "
-    parseReturnValue
+    parseExpression
 
 parseBinding :: Int -> Parser (Maybe Name, Expression)
-parseBinding level = dbg "parseBinding" $ try $ do
+parseBinding level = do
     indents <- parseNIndents
     when (indents /= level) (fail "Bad indentation.")
     name <- (Just <$> parseNameAndEquals) <|> return Nothing
@@ -138,13 +138,37 @@ parseBinding level = dbg "parseBinding" $ try $ do
     _ <- newline
     return (name, value)
 
-parseReturnValue :: Parser Expression
-parseReturnValue = choice
+parseExpression :: Parser Expression
+parseExpression = choice
     [ parseInt
     , parseFloat
     , parseSingleString
+    , parseEvaluate
     ]
 
+parseEvaluate :: Parser Expression
+parseEvaluate = parseVarEval <|> parseFuncEval
+
+parseVarEval :: Parser Expression
+parseVarEval = do
+    name <- parseName
+    lookAhead $ void (char ' ') <|> void (char '\n')
+    return $ Evaluate name []
+
+parseFuncEval :: Parser Expression
+parseFuncEval = do
+    name <- parseName
+    _ <- char '('
+    inputs <- many parseFuncInput
+    _ <- char ')'
+    return $ Evaluate name inputs
+    
+parseFuncInput :: Parser Expression
+parseFuncInput = do
+    expr <- parseExpression
+    void (string ", ") <|> lookAhead (void $ char ')')
+    return expr
+    
 parseNameAndEquals :: Parser Name
 parseNameAndEquals = try $ do
     name <- parseNameAndType
@@ -168,7 +192,7 @@ parseFuncArg :: Parser Name
 parseFuncArg = do
     arg <- parseNameAndType
     void (string ", ") <|> lookAhead (void $ char ')')
-    return $ arg
+    return arg
 
 parseNameAndType :: Parser Name
 parseNameAndType = do
@@ -204,7 +228,7 @@ fnameChars = "abcdefghijklmnopqrstuvwxyz\
              \!£$&_?;'@#~"
 
 parseNIndents :: Parser Int
-parseNIndents = dbg "parseNIndents" $
+parseNIndents =
     let
         f :: Int -> Parser Int
         f n = (parseOneIndent >> f (n + 1)) <|> return n
@@ -225,9 +249,15 @@ parseTopLevelBinding = do
         Nothing -> fail "Top-level bindings must have names."
         Just name -> return (name, value)
 
+parseOneTopLevel :: Parser (Name, Expression)
+parseOneTopLevel = do
+    result <- parseTopLevelBinding <|> parseIoFunc 0
+    _ <- many newline
+    return result
+
 parseNamespace :: Parser Namespace
 parseNamespace = do
-    namespace <- some $ parseTopLevelBinding <|> parseIoFunc 0
+    namespace <- some parseOneTopLevel
     return $ M.fromList namespace
 
 main :: IO ()
