@@ -1,4 +1,7 @@
 import Browser
+import Element as E
+import Element.Border as Eb
+import Element.Input as Ei
 import Browser.Navigation as Nav
 import Html exposing (Html, button, div, text)
 import Html.Events exposing (onClick)
@@ -29,11 +32,36 @@ update msg model =
 
 view model =
   { title = "BigWebThing"
-  , body = [
-      div []
-        [ button [ onClick Decrement ] [ text "-" ]
-        , div [] [ text (String.fromInt model) ]
-        , button [ onClick Increment ] [ text "+" ]
-        ]
-    ]
+  , body = [ E.layout [] (gui model) ]
+    --   div []
+    --     [ button [ onClick Decrement ] [ text "-" ]
+    --     , div [] [ text (String.fromInt model) ]
+    --     , button [ onClick Increment ] [ text "+" ]
+    --     ]
+    -- ]
   }
+
+gui model =
+    E.el
+        []
+        (E.column
+            [ E.spacing 20 ]
+            [ Ei.button
+                [ Eb.width 2
+                , Eb.color <| E.rgb 0 0 0
+                , E.padding 5
+                ]
+                { onPress = Just Decrement
+                , label = E.text "-"
+                }
+            , E.text <| String.fromInt model
+            , Ei.button
+                [ Eb.width 2
+                , Eb.color <| E.rgb 0 0 0
+                , E.padding 5
+                ]
+                { onPress = Just Increment
+                , label = E.text "+"
+                }
+            ]
+        )

@@ -1,5 +1,16 @@
 dio !():
+    a str = 23
     return 888
 
-dio £():
+
+zebedee int = 444
+
+
+dio has():
+    dio onion(a int, b int) -> int:
+        return j
     return !()
+
+
+potatoes str = "hello"
+
