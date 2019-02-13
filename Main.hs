@@ -47,7 +47,7 @@ data Expression where
     IOFunction
         :: [NameStr] -- The input arguments.
         -> [(Maybe Name, Expression)] -- Local name bindings.
-        -> Expression -- The return expression.
+        -> Maybe Expression -- The return expression.
         -> Expression
     Evaluate :: T.Text -> [Expression] -> Expression
     deriving (Show)
@@ -106,9 +106,9 @@ parseIoFunc level = dbg "parseIoFunc" $
     _ <- newline
     let i = level + 1
     exprs <- many $ parseElement i
-    returnVal <- parseReturnExpr i
+    returnVal <- fmap Just (parseReturnExpr i) <|> return Nothing
     dbg "trailingWSParser" $ if level == 0 then
-        dbg "level0" $ try (lookAhead $ space >> eof) <|> void (count 3 newline)
+        dbg "level0" $ try (lookAhead $ (void newline) >> eof) <|> void (count 3 newline)
     else dbg "level1ormore" $ try (lookAhead eof) <|> void newline
     return ( (name, funcType)
            , IOFunction arglist exprs returnVal
@@ -135,9 +135,10 @@ parseFuncDeclaration = dbg "parseFuncDeclaration" $
 parseReturnExpr :: Int -> Parser Expression
 parseReturnExpr level = dbg "parseReturnExpr" $
   do
-    indents <- parseNIndents
-    when (indents /= level) (fail "Bad indentation.")
-    _ <- string "return "
+    try $ do
+        indents <- parseNIndents
+        when (indents /= level) (fail "Bad indentation.")
+        void $ string "return "
     parseExpression
 
 parseBinding :: Int -> Parser (Maybe Name, Expression)
@@ -165,7 +166,7 @@ parseBindingWhitespace level =
         , try $ newline >> (lookAhead $ void parseName)
         , void (count 3 newline) >> lookForFuncDec
         ]
-    else try (lookAhead eof) <|> (void newline)
+    else try $ lookAhead $ eof <|> (void newline)
 
 lookForFuncDec :: Parser ()
 lookForFuncDec = void $ try $ lookAhead $ choice
