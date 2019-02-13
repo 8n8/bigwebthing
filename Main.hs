@@ -17,7 +17,7 @@ import Text.Megaparsec.Debug (dbg)
 
 type Parser = Parsec Void T.Text
 
-type Namespace = M.Map Name Expression
+type Namespace = M.Map (Maybe Name) Expression
 
 newtype NameStr = NameStr T.Text deriving (Eq, Ord, Show)
 newtype TypeStr = TypeStr T.Text deriving (Eq, Ord, Show)
@@ -106,12 +106,14 @@ parseIoFunc level = dbg "parseIoFunc" $
     _ <- newline
     let i = level + 1
     exprs <- many $ parseMaybeIoFunc i <|> parseBinding i
-    (void newline) <|> return ()
     returnVal <- parseReturnExpr i
-    _ <- newline
+    dbg "trailingWSParser" $ if level == 0 then
+        dbg "level0" $ try (lookAhead $ space >> eof) <|> void (count 3 newline)
+    else dbg "level1ormore" $ try (lookAhead eof) <|> void newline
     return ( (name, funcType)
            , IOFunction arglist exprs returnVal
            )
+
 
 parseMaybeIoFunc :: Int -> Parser (Maybe Name, Expression)
 parseMaybeIoFunc level = dbg "parseMaybeIoFunc" $
@@ -141,16 +143,29 @@ parseReturnExpr level = dbg "parseReturnExpr" $
 parseBinding :: Int -> Parser (Maybe Name, Expression)
 parseBinding level = dbg "parseBinding" $
   do
-    name <- try $ do
+    nameStr <- try $ do
         indents <- parseNIndents
         when (indents /= level) (fail "Bad indentation.")
-        (Just <$> parseNameAndType) <|> return Nothing
+        ns <- parseName
+        void $ char ' '
+        return ns
+    typeStr <- parseName
+    let name = (NameStr nameStr, [Just (TypeStr typeStr)])
     _ <- char ' '
     _ <- char '='
     _ <- char ' '
     value <- parseInt <|> parseFloat <|> parseSingleString
-    _ <- newline
-    return (name, value)
+    if level == 0 then choice
+        [ try (lookAhead eof) 
+        , try $ newline >> (lookAhead $ void parseName)
+        , void (count 3 newline) >> lookForFuncDec
+        ]
+    else try (lookAhead eof) <|> (void newline)
+    return (Just name, value)
+
+lookForFuncDec :: Parser ()
+lookForFuncDec = void $ try $ lookAhead $ choice
+    [ string "def ", string "dio ", string "dtm " ]
 
 parseExpression :: Parser Expression
 parseExpression = dbg "parseExpression" $
@@ -260,24 +275,12 @@ parseOneIndent =
 parseOneWhiteSpace :: Parser ()
 parseOneWhiteSpace = void (try $ char ' ') <|> void (try newline)
 
-parseTopLevelBinding :: Parser (Name, Expression)
-parseTopLevelBinding = dbg "parseTopLevelBinding" $
-  do
-    (maybeName, value) <- parseBinding 0
-    case maybeName of
-        Nothing -> fail "Top-level bindings must have names."
-        Just name -> return (name, value)
-
-parseOneTopLevel :: Parser (Name, Expression)
-parseOneTopLevel = do
-    result <- parseIoFunc 0 <|> parseTopLevelBinding
-    void $ eof <|> (try $ (count 2 newline) >> notFollowedBy eof)
-    return result
-
 parseNamespace :: Parser Namespace
 parseNamespace = dbg "parseNamespace" $
   do
-    namespace <- some parseOneTopLevel
+    namespace <- some (parseMaybeIoFunc 0 <|> parseBinding 0)
+    _ <- newline
+    eof
     return $ M.fromList namespace
 
 main :: IO ()

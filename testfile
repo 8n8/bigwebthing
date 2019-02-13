@@ -1,16 +1,16 @@
+zebedee int = 444
+bogg int = 23
+
+
 dio !():
     a str = 23
     return 888
 
 
-zebedee int = 444
+potatoes str = "hello"
 
 
 dio has():
     dio onion(a int, b int) -> int:
         return j
     return !()
-
-
-potatoes str = "hello"
-
