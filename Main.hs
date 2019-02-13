@@ -5,7 +5,7 @@ module Main (main) where
 -- import qualified Control.Concurrent.STM as Stm
 import Control.Monad
 import qualified Data.ByteString as B
-import qualified Data.Map as M
+-- import qualified Data.Map as M
 -- import qualified Data.Set as Ds
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
@@ -17,7 +17,7 @@ import Text.Megaparsec.Debug (dbg)
 
 type Parser = Parsec Void T.Text
 
-type Namespace = M.Map (Maybe Name) Expression
+type Namespace = [((Maybe Name), Expression)]
 
 newtype NameStr = NameStr T.Text deriving (Eq, Ord, Show)
 newtype TypeStr = TypeStr T.Text deriving (Eq, Ord, Show)
@@ -92,7 +92,7 @@ parseInt = try $ fmap (I . read) parseDigits
 parseDigits :: Parser String
 parseDigits = do
     int <- try $ some digitChar
-    lookAhead $ parseOneWhiteSpace
+    lookAhead $ parseOneWhiteSpace <|> void (char ')')
     return int
 
 parseIoFunc :: Int -> Parser (Name, Expression)
@@ -105,7 +105,7 @@ parseIoFunc level = dbg "parseIoFunc" $
     (name, arglist, funcType) <- parseFuncDeclaration
     _ <- newline
     let i = level + 1
-    exprs <- many $ parseMaybeIoFunc i <|> parseBinding i
+    exprs <- many $ parseElement i
     returnVal <- parseReturnExpr i
     dbg "trailingWSParser" $ if level == 0 then
         dbg "level0" $ try (lookAhead $ space >> eof) <|> void (count 3 newline)
@@ -155,13 +155,17 @@ parseBinding level = dbg "parseBinding" $
     _ <- char '='
     _ <- char ' '
     value <- parseInt <|> parseFloat <|> parseSingleString
+    parseBindingWhitespace level
+    return (Just name, value)
+
+parseBindingWhitespace :: Int -> Parser ()
+parseBindingWhitespace level =
     if level == 0 then choice
-        [ try (lookAhead eof) 
+        [ try (lookAhead $ void newline >> eof) 
         , try $ newline >> (lookAhead $ void parseName)
         , void (count 3 newline) >> lookForFuncDec
         ]
     else try (lookAhead eof) <|> (void newline)
-    return (Just name, value)
 
 lookForFuncDec :: Parser ()
 lookForFuncDec = void $ try $ lookAhead $ choice
@@ -275,13 +279,29 @@ parseOneIndent =
 parseOneWhiteSpace :: Parser ()
 parseOneWhiteSpace = void (try $ char ' ') <|> void (try newline)
 
+parseUnboundFuncEval :: Int -> Parser (Maybe Name, Expression)
+parseUnboundFuncEval level = dbg "parseUnboundFuncEval" $
+  try $ do
+    indents <- parseNIndents
+    when (indents /= level) (fail "Bad indentation.")
+    eval <- parseFuncEval
+    parseBindingWhitespace level
+    return (Nothing, eval)
+
+parseElement :: Int -> Parser (Maybe Name, Expression)
+parseElement level = choice
+    [ parseMaybeIoFunc level
+    , parseBinding level
+    , parseUnboundFuncEval level
+    ]
+
 parseNamespace :: Parser Namespace
 parseNamespace = dbg "parseNamespace" $
   do
-    namespace <- some (parseMaybeIoFunc 0 <|> parseBinding 0)
+    namespace <- some $ parseElement 0
     _ <- newline
     eof
-    return $ M.fromList namespace
+    return namespace
 
 main :: IO ()
 main = do
