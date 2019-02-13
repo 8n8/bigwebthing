@@ -108,7 +108,7 @@ parseIoFunc level = dbg "parseIoFunc" $
     exprs <- many $ parseElement i
     returnVal <- fmap Just (parseReturnExpr i) <|> return Nothing
     dbg "trailingWSParser" $ if level == 0 then
-        dbg "level0" $ try (lookAhead $ (void newline) >> eof) <|> void (count 3 newline)
+        dbg "level0" $ try (lookAhead $ (void newline) >> eof) <|> (try $ void (count 3 newline) >> notFollowedBy (space >> eof)) <|> return ()
     else dbg "level1ormore" $ try (lookAhead eof) <|> void newline
     return ( (name, funcType)
            , IOFunction arglist exprs returnVal
@@ -160,13 +160,17 @@ parseBinding level = dbg "parseBinding" $
     return (Just name, value)
 
 parseBindingWhitespace :: Int -> Parser ()
-parseBindingWhitespace level =
+parseBindingWhitespace level = dbg "parseBindingWhitespace" $
     if level == 0 then choice
-        [ try (lookAhead $ void newline >> eof) 
-        , try $ newline >> (lookAhead $ void parseName)
-        , void (count 3 newline) >> lookForFuncDec
+        [ dbg "bw1" $ try (lookAhead $ void newline >> eof) 
+        , dbg "bw2" $ try $ newline >> (lookAhead $ void parseName)
+        , dbg "bw3" $ void (count 3 newline) >> lookForFuncDec
         ]
-    else try $ lookAhead $ eof <|> (void newline)
+    else dbg "bw4" $ (try $ lookAhead eof) <|>
+                     (try (lookAhead (space >> eof)) <|>
+                     void newline)
+                     
+                     
 
 lookForFuncDec :: Parser ()
 lookForFuncDec = void $ try $ lookAhead $ choice
@@ -299,7 +303,7 @@ parseElement level = choice
 parseNamespace :: Parser Namespace
 parseNamespace = dbg "parseNamespace" $
   do
-    namespace <- some $ parseElement 0
+    namespace <- many $ parseElement 0
     _ <- newline
     eof
     return namespace
