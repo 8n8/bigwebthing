@@ -1,2 +1,1 @@
-dio clearlyNot&(andnot int):
-    print(22)
+print("hello")

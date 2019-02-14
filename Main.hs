@@ -17,7 +17,7 @@ import Text.Megaparsec.Debug (dbg)
 
 type Parser = Parsec Void T.Text
 
-type Namespace = [((Maybe Name), Expression)]
+type Namespace = [(Maybe Name, Expression, SourcePos)]
 
 newtype NameStr = NameStr T.Text deriving (Eq, Ord, Show)
 newtype TypeStr = TypeStr T.Text deriving (Eq, Ord, Show)
@@ -46,7 +46,7 @@ data Expression where
     -- LetIn :: Namespace -> Expression
     IOFunction
         :: [NameStr] -- The input arguments.
-        -> [(Maybe Name, Expression)] -- Local name bindings.
+        -> Namespace -- Local name bindings.
         -> Maybe Expression -- The return expression.
         -> Expression
     Evaluate :: T.Text -> [Expression] -> Expression
@@ -169,8 +169,6 @@ parseBindingWhitespace level = dbg "parseBindingWhitespace" $
     else dbg "bw4" $ (try $ lookAhead eof) <|>
                      (try (lookAhead (space >> eof)) <|>
                      void newline)
-                     
-                     
 
 lookForFuncDec :: Parser ()
 lookForFuncDec = void $ try $ lookAhead $ choice
@@ -293,12 +291,67 @@ parseUnboundFuncEval level = dbg "parseUnboundFuncEval" $
     parseBindingWhitespace level
     return (Nothing, eval)
 
-parseElement :: Int -> Parser (Maybe Name, Expression)
-parseElement level = choice
-    [ parseMaybeIoFunc level
-    , parseBinding level
-    , parseUnboundFuncEval level
+parseElement :: Int -> Parser (Maybe Name, Expression, SourcePos)
+parseElement level = do
+    pos <- getSourcePos
+    (name, expr) <- choice
+        [ parseMaybeIoFunc level
+        , parseBinding level
+        , parseUnboundFuncEval level
+        ]
+    return (name, expr, pos)
+
+builtIns :: [Name]
+builtIns =
+    [ (NameStr "print", [Just (TypeStr "str"), Nothing])
     ]
+
+nameMatch :: T.Text -> (Maybe Name, Expression, SourcePos) -> Bool
+nameMatch _ (Nothing, _, _) = False
+nameMatch lookingFor (Just (NameStr name, _), _, _) =
+    lookingFor == name
+
+lookupNew
+    :: T.Text
+    -> Namespace
+    -> [(Maybe Name, Expression, SourcePos)]
+lookupNew name namespace = filter (nameMatch name) namespace
+
+lookupBuiltIn :: T.Text -> [Name]
+lookupBuiltIn name = filter (\(NameStr n, _) -> n == name) builtIns 
+
+typecheck
+    :: (Maybe Name, Expression, SourcePos)
+    -> Namespace
+    -> Maybe T.Text
+typecheck element namespace = case element of
+    (Nothing, Evaluate name args, sourcePos) ->
+        case (lookupNew name namespace, lookupBuiltIn name) of
+            ([], []) -> Just $ T.concat
+                [ T.pack $ sourcePosPretty sourcePos
+                , "Name \""
+                , name
+                , "\" could not be found."
+                ]
+            ([(Nothing, _, _)], []) ->
+                Just $ "This error should never happen and is a " <>
+                       "bug in the compiler."
+            ([(Just (NameStr name, types), expr, pos)], []) ->
+                undefined 
+                
+getNamedTypes :: T.Text -> Namespace -> [Type]
+getNamedTypes name ns =
+    case (lookUpNew name namespace, lookupBuiltIn name) of
+        ([], []) -> Nothing
+        (new, builtIn) ->
+
+getExprType :: Expression -> Maybe Type
+getExprType expr = case expr of
+    I _ -> Just "int"
+    F _ -> Just "float"
+    S _ -> Just "str"
+    IOFunction _ _ _ -> Nothing
+    Evaluate name args -> 
 
 parseNamespace :: Parser Namespace
 parseNamespace = dbg "parseNamespace" $
