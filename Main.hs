@@ -24,7 +24,12 @@ newtype TypeStr = TypeStr T.Text deriving (Eq, Ord, Show)
 
 type Name = (NameStr, Type)
 
-type Type = [Maybe TypeStr]
+data Type where
+    StrT :: Type
+    IntT :: Type
+    FloatT :: Type
+    IOFuncT :: [Type] -> Type -> Type
+    NilT :: Type
 
 data Expression where
     I :: Integer -> Expression
@@ -45,7 +50,7 @@ data Expression where
     -- Atom :: T.Text -> Expression
     -- LetIn :: Namespace -> Expression
     IOFunction
-        :: [NameStr] -- The input arguments.
+        :: [Name] -- The input arguments.
         -> Namespace -- Local name bindings.
         -> Maybe Expression -- The return expression.
         -> Expression
@@ -339,19 +344,40 @@ typecheck element namespace = case element of
             ([(Just (NameStr name, types), expr, pos)], []) ->
                 undefined 
                 
+extractNewNameTypes :: [(Maybe Name, Expression, SourcePos)] -> [Type]
+extractNewName names =
+    let
+       getType (Just (_, t), _, _) = Just t
+       getType (Nothing, _, _) = Nothing
+    in
+       justs $ map getType names
+
 getNamedTypes :: T.Text -> Namespace -> [Type]
 getNamedTypes name ns =
-    case (lookUpNew name namespace, lookupBuiltIn name) of
-        ([], []) -> Nothing
-        (new, builtIn) ->
+    extractNewNameTypes (lookUpNew name ns) ++
+        map snd lookupBuiltIn name
 
-getExprType :: Expression -> Maybe Type
+getExprType :: Expression -> Type
 getExprType expr = case expr of
-    I _ -> Just "int"
-    F _ -> Just "float"
-    S _ -> Just "str"
-    IOFunction _ _ _ -> Nothing
-    Evaluate name args -> 
+    I _ -> IntT
+    F _ -> FloatT
+    S _ -> StrT
+    IOFunction args _ retExp ->
+        IOFuncT (map snd args) (getExprType retExp)
+    Evaluate nameStr args ->
+        let
+            -- candidateTypes = getNamedTypes name
+            argTypes = map getExprType args
+
+matchingTypes :: [Type] -> [Type] -> Maybe Type
+matchingTypes
+
+getReturnType :: T.Text -> [Type] -> Namespace -> Maybe Type
+getReturnType nameStr argTypes namespace =
+    let
+        candidates = getNamedTypes name namespace
+    in
+        case filter ((argTypes ==) . init) 
 
 parseNamespace :: Parser Namespace
 parseNamespace = dbg "parseNamespace" $
