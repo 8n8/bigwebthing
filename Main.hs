@@ -17,19 +17,19 @@ import Text.Megaparsec.Debug (dbg)
 
 type Parser = Parsec Void T.Text
 
-type Namespace = [(Maybe Name, Expression, SourcePos)]
+type Namespace = [(Maybe NameStr, Maybe Type, Expression, SourcePos)]
 
 newtype NameStr = NameStr T.Text deriving (Eq, Ord, Show)
 newtype TypeStr = TypeStr T.Text deriving (Eq, Ord, Show)
 
 type Name = (NameStr, Type)
 
-data Type where
-    StrT :: Type
-    IntT :: Type
-    FloatT :: Type
-    IOFuncT :: [Type] -> Type -> Type
-    NilT :: Type
+data Type
+    = NormalT T.Text
+    | FIo [Type] (Maybe Type)
+    deriving (Eq, Show)
+
+-- type Type = ([TypeStr], [TypeStr])
 
 data Expression where
     I :: Integer -> Expression
@@ -100,14 +100,14 @@ parseDigits = do
     lookAhead $ parseOneWhiteSpace <|> void (char ')')
     return int
 
-parseIoFunc :: Int -> Parser (Name, Expression)
+parseIoFunc :: Int -> Parser (NameStr, Type, Expression)
 parseIoFunc level = dbg "parseIoFunc" $
   do
     try $ do
         indents <- parseNIndents
         when (indents /= level) (fail "Bad indentation.")
         void $ string "dio "
-    (name, arglist, funcType) <- parseFuncDeclaration
+    (name, arglist, ins, out) <- parseFuncDeclaration
     _ <- newline
     let i = level + 1
     exprs <- many $ parseElement i
@@ -115,18 +115,19 @@ parseIoFunc level = dbg "parseIoFunc" $
     dbg "trailingWSParser" $ if level == 0 then
         dbg "level0" $ try (lookAhead $ (void newline) >> eof) <|> (try $ void (count 3 newline) >> notFollowedBy (space >> eof)) <|> return ()
     else dbg "level1ormore" $ try (lookAhead eof) <|> void newline
-    return ( (name, funcType)
-           , IOFunction arglist exprs returnVal
+    return ( name
+           , FIo ins out
+           , IOFunction (zip arglist ins) exprs returnVal
            )
 
-
-parseMaybeIoFunc :: Int -> Parser (Maybe Name, Expression)
+parseMaybeIoFunc
+    :: Int -> Parser (Maybe NameStr, Maybe Type, Expression)
 parseMaybeIoFunc level = dbg "parseMaybeIoFunc" $
   do
-    (name, expr) <- parseIoFunc level
-    return (Just name, expr)
+    (name, typeT, expr) <- parseIoFunc level
+    return (Just name, Just typeT, expr)
         
-parseFuncDeclaration :: Parser (NameStr, [NameStr], Type)
+parseFuncDeclaration :: Parser (NameStr, [NameStr], [Type], Maybe Type)
 parseFuncDeclaration = dbg "parseFuncDeclaration" $
   do
     name <- try parseName
@@ -134,8 +135,7 @@ parseFuncDeclaration = dbg "parseFuncDeclaration" $
     args <- many parseFuncArg  
     _ <- char ')'
     returnType <- parseReturnType
-    let funcType = concat (map snd args) ++ returnType
-    return (NameStr name, map fst args, funcType)
+    return (NameStr name, map fst args, map snd args, returnType)
 
 parseReturnExpr :: Int -> Parser Expression
 parseReturnExpr level = dbg "parseReturnExpr" $
@@ -146,7 +146,7 @@ parseReturnExpr level = dbg "parseReturnExpr" $
         void $ string "return "
     parseExpression
 
-parseBinding :: Int -> Parser (Maybe Name, Expression)
+parseBinding :: Int -> Parser (Maybe NameStr, Maybe Type, Expression)
 parseBinding level = dbg "parseBinding" $
   do
     nameStr <- try $ do
@@ -156,13 +156,12 @@ parseBinding level = dbg "parseBinding" $
         void $ char ' '
         return ns
     typeStr <- parseName
-    let name = (NameStr nameStr, [Just (TypeStr typeStr)])
     _ <- char ' '
     _ <- char '='
     _ <- char ' '
     value <- parseInt <|> parseFloat <|> parseSingleString
     parseBindingWhitespace level
-    return (Just name, value)
+    return (Just (NameStr nameStr), Just (NormalT typeStr), value)
 
 parseBindingWhitespace :: Int -> Parser ()
 parseBindingWhitespace level = dbg "parseBindingWhitespace" $
@@ -215,11 +214,11 @@ parseFuncInput = dbg "parseFuncInput" $
     void (string ", ") <|> lookAhead (void $ char ')')
     return expr
 
-parseReturnType :: Parser Type
+parseReturnType :: Parser (Maybe Type)
 parseReturnType = dbg "parseReturnType" $
   choice
-    [ void (char ':') >> return [Nothing]
-    , parseExplicitReturnType
+    [ void (char ':') >> return Nothing
+    , fmap Just parseExplicitReturnType
     ]
 
 parseExplicitReturnType :: Parser Type
@@ -228,7 +227,7 @@ parseExplicitReturnType = dbg "parseExplicitReturnType" $
     _ <- string " -> "
     typeStr <- parseName
     _ <- char ':'
-    return $ [Just (TypeStr typeStr)]
+    return $ NormalT typeStr
 
 parseFuncArg :: Parser Name
 parseFuncArg = dbg "parseFuncArg" $
@@ -243,7 +242,7 @@ parseNameAndType = dbg "parseNameAndType" $
     name <- parseName
     _ <- char ' '
     typeStr <- parseName
-    return (NameStr name, [Just (TypeStr typeStr)])
+    return (NameStr name, NormalT typeStr)
 
 parseName :: Parser T.Text
 parseName = dbg "parseName" $
@@ -287,97 +286,245 @@ parseOneIndent =
 parseOneWhiteSpace :: Parser ()
 parseOneWhiteSpace = void (try $ char ' ') <|> void (try newline)
 
-parseUnboundFuncEval :: Int -> Parser (Maybe Name, Expression)
+parseUnboundFuncEval
+    :: Int -> Parser (Maybe NameStr, Maybe Type, Expression)
 parseUnboundFuncEval level = dbg "parseUnboundFuncEval" $
   try $ do
     indents <- parseNIndents
     when (indents /= level) (fail "Bad indentation.")
     eval <- parseFuncEval
     parseBindingWhitespace level
-    return (Nothing, eval)
+    return (Nothing, Nothing, eval)
 
-parseElement :: Int -> Parser (Maybe Name, Expression, SourcePos)
+parseElement
+    :: Int
+    -> Parser (Maybe NameStr, Maybe Type, Expression, SourcePos)
 parseElement level = do
     pos <- getSourcePos
-    (name, expr) <- choice
+    (name, typeT, expr) <- choice
         [ parseMaybeIoFunc level
         , parseBinding level
         , parseUnboundFuncEval level
         ]
-    return (name, expr, pos)
+    return (name, typeT, expr, pos)
 
 builtIns :: [Name]
 builtIns =
-    [ (NameStr "print", [Just (TypeStr "str"), Nothing])
+    [ (NameStr "print", FIo [NormalT "str"] Nothing)
     ]
 
-nameMatch :: T.Text -> (Maybe Name, Expression, SourcePos) -> Bool
-nameMatch _ (Nothing, _, _) = False
-nameMatch lookingFor (Just (NameStr name, _), _, _) =
+typeErr :: SourcePos -> T.Text -> T.Text
+typeErr pos errMsg = T.concat
+    [ T.pack $ sourcePosPretty pos
+    , "\n"
+    , errMsg
+    ]
+
+noPoint :: T.Text -> T.Text
+noPoint msg = "There's no point in " <> msg <> " with no name."
+
+takeSafe :: Int -> [a] -> Maybe [a]
+takeSafe n ls =
+    if n > length ls then
+        Nothing
+    else Just $ take n ls
+   
+dropSafe :: Int -> [a] -> Maybe [a]
+dropSafe n ls =
+    if n > length ls then
+        Nothing
+    else Just $ drop n ls
+
+-- argsOkOnce :: [Name] -> Type -> Maybe T.Text
+-- argsOkOnce args namedType =
+--     case takeSafe (length args) namedType of
+--         Nothing -> Just "Too many arguments."
+--         Just shouldMatch ->
+--             if shouldMatch /= args then
+--                 Just $ T.concat
+--                     [ "Expected argument types:\n "
+--                     , show shouldMatch
+--                     , ", but got:\n "
+--                     , show args
+--                     , "." 
+--                     ]
+--             else Nothing
+-- 
+-- argsOk :: [Name] -> [Type] -> Either T.Text Type
+-- argsOk args candidates =
+--     case justs $ map (argsOkOnce args) candidates of
+--         [] -> Left "No types match the given arguments."
+--         [t] -> Right t
+--         matching -> Left $ T.concat 
+--             [ "There is more than one matching name: "
+--             , T.pack $ show matching
+--             ]
+
+lookUpArgType :: [Name] -> T.Text -> [Type]
+lookUpArgType args name =
+    map snd $ filter ((NameStr name ==) . fst) args
+
+lookupTypes :: T.Text -> Namespace -> [Name] -> [Type]
+lookupTypes name ns argSpace = 
+    getNamedType name ns ++ lookUpArgType argSpace name
+
+typecheck
+    :: Namespace
+    -> [Name]
+    -> (Maybe NameStr, Maybe Type, Expression, SourcePos)
+    -> Maybe T.Text
+typecheck namespace argSpace exprInfo = case exprInfo of
+    (Nothing, _, expr, pos) -> case expr of
+        I _ -> Just $ typeErr pos $ noPoint "an integer"
+        F _ -> Just $ typeErr pos $ noPoint "a float"
+        S _ -> Just $ typeErr pos $ noPoint "a string"
+        IOFunction _ _ _ ->
+            Just $ "Unnamed functions are not allowed. This is a \
+              \bug in the compiler and should not have passed the \
+              \parser."
+        Evaluate name args ->
+            case lookupTypes name namespace argSpace of
+                [] -> Just $ typeErr pos $ T.concat
+                    [ "Function \""
+                    , name
+                    , "\" does not exist."
+                    ] 
+                [NormalT _] -> Just $ typeErr pos $ T.concat
+                    [ "There is no point in a simple type without "
+                    , "a name."
+                    ]
+                [FIo ins _] -> 
+                    let c (e, t) = typecheck namespace argSpace
+                         (Nothing, Just t, e, pos)
+                    in case justs (map c (zip args ins)) of
+                       [] -> Nothing
+                       errs -> Just $ T.concat errs 
+                _ -> Just $ typeErr pos $ T.concat
+                    [ "There were multiple functions with the "
+                    , "name \""
+                    , name
+                    , "\" which is not allowed."
+                    ]
+    (Just _, Nothing, _, pos) -> Just $ typeErr pos "It is not \
+        \allowed to have a name without an accompanying type \
+        \declaration."
+    (Just _, Just (NormalT "int"), I _, _) -> Nothing
+    (Just _, Just (NormalT "float"), F _, _) -> Nothing
+    (Just _, Just (NormalT "str"), S _, _) -> Nothing
+    (Just (NameStr fname), Just (NormalT _), IOFunction _ _ _, pos) ->
+        Just $ typeErr pos $ T.concat
+            [ "Function \""
+            , fname
+            , "\" has a simple type, but it should have a function "
+            , "type."
+            ]
+    (Just _, Just (FIo _ (Just _)), IOFunction args ns Nothing, _) ->
+        let checker = typecheck (namespace ++ ns) (args ++ argSpace)
+            errs = justs $ map checker ns
+        in case errs of
+            [] -> Nothing
+            _ -> Just $ T.concat errs
+    (Just _, Just (FIo _ (Just outputType)), IOFunction args ns (Just retExpr), pos) ->
+        let checker = typecheck (namespace ++ ns) (args ++ argSpace)
+            errs = justs $ map checker ns
+            retErr expectedRetType = checker
+                ( Just $ NameStr "return"
+                , Just expectedRetType
+                , retExpr
+                , pos
+                )
+        in case (errs, retErr outputType) of
+            ([], Nothing) -> Nothing
+            (_, Nothing) -> Just $ T.concat errs
+            (_, Just err) -> Just $ T.concat $ err : errs
+    (Just _, Just ftype, Evaluate name inputs, pos) ->
+        let nametype = getNamedType name namespace ++
+                           lookUpArgType argSpace name
+        in case nametype of
+            [] -> Just $ typeErr pos $ T.concat
+                [ "Could not find name \""
+                , name
+                , "\"."
+                ]
+            [NormalT normName] ->
+                if not (null inputs) then
+                    Just $ typeErr pos $ T.concat
+                        [ "\""
+                        , normName
+                        , "\" is just a variable, and does not take "
+                        , "any arguments."
+                        ]
+                else Nothing
+            [FIo inputTypes outputType] ->
+                if length inputTypes /= length inputs then
+                    Just $ typeErr pos $ T.concat
+                        [ "Function \""
+                        , name
+                        , "\" takes "
+                        , T.pack $ show $ length inputTypes
+                        , " arguments, but "
+                        , T.pack $ show $ length inputs
+                        , " were given."
+                        ]
+                else
+                   let
+                     checker expr t = typecheck namespace argSpace 
+                           (Nothing, Just t, expr, pos)
+                     errs = zipWith checker inputs inputTypes
+                   in case (errs, outputType) of
+                       ([], Just otype) -> if ftype /= otype then
+                           Just $ typeErr pos $ T.concat
+                               [ "Function \""
+                               , name
+                               , "\" returns type \""
+                               , T.pack $ show otype
+                               , "\", but type \""
+                               , T.pack $ show ftype
+                               , "\" is required."
+                               ]
+                            else Nothing
+                       _ -> Just $ typeErr pos $
+                                T.unlines $ justs errs
+            _ -> Just $ typeErr pos $ T.concat 
+                [ "There is more than one name matching \""
+                , name
+                , "\", so I can't tell which one to use."
+                ]
+        
+nameMatch :: T.Text -> (Maybe NameStr, Maybe Type, Expression, SourcePos) -> Bool
+nameMatch _ (Nothing, _, _, _) = False
+nameMatch lookingFor (Just (NameStr name), _, _, _) =
     lookingFor == name
 
 lookupNew
     :: T.Text
     -> Namespace
-    -> [(Maybe Name, Expression, SourcePos)]
-lookupNew name namespace = filter (nameMatch name) namespace
+    -> [(Maybe NameStr, Maybe Type, Expression, SourcePos)]
+lookupNew name = filter (nameMatch name)
 
 lookupBuiltIn :: T.Text -> [Name]
 lookupBuiltIn name = filter (\(NameStr n, _) -> n == name) builtIns 
 
-typecheck
-    :: (Maybe Name, Expression, SourcePos)
-    -> Namespace
-    -> Maybe T.Text
-typecheck element namespace = case element of
-    (Nothing, Evaluate name args, sourcePos) ->
-        case (lookupNew name namespace, lookupBuiltIn name) of
-            ([], []) -> Just $ T.concat
-                [ T.pack $ sourcePosPretty sourcePos
-                , "Name \""
-                , name
-                , "\" could not be found."
-                ]
-            ([(Nothing, _, _)], []) ->
-                Just $ "This error should never happen and is a " <>
-                       "bug in the compiler."
-            ([(Just (NameStr name, types), expr, pos)], []) ->
-                undefined 
-                
-extractNewNameTypes :: [(Maybe Name, Expression, SourcePos)] -> [Type]
-extractNewName names =
+extractNewNameTypes :: [(Maybe NameStr, Maybe Type, Expression, SourcePos)] -> [Type]
+extractNewNameTypes names =
     let
-       getType (Just (_, t), _, _) = Just t
-       getType (Nothing, _, _) = Nothing
+       getType (_, Just t, _, _) = Just t
+       getType (_, Nothing, _, _) = Nothing
     in
        justs $ map getType names
 
-getNamedTypes :: T.Text -> Namespace -> [Type]
-getNamedTypes name ns =
-    extractNewNameTypes (lookUpNew name ns) ++
-        map snd lookupBuiltIn name
-
-getExprType :: Expression -> Type
-getExprType expr = case expr of
-    I _ -> IntT
-    F _ -> FloatT
-    S _ -> StrT
-    IOFunction args _ retExp ->
-        IOFuncT (map snd args) (getExprType retExp)
-    Evaluate nameStr args ->
-        let
-            -- candidateTypes = getNamedTypes name
-            argTypes = map getExprType args
-
-matchingTypes :: [Type] -> [Type] -> Maybe Type
-matchingTypes
-
-getReturnType :: T.Text -> [Type] -> Namespace -> Maybe Type
-getReturnType nameStr argTypes namespace =
+justs :: [Maybe a] -> [a]
+justs ms =
     let
-        candidates = getNamedTypes name namespace
-    in
-        case filter ((argTypes ==) . init) 
+        f :: Maybe a -> [a] -> [a]
+        f Nothing js = js
+        f (Just j) js = j:js
+    in foldr f [] ms
+
+getNamedType :: T.Text -> Namespace -> [Type]
+getNamedType name ns =
+    extractNewNameTypes (lookupNew name ns) ++
+          map snd (lookupBuiltIn name)
 
 parseNamespace :: Parser Namespace
 parseNamespace = dbg "parseNamespace" $
@@ -394,4 +541,8 @@ main = do
     let filetext = decodeUtf8 filebytes
     case parse parseNamespace filepath filetext of
         Left err -> putStrLn (errorBundlePretty err)
-        Right a -> print a
+        Right namespace ->
+            case justs $ map (typecheck namespace []) namespace of
+                [] -> putStrLn "All the types are fine!"
+                errMsgs -> print errMsgs
+              
