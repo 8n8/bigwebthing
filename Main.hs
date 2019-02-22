@@ -39,7 +39,9 @@ newtype Type = Type Expression deriving Show
 
 -- type Type = ([TypeStr], [TypeStr])
 
-type Expression = [Value]
+type Expression
+    = [Value]
+    | 
 
 data Value
     = TypeT
