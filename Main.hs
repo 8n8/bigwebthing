@@ -23,13 +23,14 @@ data NsElement
     = NameType NameStr Type Expression SourcePos
     | TypeOnly Type Expression SourcePos
     | NoNameType Expression SourcePos
+    deriving Show
 
 newtype NameStr = NameStr T.Text deriving (Eq, Ord, Show)
 newtype TypeStr = TypeStr T.Text deriving (Eq, Ord, Show)
 
 type Name = (NameStr, Type)
 
-type Type = Type Expression
+newtype Type = Type Expression deriving Show
 
 -- data Type
 --     = NormalT T.Text
@@ -38,43 +39,52 @@ type Type = Type Expression
 
 -- type Type = ([TypeStr], [TypeStr])
 
-data Expression where
-    TypeT :: Expression
-    IntOne :: Integer -> Expression
-    IntSet :: S.Set Integer -> Expression
-    IntAll :: Expression
-    FloatOne :: Float -> Expression
-    FloatSet :: S.Set Float -> Expression
-    FloatAll :: Expression
-    StrOne :: T.Text -> Expression
-    StrSet :: S.Set T.Text -> Expression
-    StrAll :: Expression
-    IoFT :: [Expression] -> Maybe Expression
-    -- C :: Char -> Expression
-    -- T1 :: (a) -> Expression
-    -- T2 :: (a, b) -> Expression
-    -- T3 :: (a, b, c) -> Expression
-    -- T4 :: (a, b, c, d) -> Expression
-    -- T5 :: (a, b, c, d, e) -> Expression
-    -- T6 :: (a, b, c, d, e, f) -> Expression
-    -- List :: [a] -> Expression
-    -- Map :: M.Map a b -> Expression
-    -- Set :: Ds.Set a -> Expression
-    -- MutVar :: Stm.TVar a -> Expression
-    -- Queue :: Stm.TQueue a -> Expression
-    -- Atom :: T.Text -> Expression
-    -- LetIn :: Namespace -> Expression
-    IOFunction
-        :: [Name] -- The input arguments.
-        -> Namespace -- Local name bindings.
-        -> Maybe Expression -- The return expression.
-        -> Expression
-    Evaluate :: T.Text -> [Expression] -> Expression
+type Expression = [Value]
+
+data Value
+    = TypeT
+    | IoFunT [Expression] (Maybe Expression)
+    | IoFun [Name] Namespace (Maybe Expression)
+    | Evaluate T.Text [Expression]
     deriving (Show)
+
+-- data Expression where
+--     TypeT :: Expression
+--     IntOne :: Integer -> Expression
+--     IntSet :: S.Set Integer -> Expression
+--     IntAll :: Expression
+--     FloatOne :: Float -> Expression
+--     FloatSet :: S.Set Float -> Expression
+--     FloatAll :: Expression
+--     StrOne :: T.Text -> Expression
+--     StrSet :: S.Set T.Text -> Expression
+--     StrAll :: Expression
+--     IoFT :: [Expression] -> Maybe Expression -> Expression
+--     -- C :: Char -> Expression
+--     -- T1 :: (a) -> Expression
+--     -- T2 :: (a, b) -> Expression
+--     -- T3 :: (a, b, c) -> Expression
+--     -- T4 :: (a, b, c, d) -> Expression
+--     -- T5 :: (a, b, c, d, e) -> Expression
+--     -- T6 :: (a, b, c, d, e, f) -> Expression
+--     -- List :: [a] -> Expression
+--     -- Map :: M.Map a b -> Expression
+--     -- Set :: Ds.Set a -> Expression
+--     -- MutVar :: Stm.TVar a -> Expression
+--     -- Queue :: Stm.TQueue a -> Expression
+--     -- Atom :: T.Text -> Expression
+--     -- LetIn :: Namespace -> Expression
+--     IOFunction
+--         :: [Name] -- The input arguments.
+--         -> Namespace -- Local name bindings.
+--         -> Maybe Expression -- The return expression.
+--         -> Expression
+--     Evaluate :: T.Text -> [Expression] -> Expression
+--     deriving (Show)
 
 numArgs :: Expression -> Int
 numArgs expr = case expr of
-    IOFunction args _ _ -> length args
+    IoFun args _ _ -> length args
     _ -> 0
 
 parseSingleString :: Parser Expression
@@ -262,7 +272,7 @@ parseNameAndType = dbg "parseNameAndType" $
     name <- parseName
     _ <- char ' '
     typeStr <- parseName
-    return (NameStr name, NormalT typeStr)
+    return (NameStr name, Type typeStr)
 
 parseName :: Parser T.Text
 parseName = dbg "parseName" $
@@ -330,7 +340,7 @@ parseElement level = do
 
 builtIns :: [Name]
 builtIns =
-    [ (NameStr "print", FIo [NormalT "str"] Nothing)
+    [ (NameStr "print", Type (Simple $ IoFunT [[StrAll]] Nothing))
     ]
 
 typeErr :: SourcePos -> T.Text -> T.Text
@@ -395,25 +405,25 @@ typecheck
     -> Maybe T.Text
 typecheck namespace argSpace exprInfo = case exprInfo of
     TypeOnly _ expr pos -> case expr of
-        I _ -> Just $ typeErr pos $ noPoint "an integer"
-        F _ -> Just $ typeErr pos $ noPoint "a float"
-        S _ -> Just $ typeErr pos $ noPoint "a string"
-        IOFunction _ _ _ ->
+        Simple _ -> Just $ typeErr pos $ noPoint ""
+        IoFun _ _ _ ->
             Just $ "Unnamed functions are not allowed. This is a \
               \bug in the compiler and should not have passed the \
               \parser."
         Evaluate name args ->
-            case lookupTypes name namespace argSpace of
+            let
+                
+            in case lookupTypes name namespace argSpace of
                 [] -> Just $ typeErr pos $ T.concat
                     [ "Function \""
                     , name
                     , "\" does not exist."
                     ] 
-                [NormalT _] -> Just $ typeErr pos $ T.concat
+                [[Simple _]] -> Just $ typeErr pos $ T.concat
                     [ "There is no point in a simple type without "
                     , "a name."
                     ]
-                [FIo ins _] -> 
+                [[IoFunT ins _]] -> 
                     let c (e, t) = typecheck namespace argSpace
                          (Nothing, Just t, e, pos)
                     in case justs (map c (zip args ins)) of
@@ -439,13 +449,13 @@ typecheck namespace argSpace exprInfo = case exprInfo of
     --         , "\" has a simple type, but it should have a function "
     --         , "type."
     --         ]
-    NameType _ (IoFT _ (Just _)) (IOFunction args ns Nothing) _ ->
+    NameType _ (IoFunT _ (Just _)) (IoFun args ns Nothing) _ ->
         let checker = typecheck (namespace ++ ns) (args ++ argSpace)
             errs = justs $ map checker ns
         in case errs of
             [] -> Nothing
             _ -> Just $ T.concat errs
-    NameType _ (IoFT _ (Just outputType)) (IOFunction args ns (Just retExpr)) pos ->
+    NameType _ (IoFunT _ (Just outputType)) (IoFun args ns (Just retExpr)) pos ->
         let checker = typecheck (namespace ++ ns) (args ++ argSpace)
             errs = justs $ map checker ns
             retErr expectedRetType = checker
@@ -461,22 +471,13 @@ typecheck namespace argSpace exprInfo = case exprInfo of
     NameType _ ftype (Evaluate name inputs) pos ->
         let nametype = getNamedType name namespace ++
                            lookUpArgType argSpace name
-            noArgErr =
-                if not (null inputs) then
-                    Just $ typeErr pos $ T.concat
-                        [ "\""
-                        , name
-                        , "\" is just a variable, and does not take "
-                        , "any arguments."
-                        ]
-                else Nothing
         in case nametype of
             [] -> Just $ typeErr pos $ T.concat
                 [ "Could not find name \""
                 , name
                 , "\"."
                 ]
-            [IoFT inputTypes outputType] ->
+            [[IoFunT inputTypes outputType]] ->
                 if length inputTypes /= length inputs then
                     Just $ typeErr pos $ T.concat
                         [ "Function \""
@@ -506,17 +507,15 @@ typecheck namespace argSpace exprInfo = case exprInfo of
                             else Nothing
                        _ -> Just $ typeErr pos $
                                 T.unlines $ justs errs
-            [TypeT] -> noArgErr
-            [IntOne] -> noArgErr
-            [IntSet] -> noArgErr
-            [IntAll] -> noArgErr
-            [FloatOne] -> noArgErr
-            [FloatSet] -> noArgErr
-            [FloatAll] -> noArgErr
-            [StrOne] -> noArgErr
-            [StrSet] -> noArgErr
-            [StrAll] -> noArgErr
-            [IoFT _] -> noArgErr 
+            [[Simple _]] ->
+                if not (null inputs) then
+                    Just $ typeErr pos $ T.concat
+                        [ "\""
+                        , name
+                        , "\" is just a variable, and does not take "
+                        , "any arguments."
+                        ]
+                else Nothing
             _ -> Just $ typeErr pos $ T.concat 
                 [ "There is more than one name matching \""
                 , name
