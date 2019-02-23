@@ -8,11 +8,8 @@ ghc-options: -Wall -O2
 
 dependencies:
   - base >= 4.7 && < 5
-  - bytestring
-  - containers
-  - megaparsec
-  - stm
   - text
+  - websockets
 
 executables:
   bigwebthing:
