@@ -6,7 +6,7 @@ import qualified Network.WebSockets as W
 import Control.Monad (forever)
 
 main :: IO ()
-main = W.runServer "127.0.0.1" 9160 application
+main = W.runServer "127.0.0.1" 3000 application
 
 application :: W.ServerApp
 application pending = do
