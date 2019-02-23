@@ -1,2 +1,0 @@
-dio g(s str):
-    print(s)

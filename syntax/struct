@@ -1,7 +1,0 @@
-struct person:
-    name str
-    age i8
-
-p person = person(name = "Jennings", age = 11)
-
-n str = p.name
