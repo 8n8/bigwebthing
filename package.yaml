@@ -13,6 +13,12 @@ dependencies:
   - websockets
 
 executables:
-  bigwebthing:
-    main: Main.hs
+  server:
+    main: Server.hs
     source-dirs: . 
+    ghc-options: -Wall -threaded -main-is Server
+  client:
+    main: Client.hs
+    source-dirs: .
+    ghc-options: -Wall -threaded -main-is Client
+  
