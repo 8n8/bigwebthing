@@ -1,6 +1,6 @@
 name: bigwebthing
 version: 0.0.0
-synopsis: A programming language and interpreter for creating programmable documents.
+synopsis: A tool for sharing and running programmable documents.
 maintainer: True Ghiassi <true@ghiassitrio.co.uk>
 license: MIT
 
