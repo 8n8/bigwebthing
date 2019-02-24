@@ -14,7 +14,8 @@ dependencies:
   - stm
   - text
   - websockets
-  - saltine
+  - aeson
+  - base64-bytestring
 
 executables:
   server:
