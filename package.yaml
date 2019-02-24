@@ -17,6 +17,8 @@ dependencies:
   - aeson
   - base64-bytestring
 
+extra-libraries: sodium
+
 executables:
   server:
     main: Server.hs

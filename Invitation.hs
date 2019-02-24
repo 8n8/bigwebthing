@@ -2,7 +2,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Invitation where
 
-import CommonJson
 import Crypto (PSign, Sig)
 import qualified Data.Aeson as J
 import GHC.Generics (Generic)

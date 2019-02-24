@@ -2,18 +2,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Uninvitation where
 
-import CommonJson
 import qualified Data.Aeson as J
 import GHC.Generics (Generic)
-import Crypto.Saltine.Core.Sign (PublicKey(..))
+import Crypto (PSign, Sig)
 
 data Uninvitation = Invitation
-    { uninvitee :: PublicKey
-    , author :: PublicKey
-    , signature :: Signature
+    { uninvitee :: PSign
+    , author :: PSign
+    , signature :: Sig
     } deriving (Generic, Show)
 
-instance ToJSON Uninvitation where
+instance J.ToJSON Uninvitation where
     toEncoding = J.genericToEncoding J.defaultOptions
 
-instance FromJSON Uninvitation
+instance J.FromJSON Uninvitation

@@ -2,18 +2,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Message where
 
-import CommonJson
 import qualified Data.Aeson as J
 import GHC.Generics (Generic)
-import Crypto.Saltine.Core.Sign (PublicKey(..))
+import Crypto (PSign, Sig, Hash)
 
 data Message = Message
     { hash :: Hash
-    , author :: PublicKey
-    , signature :: Signature
+    , author :: PSign
+    , signature :: Sig
     } deriving (Generic, Show)
 
-instance ToJSON Hash where
+instance J.ToJSON Message where
     toEncoding = J.genericToEncoding J.defaultOptions
 
-instance FromJSON Hash
+instance J.FromJSON Message
