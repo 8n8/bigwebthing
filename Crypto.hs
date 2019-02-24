@@ -19,6 +19,14 @@ module Crypto
   , crypto_secretbox_NONCEBYTES
   , crypto_secretbox_KEYBYTES
   , crypto_box_NONCEBYTES
+  , PSign (..)
+  , SSign (..)
+  , PEnc (..)
+  , SEnc (..)
+  , Sig (..)
+  , Nonce (..)
+  , Hash (..)
+  , SymmetricKey (..)
   ) where
 
 import qualified Data.ByteString as B
