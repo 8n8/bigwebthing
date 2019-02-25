@@ -58,7 +58,11 @@ byteStringToText :: B.ByteString -> T.Text
 byteStringToText = E.decodeUtf8 . B64.encode
 
 instance J.FromJSON PSign where
-    parseJSON (J.String x) = fmap PSign (textToByteString x)
+    parseJSON (J.String x) = do
+       bs <- textToByteString x
+       if B.length bs /= crypto_sign_PUBLICKEYBYTES then
+           mzero
+       else return $ PSign bs
     parseJSON _ = mzero
 
 instance J.ToJSON PSign where
@@ -101,6 +105,9 @@ crypto_secretbox_KEYBYTES = 32
 
 crypto_sign_BYTES :: Int
 crypto_sign_BYTES = 64
+
+crypto_sign_PUBLICKEYBYTES :: Int
+crypto_sign_PUBLICKEYBYTES = 32
 
 -- crypto_sign_SEEDBYTES :: Int
 -- crypto_sign_SEEDBYTES = 32
