@@ -26,17 +26,6 @@ dataDir = "serverData"
 hashStr :: C.Hash -> T.Text
 hashStr (C.Hash bs) = De.decodeUtf8 bs
 
--- pSignOk :: C.PSign -> Bool
--- pSignOk (C.PSign bs) = B.length bs == C.crypto_sign_PUBLICKEYBYTES
--- 
--- sigOk :: C.Sig -> Bool
--- sigOk (C.Sig bs) = B.length bs == C.
--- 
--- inviteValid :: I.Invitation -> Bool
--- inviteValid (I.Invitation invitee author sig) =
-    
-    
-
 main :: IO ()
 main = do
   expected <- Stm.atomically $ Stm.newTVar S.empty
@@ -51,8 +40,4 @@ main = do
       when allowed $ liftIO $ B.writeFile filepath body
     Scot.post "/invite" $ do
       invite <- Scot.jsonData 
-      if inviteValid invite then
-          liftIO $ saveInvite invite
-      else
-          fail "Bad invite."
-      
+      liftIO $ print (invite :: Maybe I.Invitation)
