@@ -1,7 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"net/http"
+)
 
 func main() {
-	fmt.Printf("hello, world\n")
+	http.Handle("/", http.FileServer(http.Dir("/home/t/bigwebthing")))
+	http.ListenAndServe(":3000", nil)
 }
