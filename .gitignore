@@ -5,3 +5,4 @@ bigwebthing.cabal
 venv/
 index.html
 elm-stuff/
+go/bin/
