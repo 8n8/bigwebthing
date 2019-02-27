@@ -9,40 +9,53 @@ type stateT struct {
 	fatalErr error
 }
 
-func initState () stateT {
+func initState() stateT {
 	return stateT{
 		fatalErr: nil,
 	}
 }
 
 type outputT struct {
-	x int
+	response     []byte
+	responseChan chan []byte
+	inputChan    chan httpInputT
 }
 
 func initOutput() outputT {
-	return outputT{x: 0}
+	return outputT{
+		response:     make([]byte, 0),
+		responseChan: make(chan []byte),
+		inputChan:    make(chan httpInputT),
+	}
 }
 
 type inputT struct {
-	x int
+	httpInput httpInputT
 }
 
 func initInput() inputT {
-	return inputT{x: 0}
+	return inputT{
+		httpInput: httpInputT{
+			typeOf:     blob,
+			body:       make([]byte, 0),
+			returnChan: make(chan []byte),
+		},
+	}
 }
 
 func io(output outputT) inputT {
+	output.responseChan <- output.response
 	return inputT{
-		x: 0,
+		httpInput: <-output.inputChan,
 	}
 }
 
 func update(s stateT, i inputT) (stateT, outputT) {
-	return stateT{fatalErr: nil}, outputT{x: 0}
+	return stateT{fatalErr: nil}, initOutput()
 }
 
 func main() {
-	httpCh := make(chan httpInput)
+	httpCh := make(chan httpInputT)
 	go httpServer(httpCh)
 	state := initState()
 	output := initOutput()
@@ -59,9 +72,10 @@ const (
 	blob httpMsgType = iota + 1
 	invite
 	uninvite
+	metadata
 )
 
-type httpInput struct {
+type httpInputT struct {
 	typeOf     httpMsgType
 	body       []byte
 	returnChan chan []byte
@@ -69,14 +83,14 @@ type httpInput struct {
 
 type handler = func(http.ResponseWriter, *http.Request)
 
-func makeHandler(ch chan httpInput, route httpMsgType) handler {
+func makeHandler(ch chan httpInputT, route httpMsgType) handler {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			return
 		}
 		returnChan := make(chan []byte)
-		ch <- httpInput{
+		ch <- httpInputT{
 			typeOf:     route,
 			body:       bodyBytes,
 			returnChan: returnChan,
@@ -85,9 +99,10 @@ func makeHandler(ch chan httpInput, route httpMsgType) handler {
 	}
 }
 
-func httpServer(ch chan httpInput) {
+func httpServer(ch chan httpInputT) {
 	http.HandleFunc("/blob", makeHandler(ch, blob))
 	http.HandleFunc("/invite", makeHandler(ch, invite))
 	http.HandleFunc("/uninvite", makeHandler(ch, uninvite))
+	http.HandleFunc("/metadata", makeHandler(ch, metadata))
 	http.ListenAndServe(":4000", nil)
 }
