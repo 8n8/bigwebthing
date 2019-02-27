@@ -1,13 +1,56 @@
 package main
 
 import (
-	"net/http"
 	"io/ioutil"
+	"net/http"
 )
 
-func main () {
+type stateT struct {
+	fatalErr error
+}
+
+func initState () stateT {
+	return stateT{
+		fatalErr: nil,
+	}
+}
+
+type outputT struct {
+	x int
+}
+
+func initOutput() outputT {
+	return outputT{x: 0}
+}
+
+type inputT struct {
+	x int
+}
+
+func initInput() inputT {
+	return inputT{x: 0}
+}
+
+func io(output outputT) inputT {
+	return inputT{
+		x: 0,
+	}
+}
+
+func update(s stateT, i inputT) (stateT, outputT) {
+	return stateT{fatalErr: nil}, outputT{x: 0}
+}
+
+func main() {
 	httpCh := make(chan httpInput)
 	go httpServer(httpCh)
+	state := initState()
+	output := initOutput()
+	input := initInput()
+	for state.fatalErr == nil {
+		input = io(output)
+		state, output = update(state, input)
+	}
 }
 
 type httpMsgType int
@@ -19,8 +62,8 @@ const (
 )
 
 type httpInput struct {
-	typeOf httpMsgType
-	body []byte
+	typeOf     httpMsgType
+	body       []byte
 	returnChan chan []byte
 }
 
@@ -34,8 +77,8 @@ func makeHandler(ch chan httpInput, route httpMsgType) handler {
 		}
 		returnChan := make(chan []byte)
 		ch <- httpInput{
-			typeOf: route,
-			body: bodyBytes,
+			typeOf:     route,
+			body:       bodyBytes,
 			returnChan: returnChan,
 		}
 		w.Write(<-returnChan)

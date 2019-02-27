@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"io/ioutil"
+	"net/http"
 )
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -13,11 +13,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		f.ServeHTTP(w, r)
 	case "POST":
 		bodyBytes, err := ioutil.ReadAll(r.Body)
-                if err != nil {
+		if err != nil {
 			return
 		}
 		bodyStr := string(bodyBytes)
-		fmt.Fprintf(w, bodyStr + " world!")
+		fmt.Fprintf(w, bodyStr+" world!")
 	}
 }
 
