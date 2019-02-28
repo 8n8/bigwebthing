@@ -6,7 +6,8 @@ import (
 )
 
 type stateT struct {
-	fatalErr error
+	fatalErr      error
+	httpInputChan chan httpInputT
 }
 
 func initState() stateT {
@@ -15,53 +16,36 @@ func initState() stateT {
 	}
 }
 
-type outputT struct {
+type outputT interface {
+	io() inputT
+}
+
+type getHttpInputs struct {
+	inputChan chan httpInputT
+}
+
+func (g getHttpInputs) io() inputT {
+	return <-g.inputChan
+}
+
+type sendHttpResponse struct {
 	response     []byte
 	responseChan chan []byte
-	inputChan    chan httpInputT
 }
 
-func initOutput() outputT {
-	return outputT{
-		response:     make([]byte, 0),
-		responseChan: make(chan []byte),
-		inputChan:    make(chan httpInputT),
-	}
-}
-
-type inputT struct {
-	httpInput httpInputT
-}
-
-func initInput() inputT {
-	return inputT{
-		httpInput: httpInputT{
-			typeOf:     blob,
-			body:       make([]byte, 0),
-			returnChan: make(chan []byte),
-		},
-	}
-}
-
-func io(output outputT) inputT {
-	output.responseChan <- output.response
-	return inputT{
-		httpInput: <-output.inputChan,
-	}
-}
-
-func update(s stateT, i inputT) (stateT, outputT) {
-	return stateT{fatalErr: nil}, initOutput()
+type inputT interface {
+	update(stateT) (stateT, outputT)
 }
 
 func main() {
-	output := initOutput()
-	go httpServer(output.inputChan)
+	httpInputChan := make(chan httpInputT)
+	go httpServer(httpInputChan)
+	var input inputT = noInput{}
+	var output outputT = getHttpInputs{inputChan: httpInputChan}
 	state := initState()
-	input := initInput()
 	for state.fatalErr == nil {
-		input = io(output)
-		state, output = update(state, input)
+		input = output.io()
+		state, output = input.update(state)
 	}
 }
 
@@ -78,6 +62,16 @@ type httpInputT struct {
 	typeOf     httpMsgType
 	body       []byte
 	returnChan chan []byte
+}
+
+func (h httpInputT) update(s stateT) (stateT, outputT) {
+	return s, getHttpInputs{inputChan: s.httpInputChan}
+}
+
+type noInput struct{}
+
+func (n noInput) update(s stateT) (stateT, outputT) {
+	return s, getHttpInputs{inputChan: s.httpInputChan}
 }
 
 type handler = func(http.ResponseWriter, *http.Request)
