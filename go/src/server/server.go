@@ -55,10 +55,9 @@ func update(s stateT, i inputT) (stateT, outputT) {
 }
 
 func main() {
-	httpCh := make(chan httpInputT)
-	go httpServer(httpCh)
-	state := initState()
 	output := initOutput()
+	go httpServer(output.inputChan)
+	state := initState()
 	input := initInput()
 	for state.fatalErr == nil {
 		input = io(output)
