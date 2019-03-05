@@ -16,6 +16,7 @@ type stateT struct {
 	invitations   invitesT
 	uninvitations invitesT
 	memberList    map[[32]byte]bool
+	authCodes     map[[15]byte]int
 }
 
 type invitesT map[invitationT]bool
@@ -101,8 +102,8 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 	switch h.typeOf {
 	case invite:
 		return processInvite(h, s)
-		// case uninvite:
-		// 	return processUninvite(h, s)
+	case uninvite:
+		return processUninvite(h, s)
 		// case metadata:
 		// 	return processMetadata(h, s)
 		// case blob:
@@ -112,14 +113,73 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 	return s, httpError{err: err, errChan: h.errChan}
 }
 
+func parseInviteLike(
+	raw []byte,
+	memberList map[[32]byte]bool,
+	meaningCode [15]byte) (invitationT, error) {
+
+	var uninvitation invitationT
+	jsonErr := json.Unmarshal(raw, &uninvitation)
+	if jsonErr != nil {
+		return uninvitation, jsonErr
+	}
+	validSignature := verifyDetached(
+		concatInviteAndCodes(
+			uninvitation.invitee,
+			uninvitation.uniqueID,
+			meaningCode),
+		uninvitation.signature,
+		uninvitation.author)
+	if !validSignature {
+		err := errors.New("Could not verify signature.")
+		return uninvitation, err
+	}
+	_, authorIsMember := memberList[uninvitation.author]
+	if !authorIsMember {
+		errStr := "The author is not a current member."
+		return uninvitation, errors.New(errStr)
+	}
+	if uninvitation.author == uninvitation.invitee {
+		errStr := "You can't uninvite yourself."
+		return uninvitation, errors.New(errStr)
+	}
+	return uninvitation, nil
+}
+
+func processUninvite(h httpInputT, s stateT) (stateT, outputT) {
+	uninvitation, err := parseInviteLike(
+		h.body,
+		s.memberList,
+		pleaseUninviteX)
+	if err != nil {
+		return s, httpError{err: err, errChan: h.errChan}
+	}
+	newUninvites := s.uninvitations
+	newUninvites[uninvitation] = true
+	newState := stateT{
+		fatalErr:      s.fatalErr,
+		httpInputChan: s.httpInputChan,
+		invitations:   s.invitations,
+		uninvitations: newUninvites,
+		memberList: makeMemberList(
+			s.invitations,
+			newUninvites),
+	}
+	goodUninvite := appendToFileT{
+		filepath:   uninvitesFilePath,
+		bytesToAdd: h.body,
+		returnChan: h.returnChan,
+		errChan:    h.errChan,
+	}
+	return newState, goodUninvite
+}
+
 type invitationT struct {
 	author    [32]byte
 	invitee   [32]byte
 	signature [sigSize]byte
 	uniqueID  [15]byte
 }
-
-// func Sum256(data []byte) [Size256]byte
 
 const sigSize = sign.Overhead + blake2b.Size256
 
@@ -149,10 +209,18 @@ func convertSig(sig [sigSize]byte) []byte {
 	return newSig
 }
 
-func inviteePlusCodes(invite [32]byte, uniqueID [15]byte) []byte {
-	pleaseInviteX := [15]byte{
-		0xe8, 0xbf, 0x93, 0xd8, 0x39, 0xd3, 0x34, 0xe5,
-		0xc0, 0x1f, 0xff, 0x2b, 0xc4, 0x30, 0xc4}
+var pleaseUninviteX = [15]byte{
+	0x6e, 0xb9, 0xb4, 0x6f, 0xdc, 0x87, 0xf6, 0xbc,
+	0xcf, 0xdf, 0x44, 0x22, 0xea, 0x78, 0xf4}
+
+var pleaseInviteX = [15]byte{
+	0xe8, 0xbf, 0x93, 0xd8, 0x39, 0xd3, 0x34, 0xe5,
+	0xc0, 0x1f, 0xff, 0x2b, 0xc4, 0x30, 0xc4}
+
+func concatInviteAndCodes(
+	invite [32]byte,
+	uniqueID [15]byte,
+	meaningCode [15]byte) []byte {
 	result := make([]byte, 62)
 	i := 0
 	for i < 32 {
@@ -160,17 +228,21 @@ func inviteePlusCodes(invite [32]byte, uniqueID [15]byte) []byte {
 		i++
 	}
 	for i < 47 {
-		result[i] = pleaseInviteX[i-32]
+		result[i] = uniqueID[i-32]
 		i++
 	}
 	for i < 62 {
-		result[i] = uniqueID[i-47]
+		result[i] = meaningCode[i-47]
 		i++
 	}
 	return result
 }
 
-func verifyDetached(msg []byte, sig [sigSize]byte, author [32]byte) bool {
+func verifyDetached(
+	msg []byte,
+	sig [sigSize]byte,
+	author [32]byte) bool {
+
 	actualHash, validSignature := sign.Open(
 		make([]byte, 0),
 		convertSig(sig),
@@ -189,35 +261,11 @@ func verifyDetached(msg []byte, sig [sigSize]byte, author [32]byte) bool {
 	return expectedHash == actualHash32
 }
 
-func parseInvite(raw []byte, memberList map[[32]byte]bool) (invitationT, error) {
-	var invitation invitationT
-	jsonErr := json.Unmarshal(raw, &invitation)
-	if jsonErr != nil {
-		return invitation, jsonErr
-	}
-	validSignature := verifyDetached(
-		inviteePlusCodes(
-			invitation.invitee,
-			invitation.uniqueID),
-		invitation.signature,
-		invitation.author)
-	if !validSignature {
-		err := errors.New("Could not verify signature")
-		return invitation, err
-	}
-	_, authorIsMember := memberList[invitation.author]
-	if !authorIsMember {
-		errStr := "The author is not a current member."
-		return invitation, errors.New(errStr)
-	}
-	if invitation.author == invitation.invitee {
-		errStr := "You can't invite yourself."
-		return invitation, errors.New(errStr)
-	}
-	return invitation, nil
-}
-
-var truesPubKey = [32]byte{0x22, 0x76, 0xf1, 0x1b, 0x62, 0xe6, 0x37, 0x55, 0x01, 0x24, 0xa3, 0x68, 0x06, 0x20, 0xbb, 0x34, 0x4f, 0xcb, 0x7d, 0xe2, 0xdc, 0x19, 0x6d, 0xa0, 0x98, 0x59, 0x12, 0xda, 0x54, 0x99, 0xf1, 0x5e}
+var truesPubKey = [32]byte{
+	0x22, 0x76, 0xf1, 0x1b, 0x62, 0xe6, 0x37, 0x55, 0x01, 0x24,
+	0xa3, 0x68, 0x06, 0x20, 0xbb, 0x34, 0x4f, 0xcb, 0x7d, 0xe2,
+	0xdc, 0x19, 0x6d, 0xa0, 0x98, 0x59, 0x12, 0xda, 0x54, 0x99,
+	0xf1, 0x5e}
 
 func authorAndInviteeEqual(a invitationT, b invitationT) bool {
 	return a.author == b.author && a.invitee == b.invitee
@@ -255,14 +303,14 @@ func makeMemberList(i invitesT, u invitesT) map[[32]byte]bool {
 	return m
 }
 
-type goodInviteT struct {
+type appendToFileT struct {
 	filepath   string
 	bytesToAdd []byte
 	returnChan chan []byte
 	errChan    chan error
 }
 
-func (g goodInviteT) send() inputT {
+func (g appendToFileT) send() inputT {
 	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	f, openErr := os.OpenFile(g.filepath, flags, 0600)
 	if openErr != nil {
@@ -277,32 +325,36 @@ func (g goodInviteT) send() inputT {
 	return noInput{}
 }
 
-const invitesFilePath = "/home/t/bigwebthing/serverData/invites.txt"
+const (
+	serverDir         = "/home/t/bigwebthing/serverData"
+	invitesFilePath   = serverDir + "/invites.txt"
+	uninvitesFilePath = serverDir + "/uninvites.txt"
+)
 
 func processInvite(h httpInputT, s stateT) (stateT, outputT) {
-	invitation, err := parseInvite(h.body, s.memberList)
+	invitation, err := parseInviteLike(
+		h.body,
+		s.memberList,
+		pleaseInviteX)
 	if err != nil {
 		return s, httpError{err: err, errChan: h.errChan}
 	}
 	newInvites := s.invitations
 	newInvites[invitation] = true
-	json, marshallErr := json.Marshal(invitation)
-	if marshallErr != nil {
-		return s, httpError{
-			err:     marshallErr,
-			errChan: h.errChan}
-	}
 	newState := stateT{
 		fatalErr:      s.fatalErr,
 		httpInputChan: s.httpInputChan,
 		invitations:   newInvites,
 		uninvitations: s.uninvitations,
-		memberList:    makeMemberList(newInvites, s.uninvitations),
+		memberList: makeMemberList(
+			newInvites,
+			s.uninvitations),
 	}
-	goodInvite := goodInviteT{
+	goodInvite := appendToFileT{
 		filepath:   invitesFilePath,
-		bytesToAdd: json,
+		bytesToAdd: h.body,
 		returnChan: h.returnChan,
+		errChan:    h.errChan,
 	}
 	return newState, goodInvite
 }
