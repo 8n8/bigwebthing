@@ -4,12 +4,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"net/http"
 	"os"
-	"github.com/gorilla/websocket"
 )
 
 type stateT struct {
@@ -53,19 +53,23 @@ func (g getHttpInputs) send() inputT {
 	return <-g.inputChan
 }
 
-type httpError struct {
-	err     error
-	errChan chan error
+func errToBytes(e error) []byte {
+	return []byte(e.Error())
 }
 
-func (e httpError) send() inputT {
-	e.errChan <- e.err
-	return noInput{}
-}
+const (
+	responseErr byte = 0x00
+	responseOk  byte = 0x01
+)
 
 type sendHttpResponse struct {
 	response     []byte
 	responseChan chan []byte
+}
+
+func (s sendHttpResponse) send() inputT {
+	s.responseChan <- s.response
+	return noInput{}
 }
 
 type inputT interface {
@@ -85,20 +89,20 @@ func main() {
 }
 
 const (
-	blob byte = 0x00
-	invite byte = 0x01
+	blob     byte = 0x00
+	invite   byte = 0x01
 	uninvite byte = 0x02
 	metadata byte = 0x03
 )
 
 type httpInputT struct {
+	route      byte
 	body       []byte
-	returnChan chan []byte
-	errChan    chan error
+	outputChan chan []byte
 }
 
 func (h httpInputT) update(s stateT) (stateT, outputT) {
-	switch h.body[0] {
+	switch h.route {
 	case invite:
 		return processInvite(h, s)
 	case uninvite:
@@ -109,26 +113,25 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 		return processBlob(h, s)
 	}
 	err := errors.New("Invalid message type.")
-	return s, httpError{err: err, errChan: h.errChan}
+	return s, httpError(h.outputChan, err)
 }
 
 func processBlob(h httpInputT, s stateT) (stateT, outputT) {
 	if len(h.body) != 16032 {
 		err := errors.New("Body not 16032 bytes long.")
-		return s, httpError{err: err, errChan: h.errChan}
+		return s, httpError(h.outputChan, err)
 	}
 	blobHash := blake2b.Sum256(h.body)
 	_, blobExpected := s.expectedBlobs[blobHash]
 	if !blobExpected {
 		err := errors.New("Blob not expected.")
-		return s, httpError{err: err, errChan: h.errChan}
+		return s, httpError(h.outputChan, err)
 	}
 	filename := hex.EncodeToString(hashToSlice(blobHash))
 	writeToFile := writeNewFileT{
 		filepath:   chunkDir + "/" + filename,
 		contents:   h.body,
-		returnChan: h.returnChan,
-		errChan:    h.errChan,
+		outputChan: h.outputChan,
 	}
 	return s, writeToFile
 }
@@ -172,7 +175,7 @@ func processUninvite(h httpInputT, s stateT) (stateT, outputT) {
 		s.memberList,
 		pleaseUninviteX)
 	if err != nil {
-		return s, httpError{err: err, errChan: h.errChan}
+		return s, httpError(h.outputChan, err)
 	}
 	newUninvites := s.uninvitations
 	newUninvites[uninvitation] = true
@@ -188,8 +191,7 @@ func processUninvite(h httpInputT, s stateT) (stateT, outputT) {
 	goodUninvite := appendToFileT{
 		filepath:   uninvitesFilePath,
 		bytesToAdd: h.body,
-		returnChan: h.returnChan,
-		errChan:    h.errChan,
+		outputChan: h.outputChan,
 	}
 	return newState, goodUninvite
 }
@@ -332,14 +334,14 @@ func makeMemberList(i invitesT, u invitesT) map[[32]byte]bool {
 type appendToFileT struct {
 	filepath   string
 	bytesToAdd []byte
-	returnChan chan []byte
+	outputChan chan []byte
 	errChan    chan error
 }
 
 type writeNewFileT struct {
 	filepath   string
 	contents   []byte
-	returnChan chan []byte
+	outputChan chan []byte
 	errChan    chan error
 }
 
@@ -356,7 +358,6 @@ func (w writeNewFileT) send() inputT {
 		w.errChan <- writeErr
 		return noInput{}
 	}
-	w.returnChan <- []byte("ok")
 	return noInput{}
 }
 
@@ -373,7 +374,6 @@ func (g appendToFileT) send() inputT {
 		g.errChan <- writeErr
 		return noInput{}
 	}
-	g.returnChan <- []byte("ok")
 	return noInput{}
 }
 
@@ -391,7 +391,7 @@ func processInvite(h httpInputT, s stateT) (stateT, outputT) {
 		s.memberList,
 		pleaseInviteX)
 	if err != nil {
-		return s, httpError{err: err, errChan: h.errChan}
+		return s, httpError(h.outputChan, err)
 	}
 	newInvites := s.invitations
 	newInvites[invitation] = true
@@ -407,8 +407,7 @@ func processInvite(h httpInputT, s stateT) (stateT, outputT) {
 	goodInvite := appendToFileT{
 		filepath:   invitesFilePath,
 		bytesToAdd: h.body,
-		returnChan: h.returnChan,
-		errChan:    h.errChan,
+		outputChan: h.outputChan,
 	}
 	return newState, goodInvite
 }
@@ -482,10 +481,19 @@ func parseMetadata(
 	return metadata, nil
 }
 
+func httpError(outputChan chan []byte, err error) sendHttpResponse {
+	return sendHttpResponse{
+		response: append(
+			[]byte{responseErr},
+			[]byte(err.Error())...),
+		responseChan: outputChan,
+	}
+}
+
 func processMetadata(h httpInputT, s stateT) (stateT, outputT) {
 	metadata, err := parseMetadata(h.body, s.memberList)
 	if err != nil {
-		return s, httpError{err: err, errChan: h.errChan}
+		return s, httpError(h.outputChan, err)
 	}
 	newExpectedBlobs := s.expectedBlobs
 	newExpectedBlobs[metadata.chunkHeadHash] = true
@@ -500,8 +508,7 @@ func processMetadata(h httpInputT, s stateT) (stateT, outputT) {
 	goodMd := appendToFileT{
 		filepath:   metadataFilePath,
 		bytesToAdd: h.body,
-		returnChan: h.returnChan,
-		errChan:    h.errChan,
+		outputChan: h.outputChan,
 	}
 	return newState, goodMd
 }
@@ -514,45 +521,16 @@ func (n noInput) update(s stateT) (stateT, outputT) {
 
 type handlerT = func(http.ResponseWriter, *http.Request)
 
-// func makeHandler(ch chan httpInputT, route httpMsgType) handler {
-// 	return func(w http.ResponseWriter, r *http.Request) {
-// 		bodyBytes, err := ioutil.ReadAll(r.Body)
-// 		if err != nil {
-// 			return
-// 		}
-// 		returnChan := make(chan []byte)
-// 		errChan := make(chan error)
-// 		ch <- httpInputT{
-// 			typeOf:     route,
-// 			body:       bodyBytes,
-// 			returnChan: returnChan,
-// 			errChan:    errChan,
-// 		}
-// 		select {
-// 		case <-errChan:
-// 			w.WriteHeader(http.StatusInternalServerError)
-// 		case response := <-returnChan:
-// 			w.Write(response)
-// 		}
-// 	}
-// }
-
-
 var upgrader = websocket.Upgrader{
-	ReadBufferSize: 1024,
+	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 }
 
-func handler(
-	ch chan httpInputT,
-	w http.ResponseWriter,
-	r *http.Request) {
+func readWebsocket(
+	ws *websocket.Conn,
+	inputChan chan httpInputT,
+	outputChan chan []byte) {
 
-	ws, wsErr := upgrader.Upgrade(w, r, nil)
-	if wsErr != nil {
-		return
-	}
-	returnChan := make(chan []byte)
 	for {
 		msgType, rawMsg, readErr := ws.ReadMessage()
 		if readErr != nil {
@@ -561,18 +539,31 @@ func handler(
 		if msgType != websocket.BinaryMessage {
 			return
 		}
-		ch <- httpInputT{
-			body: rawMsg,
-			returnChan: returnChan,
+		inputChan <- httpInputT{
+			route:      rawMsg[0],
+			body:       rawMsg[1:],
+			outputChan: outputChan,
 		}
-		select {
-		case returnMsg := <-returnChan:
-			sendErr := ws.WriteMessage(
-				websocket.BinaryMessage, returnMsg)
-			if sendErr != nil {
-				return
-			}
-		default:
+	}
+}
+
+func handler(
+	inputChan chan httpInputT,
+	w http.ResponseWriter,
+	r *http.Request) {
+
+	ws, wsErr := upgrader.Upgrade(w, r, nil)
+	if wsErr != nil {
+		return
+	}
+	outputChan := make(chan []byte)
+	go readWebsocket(ws, inputChan, outputChan)
+	for {
+		msgOut := <-outputChan
+		sendErr := ws.WriteMessage(
+			websocket.BinaryMessage, msgOut)
+		if sendErr != nil {
+			return
 		}
 	}
 }
@@ -585,9 +576,5 @@ func makeHandler(ch chan httpInputT) handlerT {
 
 func httpServer(ch chan httpInputT) {
 	http.HandleFunc("/", makeHandler(ch))
-	// http.HandleFunc("/blob", makeHandler(ch, blob))
-	// http.HandleFunc("/invite", makeHandler(ch, invite))
-	// http.HandleFunc("/uninvite", makeHandler(ch, uninvite))
-	// http.HandleFunc("/metadata", makeHandler(ch, metadata))
 	http.ListenAndServe(":4000", nil)
 }
