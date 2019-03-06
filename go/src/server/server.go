@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"golang.org/x/crypto/blake2b"
@@ -107,11 +108,32 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 		return processUninvite(h, s)
 	case metadata:
 		return processMetadata(h, s)
-		// case blob:
-		// 	return processBlob(h, s)
+	case blob:
+		return processBlob(h, s)
 	}
 	err := errors.New("Invalid message type.")
 	return s, httpError{err: err, errChan: h.errChan}
+}
+
+func processBlob(h httpInputT, s stateT) (stateT, outputT) {
+	if len(h.body) != 16032 {
+		err := errors.New("Body not 16032 bytes long.")
+		return s, httpError{err: err, errChan: h.errChan}
+	}
+	blobHash := blake2b.Sum256(h.body)
+	_, blobExpected := s.expectedBlobs[blobHash]
+	if !blobExpected {
+		err := errors.New("Blob not expected.")
+		return s, httpError{err: err, errChan: h.errChan}
+	}
+	filename := hex.EncodeToString(hashToSlice(blobHash))
+	writeToFile := writeNewFileT{
+		filepath:   chunkDir + "/" + filename,
+		contents:   h.body,
+		returnChan: h.returnChan,
+		errChan:    h.errChan,
+	}
+	return s, writeToFile
 }
 
 func parseInviteLike(
@@ -262,11 +284,17 @@ func verifyDetached(
 	return expectedHash == actualHash32
 }
 
-var truesPubKey = [32]byte{
+var truesPubSign = [32]byte{
 	0x22, 0x76, 0xf1, 0x1b, 0x62, 0xe6, 0x37, 0x55, 0x01, 0x24,
 	0xa3, 0x68, 0x06, 0x20, 0xbb, 0x34, 0x4f, 0xcb, 0x7d, 0xe2,
 	0xdc, 0x19, 0x6d, 0xa0, 0x98, 0x59, 0x12, 0xda, 0x54, 0x99,
 	0xf1, 0x5e}
+
+var truesPubEncrypt = [32]byte{
+	0x0e, 0x62, 0x16, 0x83, 0x6f, 0x6e, 0xd8, 0xb3, 0x1b, 0x68,
+	0x52, 0xec, 0xc1, 0xef, 0x70, 0x01, 0xaa, 0xcd, 0xdc, 0xba,
+	0x3b, 0xe4, 0xcb, 0x81, 0x34, 0xfc, 0xa9, 0xa3, 0x0c, 0x3d,
+	0x82, 0xa0}
 
 func authorAndInviteeEqual(a invitationT, b invitationT) bool {
 	return a.author == b.author && a.invitee == b.invitee
@@ -285,7 +313,7 @@ func countSimilarInvites(i invitationT, invites invitesT) int {
 func makeMemberList(i invitesT, u invitesT) map[[32]byte]bool {
 	var m map[[32]byte]bool
 	lenm := 0
-	m[truesPubKey] = true
+	m[truesPubSign] = true
 	for len(m) > lenm {
 		for invite, _ := range i {
 			_, authorIsMember := m[invite.author]
@@ -311,16 +339,42 @@ type appendToFileT struct {
 	errChan    chan error
 }
 
+type writeNewFileT struct {
+	filepath   string
+	contents   []byte
+	returnChan chan []byte
+	errChan    chan error
+}
+
+func (w writeNewFileT) send() inputT {
+	flags := os.O_CREATE | os.O_WRONLY
+	f, openErr := os.OpenFile(w.filepath, flags, 0400)
+	if openErr != nil {
+		w.errChan <- openErr
+		return noInput{}
+	}
+	defer f.Close()
+	_, writeErr := f.Write(w.contents)
+	if writeErr != nil {
+		w.errChan <- writeErr
+		return noInput{}
+	}
+	w.returnChan <- []byte("ok")
+	return noInput{}
+}
+
 func (g appendToFileT) send() inputT {
 	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	f, openErr := os.OpenFile(g.filepath, flags, 0600)
 	if openErr != nil {
 		g.errChan <- openErr
+		return noInput{}
 	}
 	defer f.Close()
 	_, writeErr := f.Write(append([]byte("\n"), g.bytesToAdd...))
 	if writeErr != nil {
 		g.errChan <- writeErr
+		return noInput{}
 	}
 	g.returnChan <- []byte("ok")
 	return noInput{}
@@ -331,6 +385,7 @@ const (
 	invitesFilePath   = serverDir + "/invites.txt"
 	uninvitesFilePath = serverDir + "/uninvites.txt"
 	metadataFilePath  = serverDir + "/metadata.txt"
+	chunkDir          = serverDir + "/chunks"
 )
 
 func processInvite(h httpInputT, s stateT) (stateT, outputT) {
