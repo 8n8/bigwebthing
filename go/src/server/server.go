@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"io/ioutil"
 	"net/http"
@@ -16,7 +17,7 @@ type stateT struct {
 	invitations   invitesT
 	uninvitations invitesT
 	memberList    map[[32]byte]bool
-	authCodes     map[[15]byte]int
+	expectedBlobs map[[32]byte]bool
 }
 
 type invitesT map[invitationT]bool
@@ -104,8 +105,8 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 		return processInvite(h, s)
 	case uninvite:
 		return processUninvite(h, s)
-		// case metadata:
-		// 	return processMetadata(h, s)
+	case metadata:
+		return processMetadata(h, s)
 		// case blob:
 		// 	return processBlob(h, s)
 	}
@@ -329,6 +330,7 @@ const (
 	serverDir         = "/home/t/bigwebthing/serverData"
 	invitesFilePath   = serverDir + "/invites.txt"
 	uninvitesFilePath = serverDir + "/uninvites.txt"
+	metadataFilePath  = serverDir + "/metadata.txt"
 )
 
 func processInvite(h httpInputT, s stateT) (stateT, outputT) {
@@ -357,6 +359,99 @@ func processInvite(h httpInputT, s stateT) (stateT, outputT) {
 		errChan:    h.errChan,
 	}
 	return newState, goodInvite
+}
+
+const encSymKeyLen = secretbox.Overhead + 32
+
+type metadataT struct {
+	chunkHeadHash         [32]byte
+	author                [32]byte
+	recipient             [32]byte
+	nonceBase             [20]byte
+	encryptedSymmetricKey [encSymKeyLen]byte
+	signature             [sigSize]byte
+}
+
+const concatMdLen = 32 + 32 + 20 + encSymKeyLen
+
+func concatMd(m metadataT) []byte {
+	result := make([]byte, concatMdLen)
+	i := 0
+	for i < 32 {
+		result[i] = m.chunkHeadHash[i]
+		i++
+	}
+	for i < 64 {
+		result[i] = m.recipient[i-32]
+		i++
+	}
+	for i < 84 {
+		result[i] = m.nonceBase[i-52]
+		i++
+	}
+	for i < 84+encSymKeyLen {
+		result[i] = m.encryptedSymmetricKey[i-encSymKeyLen-52]
+		i++
+	}
+	return result
+}
+
+func parseMetadata(
+	raw []byte,
+	memberList map[[32]byte]bool) (metadataT, error) {
+
+	var metadata metadataT
+	jsonErr := json.Unmarshal(raw, &metadata)
+	if jsonErr != nil {
+		return metadataT{}, jsonErr
+	}
+	validSignature := verifyDetached(
+		concatMd(metadata),
+		metadata.signature,
+		metadata.author)
+	if !validSignature {
+		err := errors.New("Could not verify signature.")
+		return metadataT{}, err
+	}
+	_, authorIsMember := memberList[metadata.author]
+	if !authorIsMember {
+		errStr := "The author is not a member."
+		return metadataT{}, errors.New(errStr)
+	}
+	_, recipientIsMember := memberList[metadata.recipient]
+	if !recipientIsMember {
+		errStr := "The recipient is not a member."
+		return metadataT{}, errors.New(errStr)
+	}
+	if metadata.author == metadata.recipient {
+		errStr := "You can't send messages to yourself."
+		return metadataT{}, errors.New(errStr)
+	}
+	return metadata, nil
+}
+
+func processMetadata(h httpInputT, s stateT) (stateT, outputT) {
+	metadata, err := parseMetadata(h.body, s.memberList)
+	if err != nil {
+		return s, httpError{err: err, errChan: h.errChan}
+	}
+	newExpectedBlobs := s.expectedBlobs
+	newExpectedBlobs[metadata.chunkHeadHash] = true
+	newState := stateT{
+		fatalErr:      s.fatalErr,
+		httpInputChan: s.httpInputChan,
+		invitations:   s.invitations,
+		uninvitations: s.uninvitations,
+		memberList:    s.memberList,
+		expectedBlobs: newExpectedBlobs,
+	}
+	goodMd := appendToFileT{
+		filepath:   metadataFilePath,
+		bytesToAdd: h.body,
+		returnChan: h.returnChan,
+		errChan:    h.errChan,
+	}
+	return newState, goodMd
 }
 
 type noInput struct{}
