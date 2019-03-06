@@ -7,9 +7,9 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
-	"io/ioutil"
 	"net/http"
 	"os"
+	"github.com/gorilla/websocket"
 )
 
 type stateT struct {
@@ -84,24 +84,21 @@ func main() {
 	}
 }
 
-type httpMsgType int
-
 const (
-	blob httpMsgType = iota + 1
-	invite
-	uninvite
-	metadata
+	blob byte = 0x00
+	invite byte = 0x01
+	uninvite byte = 0x02
+	metadata byte = 0x03
 )
 
 type httpInputT struct {
-	typeOf     httpMsgType
 	body       []byte
 	returnChan chan []byte
 	errChan    chan error
 }
 
 func (h httpInputT) update(s stateT) (stateT, outputT) {
-	switch h.typeOf {
+	switch h.body[0] {
 	case invite:
 		return processInvite(h, s)
 	case uninvite:
@@ -515,35 +512,82 @@ func (n noInput) update(s stateT) (stateT, outputT) {
 	return s, getHttpInputs{inputChan: s.httpInputChan}
 }
 
-type handler = func(http.ResponseWriter, *http.Request)
+type handlerT = func(http.ResponseWriter, *http.Request)
 
-func makeHandler(ch chan httpInputT, route httpMsgType) handler {
-	return func(w http.ResponseWriter, r *http.Request) {
-		bodyBytes, err := ioutil.ReadAll(r.Body)
-		if err != nil {
+// func makeHandler(ch chan httpInputT, route httpMsgType) handler {
+// 	return func(w http.ResponseWriter, r *http.Request) {
+// 		bodyBytes, err := ioutil.ReadAll(r.Body)
+// 		if err != nil {
+// 			return
+// 		}
+// 		returnChan := make(chan []byte)
+// 		errChan := make(chan error)
+// 		ch <- httpInputT{
+// 			typeOf:     route,
+// 			body:       bodyBytes,
+// 			returnChan: returnChan,
+// 			errChan:    errChan,
+// 		}
+// 		select {
+// 		case <-errChan:
+// 			w.WriteHeader(http.StatusInternalServerError)
+// 		case response := <-returnChan:
+// 			w.Write(response)
+// 		}
+// 	}
+// }
+
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize: 1024,
+	WriteBufferSize: 1024,
+}
+
+func handler(
+	ch chan httpInputT,
+	w http.ResponseWriter,
+	r *http.Request) {
+
+	ws, wsErr := upgrader.Upgrade(w, r, nil)
+	if wsErr != nil {
+		return
+	}
+	returnChan := make(chan []byte)
+	for {
+		msgType, rawMsg, readErr := ws.ReadMessage()
+		if readErr != nil {
 			return
 		}
-		returnChan := make(chan []byte)
-		errChan := make(chan error)
+		if msgType != websocket.BinaryMessage {
+			return
+		}
 		ch <- httpInputT{
-			typeOf:     route,
-			body:       bodyBytes,
+			body: rawMsg,
 			returnChan: returnChan,
-			errChan:    errChan,
 		}
 		select {
-		case <-errChan:
-			w.WriteHeader(http.StatusInternalServerError)
-		case response := <-returnChan:
-			w.Write(response)
+		case returnMsg := <-returnChan:
+			sendErr := ws.WriteMessage(
+				websocket.BinaryMessage, returnMsg)
+			if sendErr != nil {
+				return
+			}
+		default:
 		}
 	}
 }
 
+func makeHandler(ch chan httpInputT) handlerT {
+	return func(w http.ResponseWriter, r *http.Request) {
+		handler(ch, w, r)
+	}
+}
+
 func httpServer(ch chan httpInputT) {
-	http.HandleFunc("/blob", makeHandler(ch, blob))
-	http.HandleFunc("/invite", makeHandler(ch, invite))
-	http.HandleFunc("/uninvite", makeHandler(ch, uninvite))
-	http.HandleFunc("/metadata", makeHandler(ch, metadata))
+	http.HandleFunc("/", makeHandler(ch))
+	// http.HandleFunc("/blob", makeHandler(ch, blob))
+	// http.HandleFunc("/invite", makeHandler(ch, invite))
+	// http.HandleFunc("/uninvite", makeHandler(ch, uninvite))
+	// http.HandleFunc("/metadata", makeHandler(ch, metadata))
 	http.ListenAndServe(":4000", nil)
 }
