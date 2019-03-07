@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"time"
@@ -67,6 +68,7 @@ const (
 	responseNoAuthCode byte = 0x01
 	responseOk         byte = 0x02
 	responseAuthCode   byte = 0x03
+	responseBlob       byte = 0x04
 )
 
 type sendHttpResponse struct {
@@ -103,6 +105,7 @@ const (
 	downloadMessages byte = 0x04
 	downloadInvites  byte = 0x05
 	getAuthCode      byte = 0x06
+	downloadBlob     byte = 0x07
 )
 
 type httpInputT struct {
@@ -125,11 +128,42 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 		return processGetAuth(h, s)
 	case downloadMessages:
 		return getTimeForMdDownload(h, s)
+	case downloadBlob:
+		return processDownloadBlob(h, s)
 		// case downloadInvites:
 		// 	return processInvitesDownload(h, s)
 	}
 	err := errors.New("Invalid message type.")
 	return s, httpError(h.outputChan, err)
+}
+
+type readFileT struct {
+	filePath   string
+	outputChan chan []byte
+}
+
+func (r readFileT) send() inputT {
+	fileContents, err := ioutil.ReadFile(r.filePath)
+	if err != nil {
+		r.outputChan <- append(
+			[]byte{responseBlob},
+			[]byte(err.Error())...)
+	}
+	r.outputChan <- fileContents
+	return noInput{}
+}
+
+func processDownloadBlob(h httpInputT, s stateT) (stateT, outputT) {
+	if len(h.body) != 32 {
+		err := errors.New("Blob hash must be 32 bytes long.")
+		return s, httpError(h.outputChan, err)
+	}
+	filename := hex.EncodeToString(h.body)
+	readFile := readFileT{
+		filePath:   chunkDir + "/" + filename,
+		outputChan: h.outputChan,
+	}
+	return s, readFile
 }
 
 func getMyMsgs(
