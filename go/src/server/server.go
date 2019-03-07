@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
@@ -22,6 +23,7 @@ type stateT struct {
 	memberList    map[[32]byte]bool
 	expectedBlobs map[[32]byte]bool
 	authCodes     map[[15]byte]int64
+	msgs          map[metadataT]bool
 }
 
 type invitesT map[invitationT]bool
@@ -121,13 +123,138 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 		return processBlob(h, s)
 	case getAuthCode:
 		return processGetAuth(h, s)
-		// case downloadMessages:
-		// 	return processMsgDownload(h, s)
+	case downloadMessages:
+		return getTimeForMdDownload(h, s)
 		// case downloadInvites:
 		// 	return processInvitesDownload(h, s)
 	}
 	err := errors.New("Invalid message type.")
 	return s, httpError(h.outputChan, err)
+}
+
+func getMyMsgs(
+	allMsgs map[metadataT]bool,
+	author [32]byte) map[metadataT]bool {
+
+	var myMsgs map[metadataT]bool
+	for msg, _ := range allMsgs {
+		if msg.recipient == author {
+			myMsgs[msg] = true
+		}
+	}
+	return myMsgs
+}
+
+type sendMsgsToClient struct {
+	msgs       map[metadataT]bool
+	outputChan chan []byte
+}
+
+func (s sendMsgsToClient) send() inputT {
+	for msg, _ := range s.msgs {
+		encoded, err := json.Marshal(msg)
+		if err != nil {
+			fmt.Print(err)
+		}
+		s.outputChan <- encoded
+	}
+	return noInput{}
+}
+
+type msgDownloadT struct {
+	author    [32]byte
+	authCode  [15]byte
+	signature [sigSize]byte
+}
+
+func concatMsgRequest(m msgDownloadT) []byte {
+	result := make([]byte, 30)
+	i := 0
+	for i < 15 {
+		result[i] = m.authCode[i]
+	}
+	for i < 30 {
+		result[i] = pleaseGiveMeMsgs[i-15]
+	}
+	return result
+}
+
+func checkAuthCode(authCode [15]byte, authCodes map[[15]byte]int64, posixTime int64) bool {
+	authTime, authExists := authCodes[authCode]
+	if !authExists {
+		return false
+	}
+	authAge := posixTime - authTime
+	if authAge > 30 {
+		return false
+	}
+	if authAge < 0 {
+		return false
+	}
+	return true
+}
+
+func parseMsgRequest(raw []byte, memberList map[[32]byte]bool, authCodes map[[15]byte]int64, posixTime int64) ([32]byte, error) {
+	var msgRequest msgDownloadT
+	var blankauthor [32]byte
+	jsonErr := json.Unmarshal(raw, &msgRequest)
+	if jsonErr != nil {
+		return blankauthor, jsonErr
+	}
+	validSignature := verifyDetached(
+		concatMsgRequest(msgRequest),
+		msgRequest.signature,
+		msgRequest.author)
+	if !validSignature {
+		err := errors.New("Could not verify signature.")
+		return blankauthor, err
+	}
+	authOk := checkAuthCode(msgRequest.authCode, authCodes, posixTime)
+	if !authOk {
+		return blankauthor, errors.New("Invalid auth code.")
+	}
+	_, authorIsMember := memberList[msgRequest.author]
+	if !authorIsMember {
+		errStr := "The author is not a member."
+		return blankauthor, errors.New(errStr)
+	}
+	return msgRequest.author, nil
+}
+
+type getTimeForMdDownloadT struct {
+	httpInput httpInputT
+}
+
+type timeForMdDownload struct {
+	httpInput httpInputT
+	posixTime int64
+}
+
+func (g getTimeForMdDownloadT) send() inputT {
+	return timeForMdDownload{
+		httpInput: g.httpInput,
+		posixTime: time.Now().Unix(),
+	}
+}
+
+func (t timeForMdDownload) update(s stateT) (stateT, outputT) {
+	author, err := parseMsgRequest(
+		t.httpInput.body,
+		s.memberList,
+		s.authCodes,
+		t.posixTime)
+	if err != nil {
+		return s, httpError(t.httpInput.outputChan, err)
+	}
+	msgs := sendMsgsToClient{
+		msgs:       getMyMsgs(s.msgs, author),
+		outputChan: t.httpInput.outputChan,
+	}
+	return s, msgs
+}
+
+func getTimeForMdDownload(h httpInputT, s stateT) (stateT, outputT) {
+	return s, getTimeForMdDownloadT{httpInput: h}
 }
 
 type getAuthCodeT struct {
@@ -258,7 +385,7 @@ func parseInviteLike(
 	}
 	_, authorIsMember := memberList[invitation.author]
 	if !authorIsMember {
-		errStr := "The author is not a current member."
+		errStr := "The author is not a member."
 		return invitation, errors.New(errStr)
 	}
 	if invitation.author == invitation.invitee {
@@ -521,12 +648,11 @@ type metadataT struct {
 	chunkHeadHash         [32]byte
 	author                [32]byte
 	recipient             [32]byte
-	nonceBase             [20]byte
 	encryptedSymmetricKey [encSymKeyLen]byte
 	signature             [sigSize]byte
 }
 
-const concatMdLen = 32 + 32 + 20 + encSymKeyLen
+const concatMdLen = 32 + 32 + encSymKeyLen
 
 func concatMd(m metadataT) []byte {
 	result := make([]byte, concatMdLen)
@@ -539,12 +665,8 @@ func concatMd(m metadataT) []byte {
 		result[i] = m.recipient[i-32]
 		i++
 	}
-	for i < 84 {
-		result[i] = m.nonceBase[i-52]
-		i++
-	}
-	for i < 84+encSymKeyLen {
-		result[i] = m.encryptedSymmetricKey[i-encSymKeyLen-52]
+	for i < 64+encSymKeyLen {
+		result[i] = m.encryptedSymmetricKey[i-encSymKeyLen-32]
 		i++
 	}
 	return result
