@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"golang.org/x/crypto/nacl/sign"
 	"net/http"
 	"os"
+	"time"
 )
 
 type stateT struct {
@@ -19,6 +21,7 @@ type stateT struct {
 	uninvitations invitesT
 	memberList    map[[32]byte]bool
 	expectedBlobs map[[32]byte]bool
+	authCodes     map[[15]byte]int64
 }
 
 type invitesT map[invitationT]bool
@@ -58,8 +61,10 @@ func errToBytes(e error) []byte {
 }
 
 const (
-	responseErr byte = 0x00
-	responseOk  byte = 0x01
+	responseErr        byte = 0x00
+	responseNoAuthCode byte = 0x01
+	responseOk         byte = 0x02
+	responseAuthCode   byte = 0x03
 )
 
 type sendHttpResponse struct {
@@ -89,10 +94,13 @@ func main() {
 }
 
 const (
-	blob     byte = 0x00
-	invite   byte = 0x01
-	uninvite byte = 0x02
-	metadata byte = 0x03
+	blob             byte = 0x00
+	invite           byte = 0x01
+	uninvite         byte = 0x02
+	metadata         byte = 0x03
+	downloadMessages byte = 0x04
+	downloadInvites  byte = 0x05
+	getAuthCode      byte = 0x06
 )
 
 type httpInputT struct {
@@ -111,10 +119,101 @@ func (h httpInputT) update(s stateT) (stateT, outputT) {
 		return processMetadata(h, s)
 	case blob:
 		return processBlob(h, s)
+	case getAuthCode:
+		return processGetAuth(h, s)
+		// case downloadMessages:
+		// 	return processMsgDownload(h, s)
+		// case downloadInvites:
+		// 	return processInvitesDownload(h, s)
 	}
 	err := errors.New("Invalid message type.")
 	return s, httpError(h.outputChan, err)
 }
+
+type getAuthCodeT struct {
+	outputChan chan []byte
+}
+
+type newAuthCodeT struct {
+	code      [15]byte
+	posixTime int64
+}
+
+func genAuthCode() ([15]byte, error) {
+	authSlice := make([]byte, 15)
+	_, err := rand.Read(authSlice)
+	var authCode [15]byte
+	if err != nil {
+		return authCode, err
+	}
+	for i, b := range authSlice {
+		authCode[i] = b
+	}
+	return authCode, nil
+}
+
+func byte15ToSlice(b15 [15]byte) []byte {
+	slice := make([]byte, 15)
+	for i, b := range b15 {
+		slice[i] = b
+	}
+	return slice
+}
+
+func (g getAuthCodeT) send() inputT {
+	authCode, err := genAuthCode()
+	if err != nil {
+		g.outputChan <- append(
+			[]byte{responseNoAuthCode},
+			[]byte(err.Error())...)
+	}
+	g.outputChan <- append(
+		[]byte{responseAuthCode},
+		byte15ToSlice(authCode)...)
+	return newAuthCodeT{
+		code:      authCode,
+		posixTime: time.Now().Unix(),
+	}
+}
+
+func (n newAuthCodeT) update(s stateT) (stateT, outputT) {
+	var newAuths map[[15]byte]int64
+	for authCode, creationTime := range s.authCodes {
+		age := n.posixTime - creationTime
+		if age > 30 {
+			continue
+		}
+		if age < 0 {
+			continue
+		}
+		newAuths[authCode] = creationTime
+	}
+	newAuths[n.code] = n.posixTime
+	newState := stateT{
+		fatalErr:      s.fatalErr,
+		httpInputChan: s.httpInputChan,
+		invitations:   s.invitations,
+		uninvitations: s.uninvitations,
+		memberList:    s.memberList,
+		expectedBlobs: s.expectedBlobs,
+		authCodes:     newAuths,
+	}
+	return newState, getHttpInputs{inputChan: s.httpInputChan}
+}
+
+func processGetAuth(h httpInputT, s stateT) (stateT, outputT) {
+	return s, getAuthCodeT{}
+}
+
+type giveMeMsgsT struct {
+	author    [32]byte
+	authCode  [15]byte
+	signature [sigSize]byte
+}
+
+// func processMsgDownload(h httpInputT, s stateT) (stateT, outputT) {
+//
+// }
 
 func processBlob(h httpInputT, s stateT) (stateT, outputT) {
 	if len(h.body) != 16032 {
@@ -141,32 +240,32 @@ func parseInviteLike(
 	memberList map[[32]byte]bool,
 	meaningCode [15]byte) (invitationT, error) {
 
-	var uninvitation invitationT
-	jsonErr := json.Unmarshal(raw, &uninvitation)
+	var invitation invitationT
+	jsonErr := json.Unmarshal(raw, &invitation)
 	if jsonErr != nil {
-		return uninvitation, jsonErr
+		return invitation, jsonErr
 	}
 	validSignature := verifyDetached(
 		concatInviteAndCodes(
-			uninvitation.invitee,
-			uninvitation.uniqueID,
+			invitation.invitee,
+			invitation.uniqueID,
 			meaningCode),
-		uninvitation.signature,
-		uninvitation.author)
+		invitation.signature,
+		invitation.author)
 	if !validSignature {
 		err := errors.New("Could not verify signature.")
-		return uninvitation, err
+		return invitation, err
 	}
-	_, authorIsMember := memberList[uninvitation.author]
+	_, authorIsMember := memberList[invitation.author]
 	if !authorIsMember {
 		errStr := "The author is not a current member."
-		return uninvitation, errors.New(errStr)
+		return invitation, errors.New(errStr)
 	}
-	if uninvitation.author == uninvitation.invitee {
-		errStr := "You can't uninvite yourself."
-		return uninvitation, errors.New(errStr)
+	if invitation.author == invitation.invitee {
+		errStr := "You can't (un)invite yourself."
+		return invitation, errors.New(errStr)
 	}
-	return uninvitation, nil
+	return invitation, nil
 }
 
 func processUninvite(h httpInputT, s stateT) (stateT, outputT) {
@@ -238,6 +337,10 @@ var pleaseUninviteX = [15]byte{
 var pleaseInviteX = [15]byte{
 	0xe8, 0xbf, 0x93, 0xd8, 0x39, 0xd3, 0x34, 0xe5,
 	0xc0, 0x1f, 0xff, 0x2b, 0xc4, 0x30, 0xc4}
+
+var pleaseGiveMeMsgs = [15]byte{
+	0x23, 0x79, 0x01, 0xd1, 0xf0, 0x04, 0xe7, 0x1c,
+	0x55, 0xba, 0x53, 0xae, 0xa3, 0x13, 0x94}
 
 func concatInviteAndCodes(
 	invite [32]byte,
