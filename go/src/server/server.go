@@ -31,18 +31,6 @@ type userStateT struct {
 
 type invitesT map[invitationT]bool
 
-type uninviteeT struct {
-	pubkey [32]byte
-}
-
-type inviteeT struct {
-	pubkey [32]byte
-}
-
-type authorT struct {
-	pubkey [32]byte
-}
-
 func initState() stateT {
 	return stateT{
 		fatalErr: nil,
@@ -53,20 +41,9 @@ type outputT interface {
 	send() inputT
 }
 
-type getHttpInputs struct {
-	inputChan chan httpInputT
-}
-
-func errToBytes(e error) []byte {
-	return []byte(e.Error())
-}
-
 const (
-	responseErr        byte = 0x00
 	responseNoAuthCode byte = 0x01
-	responseOk         byte = 0x02
 	responseAuthCode   byte = 0x03
-	responseBlob       byte = 0x04
 )
 
 type inputT interface {
@@ -170,58 +147,9 @@ func main() {
 	}
 }
 
-const (
-	blob         byte = 0x00
-	invite       byte = 0x01
-	uninvite     byte = 0x02
-	metadata     byte = 0x03
-	authenticate byte = 0x04
-)
-
 type httpInputT struct {
 	route byte
 	body  []byte
-}
-
-type readFileT struct {
-	filePath   string
-	outputChan chan []byte
-}
-
-func getMyMsgs(
-	allMsgs map[metadataT]bool,
-	author [32]byte) map[metadataT]bool {
-
-	var myMsgs map[metadataT]bool
-	for msg, _ := range allMsgs {
-		if msg.recipient == author {
-			myMsgs[msg] = true
-		}
-	}
-	return myMsgs
-}
-
-type sendMsgsToClient struct {
-	msgs       map[metadataT]bool
-	outputChan chan []byte
-}
-
-type msgDownloadT struct {
-	author    [32]byte
-	authCode  [15]byte
-	signature [sigSize]byte
-}
-
-func concatMsgRequest(m msgDownloadT) []byte {
-	result := make([]byte, 30)
-	i := 0
-	for i < 15 {
-		result[i] = m.authCode[i]
-	}
-	for i < 30 {
-		result[i] = pleaseGiveMeMsgs[i-15]
-	}
-	return result
 }
 
 func checkAuthCode(authCode [authCodeLength]byte, authCodes map[[authCodeLength]byte]int64, posixTime int64) bool {
@@ -239,18 +167,9 @@ func checkAuthCode(authCode [authCodeLength]byte, authCodes map[[authCodeLength]
 	return true
 }
 
-type getAuthCodeT struct {
-	chans userChansT
-}
-
 type userChansT struct {
 	in  chan httpInputT
 	out chan []byte
-}
-
-type newAuthCodeT struct {
-	code      [15]byte
-	posixTime int64
 }
 
 func genAuthCode() ([authCodeLength]byte, error) {
@@ -264,20 +183,6 @@ func genAuthCode() ([authCodeLength]byte, error) {
 		authCode[i] = b
 	}
 	return authCode, nil
-}
-
-func byte15ToSlice(b15 [15]byte) []byte {
-	slice := make([]byte, 15)
-	for i, b := range b15 {
-		slice[i] = b
-	}
-	return slice
-}
-
-type giveMeMsgsT struct {
-	author    [32]byte
-	authCode  [15]byte
-	signature [sigSize]byte
 }
 
 func parseInviteLike(
