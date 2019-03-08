@@ -13,18 +13,18 @@ import (
 )
 
 type stateT struct {
-	fatalErr      error
-	mainChans mainChansT
+	fatalErr       error
+	mainChans      mainChansT
 	connectedUsers map[[32]byte]userStateT
-	invitations   invitesT
-	uninvitations invitesT
-	memberList    map[[32]byte]bool
-	expectedBlobs map[[32]byte]bool
-	authCodes     map[[authCodeLength]byte]int64
+	invitations    invitesT
+	uninvitations  invitesT
+	memberList     map[[32]byte]bool
+	expectedBlobs  map[[32]byte]bool
+	authCodes      map[[authCodeLength]byte]int64
 }
 
 type userStateT struct {
-	chans userChansT
+	chans        userChansT
 	blobExpected bool
 	expectedBlob [32]byte
 }
@@ -57,10 +57,6 @@ type getHttpInputs struct {
 	inputChan chan httpInputT
 }
 
-// func (g getHttpInputs) send() inputT {
-// 	return <-g.inputChan
-// }
-
 func errToBytes(e error) []byte {
 	return []byte(e.Error())
 }
@@ -72,16 +68,6 @@ const (
 	responseAuthCode   byte = 0x03
 	responseBlob       byte = 0x04
 )
-
-// type sendHttpResponse struct {
-// 	response     []byte
-// 	responseChan chan []byte
-// }
-// 
-// func (s sendHttpResponse) send() inputT {
-// 	s.responseChan <- s.response
-// 	return noInput{}
-// }
 
 type inputT interface {
 	update(stateT) (stateT, outputT)
@@ -108,7 +94,7 @@ func (r readMainChansT) send() inputT {
 	}
 }
 
-type noInputT struct {}
+type noInputT struct{}
 
 func (n noInputT) update(s stateT) (stateT, outputT) {
 	return s, readMainChansT{chs: s.mainChans}
@@ -128,7 +114,7 @@ func signedAuthToSlice(bs [signedAuthSize]byte) []byte {
 
 type sendErr struct {
 	err error
-	ch chan error
+	ch  chan error
 }
 
 func (s sendErr) send() inputT {
@@ -160,7 +146,7 @@ func (n newSetupRequest) update(s stateT) (stateT, outputT) {
 	}
 	var expectedBlob [32]byte
 	newConnUsers[n.s.author] = userStateT{
-		chans: n.s.chans,
+		chans:        n.s.chans,
 		blobExpected: false,
 		expectedBlob: expectedBlob,
 	}
@@ -171,7 +157,7 @@ func (n newSetupRequest) update(s stateT) (stateT, outputT) {
 
 func main() {
 	mainChans := mainChansT{
-		getAuthCode: make(chan authCodeChans),
+		getAuthCode:     make(chan authCodeChans),
 		setupConnection: make(chan setupConnectionT),
 	}
 	go httpServer(mainChans)
@@ -185,67 +171,22 @@ func main() {
 }
 
 const (
-	blob             byte = 0x00
-	invite           byte = 0x01
-	uninvite         byte = 0x02
-	metadata         byte = 0x03
+	blob         byte = 0x00
+	invite       byte = 0x01
+	uninvite     byte = 0x02
+	metadata     byte = 0x03
 	authenticate byte = 0x04
 )
 
 type httpInputT struct {
-	route      byte
-	body       []byte
+	route byte
+	body  []byte
 }
-
-// func (h httpInputT) update(s stateT) (stateT, outputT) {
-// 	switch h.route {
-// 	case authenticate:
-// 		return processAuthenticate(h, s)
-// 	case blob:
-// 		return processBlob(h, s)
-// 	case invite:
-// 		return processInvite(h, s)
-// 	case metadata:
-// 		return processMetadata(h, s)
-// 	case uninvite:
-// 		return processUninvite(h, s)
-// 	}
-// 	err := errors.New("Invalid message type.")
-// 	return s, httpError(h.outputChan, err)
-// }
-
-// func processAuthenticate(h httpInputT, s stateT) (stateT, outputT) {
-// 	return s, getAuthCodeT{outputChan: h.chans}
-// }
 
 type readFileT struct {
 	filePath   string
 	outputChan chan []byte
 }
-
-// func (r readFileT) send() inputT {
-// 	fileContents, err := ioutil.ReadFile(r.filePath)
-// 	if err != nil {
-// 		r.outputChan <- append(
-// 			[]byte{responseBlob},
-// 			[]byte(err.Error())...)
-// 	}
-// 	r.outputChan <- fileContents
-// 	return noInput{}
-// }
-
-// func processDownloadBlob(h httpInputT, s stateT) (stateT, outputT) {
-// 	if len(h.body) != 32 {
-// 		err := errors.New("Blob hash must be 32 bytes long.")
-// 		return s, httpError(h.outputChan, err)
-// 	}
-// 	filename := hex.EncodeToString(h.body)
-// 	readFile := readFileT{
-// 		filePath:   chunkDir + "/" + filename,
-// 		outputChan: h.chans.out,
-// 	}
-// 	return s, readFile
-// }
 
 func getMyMsgs(
 	allMsgs map[metadataT]bool,
@@ -264,17 +205,6 @@ type sendMsgsToClient struct {
 	msgs       map[metadataT]bool
 	outputChan chan []byte
 }
-
-// func (s sendMsgsToClient) send() inputT {
-// 	for msg, _ := range s.msgs {
-// 		encoded, err := json.Marshal(msg)
-// 		if err != nil {
-// 			fmt.Print(err)
-// 		}
-// 		s.outputChan <- encoded
-// 	}
-// 	return noInput{}
-// }
 
 type msgDownloadT struct {
 	author    [32]byte
@@ -309,75 +239,12 @@ func checkAuthCode(authCode [authCodeLength]byte, authCodes map[[authCodeLength]
 	return true
 }
 
-// func parseMsgRequest(raw []byte, memberList map[[32]byte]bool, authCodes map[[15]byte]int64, posixTime int64) ([32]byte, error) {
-// 	var msgRequest msgDownloadT
-// 	var blankauthor [32]byte
-// 	jsonErr := json.Unmarshal(raw, &msgRequest)
-// 	if jsonErr != nil {
-// 		return blankauthor, jsonErr
-// 	}
-// 	validSignature := verifyDetached(
-// 		concatMsgRequest(msgRequest),
-// 		msgRequest.signature,
-// 		msgRequest.author)
-// 	if !validSignature {
-// 		err := errors.New("Could not verify signature.")
-// 		return blankauthor, err
-// 	}
-// 	authOk := checkAuthCode(msgRequest.authCode, authCodes, posixTime)
-// 	if !authOk {
-// 		return blankauthor, errors.New("Invalid auth code.")
-// 	}
-// 	_, authorIsMember := memberList[msgRequest.author]
-// 	if !authorIsMember {
-// 		errStr := "The author is not a member."
-// 		return blankauthor, errors.New(errStr)
-// 	}
-// 	return msgRequest.author, nil
-// }
-
-// type getTimeForMdDownloadT struct {
-// 	httpInput httpInputT
-// }
-
-// type timeForMdDownload struct {
-// 	httpInput httpInputT
-// 	posixTime int64
-// }
-
-// func (g getTimeForMdDownloadT) send() inputT {
-// 	return timeForMdDownload{
-// 		httpInput: g.httpInput,
-// 		posixTime: time.Now().Unix(),
-// 	}
-// }
-
-// func (t timeForMdDownload) update(s stateT) (stateT, outputT) {
-// 	author, err := parseMsgRequest(
-// 		t.httpInput.body,
-// 		s.memberList,
-// 		s.authCodes,
-// 		t.posixTime)
-// 	if err != nil {
-// 		return s, httpError(t.httpInput.outputChan, err)
-// 	}
-// 	msgs := sendMsgsToClient{
-// 		msgs:       getMyMsgs(s.msgs, author),
-// 		outputChan: t.httpInput.outputChan,
-// 	}
-// 	return s, msgs
-// }
-
-// func getTimeForMdDownload(h httpInputT, s stateT) (stateT, outputT) {
-// 	return s, getTimeForMdDownloadT{httpInput: h}
-// }
-
 type getAuthCodeT struct {
 	chans userChansT
 }
 
 type userChansT struct {
-	in chan httpInputT
+	in  chan httpInputT
 	out chan []byte
 }
 
@@ -407,80 +274,11 @@ func byte15ToSlice(b15 [15]byte) []byte {
 	return slice
 }
 
-// func (g getAuthCodeT) send() inputT {
-// 	authCode, err := genAuthCode()
-// 	if err != nil {
-// 		g.chans.out <- append(
-// 			[]byte{responseNoAuthCode},
-// 			[]byte(err.Error())...)
-// 	}
-// 	g.chans.out <- append(
-// 		[]byte{responseAuthCode},
-// 		byte15ToSlice(authCode)...)
-// 	return newAuthCodeT{
-// 		code:      authCode,
-// 		posixTime: time.Now().Unix(),
-// 	}
-// }
-
-// func (n newAuthCodeT) update(s stateT) (stateT, outputT) {
-// 	var newAuths map[[15]byte]int64
-// 	for authCode, creationTime := range s.authCodes {
-// 		age := n.posixTime - creationTime
-// 		if age > 30 {
-// 			continue
-// 		}
-// 		if age < 0 {
-// 			continue
-// 		}
-// 		newAuths[authCode] = creationTime
-// 	}
-// 	newAuths[n.code] = n.posixTime
-// 	newState := stateT{
-// 		fatalErr:      s.fatalErr,
-// 		httpInputChan: s.httpInputChan,
-// 		invitations:   s.invitations,
-// 		uninvitations: s.uninvitations,
-// 		memberList:    s.memberList,
-// 		expectedBlobs: s.expectedBlobs,
-// 		authCodes:     newAuths,
-// 	}
-// 	return newState, getHttpInputs{inputChan: s.httpInputChan}
-// }
-
-// func processGetAuth(h httpInputT, s stateT) (stateT, outputT) {
-// 	return s, getAuthCodeT{}
-// }
-
 type giveMeMsgsT struct {
 	author    [32]byte
 	authCode  [15]byte
 	signature [sigSize]byte
 }
-
-// func processMsgDownload(h httpInputT, s stateT) (stateT, outputT) {
-//
-// }
-
-// func processBlob(h httpInputT, s stateT) (stateT, outputT) {
-// 	if len(h.body) != 16000 {
-// 		err := errors.New("Body not 16000 bytes long.")
-// 		return s, httpError(h.chans.out, err)
-// 	}
-// 	blobHash := blake2b.Sum256(h.body)
-// 	_, blobExpected := s.expectedBlobs[blobHash]
-// 	if !blobExpected {
-// 		err := errors.New("Blob not expected.")
-// 		return s, httpError(h.chans.out, err)
-// 	}
-// 	filename := hex.EncodeToString(hashToSlice(blobHash))
-// 	writeToFile := writeNewFileT{
-// 		filepath:   chunkDir + "/" + filename,
-// 		contents:   h.body,
-// 		outputChan: h.chans.out,
-// 	}
-// 	return s, writeToFile
-// }
 
 func parseInviteLike(
 	raw []byte,
@@ -514,33 +312,6 @@ func parseInviteLike(
 	}
 	return invitation, nil
 }
-
-// func processUninvite(h httpInputT, s stateT) (stateT, outputT) {
-// 	uninvitation, err := parseInviteLike(
-// 		h.body,
-// 		s.memberList,
-// 		pleaseUninviteX)
-// 	if err != nil {
-// 		return s, httpError(h.chans.out, err)
-// 	}
-// 	newUninvites := s.uninvitations
-// 	newUninvites[uninvitation] = true
-// 	newState := stateT{
-// 		fatalErr:      s.fatalErr,
-// 		httpInputChan: s.httpInputChan,
-// 		invitations:   s.invitations,
-// 		uninvitations: newUninvites,
-// 		memberList: makeMemberList(
-// 			s.invitations,
-// 			newUninvites),
-// 	}
-// 	goodUninvite := appendToFileT{
-// 		filepath:   uninvitesFilePath,
-// 		bytesToAdd: h.body,
-// 		outputChan: h.outputChan,
-// 	}
-// 	return newState, goodUninvite
-// }
 
 type invitationT struct {
 	author    [32]byte
@@ -689,45 +460,6 @@ type appendToFileT struct {
 	errChan    chan error
 }
 
-// type writeNewFileT struct {
-// 	filepath   string
-// 	contents   []byte
-// 	outputChan chan []byte
-// 	errChan    chan error
-// }
-// 
-// func (w writeNewFileT) send() inputT {
-// 	flags := os.O_CREATE | os.O_WRONLY
-// 	f, openErr := os.OpenFile(w.filepath, flags, 0400)
-// 	if openErr != nil {
-// 		w.errChan <- openErr
-// 		return noInput{}
-// 	}
-// 	defer f.Close()
-// 	_, writeErr := f.Write(w.contents)
-// 	if writeErr != nil {
-// 		w.errChan <- writeErr
-// 		return noInput{}
-// 	}
-// 	return noInput{}
-// }
-
-// func (g appendToFileT) send() inputT {
-// 	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
-// 	f, openErr := os.OpenFile(g.filepath, flags, 0600)
-// 	if openErr != nil {
-// 		g.errChan <- openErr
-// 		return noInput{}
-// 	}
-// 	defer f.Close()
-// 	_, writeErr := f.Write(append([]byte("\n"), g.bytesToAdd...))
-// 	if writeErr != nil {
-// 		g.errChan <- writeErr
-// 		return noInput{}
-// 	}
-// 	return noInput{}
-// }
-
 const (
 	serverDir         = "/home/t/bigwebthing/serverData"
 	invitesFilePath   = serverDir + "/invites.txt"
@@ -735,33 +467,6 @@ const (
 	metadataFilePath  = serverDir + "/metadata.txt"
 	chunkDir          = serverDir + "/chunks"
 )
-
-// func processInvite(h httpInputT, s stateT) (stateT, outputT) {
-// 	invitation, err := parseInviteLike(
-// 		h.body,
-// 		s.memberList,
-// 		pleaseInviteX)
-// 	if err != nil {
-// 		return s, httpError(h.outputChan, err)
-// 	}
-// 	newInvites := s.invitations
-// 	newInvites[invitation] = true
-// 	newState := stateT{
-// 		fatalErr:      s.fatalErr,
-// 		httpInputChan: s.httpInputChan,
-// 		invitations:   newInvites,
-// 		uninvitations: s.uninvitations,
-// 		memberList: makeMemberList(
-// 			newInvites,
-// 			s.uninvitations),
-// 	}
-// 	goodInvite := appendToFileT{
-// 		filepath:   invitesFilePath,
-// 		bytesToAdd: h.body,
-// 		outputChan: h.outputChan,
-// 	}
-// 	return newState, goodInvite
-// }
 
 const encSymKeyLen = secretbox.Overhead + 32
 
@@ -827,44 +532,6 @@ func parseMetadata(
 	return metadata, nil
 }
 
-// func httpError(outputChan chan []byte, err error) sendHttpResponse {
-// 	return sendHttpResponse{
-// 		response: append(
-// 			[]byte{responseErr},
-// 			[]byte(err.Error())...),
-// 		responseChan: outputChan,
-// 	}
-// }
-
-// func processMetadata(h httpInputT, s stateT) (stateT, outputT) {
-// 	metadata, err := parseMetadata(h.body, s.memberList)
-// 	if err != nil {
-// 		return s, httpError(h.outputChan, err)
-// 	}
-// 	newExpectedBlobs := s.expectedBlobs
-// 	newExpectedBlobs[metadata.chunkHeadHash] = true
-// 	newState := stateT{
-// 		fatalErr:      s.fatalErr,
-// 		httpInputChan: s.httpInputChan,
-// 		invitations:   s.invitations,
-// 		uninvitations: s.uninvitations,
-// 		memberList:    s.memberList,
-// 		expectedBlobs: newExpectedBlobs,
-// 	}
-// 	goodMd := appendToFileT{
-// 		filepath:   metadataFilePath,
-// 		bytesToAdd: h.body,
-// 		outputChan: h.outputChan,
-// 	}
-// 	return newState, goodMd
-// }
-
-// type noInput struct{}
-
-// func (n noInput) update(s stateT) (stateT, outputT) {
-// 	return s, getHttpInputs{inputChan: s.httpInputChan}
-// }
-
 type handlerT = func(http.ResponseWriter, *http.Request)
 
 var upgrader = websocket.Upgrader{
@@ -885,8 +552,8 @@ func readWebsocket(
 			return
 		}
 		inputChan <- httpInputT{
-			route:      rawMsg[0],
-			body:       rawMsg[1:],
+			route: rawMsg[0],
+			body:  rawMsg[1:],
 		}
 	}
 }
@@ -910,7 +577,7 @@ func handler(
 	}
 	authChans := authCodeChans{
 		main: make(chan [authCodeLength]byte),
-		err: make(chan error),
+		err:  make(chan error),
 	}
 	mainChans.getAuthCode <- authChans
 	select {
@@ -948,13 +615,13 @@ func handler(
 	errChan := make(chan error)
 	setup := setupConnectionT{
 		chans: userChansT{
-			in: make(chan httpInputT),
+			in:  make(chan httpInputT),
 			out: make(chan []byte),
-			},
-		author: auth.author,
+		},
+		author:         auth.author,
 		signedAuthCode: auth.signedAuthCode,
-		errChan: errChan,
-		posixTime: time.Now().Unix(),
+		errChan:        errChan,
+		posixTime:      time.Now().Unix(),
 	}
 	mainChans.setupConnection <- setup
 	err := <-errChan
@@ -976,25 +643,25 @@ func handler(
 const authCodeLength = 24
 
 type setupConnectionT struct {
-	chans userChansT
-	author [32]byte
+	chans          userChansT
+	author         [32]byte
 	signedAuthCode [signedAuthSize]byte
-	errChan chan error
-	posixTime int64
+	errChan        chan error
+	posixTime      int64
 }
 
 type authenticatorT struct {
 	signedAuthCode [signedAuthSize]byte
-	author [32]byte
+	author         [32]byte
 }
 
 type authCodeChans struct {
 	main chan [authCodeLength]byte
-	err chan error
+	err  chan error
 }
 
 type mainChansT struct {
-	getAuthCode chan authCodeChans
+	getAuthCode     chan authCodeChans
 	setupConnection chan setupConnectionT
 }
 
