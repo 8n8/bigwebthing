@@ -276,7 +276,7 @@ func (g appendToFileT) send() inputT {
 
 type noInputT struct{}
 
-func readChans(s stateT) readChansT {
+func readChans(s *stateT) readChansT {
 	return readChansT{
 		chs:            s.mainChans,
 		connectedUsers: s.connectedUsers,
@@ -284,7 +284,7 @@ func readChans(s stateT) readChansT {
 }
 
 func (n noInputT) update(s stateT) (stateT, outputT) {
-	return s, readChans(s)
+	return s, readChans(&s)
 }
 
 type newSetupRequest struct {
@@ -347,18 +347,14 @@ func (c setupConnectionT) update(s stateT) (stateT, outputT) {
 	}
 	newState := s
 	newState.connectedUsers = newConnUsers
-	return newState, readChans(s)
+	return newState, readChans(&s)
 }
 
 func main() {
-	mainChans := mainChansT{
-		getAuthCode:     make(chan authCodeChans),
-		setupConnection: make(chan setupConnectionT),
-	}
-	go httpServer(mainChans)
-	var input inputT = noInputT{}
 	state := initState()
-	var output outputT = readChans(state)
+	go httpServer(state.mainChans)
+	var input inputT = noInputT{}
+	var output outputT = readChans(&state)
 	for {
 		input = output.send()
 		state, output = input.update(state)
