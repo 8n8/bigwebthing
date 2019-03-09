@@ -26,7 +26,6 @@ type stateT struct {
 
 type userStateT struct {
 	chans        userChansT
-	blobExpected bool
 	expectedBlob [32]byte
 }
 
@@ -109,6 +108,7 @@ const (
 	inInvitation   byte = 0x00
 	inUninvitation byte = 0x01
 	inMetadata     byte = 0x02
+	inBlob         byte = 0x03
 )
 
 func (u userMsgT) update(s stateT) (stateT, outputT) {
@@ -119,9 +119,62 @@ func (u userMsgT) update(s stateT) (stateT, outputT) {
 		return processUninvitation(u, s)
 	case inMetadata:
 		return processMetadata(u, s)
+	case inBlob:
+		return processBlob(u, s)
 	}
 	err := errors.New("Bad router byte.")
 	return s, sendErrT{err: err, ch: u.errChan}
+}
+
+var finalHash = [32]byte{
+	0xca, 0xd7, 0xa9, 0xc5, 0xef, 0xc5, 0xc6, 0x6a, 0xf0, 0x1b,
+	0xd8, 0x0e, 0x7e, 0xa3, 0xc5, 0x04, 0xa8, 0xe6, 0x07, 0xa3,
+	0x05, 0xf9, 0x28, 0x36, 0x0e, 0xa8, 0x32, 0xb0, 0x1d, 0xd2,
+	0xbe, 0x4c}
+
+func processBlob(umsg userMsgT, s stateT) (stateT, outputT) {
+	// A blob should be 16000 bytes long or less. The first 32
+	// bytes is the public key of the recipient, and the next 32
+	// bytes is the hash of the next blob. If the blob is the
+	// final one in the chain, use 'finalHash' above instead of
+	// the next blob hash.
+	if len(umsg.msg.body) > 16000 {
+		err := errors.New(
+			"Message more than 16000 bytes.")
+		return s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	recipient := slice32ToArray(umsg.msg.body[:32])
+	userState, userExists := s.connectedUsers[recipient]
+	if !userExists {
+		err := errors.New("Recipient offline.")
+		return s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	blobHash := blake2b.Sum256(umsg.msg.body)
+	expectedBlobHash := userState.expectedBlob
+	if blobHash != expectedBlobHash {
+		err := errors.New("Unexpected blob.")
+		return s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	nextBlobHash := slice32ToArray(umsg.msg.body[32:64])
+	newUserState := userState
+	newUserState.expectedBlob = nextBlobHash
+	newState := s
+	var newConnectedUsers map[[32]byte]userStateT
+	for user, theirState := range s.connectedUsers {
+		newConnectedUsers[user] = theirState
+	}
+	newConnectedUsers[recipient] = newUserState
+	newState.connectedUsers = newConnectedUsers
+	output := sendMsgT{msg: umsg.msg.body, ch: umsg.outChan}
+	return newState, output
+}
+
+func slice32ToArray(s []byte) [32]byte {
+	var arr [32]byte
+	for i, b := range s {
+		arr[i] = b
+	}
+	return arr
 }
 
 type metadataT struct {
@@ -150,7 +203,6 @@ func processMetadata(umsg userMsgT, s stateT) (stateT, outputT) {
 	}
 	newConnectedUsers[metadata.recipient] = userStateT{
 		chans:        userState.chans,
-		blobExpected: true,
 		expectedBlob: metadata.firstChunkHash,
 	}
 	output := sendMsgT{
@@ -291,11 +343,9 @@ func (c setupConnectionT) update(s stateT) (stateT, outputT) {
 	for user, userState := range s.connectedUsers {
 		newConnUsers[user] = userState
 	}
-	var expectedBlob [32]byte
 	newConnUsers[c.author] = userStateT{
 		chans:        c.chans,
-		blobExpected: false,
-		expectedBlob: expectedBlob,
+		expectedBlob: finalHash,
 	}
 	newState := s
 	newState.connectedUsers = newConnUsers
