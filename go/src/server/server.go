@@ -128,39 +128,45 @@ var finalHash = [32]byte{
 	0x05, 0xf9, 0x28, 0x36, 0x0e, 0xa8, 0x32, 0xb0, 0x1d, 0xd2,
 	0xbe, 0x4c}
 
-func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
-	// A blob should be 16000 bytes long or less. The first 32
-	// bytes is the public key of the recipient, and the next 32
-	// bytes is the hash of the next blob. If the blob is the
-	// final one in the chain, use 'finalHash' above instead of
-	// the next blob hash.
-	if len(umsg.msg.body) > 16000 {
-		err := errors.New(
-			"Message more than 16000 bytes.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
-	recipient := slice32ToArray(umsg.msg.body[:32])
-	userState, userExists := s.connectedUsers[recipient]
-	if !userExists {
-		err := errors.New("Recipient offline.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
-	blobHash := blake2b.Sum256(umsg.msg.body)
-	expectedBlobHash := userState.expectedBlob
-	if blobHash != expectedBlobHash {
-		err := errors.New("Unexpected blob.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
-	nextBlobHash := slice32ToArray(umsg.msg.body[32:64])
-	newUserState := userState
-	newUserState.expectedBlob = nextBlobHash
+func stateCopyConnUsers(s *stateT) stateT {
 	newState := *s
 	var newConnectedUsers map[[32]byte]userStateT
 	for user, theirState := range s.connectedUsers {
 		newConnectedUsers[user] = theirState
 	}
-	newConnectedUsers[recipient] = newUserState
 	newState.connectedUsers = newConnectedUsers
+	return newState
+}
+
+func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
+	blobLen := len(umsg.msg.body)
+	if blobLen > 16000 {
+		err := errors.New("Blob too big.")
+		return *s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	if blobLen < 97 {
+		err := errors.New("Blob too small.")
+		return *s, sendErrT{err: err, ch: umsg.errChan}
+	}
+
+	recipient := slice32ToArray(umsg.msg.body[:32])
+
+	userState, userExists := s.connectedUsers[recipient]
+	if !userExists {
+		err := errors.New("Recipient offline.")
+		return *s, sendErrT{err: err, ch: umsg.errChan}
+	}
+
+	if blake2b.Sum256(umsg.msg.body) != userState.expectedBlob {
+		err := errors.New("Bad blob hash.")
+		return *s, sendErrT{err: err, ch: umsg.errChan}
+	}
+
+	newState := stateCopyConnUsers(s)
+	newState.connectedUsers[recipient] = userStateT{
+		chans:        userState.chans,
+		expectedBlob: slice32ToArray(umsg.msg.body[32:64]),
+	}
 	output := sendMsgT{msg: umsg.msg.body, ch: umsg.outChan}
 	return newState, output
 }
