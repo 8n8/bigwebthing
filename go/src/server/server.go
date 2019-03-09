@@ -14,7 +14,6 @@ import (
 )
 
 type stateT struct {
-	fatalErr       error
 	mainChans      mainChansT
 	connectedUsers map[[32]byte]userStateT
 	invitations    invitesT
@@ -33,7 +32,6 @@ type invitesT map[invitationT]bool
 
 func initState() stateT {
 	return stateT{
-		fatalErr: nil,
 		mainChans: mainChansT{
 			getAuthCode:     make(chan authCodeChans),
 			setupConnection: make(chan setupConnectionT),
@@ -361,7 +359,7 @@ func main() {
 	var input inputT = noInputT{}
 	state := initState()
 	var output outputT = readChans(state)
-	for state.fatalErr == nil {
+	for {
 		input = output.send()
 		state, output = input.update(state)
 	}
