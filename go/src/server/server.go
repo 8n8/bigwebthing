@@ -58,7 +58,7 @@ const (
 )
 
 type inputT interface {
-	update(stateT) (stateT, outputT)
+	update(*stateT) (stateT, outputT)
 }
 
 type readChansT struct {
@@ -109,7 +109,7 @@ const (
 	inBlob         byte = 0x03
 )
 
-func (u userMsgT) update(s stateT) (stateT, outputT) {
+func (u userMsgT) update(s *stateT) (stateT, outputT) {
 	switch u.msg.route {
 	case inInvitation:
 		return processInvitation(u, s)
@@ -121,7 +121,7 @@ func (u userMsgT) update(s stateT) (stateT, outputT) {
 		return processBlob(u, s)
 	}
 	err := errors.New("Bad router byte.")
-	return s, sendErrT{err: err, ch: u.errChan}
+	return *s, sendErrT{err: err, ch: u.errChan}
 }
 
 var finalHash = [32]byte{
@@ -130,7 +130,7 @@ var finalHash = [32]byte{
 	0x05, 0xf9, 0x28, 0x36, 0x0e, 0xa8, 0x32, 0xb0, 0x1d, 0xd2,
 	0xbe, 0x4c}
 
-func processBlob(umsg userMsgT, s stateT) (stateT, outputT) {
+func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 	// A blob should be 16000 bytes long or less. The first 32
 	// bytes is the public key of the recipient, and the next 32
 	// bytes is the hash of the next blob. If the blob is the
@@ -139,24 +139,24 @@ func processBlob(umsg userMsgT, s stateT) (stateT, outputT) {
 	if len(umsg.msg.body) > 16000 {
 		err := errors.New(
 			"Message more than 16000 bytes.")
-		return s, sendErrT{err: err, ch: umsg.errChan}
+		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 	recipient := slice32ToArray(umsg.msg.body[:32])
 	userState, userExists := s.connectedUsers[recipient]
 	if !userExists {
 		err := errors.New("Recipient offline.")
-		return s, sendErrT{err: err, ch: umsg.errChan}
+		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 	blobHash := blake2b.Sum256(umsg.msg.body)
 	expectedBlobHash := userState.expectedBlob
 	if blobHash != expectedBlobHash {
 		err := errors.New("Unexpected blob.")
-		return s, sendErrT{err: err, ch: umsg.errChan}
+		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 	nextBlobHash := slice32ToArray(umsg.msg.body[32:64])
 	newUserState := userState
 	newUserState.expectedBlob = nextBlobHash
-	newState := s
+	newState := *s
 	var newConnectedUsers map[[32]byte]userStateT
 	for user, theirState := range s.connectedUsers {
 		newConnectedUsers[user] = theirState
@@ -183,14 +183,14 @@ type metadataT struct {
 	signature             [sigSize]byte
 }
 
-func processMetadata(umsg userMsgT, s stateT) (stateT, outputT) {
+func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 	metadata, err := parseMetadata(umsg.msg.body, s.memberList)
 	if err != nil {
-		return s, sendErrT{err: err, ch: umsg.errChan}
+		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 	userState, userConnected := s.connectedUsers[metadata.recipient]
 	if !userConnected {
-		return s, sendMsgT{
+		return *s, sendMsgT{
 			msg: []byte{responseRecipientNotConnected},
 			ch:  umsg.outChan,
 		}
@@ -207,25 +207,25 @@ func processMetadata(umsg userMsgT, s stateT) (stateT, outputT) {
 		msg: umsg.msg.body,
 		ch:  userState.chans.out,
 	}
-	newState := s
+	newState := *s
 	newState.connectedUsers = newConnectedUsers
-	return s, output
+	return newState, output
 }
 
-func processUninvitation(umsg userMsgT, s stateT) (stateT, outputT) {
+func processUninvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
 	uninvitation, err := parseInviteLike(
 		umsg.msg.body,
 		s.memberList,
 		pleaseUninviteX)
 	if err != nil {
-		return s, sendErrT{err: err, ch: umsg.errChan}
+		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 	var newUninvites map[invitationT]bool
 	for i, _ := range s.uninvitations {
 		newUninvites[i] = true
 	}
 	newUninvites[uninvitation] = true
-	newState := s
+	newState := *s
 	newState.uninvitations = newUninvites
 	goodUninvite := appendToFileT{
 		filepath:   uninvitesFilePath,
@@ -235,20 +235,20 @@ func processUninvitation(umsg userMsgT, s stateT) (stateT, outputT) {
 	return newState, goodUninvite
 }
 
-func processInvitation(umsg userMsgT, s stateT) (stateT, outputT) {
+func processInvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
 	invitation, err := parseInviteLike(
 		umsg.msg.body,
 		s.memberList,
 		pleaseInviteX)
 	if err != nil {
-		return s, sendErrT{err: err, ch: umsg.errChan}
+		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 	var newInvites map[invitationT]bool
 	for i, _ := range s.invitations {
 		newInvites[i] = true
 	}
 	newInvites[invitation] = true
-	newState := s
+	newState := *s
 	newState.invitations = newInvites
 	goodInvite := appendToFileT{
 		filepath:   invitesFilePath,
@@ -283,8 +283,8 @@ func readChans(s *stateT) readChansT {
 	}
 }
 
-func (n noInputT) update(s stateT) (stateT, outputT) {
-	return s, readChans(&s)
+func (n noInputT) update(s *stateT) (stateT, outputT) {
+	return *s, readChans(s)
 }
 
 type newSetupRequest struct {
@@ -319,14 +319,14 @@ func (s sendErrT) send() inputT {
 	return noInputT{}
 }
 
-func (c setupConnectionT) update(s stateT) (stateT, outputT) {
+func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
 	authSlice, validSignature := sign.Open(
 		make([]byte, 0),
 		signedAuthToSlice(c.signedAuthCode),
 		&c.author)
 	if !validSignature {
 		err := errors.New("Bad signature.")
-		return s, sendErrT{err: err, ch: c.errChan}
+		return *s, sendErrT{err: err, ch: c.errChan}
 	}
 	var authCode [authCodeLength]byte
 	for i, b := range authSlice {
@@ -335,7 +335,7 @@ func (c setupConnectionT) update(s stateT) (stateT, outputT) {
 	authOk := checkAuthCode(authCode, s.authCodes, c.posixTime)
 	if !authOk {
 		err := errors.New("Bad auth code.")
-		return s, sendErrT{err: err, ch: c.errChan}
+		return *s, sendErrT{err: err, ch: c.errChan}
 	}
 	var newConnUsers map[[32]byte]userStateT
 	for user, userState := range s.connectedUsers {
@@ -345,9 +345,9 @@ func (c setupConnectionT) update(s stateT) (stateT, outputT) {
 		chans:        c.chans,
 		expectedBlob: finalHash,
 	}
-	newState := s
+	newState := *s
 	newState.connectedUsers = newConnUsers
-	return newState, readChans(&s)
+	return newState, readChans(s)
 }
 
 func main() {
@@ -357,7 +357,7 @@ func main() {
 	var output outputT = readChans(&state)
 	for {
 		input = output.send()
-		state, output = input.update(state)
+		state, output = input.update(&state)
 	}
 }
 
