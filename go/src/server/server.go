@@ -52,9 +52,7 @@ type outputT interface {
 const (
 	responseNoAuthCode            byte = 0x00
 	responseAuthCode              byte = 0x01
-	responseBadInviteSig          byte = 0x02
-	responseBadAuthCode           byte = 0x03
-	responseRecipientNotConnected byte = 0x04
+	responseRecipientNotConnected byte = 0x02
 )
 
 type inputT interface {
