@@ -64,6 +64,22 @@ type readChansT struct {
 	connectedUsers map[[32]byte]userStateT
 }
 
+func readAUserChan(connectedUsers map[[32]byte]userStateT) inputT {
+	for author, userState := range connectedUsers {
+		select {
+		case msg := <-userState.chans.in:
+			return userMsgT{
+				author:  author,
+				msg:     msg,
+				outChan: userState.chans.out,
+				errChan: userState.chans.err,
+			}
+		default:
+		}
+	}
+	return noInputT{}
+}
+
 func (r readChansT) send() inputT {
 	select {
 	case authChans := <-r.chs.getAuthCode:
@@ -77,19 +93,7 @@ func (r readChansT) send() inputT {
 	case newConnection := <-r.chs.setupConnection:
 		return newConnection
 	default:
-		for author, userState := range r.connectedUsers {
-			select {
-			case msg := <-userState.chans.in:
-				return userMsgT{
-					author:  author,
-					msg:     msg,
-					outChan: userState.chans.out,
-					errChan: userState.chans.err,
-				}
-			default:
-			}
-		}
-		return noInputT{}
+		return readAUserChan(r.connectedUsers)
 	}
 }
 
