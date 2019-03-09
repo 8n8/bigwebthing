@@ -105,16 +105,42 @@ type userMsgT struct {
 }
 
 const (
-	inInvitation byte = 0x00
+	inInvitation   byte = 0x00
+	inUninvitation byte = 0x01
 )
 
 func (u userMsgT) update(s stateT) (stateT, outputT) {
 	switch u.msg.route {
 	case inInvitation:
 		return processInvitation(u, s)
+	case inUninvitation:
+		return processUninvitation(u, s)
 	}
 	err := errors.New("Bad router byte.")
 	return s, sendErrT{err: err, ch: u.errChan}
+}
+
+func processUninvitation(umsg userMsgT, s stateT) (stateT, outputT) {
+	uninvitation, err := parseInviteLike(
+		umsg.msg.body,
+		s.memberList,
+		pleaseUninviteX)
+	if err != nil {
+		return s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	var newUninvites map[invitationT]bool
+	for i, _ := range s.uninvitations {
+		newUninvites[i] = true
+	}
+	newUninvites[uninvitation] = true
+	newState := s
+	newState.uninvitations = newUninvites
+	goodUninvite := appendToFileT{
+		filepath:   uninvitesFilePath,
+		bytesToAdd: umsg.msg.body,
+		errChan:    umsg.errChan,
+	}
+	return newState, goodUninvite
 }
 
 func processInvitation(umsg userMsgT, s stateT) (stateT, outputT) {
@@ -135,7 +161,7 @@ func processInvitation(umsg userMsgT, s stateT) (stateT, outputT) {
 	goodInvite := appendToFileT{
 		filepath:   invitesFilePath,
 		bytesToAdd: umsg.msg.body,
-		outputChan: umsg.outChan,
+		errChan:    umsg.errChan,
 	}
 	return newState, goodInvite
 }
@@ -468,7 +494,6 @@ func makeMemberList(i invitesT, u invitesT) map[[32]byte]bool {
 type appendToFileT struct {
 	filepath   string
 	bytesToAdd []byte
-	outputChan chan []byte
 	errChan    chan error
 }
 
