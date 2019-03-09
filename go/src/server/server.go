@@ -53,10 +53,11 @@ type outputT interface {
 }
 
 const (
-	responseNoAuthCode   byte = 0x00
-	responseAuthCode     byte = 0x01
-	responseBadInviteSig byte = 0x02
-	responseBadAuthCode  byte = 0x03
+	responseNoAuthCode            byte = 0x00
+	responseAuthCode              byte = 0x01
+	responseBadInviteSig          byte = 0x02
+	responseBadAuthCode           byte = 0x03
+	responseRecipientNotConnected byte = 0x04
 )
 
 type inputT interface {
@@ -107,6 +108,7 @@ type userMsgT struct {
 const (
 	inInvitation   byte = 0x00
 	inUninvitation byte = 0x01
+	inMetadata     byte = 0x02
 )
 
 func (u userMsgT) update(s stateT) (stateT, outputT) {
@@ -115,9 +117,49 @@ func (u userMsgT) update(s stateT) (stateT, outputT) {
 		return processInvitation(u, s)
 	case inUninvitation:
 		return processUninvitation(u, s)
+	case inMetadata:
+		return processMetadata(u, s)
 	}
 	err := errors.New("Bad router byte.")
 	return s, sendErrT{err: err, ch: u.errChan}
+}
+
+type metadataT struct {
+	firstChunkHash        [32]byte
+	author                [32]byte
+	recipient             [32]byte
+	encryptedSymmetricKey [encSymKeyLen]byte
+	signature             [sigSize]byte
+}
+
+func processMetadata(umsg userMsgT, s stateT) (stateT, outputT) {
+	metadata, err := parseMetadata(umsg.msg.body, s.memberList)
+	if err != nil {
+		return s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	userState, userConnected := s.connectedUsers[metadata.recipient]
+	if !userConnected {
+		return s, sendMsgT{
+			msg: []byte{responseRecipientNotConnected},
+			ch:  umsg.outChan,
+		}
+	}
+	var newConnectedUsers map[[32]byte]userStateT
+	for id, ustate := range s.connectedUsers {
+		newConnectedUsers[id] = ustate
+	}
+	newConnectedUsers[metadata.recipient] = userStateT{
+		chans:        userState.chans,
+		blobExpected: true,
+		expectedBlob: metadata.firstChunkHash,
+	}
+	output := sendMsgT{
+		msg: umsg.msg.body,
+		ch:  userState.chans.out,
+	}
+	newState := s
+	newState.connectedUsers = newConnectedUsers
+	return s, output
 }
 
 func processUninvitation(umsg userMsgT, s stateT) (stateT, outputT) {
@@ -507,21 +549,13 @@ const (
 
 const encSymKeyLen = secretbox.Overhead + 32
 
-type metadataT struct {
-	chunkHeadHash         [32]byte
-	author                [32]byte
-	recipient             [32]byte
-	encryptedSymmetricKey [encSymKeyLen]byte
-	signature             [sigSize]byte
-}
-
 const concatMdLen = 32 + 32 + encSymKeyLen
 
 func concatMd(m metadataT) []byte {
 	result := make([]byte, concatMdLen)
 	i := 0
 	for i < 32 {
-		result[i] = m.chunkHeadHash[i]
+		result[i] = m.firstChunkHash[i]
 		i++
 	}
 	for i < 64 {
