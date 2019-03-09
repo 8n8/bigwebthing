@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -34,6 +35,16 @@ type invitesT map[invitationT]bool
 func initState() stateT {
 	return stateT{
 		fatalErr: nil,
+		mainChans: mainChansT{
+			getAuthCode:     make(chan authCodeChans),
+			setupConnection: make(chan setupConnectionT),
+		},
+		connectedUsers: make(map[[32]byte]userStateT),
+		invitations:    make(map[invitationT]bool),
+		uninvitations:  make(map[invitationT]bool),
+		memberList:     make(map[[32]byte]bool),
+		expectedBlobs:  make(map[[32]byte]bool),
+		authCodes:      make(map[[authCodeLength]byte]int64),
 	}
 }
 
@@ -42,19 +53,22 @@ type outputT interface {
 }
 
 const (
-	responseNoAuthCode byte = 0x01
-	responseAuthCode   byte = 0x03
+	responseNoAuthCode   byte = 0x00
+	responseAuthCode     byte = 0x01
+	responseBadInviteSig byte = 0x02
+	responseBadAuthCode  byte = 0x03
 )
 
 type inputT interface {
 	update(stateT) (stateT, outputT)
 }
 
-type readMainChansT struct {
-	chs mainChansT
+type readChansT struct {
+	chs            mainChansT
+	connectedUsers map[[32]byte]userStateT
 }
 
-func (r readMainChansT) send() inputT {
+func (r readChansT) send() inputT {
 	select {
 	case authChans := <-r.chs.getAuthCode:
 		authCode, err := genAuthCode()
@@ -65,16 +79,94 @@ func (r readMainChansT) send() inputT {
 		authChans.main <- authCode
 		return noInputT{}
 	case newConnection := <-r.chs.setupConnection:
-		return newSetupRequest{s: newConnection}
+		return newConnection
 	default:
+		for author, userState := range r.connectedUsers {
+			select {
+			case msg := <-userState.chans.in:
+				return userMsgT{
+					author:  author,
+					msg:     msg,
+					outChan: userState.chans.out,
+					errChan: userState.chans.err,
+				}
+			default:
+			}
+		}
 		return noInputT{}
 	}
 }
 
+type userMsgT struct {
+	author  [32]byte
+	msg     httpInputT
+	outChan chan []byte
+	errChan chan error
+}
+
+const (
+	inInvitation byte = 0x00
+)
+
+func (u userMsgT) update(s stateT) (stateT, outputT) {
+	switch u.msg.route {
+	case inInvitation:
+		return processInvitation(u, s)
+	}
+	err := errors.New("Bad router byte.")
+	return s, sendErrT{err: err, ch: u.errChan}
+}
+
+func processInvitation(umsg userMsgT, s stateT) (stateT, outputT) {
+	invitation, err := parseInviteLike(
+		umsg.msg.body,
+		s.memberList,
+		pleaseInviteX)
+	if err != nil {
+		return s, sendErrT{err: err, ch: umsg.errChan}
+	}
+	var newInvites map[invitationT]bool
+	for i, _ := range s.invitations {
+		newInvites[i] = true
+	}
+	newInvites[invitation] = true
+	newState := s
+	newState.invitations = newInvites
+	goodInvite := appendToFileT{
+		filepath:   invitesFilePath,
+		bytesToAdd: umsg.msg.body,
+		outputChan: umsg.outChan,
+	}
+	return newState, goodInvite
+}
+
+func (g appendToFileT) send() inputT {
+	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
+	f, openErr := os.OpenFile(g.filepath, flags, 0600)
+	if openErr != nil {
+		g.errChan <- openErr
+		return noInputT{}
+	}
+	defer f.Close()
+	_, writeErr := f.Write(append([]byte("\n"), g.bytesToAdd...))
+	if writeErr != nil {
+		g.errChan <- writeErr
+		return noInputT{}
+	}
+	return noInputT{}
+}
+
 type noInputT struct{}
 
+func readChans(s stateT) readChansT {
+	return readChansT{
+		chs:            s.mainChans,
+		connectedUsers: s.connectedUsers,
+	}
+}
+
 func (n noInputT) update(s stateT) (stateT, outputT) {
-	return s, readMainChansT{chs: s.mainChans}
+	return s, readChans(s)
 }
 
 type newSetupRequest struct {
@@ -89,47 +181,57 @@ func signedAuthToSlice(bs [signedAuthSize]byte) []byte {
 	return slice
 }
 
-type sendErr struct {
+type sendMsgT struct {
+	msg []byte
+	ch  chan []byte
+}
+
+func (s sendMsgT) send() inputT {
+	s.ch <- s.msg
+	return noInputT{}
+}
+
+type sendErrT struct {
 	err error
 	ch  chan error
 }
 
-func (s sendErr) send() inputT {
+func (s sendErrT) send() inputT {
 	s.ch <- s.err
 	return noInputT{}
 }
 
-func (n newSetupRequest) update(s stateT) (stateT, outputT) {
+func (c setupConnectionT) update(s stateT) (stateT, outputT) {
 	authSlice, validSignature := sign.Open(
 		make([]byte, 0),
-		signedAuthToSlice(n.s.signedAuthCode),
-		&n.s.author)
+		signedAuthToSlice(c.signedAuthCode),
+		&c.author)
 	if !validSignature {
 		err := errors.New("Bad signature.")
-		return s, sendErr{err: err, ch: n.s.errChan}
+		return s, sendErrT{err: err, ch: c.errChan}
 	}
 	var authCode [authCodeLength]byte
 	for i, b := range authSlice {
 		authCode[i] = b
 	}
-	authOk := checkAuthCode(authCode, s.authCodes, n.s.posixTime)
+	authOk := checkAuthCode(authCode, s.authCodes, c.posixTime)
 	if !authOk {
 		err := errors.New("Bad auth code.")
-		return s, sendErr{err: err, ch: n.s.errChan}
+		return s, sendErrT{err: err, ch: c.errChan}
 	}
 	var newConnUsers map[[32]byte]userStateT
 	for user, userState := range s.connectedUsers {
 		newConnUsers[user] = userState
 	}
 	var expectedBlob [32]byte
-	newConnUsers[n.s.author] = userStateT{
-		chans:        n.s.chans,
+	newConnUsers[c.author] = userStateT{
+		chans:        c.chans,
 		blobExpected: false,
 		expectedBlob: expectedBlob,
 	}
 	newState := s
 	newState.connectedUsers = newConnUsers
-	return newState, readMainChansT{chs: s.mainChans}
+	return newState, readChans(s)
 }
 
 func main() {
@@ -139,8 +241,8 @@ func main() {
 	}
 	go httpServer(mainChans)
 	var input inputT = noInputT{}
-	var output outputT = readMainChansT{chs: mainChans}
 	state := initState()
+	var output outputT = readChans(state)
 	for state.fatalErr == nil {
 		input = output.send()
 		state, output = input.update(state)
@@ -152,7 +254,11 @@ type httpInputT struct {
 	body  []byte
 }
 
-func checkAuthCode(authCode [authCodeLength]byte, authCodes map[[authCodeLength]byte]int64, posixTime int64) bool {
+func checkAuthCode(
+	authCode [authCodeLength]byte,
+	authCodes map[[authCodeLength]byte]int64,
+	posixTime int64) bool {
+
 	authTime, authExists := authCodes[authCode]
 	if !authExists {
 		return false
@@ -170,6 +276,7 @@ func checkAuthCode(authCode [authCodeLength]byte, authCodes map[[authCodeLength]
 type userChansT struct {
 	in  chan httpInputT
 	out chan []byte
+	err chan error
 }
 
 func genAuthCode() ([authCodeLength]byte, error) {
