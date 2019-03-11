@@ -128,36 +128,23 @@ func removeBlob(s *stateT, blobHash [32]byte) stateT {
 	return newState
 }
 
-func blobOk(
-	blobHash [32]byte,
-	expectedBlobs map[[32]byte][32]byte,
-	connectedUsers map[[32]byte]userChansT) (
-	userChansT, error) {
-
-	var chs userChansT
-
-	recipient, blobExpected := expectedBlobs[blobHash]
-	if !blobExpected {
-		return chs, errors.New("Blob not expected.")
-	}
-
-	recipientChans, recipientOnline := connectedUsers[recipient]
-	if !recipientOnline {
-		return chs, errors.New("Recipient offline.")
-	}
-
-	return recipientChans, nil
-}
-
 func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
-
 	hash := blake2b.Sum256(umsg.msg.body)
-	chs, err := blobOk(hash, s.expectedBlobs, s.connectedUsers)
-	if err != nil {
-		return *s, sendErrT{err: err, ch: chs.err}
+	recipient, blobExpected := s.expectedBlobs[hash]
+	if !blobExpected {
+		return *s, sendErrT{
+			err: errors.New("Blob not expected."),
+			ch: umsg.errChan}
 	}
 
-	output := sendMsgT{msg: umsg.msg.body, ch: chs.out}
+	recipientChans, recipientOnline := s.connectedUsers[recipient]
+	if !recipientOnline {
+		return *s, sendErrT{
+			err: errors.New("Recipient offline."),
+			ch: umsg.errChan}
+	}
+
+	output := sendMsgT{msg: umsg.msg.body, ch: recipientChans.out}
 	return removeBlob(s, hash), output
 }
 
