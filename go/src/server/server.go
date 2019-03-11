@@ -609,17 +609,17 @@ func parseMetadata(
 		metadata.signature,
 		metadata.author)
 	if !validSignature {
-		err := errors.New("Could not verify signature.")
+		err := errors.New("Bad signature.")
 		return metadataT{}, err
 	}
 	_, authorIsMember := memberList[metadata.author]
 	if !authorIsMember {
-		errStr := "The author is not a member."
+		errStr := "Author is not a member."
 		return metadataT{}, errors.New(errStr)
 	}
 	_, recipientIsMember := memberList[metadata.recipient]
 	if !recipientIsMember {
-		errStr := "The recipient is not a member."
+		errStr := "Recipient is not a member."
 		return metadataT{}, errors.New(errStr)
 	}
 	if metadata.author == metadata.recipient {
