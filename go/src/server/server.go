@@ -197,6 +197,17 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 	return newState, output
 }
 
+func addUninvite(s *stateT, uninvitation invitationT) stateT {
+	var newUninvites map[invitationT]bool
+	for u, _ := range s.uninvitations {
+		newUninvites[i] = true
+	}
+	newUninvites[uninvitation] = true
+	newState := *s
+	newState.uninvitations = newUninvites
+	return newState
+}
+
 func processUninvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
 	uninvitation, err := parseInviteLike(
 		umsg.msg.body,
@@ -205,13 +216,7 @@ func processUninvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
 	if err != nil {
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
-	var newUninvites map[invitationT]bool
-	for i, _ := range s.uninvitations {
-		newUninvites[i] = true
-	}
-	newUninvites[uninvitation] = true
-	newState := *s
-	newState.uninvitations = newUninvites
+	newState := addUninvite(s, uninvitation)
 	goodUninvite := appendToFileT{
 		filepath:   uninvitesFilePath,
 		bytesToAdd: umsg.msg.body,
