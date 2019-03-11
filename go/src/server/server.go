@@ -117,52 +117,48 @@ func (u userMsgT) update(s *stateT) (stateT, outputT) {
 	return *s, sendErrT{err: err, ch: u.errChan}
 }
 
-var finalHash = [32]byte{
-	0xca, 0xd7, 0xa9, 0xc5, 0xef, 0xc5, 0xc6, 0x6a, 0xf0, 0x1b,
-	0xd8, 0x0e, 0x7e, 0xa3, 0xc5, 0x04, 0xa8, 0xe6, 0x07, 0xa3,
-	0x05, 0xf9, 0x28, 0x36, 0x0e, 0xa8, 0x32, 0xb0, 0x1d, 0xd2,
-	0xbe, 0x4c}
-
-func stateCopyConnUsers(s *stateT) stateT {
-	newState := *s
-	var newConnectedUsers map[[32]byte]userChansT
-	for user, theirState := range s.connectedUsers {
-		newConnectedUsers[user] = theirState
+func removeBlob(s *stateT, blobHash [32]byte) stateT {
+	var newExpectedBlobs map[[32]byte][32]byte
+	for hash, id := range s.expectedBlobs {
+		newExpectedBlobs[hash] = id
 	}
-	newState.connectedUsers = newConnectedUsers
+	delete(newExpectedBlobs, blobHash)
+	newState := *s
+	newState.expectedBlobs = newExpectedBlobs
 	return newState
 }
 
-func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
-	blobLen := len(umsg.msg.body)
-	if blobLen > 16000 {
-		err := errors.New("Blob too big.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
+func blobOk(
+	blobHash [32]byte,
+	expectedBlobs map[[32]byte][32]byte,
+	connectedUsers map[[32]byte]userChansT) (
+	userChansT, error) {
 
-	blobHash := blake2b.Sum256(umsg.msg.body)
-	recipient, blobExpected := s.expectedBlobs[blobHash]
+	var chs userChansT
+
+	recipient, blobExpected := expectedBlobs[blobHash]
 	if !blobExpected {
-		err := errors.New("Blob not expected.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
+		return chs, errors.New("Blob not expected.")
 	}
 
-	recipientChans, recipientOnline := s.connectedUsers[recipient]
+	recipientChans, recipientOnline := connectedUsers[recipient]
 	if !recipientOnline {
-		err := errors.New("Recipient offline.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
+		return chs, errors.New("Recipient offline.")
 	}
 
-	newState := *s
-	var newExpected map[[32]byte][32]byte
-	for hash, id := range s.expectedBlobs {
-		newExpected[hash] = id
-	}
-	delete(newExpected, blobHash)
-	newState.expectedBlobs = newExpected
+	return recipientChans, nil
+}
 
-	output := sendMsgT{msg: umsg.msg.body, ch: recipientChans.out}
-	return newState, output
+func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
+
+	hash := blake2b.Sum256(umsg.msg.body)
+	chs, err := blobOk(hash, s.expectedBlobs, s.connectedUsers)
+	if err != nil {
+		return *s, sendErrT{err: err, ch: chs.err}
+	}
+
+	output := sendMsgT{msg: umsg.msg.body, ch: chs.out}
+	return removeBlob(s, hash), output
 }
 
 func slice32ToArray(s []byte) [32]byte {
