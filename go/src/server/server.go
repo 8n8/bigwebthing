@@ -148,14 +148,6 @@ func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 	return removeBlob(s, hash), output
 }
 
-func slice32ToArray(s []byte) [32]byte {
-	var arr [32]byte
-	for i, b := range s {
-		arr[i] = b
-	}
-	return arr
-}
-
 type metadataT struct {
 	blobHash        [32]byte
 	author                [32]byte
@@ -636,16 +628,24 @@ func readWebsocket(
 	inputChan chan httpInputT) {
 
 	for {
-		msgType, rawMsg, readErr := ws.ReadMessage()
+		msgType, msgReader, readErr := ws.NextReader()
 		if readErr != nil {
 			return
 		}
 		if msgType != websocket.BinaryMessage {
 			return
 		}
+		rawMsg := make([]byte, 16000)
+		lenMsg, err := msgReader.Read(rawMsg)
+		if lenMsg == 0 {
+			return
+		}
+		if err != nil {
+			return
+		}
 		inputChan <- httpInputT{
 			route: rawMsg[0],
-			body:  rawMsg[1:],
+			body:  rawMsg[1:lenMsg],
 		}
 	}
 }
