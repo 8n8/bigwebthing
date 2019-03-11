@@ -117,10 +117,10 @@ func (u userMsgT) update(s *stateT) (stateT, outputT) {
 	return *s, sendErrT{err: err, ch: u.errChan}
 }
 
-func removeBlob(s *stateT, blobHash [32]byte) stateT {
+func removeBlobHash(s *stateT, blobHash [32]byte) stateT {
 	var newExpectedBlobs map[[32]byte][32]byte
-	for hash, id := range s.expectedBlobs {
-		newExpectedBlobs[hash] = id
+	for hash, recipient := range s.expectedBlobs {
+		newExpectedBlobs[hash] = recipient
 	}
 	delete(newExpectedBlobs, blobHash)
 	newState := *s
@@ -144,8 +144,11 @@ func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 			ch: umsg.errChan}
 	}
 
-	output := sendMsgT{msg: umsg.msg.body, ch: recipientChans.out}
-	return removeBlob(s, hash), output
+	newState := removeBlobHash(s, hash)
+	output := sendMsgT{
+		msg: umsg.msg.body,
+		ch: recipientChans.out}
+	return newState, output
 }
 
 type metadataT struct {
@@ -156,31 +159,41 @@ type metadataT struct {
 	signature             [sigSize]byte
 }
 
+func addBlobHash(
+	s *stateT,
+	blobHash [32]byte,
+	recipient [32]byte) stateT {
+
+	var newExpectedBlobs map[[32]byte][32]byte
+	for hash, recipient := range s.expectedBlobs {
+		newExpectedBlobs[hash] = recipient
+	}
+	newExpectedBlobs[blobHash] = recipient
+	newState := *s
+	newState.expectedBlobs = newExpectedBlobs
+	return newState
+}
+
 func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
-	metadata, err := parseMetadata(umsg.msg.body, s.memberList)
+	md, err := parseMetadata(umsg.msg.body, s.memberList)
 	if err != nil {
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
+
 	recipientChans, recipientOnline := s.connectedUsers[
-		metadata.recipient]
+		md.recipient]
 	if !recipientOnline {
 		return *s, sendMsgT{
 			msg: []byte{responseRecipientNotConnected},
 			ch:  umsg.outChan,
 		}
 	}
-	var newExpectedBlobs map[[32]byte][32]byte
-	for blobHash, recipient := range s.expectedBlobs {
-		newExpectedBlobs[blobHash] = recipient
-	}
-	newExpectedBlobs[metadata.blobHash] = metadata.recipient
 
+	newState := addBlobHash(s, md.blobHash, md.recipient)
 	output := sendMsgT{
 		msg: umsg.msg.body,
 		ch: recipientChans.out,
 	}
-	newState := *s
-	newState.expectedBlobs = newExpectedBlobs
 	return newState, output
 }
 
