@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"time"
@@ -354,22 +355,34 @@ func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
 	return addUserConn(s, c.author, c.chans), readChans(s)
 }
 
-func readInvites(filePath string) (invitesT, error) {
+func parseInvites(rawBytes []byte) (invitesT, error) {
 	var invites invitesT
-	f, openErr := os.Open(filePath)
-	if openErr != nil {
-		return invites, openErr
-	}
-	scanner := bufio.NewScanner(f)
+	lines := bytes.Split(rawBytes, []byte("\n"))
 	var invite invitationT
-	for scanner.Scan() {
-		jsonErr := json.Unmarshal(scanner.Bytes(), &invite)
+	for _, line := range lines {
+		jsonErr := json.Unmarshal(line, &invite)
 		if jsonErr != nil {
 			return invites, jsonErr
 		}
 		invites[invite] = true
 	}
 	return invites, nil
+}
+
+func readInvites(filePath string) (invitesT, error) {
+	var invites invitesT
+	f, openErr := os.Open(filePath)
+	if openErr != nil {
+		return invites, openErr
+	}
+	defer f.Close()
+
+	rawContents, readErr := ioutil.ReadAll(f)
+	if readErr != nil {
+		return invites, readErr
+	}
+
+	return parseInvites(rawContents)
 }
 
 func readFileData(s *stateT) error {
@@ -514,10 +527,6 @@ var pleaseInviteX = [15]byte{
 	0xe8, 0xbf, 0x93, 0xd8, 0x39, 0xd3, 0x34, 0xe5,
 	0xc0, 0x1f, 0xff, 0x2b, 0xc4, 0x30, 0xc4}
 
-var pleaseGiveMeMsgs = [15]byte{
-	0x23, 0x79, 0x01, 0xd1, 0xf0, 0x04, 0xe7, 0x1c,
-	0x55, 0xba, 0x53, 0xae, 0xa3, 0x13, 0x94}
-
 func concatInviteAndCodes(
 	invite [32]byte,
 	uniqueID [15]byte,
@@ -567,12 +576,6 @@ var truesPubSign = [32]byte{
 	0xa3, 0x68, 0x06, 0x20, 0xbb, 0x34, 0x4f, 0xcb, 0x7d, 0xe2,
 	0xdc, 0x19, 0x6d, 0xa0, 0x98, 0x59, 0x12, 0xda, 0x54, 0x99,
 	0xf1, 0x5e}
-
-var truesPubEncrypt = [32]byte{
-	0x0e, 0x62, 0x16, 0x83, 0x6f, 0x6e, 0xd8, 0xb3, 0x1b, 0x68,
-	0x52, 0xec, 0xc1, 0xef, 0x70, 0x01, 0xaa, 0xcd, 0xdc, 0xba,
-	0x3b, 0xe4, 0xcb, 0x81, 0x34, 0xfc, 0xa9, 0xa3, 0x0c, 0x3d,
-	0x82, 0xa0}
 
 func authorAndInviteeEqual(a invitationT, b invitationT) bool {
 	return a.author == b.author && a.invitee == b.invitee
