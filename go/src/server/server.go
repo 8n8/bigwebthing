@@ -20,8 +20,10 @@ type stateT struct {
 	uninvitations  invitesT
 	memberList     map[[32]byte]bool
 	expectedBlobs  map[[32]byte][32]byte
-	authCodes      map[[authCodeLength]byte]int64
+	authCodes      authCodesT
 }
+
+type authCodesT map[[authCodeLength]byte]int64
 
 type invitesT map[invitationT]bool
 
@@ -134,25 +136,25 @@ func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 	if !blobExpected {
 		return *s, sendErrT{
 			err: errors.New("Blob not expected."),
-			ch: umsg.errChan}
+			ch:  umsg.errChan}
 	}
 
 	recipientChans, recipientOnline := s.connectedUsers[recipient]
 	if !recipientOnline {
 		return *s, sendErrT{
 			err: errors.New("Recipient offline."),
-			ch: umsg.errChan}
+			ch:  umsg.errChan}
 	}
 
 	newState := removeBlobHash(s, hash)
 	output := sendMsgT{
 		msg: umsg.msg.body,
-		ch: recipientChans.out}
+		ch:  recipientChans.out}
 	return newState, output
 }
 
 type metadataT struct {
-	blobHash        [32]byte
+	blobHash              [32]byte
 	author                [32]byte
 	recipient             [32]byte
 	encryptedSymmetricKey [encSymKeyLen]byte
@@ -180,8 +182,7 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 
-	recipientChans, recipientOnline := s.connectedUsers[
-		md.recipient]
+	recipientChans, recipientOnline := s.connectedUsers[md.recipient]
 	if !recipientOnline {
 		return *s, sendMsgT{
 			msg: []byte{responseRecipientNotConnected},
@@ -192,7 +193,7 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 	newState := addBlobHash(s, md.blobHash, md.recipient)
 	output := sendMsgT{
 		msg: umsg.msg.body,
-		ch: recipientChans.out,
+		ch:  recipientChans.out,
 	}
 	return newState, output
 }
@@ -200,7 +201,7 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 func addUninvite(s *stateT, uninvitation invitationT) stateT {
 	var newUninvites map[invitationT]bool
 	for u, _ := range s.uninvitations {
-		newUninvites[i] = true
+		newUninvites[u] = true
 	}
 	newUninvites[uninvitation] = true
 	newState := *s
@@ -282,10 +283,6 @@ func (n noInputT) update(s *stateT) (stateT, outputT) {
 	return *s, readChans(s)
 }
 
-type newSetupRequest struct {
-	s setupConnectionT
-}
-
 func signedAuthToSlice(bs [signedAuthSize]byte) []byte {
 	slice := make([]byte, signedAuthSize)
 	for i, b := range bs {
@@ -314,32 +311,45 @@ func (s sendErrT) send() inputT {
 	return noInputT{}
 }
 
-func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
-	authSlice, validSignature := sign.Open(
+func authSliceToArray(authSlice []byte) [authCodeLength]byte {
+	var arr [authCodeLength]byte
+	for i, b := range authSlice {
+		arr[i] = b
+	}
+	return arr
+}
+
+func addUserConn(s *stateT, user [32]byte, chans userChansT) stateT {
+	var newConnUsers map[[32]byte]userChansT
+	for u, ch := range s.connectedUsers {
+		newConnUsers[u] = ch
+	}
+	newConnUsers[user] = chans
+	newState := *s
+	newState.connectedUsers = newConnUsers
+	return newState
+}
+
+func validSetupConn(c setupConnectionT, authCodes authCodesT) error {
+	authCode, validSignature := sign.Open(
 		make([]byte, 0),
 		signedAuthToSlice(c.signedAuthCode),
 		&c.author)
 	if !validSignature {
-		err := errors.New("Bad signature.")
+		return errors.New("Bad signature.")
+	}
+	if !authOk(authCode, authCodes, c.posixTime) {
+		return errors.New("Bad auth code.")
+	}
+	return nil
+}
+
+func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
+	err := validSetupConn(c, s.authCodes)
+	if err != nil {
 		return *s, sendErrT{err: err, ch: c.errChan}
 	}
-	var authCode [authCodeLength]byte
-	for i, b := range authSlice {
-		authCode[i] = b
-	}
-	authOk := checkAuthCode(authCode, s.authCodes, c.posixTime)
-	if !authOk {
-		err := errors.New("Bad auth code.")
-		return *s, sendErrT{err: err, ch: c.errChan}
-	}
-	var newConnUsers map[[32]byte]userChansT
-	for user, userChans := range s.connectedUsers {
-		newConnUsers[user] = userChans
-	}
-	newConnUsers[c.author] = c.chans
-	newState := *s
-	newState.connectedUsers = newConnUsers
-	return newState, readChans(s)
+	return addUserConn(s, c.author, c.chans), readChans(s)
 }
 
 func main() {
@@ -358,23 +368,15 @@ type httpInputT struct {
 	body  []byte
 }
 
-func checkAuthCode(
-	authCode [authCodeLength]byte,
+func authOk(
+	authSlice []byte,
 	authCodes map[[authCodeLength]byte]int64,
 	posixTime int64) bool {
 
+	authCode := authSliceToArray(authSlice)
 	authTime, authExists := authCodes[authCode]
-	if !authExists {
-		return false
-	}
 	authAge := posixTime - authTime
-	if authAge > 30 {
-		return false
-	}
-	if authAge < 0 {
-		return false
-	}
-	return true
+	return authExists && (authAge <= 30) && (authAge >= 0)
 }
 
 type userChansT struct {
