@@ -15,17 +15,12 @@ import (
 
 type stateT struct {
 	mainChans      mainChansT
-	connectedUsers map[[32]byte]userStateT
+	connectedUsers map[[32]byte]userChansT
 	invitations    invitesT
 	uninvitations  invitesT
 	memberList     map[[32]byte]bool
-	expectedBlobs  map[[32]byte]bool
+	expectedBlobs  map[[32]byte][32]byte
 	authCodes      map[[authCodeLength]byte]int64
-}
-
-type userStateT struct {
-	chans        userChansT
-	expectedBlob [32]byte
 }
 
 type invitesT map[invitationT]bool
@@ -36,11 +31,11 @@ func initState() stateT {
 			getAuthCode:     make(chan authCodeChans),
 			setupConnection: make(chan setupConnectionT),
 		},
-		connectedUsers: make(map[[32]byte]userStateT),
+		connectedUsers: make(map[[32]byte]userChansT),
 		invitations:    make(map[invitationT]bool),
 		uninvitations:  make(map[invitationT]bool),
 		memberList:     make(map[[32]byte]bool),
-		expectedBlobs:  make(map[[32]byte]bool),
+		expectedBlobs:  make(map[[32]byte][32]byte),
 		authCodes:      make(map[[authCodeLength]byte]int64),
 	}
 }
@@ -61,7 +56,7 @@ type inputT interface {
 
 type readChansT struct {
 	chs            mainChansT
-	connectedUsers map[[32]byte]userStateT
+	connectedUsers map[[32]byte]userChansT
 }
 
 func (r readChansT) send() inputT {
@@ -77,14 +72,14 @@ func (r readChansT) send() inputT {
 	case newConnection := <-r.chs.setupConnection:
 		return newConnection
 	default:
-		for author, userState := range r.connectedUsers {
+		for author, userChans := range r.connectedUsers {
 			select {
-			case msg := <-userState.chans.in:
+			case msg := <-userChans.in:
 				return userMsgT{
 					author:  author,
 					msg:     msg,
-					outChan: userState.chans.out,
-					errChan: userState.chans.err,
+					outChan: userChans.out,
+					errChan: userChans.err,
 				}
 			default:
 			}
@@ -130,7 +125,7 @@ var finalHash = [32]byte{
 
 func stateCopyConnUsers(s *stateT) stateT {
 	newState := *s
-	var newConnectedUsers map[[32]byte]userStateT
+	var newConnectedUsers map[[32]byte]userChansT
 	for user, theirState := range s.connectedUsers {
 		newConnectedUsers[user] = theirState
 	}
@@ -144,30 +139,29 @@ func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 		err := errors.New("Blob too big.")
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
-	if blobLen < 97 {
-		err := errors.New("Blob too small.")
+
+	blobHash := blake2b.Sum256(umsg.msg.body)
+	recipient, blobExpected := s.expectedBlobs[blobHash]
+	if !blobExpected {
+		err := errors.New("Blob not expected.")
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 
-	recipient := slice32ToArray(umsg.msg.body[:32])
-
-	userState, userExists := s.connectedUsers[recipient]
-	if !userExists {
+	recipientChans, recipientOnline := s.connectedUsers[recipient]
+	if !recipientOnline {
 		err := errors.New("Recipient offline.")
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 
-	if blake2b.Sum256(umsg.msg.body) != userState.expectedBlob {
-		err := errors.New("Bad blob hash.")
-		return *s, sendErrT{err: err, ch: umsg.errChan}
+	newState := *s
+	var newExpected map[[32]byte][32]byte
+	for hash, id := range s.expectedBlobs {
+		newExpected[hash] = id
 	}
+	delete(newExpected, blobHash)
+	newState.expectedBlobs = newExpected
 
-	newState := stateCopyConnUsers(s)
-	newState.connectedUsers[recipient] = userStateT{
-		chans:        userState.chans,
-		expectedBlob: slice32ToArray(umsg.msg.body[32:64]),
-	}
-	output := sendMsgT{msg: umsg.msg.body, ch: umsg.outChan}
+	output := sendMsgT{msg: umsg.msg.body, ch: recipientChans.out}
 	return newState, output
 }
 
@@ -180,7 +174,7 @@ func slice32ToArray(s []byte) [32]byte {
 }
 
 type metadataT struct {
-	firstChunkHash        [32]byte
+	blobHash        [32]byte
 	author                [32]byte
 	recipient             [32]byte
 	encryptedSymmetricKey [encSymKeyLen]byte
@@ -192,27 +186,26 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 	if err != nil {
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
-	userState, userConnected := s.connectedUsers[metadata.recipient]
-	if !userConnected {
+	recipientChans, recipientOnline := s.connectedUsers[
+		metadata.recipient]
+	if !recipientOnline {
 		return *s, sendMsgT{
 			msg: []byte{responseRecipientNotConnected},
 			ch:  umsg.outChan,
 		}
 	}
-	var newConnectedUsers map[[32]byte]userStateT
-	for id, ustate := range s.connectedUsers {
-		newConnectedUsers[id] = ustate
+	var newExpectedBlobs map[[32]byte][32]byte
+	for blobHash, recipient := range s.expectedBlobs {
+		newExpectedBlobs[blobHash] = recipient
 	}
-	newConnectedUsers[metadata.recipient] = userStateT{
-		chans:        userState.chans,
-		expectedBlob: metadata.firstChunkHash,
-	}
+	newExpectedBlobs[metadata.blobHash] = metadata.recipient
+
 	output := sendMsgT{
 		msg: umsg.msg.body,
-		ch:  userState.chans.out,
+		ch: recipientChans.out,
 	}
 	newState := *s
-	newState.connectedUsers = newConnectedUsers
+	newState.expectedBlobs = newExpectedBlobs
 	return newState, output
 }
 
@@ -341,14 +334,11 @@ func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
 		err := errors.New("Bad auth code.")
 		return *s, sendErrT{err: err, ch: c.errChan}
 	}
-	var newConnUsers map[[32]byte]userStateT
-	for user, userState := range s.connectedUsers {
-		newConnUsers[user] = userState
+	var newConnUsers map[[32]byte]userChansT
+	for user, userChans := range s.connectedUsers {
+		newConnUsers[user] = userChans
 	}
-	newConnUsers[c.author] = userStateT{
-		chans:        c.chans,
-		expectedBlob: finalHash,
-	}
+	newConnUsers[c.author] = c.chans
 	newState := *s
 	newState.connectedUsers = newConnUsers
 	return newState, readChans(s)
@@ -603,7 +593,7 @@ func concatMd(m metadataT) []byte {
 	result := make([]byte, concatMdLen)
 	i := 0
 	for i < 32 {
-		result[i] = m.firstChunkHash[i]
+		result[i] = m.blobHash[i]
 		i++
 	}
 	for i < 64 {
