@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
@@ -352,8 +354,45 @@ func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
 	return addUserConn(s, c.author, c.chans), readChans(s)
 }
 
+func readInvites(filePath string) (invitesT, error) {
+	var invites invitesT
+	f, openErr := os.Open(filePath)
+	if openErr != nil {
+		return invites, openErr
+	}
+	scanner := bufio.NewScanner(f)
+	var invite invitationT
+	for scanner.Scan() {
+		jsonErr := json.Unmarshal(scanner.Bytes(), &invite)
+		if jsonErr != nil {
+			return invites, jsonErr
+		}
+		invites[invite] = true
+	}
+	return invites, nil
+}
+
+func readFileData(s *stateT) error {
+	var err error
+	s.invitations, err = readInvites(invitesFilePath)
+	if err != nil {
+		fmt.Print(err.Error())
+		return err
+	}
+	s.uninvitations, err = readInvites(uninvitesFilePath)
+	if err != nil {
+		fmt.Print(err.Error())
+		return err
+	}
+	return nil
+}
+
 func main() {
 	state := initState()
+	err := readFileData(&state)
+	if err != nil {
+		return
+	}
 	go httpServer(state.mainChans)
 	var input inputT = noInputT{}
 	var output outputT = readChans(&state)
