@@ -30,21 +30,6 @@ type authCodesT map[[authCodeLength]byte]int64
 
 type invitesT map[invitationT]bool
 
-func initState() stateT {
-	return stateT{
-		mainChans: mainChansT{
-			getAuthCode:     make(chan authCodeChans),
-			setupConnection: make(chan setupConnectionT),
-		},
-		connectedUsers: make(map[[32]byte]userChansT),
-		invitations:    make(map[invitationT]bool),
-		uninvitations:  make(map[invitationT]bool),
-		memberList:     make(map[[32]byte]bool),
-		expectedBlobs:  make(map[[32]byte][32]byte),
-		authCodes:      make(map[[authCodeLength]byte]int64),
-	}
-}
-
 type outputT interface {
 	send() inputT
 }
@@ -443,7 +428,7 @@ func readFileData(s *stateT) error {
 }
 
 func main() {
-	state := initState()
+	var state stateT
 	err := readFileData(&state)
 	if err != nil {
 		return
