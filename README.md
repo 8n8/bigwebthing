@@ -26,4 +26,4 @@ Terminal commands are denoted by ```$```. Obviously, don't include the ```$``` i
 5. ```$ cd go/bin```
 6. ```$ ./server```
 
-This will (hopefully - it's not been tested yet) set up a websockets server on http://localhost:4000. Clients can then connect to this and ping messages back and forth to each other. It doesn't store the messages, so will fail if both sender and receiver are not connected at the same time.
+This will (hopefully - it's not been tested yet) set up a websockets server on ws://localhost:4000. Clients can then connect to this and ping messages back and forth to each other. It doesn't store the messages, so will fail if both sender and receiver are not connected at the same time.
