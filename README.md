@@ -12,16 +12,18 @@ The current plan is that the project will be in three parts:
 
 Item (1) is mostly in place now, though untested. The project started in Haskell but switched to Go mainly because good trustworthy crypto is hard to come by in Haskell. 
 
-# Installation of the message-passing server in Ubuntu Linux - terminal commands
+# Installation of the message-passing server in Ubuntu Linux
 
-1. Clone this repository: ```git clone https://github.com/8n8/bigwebthing```
-2. ```cd bigwebthing```
-3. Install Go 1.12 using (these)[https://golang.org/doc/install#install] instructions, but set the GOPATH to /path/to/bigwebthing/go.
-4. ```go install server```
+Terminal commands are denoted by ```$```. Obviously, don't include the ```$``` in the actual command.
+
+1. Clone this repository: ```$ git clone https://github.com/8n8/bigwebthing```
+2. ```$ cd bigwebthing```
+3. Install Go 1.12 using [these](https://golang.org/doc/install#install) instructions, but set the GOPATH to ```/path/to/bigwebthing/go```.
+4. ```$ go install server```
 
 # Running the program
 
-5. ```cd go/bin```
-6. ```./server```
+5. ```$ cd go/bin```
+6. ```$ ./server```
 
 This will (hopefully - it's not been tested yet) set up a websockets server on http://localhost:4000. Clients can then connect to this and ping messages back and forth to each other. It doesn't store the messages, so will fail if both sender and receiver are not connected at the same time.
