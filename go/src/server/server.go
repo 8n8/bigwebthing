@@ -84,7 +84,7 @@ func (r readChansT) send() inputT {
 					author:  author,
 					msg:     msg,
 					outChan: userChans.out,
-					errChan: userChans.err,
+					errChan: userChans.errOut,
 				}
 			default:
 			}
@@ -462,7 +462,8 @@ func authOk(
 type userChansT struct {
 	in  chan httpInputT
 	out chan []byte
-	err chan error
+	errOut chan error
+	errIn chan error
 }
 
 func genAuthCode() ([authCodeLength]byte, error) {
@@ -706,6 +707,7 @@ var upgrader = websocket.Upgrader{
 
 func readWebsocket(
 	ws *websocket.Conn,
+	errChanIn chan error,
 	inputChan chan httpInputT) {
 
 	for {
@@ -718,10 +720,10 @@ func readWebsocket(
 		}
 		rawMsg := make([]byte, 16000)
 		lenMsg, err := msgReader.Read(rawMsg)
-		if lenMsg == 0 {
+		if err != nil {
 			return
 		}
-		if err != nil {
+		if lenMsg == 0 {
 			return
 		}
 		inputChan <- httpInputT{
@@ -790,6 +792,8 @@ func handler(
 		chans: userChansT{
 			in:  make(chan httpInputT),
 			out: make(chan []byte),
+			errOut: make(chan error),
+			errIn: make(chan error),
 		},
 		author:         auth.author,
 		signedAuthCode: auth.signedAuthCode,
@@ -802,7 +806,7 @@ func handler(
 		return
 	}
 
-	go readWebsocket(ws, setup.chans.in)
+	go readWebsocket(ws, setup.chans.errIn, setup.chans.in)
 	for {
 		msgOut := <-setup.chans.out
 		sendErr := ws.WriteMessage(
