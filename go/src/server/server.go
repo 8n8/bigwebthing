@@ -215,6 +215,28 @@ func addUninvite(s *stateT, uninvitation invitationT) stateT {
 	return newState
 }
 
+func metadataErr(metadata metadataT, memberList map[[32]byte]bool) error {
+	validSignature := verifyDetached(
+		concatMd(metadata),
+		metadata.signature,
+		metadata.author)
+	if !validSignature {
+		return errors.New("Bad signature.")
+	}
+	_, authorIsMember := memberList[metadata.author]
+	if !authorIsMember {
+		return errors.New("Author is not a member.")
+	}
+	_, recipientIsMember := memberList[metadata.recipient]
+	if !recipientIsMember {
+		return errors.New("Recipient is not a member.")
+	}
+	if metadata.author == metadata.recipient {
+		return errors.New("Can't send messages to yourself.")
+	}
+	return nil
+}
+
 func processUninvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
 	uninvitation, err := parseInviteLike(
 		umsg.msg.body,
@@ -672,29 +694,7 @@ func parseMetadata(
 	if jsonErr != nil {
 		return metadataT{}, jsonErr
 	}
-	validSignature := verifyDetached(
-		concatMd(metadata),
-		metadata.signature,
-		metadata.author)
-	if !validSignature {
-		err := errors.New("Bad signature.")
-		return metadataT{}, err
-	}
-	_, authorIsMember := memberList[metadata.author]
-	if !authorIsMember {
-		errStr := "Author is not a member."
-		return metadataT{}, errors.New(errStr)
-	}
-	_, recipientIsMember := memberList[metadata.recipient]
-	if !recipientIsMember {
-		errStr := "Recipient is not a member."
-		return metadataT{}, errors.New(errStr)
-	}
-	if metadata.author == metadata.recipient {
-		errStr := "You can't send messages to yourself."
-		return metadataT{}, errors.New(errStr)
-	}
-	return metadata, nil
+	return metadata, metadataErr(metadata, memberList)
 }
 
 type handlerT = func(http.ResponseWriter, *http.Request)
