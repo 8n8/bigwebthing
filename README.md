@@ -2,7 +2,7 @@ BigWebThing will be a tool for sharing and running programmable documents.
 
 The project is in the early stages and there is nothing much working yet.
 
-The current plan is that the project will be in three parts:
+The project will be in three parts:
 
 1. A simple message-passing server.
 

@@ -86,11 +86,21 @@ func (r readChansT) send() inputT {
 					outChan: userChans.out,
 					errChan: userChans.errOut,
 				}
+			case <-userChans.errIn:
+				return killUserT {author: author}
 			default:
 			}
 		}
 		return noInputT{}
 	}
+}
+
+type killUserT struct {
+	author [32]byte
+}
+
+func (k killUserT) update(s *stateT) (stateT, outputT) {
+	return removeBlobHash(s, k.author), readChans(s)
 }
 
 type userMsgT struct {
@@ -713,17 +723,21 @@ func readWebsocket(
 	for {
 		msgType, msgReader, readErr := ws.NextReader()
 		if readErr != nil {
+			errChanIn <- readErr
 			return
 		}
 		if msgType != websocket.BinaryMessage {
+			errChanIn <- errors.New("Bad message type.")
 			return
 		}
 		rawMsg := make([]byte, 16000)
 		lenMsg, err := msgReader.Read(rawMsg)
 		if err != nil {
+			errChanIn <- err
 			return
 		}
 		if lenMsg == 0 {
+			errChanIn <- errors.New("Empty message.")
 			return
 		}
 		inputChan <- httpInputT{
@@ -747,6 +761,7 @@ func handler(
 	r *http.Request) {
 
 	ws, wsErr := upgrader.Upgrade(w, r, nil)
+	defer ws.Close()
 	if wsErr != nil {
 		return
 	}
@@ -808,11 +823,18 @@ func handler(
 
 	go readWebsocket(ws, setup.chans.errIn, setup.chans.in)
 	for {
-		msgOut := <-setup.chans.out
-		sendErr := ws.WriteMessage(
-			websocket.BinaryMessage, msgOut)
-		if sendErr != nil {
+		select {
+		case msgOut := <-setup.chans.out:
+			sendErr := ws.WriteMessage(
+				websocket.BinaryMessage, msgOut)
+			fmt.Print(err.Error())
+			if sendErr != nil {
+				return
+			}
+		case err := <-setup.chans.errOut:
+			fmt.Print(err.Error())
 			return
+		default:
 		}
 	}
 }
