@@ -450,6 +450,33 @@ func genAuthCode() ([authCodeLength]byte, error) {
 	return authCode, nil
 }
 
+func inviteErr(
+	invitation invitationT,
+	memberList map[[32]byte]bool,
+	meaningCode [15]byte) error {
+
+	validSignature := verifyDetached(
+		concatInviteAndCodes(
+			invitation.invitee,
+			invitation.uniqueID,
+			meaningCode),
+		invitation.signature,
+		invitation.author)
+	if !validSignature {
+		return errors.New("Could not verify signature.")
+	}
+
+	_, authorIsMember := memberList[invitation.author]
+	if !authorIsMember {
+		return errors.New("The author is not a member.")
+	}
+
+	if invitation.author == invitation.invitee {
+		return errors.New("You can't (un)invite yourself.")
+	}
+	return nil
+}
+
 func parseInviteLike(
 	raw []byte,
 	memberList map[[32]byte]bool,
@@ -460,27 +487,9 @@ func parseInviteLike(
 	if jsonErr != nil {
 		return invitation, jsonErr
 	}
-	validSignature := verifyDetached(
-		concatInviteAndCodes(
-			invitation.invitee,
-			invitation.uniqueID,
-			meaningCode),
-		invitation.signature,
-		invitation.author)
-	if !validSignature {
-		err := errors.New("Could not verify signature.")
-		return invitation, err
-	}
-	_, authorIsMember := memberList[invitation.author]
-	if !authorIsMember {
-		errStr := "The author is not a member."
-		return invitation, errors.New(errStr)
-	}
-	if invitation.author == invitation.invitee {
-		errStr := "You can't (un)invite yourself."
-		return invitation, errors.New(errStr)
-	}
-	return invitation, nil
+
+	inviteErr := inviteErr(invitation, memberList, meaningCode)
+	return invitation, inviteErr
 }
 
 type invitationT struct {
@@ -531,6 +540,7 @@ func concatInviteAndCodes(
 	invite [32]byte,
 	uniqueID [15]byte,
 	meaningCode [15]byte) []byte {
+
 	result := make([]byte, 62)
 	i := 0
 	for i < 32 {
