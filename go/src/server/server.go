@@ -35,9 +35,8 @@ type outputT interface {
 }
 
 const (
-	responseNoAuthCode            byte = 0x00
-	responseAuthCode              byte = 0x01
-	responseRecipientNotConnected byte = 0x02
+	responseAuthCode              byte = 0x00
+	responseRecipientNotConnected byte = 0x01
 )
 
 type inputT interface {
@@ -212,7 +211,10 @@ func addUninvite(s *stateT, uninvitation invitationT) stateT {
 	return newState
 }
 
-func metadataErr(metadata metadataT, memberList map[[32]byte]bool) error {
+func metadataErr(
+	metadata metadataT,
+	memberList map[[32]byte]bool) error {
+
 	validSignature := verifyDetached(
 		concatMd(metadata),
 		metadata.signature,
