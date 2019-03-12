@@ -209,6 +209,9 @@ func addUninvite(s *stateT, uninvitation invitationT) stateT {
 	newUninvites[uninvitation] = true
 	newState := *s
 	newState.uninvitations = newUninvites
+	newState.memberList = makeMemberList(
+		s.invitations,
+		newUninvites)
 	return newState
 }
 
@@ -237,6 +240,9 @@ func addInvite(s *stateT, invitation invitationT) stateT {
 	newInvites[invitation] = true
 	newState := *s
 	newState.invitations = newInvites
+	newState.memberList = makeMemberList(
+		newInvites,
+		s.uninvitations)
 	return newState
 }
 
