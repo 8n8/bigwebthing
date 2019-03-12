@@ -87,7 +87,9 @@ func (r readChansT) send() inputT {
 					errChan: userChans.errOut,
 				}
 			case <-userChans.errIn:
-				return killUserT {author: author}
+				userChans.errOut <- errors.New(
+					"WS reader has errored.")
+				return endWsSessionT {author: author}
 			default:
 			}
 		}
@@ -95,11 +97,11 @@ func (r readChansT) send() inputT {
 	}
 }
 
-type killUserT struct {
+type endWsSessionT struct {
 	author [32]byte
 }
 
-func (k killUserT) update(s *stateT) (stateT, outputT) {
+func (k endWsSessionT) update(s *stateT) (stateT, outputT) {
 	return removeBlobHash(s, k.author), readChans(s)
 }
 
@@ -755,31 +757,18 @@ func authToSlice(bs [authCodeLength]byte) []byte {
 	return slice
 }
 
-func handler(
-	mainChans mainChansT,
-	w http.ResponseWriter,
-	r *http.Request) {
+func makeAndSendAuthCode(
+	ws *websocket.Conn,
+	getAuthChan chan authCodeChans) error {
 
-	ws, wsErr := upgrader.Upgrade(w, r, nil)
-	defer ws.Close()
-	if wsErr != nil {
-		return
-	}
 	authChans := authCodeChans{
 		main: make(chan [authCodeLength]byte),
 		err:  make(chan error),
 	}
-	mainChans.getAuthCode <- authChans
+	getAuthChan <- authChans
 	select {
 	case err := <-authChans.err:
-		sendErr := ws.WriteMessage(
-			websocket.BinaryMessage,
-			append(
-				[]byte{responseNoAuthCode},
-				[]byte(err.Error())...))
-		if sendErr != nil {
-			return
-		}
+		return err
 	case authCode := <-authChans.main:
 		sendErr := ws.WriteMessage(
 			websocket.BinaryMessage,
@@ -787,9 +776,32 @@ func handler(
 				[]byte{responseAuthCode},
 				authToSlice(authCode)...))
 		if sendErr != nil {
-			return
+			return sendErr
 		}
 	}
+	return nil
+}
+
+func handler(
+	mainChans mainChansT,
+	w http.ResponseWriter,
+	r *http.Request) {
+
+	// Initialise websocket
+	ws, wsErr := upgrader.Upgrade(w, r, nil)
+	defer ws.Close()
+	if wsErr != nil {
+		return
+	}
+
+	// Get auth code from main loop and send it to client.
+	getAuthErr := makeAndSendAuthCode(ws, mainChans.getAuthCode)
+	if getAuthErr != nil {
+		fmt.Print(getAuthErr.Error())
+		return
+	}
+
+	// Receive signed auth code from client.
 	msgType, rawMsg, readErr := ws.ReadMessage()
 	if readErr != nil {
 		return
@@ -800,8 +812,11 @@ func handler(
 	var auth authenticatorT
 	jsonErr := json.Unmarshal(rawMsg, &auth)
 	if jsonErr != nil {
+		fmt.Print(jsonErr.Error())
 		return
 	}
+
+	// Set up the connection with the main loop.
 	errChan := make(chan error)
 	setup := setupConnectionT{
 		chans: userChansT{
@@ -818,17 +833,21 @@ func handler(
 	mainChans.setupConnection <- setup
 	err := <-errChan
 	if err != nil {
+		fmt.Print(err.Error())
 		return
 	}
 
+	// Set up listener for new messages from user.
 	go readWebsocket(ws, setup.chans.errIn, setup.chans.in)
+
+	// Listen for messages from the main loop.
 	for {
 		select {
 		case msgOut := <-setup.chans.out:
 			sendErr := ws.WriteMessage(
 				websocket.BinaryMessage, msgOut)
-			fmt.Print(err.Error())
 			if sendErr != nil {
+				fmt.Print(sendErr.Error())
 				return
 			}
 		case err := <-setup.chans.errOut:
