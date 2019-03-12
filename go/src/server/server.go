@@ -639,8 +639,6 @@ const (
 	serverDir         = "/home/t/bigwebthing/serverData"
 	invitesFilePath   = serverDir + "/invites.txt"
 	uninvitesFilePath = serverDir + "/uninvites.txt"
-	metadataFilePath  = serverDir + "/metadata.txt"
-	chunkDir          = serverDir + "/chunks"
 )
 
 const encSymKeyLen = secretbox.Overhead + 32
