@@ -7,6 +7,11 @@ import Html.Attributes as Hat
 import Html.Events exposing (onClick, onInput)
 import Http
 import Url
+import Element as E -- exposing (Element, el, text, row, alignRight, fill, width, rgb255, spacing, centerY, padding)
+import Element.Input as Ei
+import Element.Background as Background
+import Element.Border as Border
+import Element.Font as Font
 
 
 main =
@@ -63,15 +68,17 @@ update msg model =
 
 view model =
     { title = "BigWebThing"
-    , body =
-        [ div []
-            [ input
-                [ Hat.placeholder "Text to send"
-                , Hat.value model.boxStr
-                , onInput TypedIn
-                ]
-                []
-            ]
-        , text model.displayStr
-        ]
+    , body = [ E.layout [] (mainEl model) ]
     }
+
+mainEl : Model -> E.Element Msg
+mainEl model =
+    E.column []
+        [ Ei.text []
+            { onChange = TypedIn
+            , text = model.boxStr
+            , placeholder = Nothing
+            , label = Ei.labelAbove [] E.none
+            }
+        , E.text model.displayStr
+        ]
