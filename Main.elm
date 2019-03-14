@@ -28,7 +28,7 @@ main =
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ _ _ =
-    ( { boxStr = "", displayStr = "" }, Cmd.none )
+    ( { boxStr = "", displayStr = "", page = Home }, Cmd.none )
 
 
 type Msg
@@ -36,11 +36,18 @@ type Msg
     | FromServer (Result Http.Error String)
     | NewDocumentButtonClick
     | MembershipButtonClick
+    | HomeButtonClick
     | DoNothing
 
 
+type Page
+    = Home
+    | NewDoc
+
+
 type alias Model =
-    { boxStr : String
+    { page : Page
+    , boxStr : String
     , displayStr : String
     }
 
@@ -72,7 +79,10 @@ update msg model =
             ( model, Cmd.none )
 
         NewDocumentButtonClick ->
-            ( model, Cmd.none )
+            ( { model | page = NewDoc }, Cmd.none )
+
+        HomeButtonClick ->
+            ( { model | page = Home }, Cmd.none )
 
 
 view model =
@@ -96,21 +106,11 @@ searchStyle =
     , Border.solid
     , Border.rounded 0
     , E.width <| E.px 600
-
-    --, E.padding 0
     ]
 
 
 edges =
     { top = 0, left = 0, right = 0, bottom = 0 }
-
-
-createNowStyle =
-    [ E.moveDown 1
-    , E.alignLeft
-    , E.alignTop
-    , E.paddingEach { edges | top = 33 }
-    ]
 
 
 idPadding =
@@ -135,7 +135,6 @@ myId =
         , Font.size 20
         , E.alignRight
         , E.alignTop
-        , E.paddingEach idPadding
         ]
     <|
         (E.el [ Font.bold ] <| E.text "Public ID:")
@@ -144,14 +143,57 @@ myId =
 
 searchBoxStyle =
     [ Font.family [ Font.typeface "Courier", Font.monospace ]
-    , E.paddingEach
-        { top = 20
-        , left = 20
-        , right = 0
-        , bottom = 0
-        }
     , E.alignTop
     ]
+
+
+topButtonStyle =
+    [ E.alignLeft
+    , E.alignTop
+    ]
+
+
+makeTopButton : ( Msg, String ) -> E.Element Msg
+makeTopButton ( msg, label ) =
+    E.el topButtonStyle <|
+        Ei.button []
+            { onPress = Just msg
+            , label = E.text label
+            }
+
+
+topButtons =
+    E.row [ E.spacing 30 ] <|
+        L.map makeTopButton
+            [ ( HomeButtonClick, "Home" )
+            , ( NewDocumentButtonClick, "New document" )
+            , ( MembershipButtonClick, "Members" )
+            ]
+
+
+searchBox txt =
+    E.el searchBoxStyle <|
+        Ei.text
+            searchStyle
+            { onChange = TypedIn
+            , text = txt
+            , placeholder = Just placeholder
+            , label = Ei.labelAbove [] E.none
+            }
+
+
+topButtonsAndSearch txt =
+    E.column [ E.spacing 20, E.alignTop ]
+        [ topButtons
+        , searchBox txt
+        ]
+
+
+topSection txt =
+    E.row [ E.width E.fill, E.spacing 20 ]
+        [ topButtonsAndSearch txt
+        , myId
+        ]
 
 
 mainEl : Model -> E.Element Msg
@@ -160,28 +202,7 @@ mainEl model =
         [ Font.family [ Font.typeface "Georgia", Font.serif ]
         , Font.size 28
         , E.width E.fill
+        , E.padding 20
         ]
-        [ E.row [ E.width E.fill, E.spacing 30 ]
-            [ E.el searchBoxStyle <|
-                Ei.text
-                    searchStyle
-                    { onChange = TypedIn
-                    , text = model.boxStr
-                    , placeholder = Just placeholder
-                    , label = Ei.labelAbove [] E.none
-                    }
-            , E.el createNowStyle <|
-                Ei.button
-                    []
-                    { onPress = Just NewDocumentButtonClick
-                    , label = E.text "New document"
-                    }
-            , E.el createNowStyle <|
-                Ei.button
-                    []
-                    { onPress = Just MembershipButtonClick
-                    , label = E.text "Members"
-                    }
-            , myId
-            ]
+        [ topSection model.displayStr
         ]
