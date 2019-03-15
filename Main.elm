@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
+import Debug
 import Element as E
 import Element.Background as Bg
 import Element.Border as Border
@@ -22,13 +23,13 @@ main =
         , update = update
         , subscriptions = \_ -> Sub.none
         , onUrlRequest = \_ -> DoNothing
-        , onUrlChange = \_ -> DoNothing
+        , onUrlChange = \url -> NewUrl url.path
         }
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
-init _ _ _ =
-    ( { boxStr = "", displayStr = "", page = Home }, Cmd.none )
+init _ _ key =
+    ( { boxStr = "", displayStr = "", page = Home, key = key }, Cmd.none )
 
 
 type Msg
@@ -38,17 +39,22 @@ type Msg
     | MembershipButtonClick
     | HomeButtonClick
     | DoNothing
+    | NewUrl String
+    | UploadDoc
 
 
 type Page
     = Home
     | NewDoc
+    | Members
+    | Unknown
 
 
 type alias Model =
     { page : Page
     , boxStr : String
     , displayStr : String
+    , key : Nav.Key
     }
 
 
@@ -61,8 +67,22 @@ postMsg txt =
         }
 
 
+setNewDocUrl key = Nav.pushUrl key "/newdocument"
+
 update msg model =
     case msg of
+        NewUrl "/" ->
+            ( { model | page = Home }, Cmd.none ) 
+
+        NewUrl "/newdocument" ->
+            ( { model | page = NewDoc }, Cmd.none )
+
+        NewUrl "/members" ->
+            ( { model | page = Members }, Cmd.none )
+
+        NewUrl _ -> 
+            ( { model | page = Unknown }, Cmd.none )
+
         TypedIn txt ->
             ( { model | boxStr = txt }, postMsg txt )
 
@@ -72,14 +92,21 @@ update msg model =
         FromServer (Ok str) ->
             ( { model | displayStr = str }, Cmd.none )
 
+        UploadDoc ->
+            ( model, Cmd.none )
+ 
         DoNothing ->
             ( model, Cmd.none )
 
         MembershipButtonClick ->
-            ( model, Cmd.none )
+            ( { model | page = Members }
+            , Nav.pushUrl model.key "/members"
+            )
 
         NewDocumentButtonClick ->
-            ( { model | page = NewDoc }, Cmd.none )
+            ( { model | page = NewDoc }
+            , Nav.pushUrl model.key "/newdocument"
+            )
 
         HomeButtonClick ->
             ( { model | page = Home }, Cmd.none )
@@ -87,7 +114,7 @@ update msg model =
 
 view model =
     { title = "BigWebThing"
-    , body = [ E.layout [] (mainEl model) ]
+    , body = [ E.layout [] (mainEl <| Debug.log "model" model) ]
     }
 
 
@@ -143,6 +170,7 @@ myId =
 
 searchBoxStyle =
     [ Font.family [ Font.typeface "Courier", Font.monospace ]
+    , Font.size 28
     , E.alignTop
     ]
 
@@ -150,24 +178,31 @@ searchBoxStyle =
 topButtonStyle =
     [ E.alignLeft
     , E.alignTop
+    , Font.size 28
+    , Font.family [ Font.typeface "Georgia", Font.serif ]
     ]
 
+buttonColor p1 p2 =
+    if p1 == p2 then
+        Bg.color (E.rgb255 201 221 255)
+    else
+        Bg.color (E.rgb255 255 255 255)
 
-makeTopButton : ( Msg, String ) -> E.Element Msg
-makeTopButton ( msg, label ) =
-    E.el topButtonStyle <|
+makeTopButton : Page -> ( Msg, Page, String ) -> E.Element Msg
+makeTopButton page ( msg, buttonPage, label ) =
+    E.el ((buttonColor page buttonPage) :: topButtonStyle) <|
         Ei.button []
             { onPress = Just msg
             , label = E.text label
             }
 
 
-topButtons =
-    E.row [ E.spacing 30 ] <|
-        L.map makeTopButton
-            [ ( HomeButtonClick, "Home" )
-            , ( NewDocumentButtonClick, "New document" )
-            , ( MembershipButtonClick, "Members" )
+topButtons page =
+    E.row [ E.spacing 20, E.alignTop ] <|
+        L.map (makeTopButton page)
+            [ ( HomeButtonClick, Home, "Home" )
+            , ( NewDocumentButtonClick, NewDoc, "New document" )
+            , ( MembershipButtonClick, Members, "Members" )
             ]
 
 
@@ -182,27 +217,62 @@ searchBox txt =
             }
 
 
-topButtonsAndSearch txt =
+topButtonsAndSearch page txt =
     E.column [ E.spacing 20, E.alignTop ]
-        [ topButtons
+        [ topButtons page
         , searchBox txt
         ]
 
 
-topSection txt =
+homeTopSection txt =
     E.row [ E.width E.fill, E.spacing 20 ]
-        [ topButtonsAndSearch txt
+        [ topButtonsAndSearch Home txt
         , myId
         ]
 
+newDocTopSection =
+    E.row [ E.width E.fill, E.spacing 20 ]
+        [ topButtons NewDoc
+        , myId
+        ]
+
+membersTopSection =
+    E.row [ E.width E.fill, E.spacing 20 ]
+        [ topButtons Members
+        , myId
+        ]
 
 mainEl : Model -> E.Element Msg
-mainEl model =
+mainEl model = case model.page of
+    Home -> homePage model
+    NewDoc -> newDocPage model
+    Members -> memberPage model
+    Unknown -> E.none
+
+memberPage model =
     E.column
-        [ Font.family [ Font.typeface "Georgia", Font.serif ]
-        , Font.size 28
-        , E.width E.fill
+        [ E.width E.fill
         , E.padding 20
         ]
-        [ topSection model.displayStr
+        [ membersTopSection
         ]
+
+homePage model =
+    E.column
+        [ E.width E.fill
+        , E.padding 20
+        ]
+        [ homeTopSection model.boxStr
+        ]
+
+newDocPage model = 
+    E.column
+         [ E.width E.fill
+         , E.padding 20
+         ]
+         [ newDocTopSection
+         , Ei.button []
+             { onPress = Just UploadDoc
+             , label = E.text "Upload document"
+             }
+         ]
