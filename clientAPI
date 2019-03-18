@@ -5,6 +5,7 @@ Only accessible from the home session
 + func saveApp() appHash
 + func sendApp(appHash, recipients [][]byte)
 + func setMetadata(tags []string, accessList [][]byte, appHash []byte)
++ func searchApps(tags []string, searchString string) metadata
 
 
 Accessible from all sessions
