@@ -233,11 +233,11 @@ newDocTopSection =
             , Ei.button
                 [ E.alignBottom
                 , E.padding 5
-                , Border.rounded 6
+                , Border.rounded 18
                 , Border.width 1
                 ]
                 { onPress = Just UploadDoc
-                , label = E.text "Choose local file"
+                , label = E.el [ E.padding 3 ] <| E.text "Choose local file"
                 }
             ]
         , myId

@@ -1,8 +1,16 @@
-+ func login(pin)
-+ func search(searchString, chosenTags) (matchingTags, matchingApps)
+Only accessible from the home session
+-------------------------------------
+
 + func launchApp(appHash)
-+ func createNew(tags, recipients)
-+ func send(appHash, recipients)
-+ func getMyId() string
-+ func saveFileMetadata(metadata)
-+ func saveFile(fileContents)
++ func saveApp() appHash
++ func sendApp(appHash, recipients [][]byte)
++ func setMetadata(tags []string, accessList [][]byte, appHash []byte)
+
+
+Accessible from all sessions
+----------------------------
+
++ func sendMsg(msg []byte)
++ func writeFile(fileName string, contents []byte) error
++ func readFile(fileName string) ([]byte, error)
++ func quota() (spaceused int, spacefree int)
