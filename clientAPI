@@ -1,0 +1,8 @@
++ func login(pin)
++ func search(searchString, chosenTags) (matchingTags, matchingApps)
++ func launchApp(appHash)
++ func createNew(tags, recipients)
++ func send(appHash, recipients)
++ func getMyId() string
++ func saveFileMetadata(metadata)
++ func saveFile(fileContents)

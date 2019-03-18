@@ -26,10 +26,15 @@ main =
         , onUrlChange = \url -> NewUrl url.path
         }
 
+urlToPage path = case path of
+    "/" -> Home
+    "/newdocument" -> NewDoc
+    "/members" -> Members
+    _ -> Unknown
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
-init _ _ key =
-    ( { boxStr = "", displayStr = "", page = Home, key = key }, Cmd.none )
+init _ url key =
+    ( { boxStr = "", displayStr = "", page = urlToPage url.path, key = key }, Cmd.none )
 
 
 type Msg
@@ -71,17 +76,8 @@ setNewDocUrl key = Nav.pushUrl key "/newdocument"
 
 update msg model =
     case msg of
-        NewUrl "/" ->
-            ( { model | page = Home }, Cmd.none ) 
-
-        NewUrl "/newdocument" ->
-            ( { model | page = NewDoc }, Cmd.none )
-
-        NewUrl "/members" ->
-            ( { model | page = Members }, Cmd.none )
-
-        NewUrl _ -> 
-            ( { model | page = Unknown }, Cmd.none )
+        NewUrl path ->
+            ( { model | page = urlToPage path }, Cmd.none ) 
 
         TypedIn txt ->
             ( { model | boxStr = txt }, postMsg txt )
@@ -191,7 +187,7 @@ buttonColor p1 p2 =
 makeTopButton : Page -> ( Msg, Page, String ) -> E.Element Msg
 makeTopButton page ( msg, buttonPage, label ) =
     E.el ((buttonColor page buttonPage) :: topButtonStyle) <|
-        Ei.button []
+        Ei.button [E.padding 5]
             { onPress = Just msg
             , label = E.text label
             }
@@ -232,7 +228,18 @@ homeTopSection txt =
 
 newDocTopSection =
     E.row [ E.width E.fill, E.spacing 20 ]
-        [ topButtons NewDoc
+        [ E.column [E.alignTop, E.height E.fill]
+            [ topButtons NewDoc
+            , Ei.button
+                [ E.alignBottom
+                , E.padding 5
+                , Border.rounded 6
+                , Border.width 1
+                ]
+                { onPress = Just UploadDoc
+                , label = E.text "Choose local file"
+                }
+            ]
         , myId
         ]
 
@@ -271,8 +278,4 @@ newDocPage model =
          , E.padding 20
          ]
          [ newDocTopSection
-         , Ei.button []
-             { onPress = Just UploadDoc
-             , label = E.text "Upload document"
-             }
          ]

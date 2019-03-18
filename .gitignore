@@ -11,3 +11,5 @@ go/src/github.com/
 go/pkg/
 server.go
 client.go
+members
+newdocument
