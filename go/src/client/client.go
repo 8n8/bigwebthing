@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -16,6 +18,7 @@ type outputT interface {
 
 type stateT struct {
 	httpChans httpChansT
+	homeCode  string
 }
 
 type httpChansT struct {
@@ -40,10 +43,10 @@ func (h homeInputT) update(s *stateT) (stateT, outputT) {
 }
 
 type homeInputT struct {
-	route string
-	postBody []byte
+	route      string
+	postBody   []byte
 	returnChan chan []byte
-	errChan chan error
+	errChan    chan error
 }
 
 type noInputT struct{}
@@ -52,13 +55,34 @@ func (n noInputT) update(s *stateT) (stateT, outputT) {
 	return *s, s.httpChans
 }
 
+func genCode() (string, error) {
+	authSlice := make([]byte, 16)
+	_, err := rand.Read(authSlice)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(authSlice), nil
+}
+
+func initState() (stateT, error) {
+	var httpChans httpChansT
+	homeCode, err := genCode()
+	if err != nil {
+		return stateT{}, err
+	}
+	return stateT{
+		httpChans: httpChans,
+		homeCode:  homeCode,
+	}, nil
+}
+
 func main() {
 	var state stateT
 	// err := readFileData(&state)
 	// if err != nil {
 	// 	return
 	// }
-	go homeServer(state.httpChans)
+	go httpServer(state.httpChans, state.homeCode)
 	var input inputT = noInputT{}
 	var output outputT = state.httpChans
 	for {
@@ -86,10 +110,10 @@ func makeHomeHandler(route string, inputChan chan homeInputT) handlerT {
 		var returnChan chan []byte
 		var errChan chan error
 		inputChan <- homeInputT{
-			route: route,
-			postBody: body,
+			route:      route,
+			postBody:   body,
 			returnChan: returnChan,
-			errChan: errChan,
+			errChan:    errChan,
 		}
 		select {
 		case response := <-returnChan:
@@ -102,7 +126,11 @@ func makeHomeHandler(route string, inputChan chan homeInputT) handlerT {
 	}
 }
 
-func homeServer(ch httpChansT) {
-	http.HandleFunc("/", staticFileHandler)
+func httpServer(ch httpChansT, homeCode string) {
+	homeBase := "/" + homeCode
+	http.HandleFunc(homeBase, staticFileHandler)
+	http.HandleFunc(
+		homeBase+"/launchapp",
+		makeHomeHandler("launchapp", ch.homeIn))
 	http.ListenAndServe(":3000", nil)
 }
