@@ -19,25 +19,31 @@ type stateT struct {
 }
 
 type httpChansT struct {
-	in chan []byte
-	out chan []byte
+	homeIn chan homeInputT
 }
+
+const (
+	docsDir = "clientData/docs"
+)
 
 func (h httpChansT) send() inputT {
 	select {
-	case body := <-h.in:
-		return httpInputT{postBody: body}
+	case input := <-h.homeIn:
+		return homeInputT{postBody: input.postBody}
 	default:
 	}
 	return noInputT{}
 }
 
-func (h httpInputT) update(s *stateT) (stateT, outputT) {
+func (h homeInputT) update(s *stateT) (stateT, outputT) {
 	return stateT{}, httpChansT{}
 }
 
-type httpInputT struct {
+type homeInputT struct {
+	route string
 	postBody []byte
+	returnChan chan []byte
+	errChan chan error
 }
 
 type noInputT struct{}
@@ -52,7 +58,7 @@ func main() {
 	// if err != nil {
 	// 	return
 	// }
-	go httpServer(state.httpChans)
+	go homeServer(state.httpChans)
 	var input inputT = noInputT{}
 	var output outputT = state.httpChans
 	for {
@@ -61,22 +67,42 @@ func main() {
 	}
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
+func staticFileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
 		f := http.FileServer(http.Dir("/home/t/bigwebthing"))
 		f.ServeHTTP(w, r)
-	case "POST":
-		bodyBytes, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			return
-		}
-		bodyStr := string(bodyBytes)
-		fmt.Fprintf(w, bodyStr+" world!")
 	}
 }
 
-func httpServer(ch httpChansT) {
-	http.HandleFunc("/", handler)
+type handlerT func(http.ResponseWriter, *http.Request)
+
+func makeHomeHandler(route string, inputChan chan homeInputT) handlerT {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, bodyReadErr := ioutil.ReadAll(r.Body)
+		if bodyReadErr != nil {
+			fmt.Print(bodyReadErr.Error())
+			return
+		}
+		var returnChan chan []byte
+		var errChan chan error
+		inputChan <- homeInputT{
+			route: route,
+			postBody: body,
+			returnChan: returnChan,
+			errChan: errChan,
+		}
+		select {
+		case response := <-returnChan:
+			w.Write(response)
+			return
+		case err := <-errChan:
+			fmt.Print(err.Error())
+			return
+		}
+	}
+}
+
+func homeServer(ch httpChansT) {
+	http.HandleFunc("/", staticFileHandler)
 	http.ListenAndServe(":3000", nil)
 }

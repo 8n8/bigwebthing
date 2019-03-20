@@ -61,24 +61,24 @@ func (r readChansT) send() inputT {
 	case newConnection := <-r.chs.setupConnection:
 		return newConnection
 	default:
-		for author, userChans := range r.connectedUsers {
-			select {
-			case msg := <-userChans.in:
-				return userMsgT{
-					author:  author,
-					msg:     msg,
-					outChan: userChans.out,
-					errChan: userChans.errOut,
-				}
-			case <-userChans.errIn:
-				userChans.errOut <- errors.New(
-					"WS reader has errored.")
-				return endWsSessionT{author: author}
-			default:
-			}
-		}
-		return noInputT{}
 	}
+	for author, userChans := range r.connectedUsers {
+		select {
+		case msg := <-userChans.in:
+			return userMsgT{
+				author:  author,
+				msg:     msg,
+				outChan: userChans.out,
+				errChan: userChans.errOut,
+			}
+		case <-userChans.errIn:
+			userChans.errOut <- errors.New(
+				"WS reader has errored.")
+			return endWsSessionT{author: author}
+		default:
+		}
+	}
+	return noInputT{}
 }
 
 type endWsSessionT struct {
