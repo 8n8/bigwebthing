@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"goji.io"
 	"goji.io/pat"
 	"golang.org/x/crypto/blake2b"
@@ -64,58 +65,45 @@ type writeAppToFileT struct {
 func (w writeAppToFileT) send() inputT {
 	req := w.r
 	bodyFileReader, err := req.MultipartReader()
-	if err != nil {
-		msg := "Could not get POST form reader."
-		http.Error(w.w, msg, 500)
+	sendErr := func(err error) inputT {
+		http.Error(w.w, err.Error(), 500)
 		w.doneCh <- endRequest{}
 		return noInputT{}
+	}
+	if err != nil {
+		return sendErr(err)
 	}
 	filepart, err := bodyFileReader.NextPart()
 	if err != nil {
-		msg := "Could not find file in POST body."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
-		return noInputT{}
+		return sendErr(err)
 	}
 	if filepart.FormName() != "upload" {
-		msg := "Could not find form element called \"upload\"."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
-		return noInputT{}
+		msg := "Could not find form element \"upload\"."
+		return sendErr(errors.New(msg))
 	}
 	tmpFileName, err := genCode()
 	if err != nil {
-		msg := "Could not generate tmp file name."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
+		return sendErr(err)
 	}
 	tmpPath := docsDir + "/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
-		msg := "Could not make file handle."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
+		return sendErr(err)
 	}
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		msg := "Couldn't get a hasher."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
+		return sendErr(err)
 	}
 	tee := io.TeeReader(filepart, hasher)
 	_, err = io.Copy(fileHandle, tee)
 	if err != nil {
-		msg := "Couldn't copy file to disk."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
+		return sendErr(err)
 	}
 	hash := base64.RawURLEncoding.EncodeToString(hasher.Sum(nil))
 	err = os.Rename(tmpPath, docsDir+"/"+hash)
 	if err != nil {
-		msg := "Could not rename temporary file."
-		http.Error(w.w, msg, 500)
-		w.doneCh <- endRequest{}
+		return sendErr(err)
 	}
 	writer := w.w
 	writer.Write([]byte(hash))
