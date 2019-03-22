@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"io"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
 	"os"
 )
@@ -62,48 +63,61 @@ type writeAppToFileT struct {
 	doneCh chan endRequest
 }
 
-func (w writeAppToFileT) send() inputT {
-	req := w.r
-	bodyFileReader, err := req.MultipartReader()
-	sendErr := func(err error) inputT {
-		http.Error(w.w, err.Error(), 500)
-		w.doneCh <- endRequest{}
-		return noInputT{}
-	}
+func getPostFilePart(r *http.Request) (*multipart.Part, error) {
+	var filepart *multipart.Part
+	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
-		return sendErr(err)
+		return filepart, err
 	}
-	filepart, err := bodyFileReader.NextPart()
+	filepart, err = bodyFileReader.NextPart()
 	if err != nil {
-		return sendErr(err)
+		return filepart, err
 	}
 	if filepart.FormName() != "upload" {
 		msg := "Could not find form element \"upload\"."
-		return sendErr(errors.New(msg))
+		return filepart, errors.New(msg)
+	}
+	return filepart, nil
+}
+
+func writeAppToFile(w writeAppToFileT) (string, error) {
+	filepart, err := getPostFilePart(w.r)
+	if err != nil {
+		return "", err
 	}
 	tmpFileName, err := genCode()
 	if err != nil {
-		return sendErr(err)
+		return "", err
 	}
 	tmpPath := docsDir + "/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
-		return sendErr(err)
+		return "", err
 	}
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		return sendErr(err)
+		return "", err
 	}
 	tee := io.TeeReader(filepart, hasher)
 	_, err = io.Copy(fileHandle, tee)
 	if err != nil {
-		return sendErr(err)
+		return "", err
 	}
 	hash := base64.RawURLEncoding.EncodeToString(hasher.Sum(nil))
 	err = os.Rename(tmpPath, docsDir+"/"+hash)
 	if err != nil {
-		return sendErr(err)
+		return "", err
+	}
+	return hash, nil
+}
+
+func (w writeAppToFileT) send() inputT {
+	hash, err := writeAppToFile(w)
+	if err != nil {
+		http.Error(w.w, err.Error(), 500)
+		w.doneCh <- endRequest{}
+		return noInputT{}
 	}
 	writer := w.w
 	writer.Write([]byte(hash))
