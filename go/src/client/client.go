@@ -178,7 +178,9 @@ type normalApiInputT struct {
 func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 	switch n.route {
 	case "makeapproute":
-		return processLaunchApp(n, s)
+		return processMakeAppRoute(n, s)
+	case "getapp":
+		return processGetApp(n, s)
 	}
 	return *s, readHttpInputT{ch: s.httpChan}
 }
@@ -248,7 +250,70 @@ func (n newAppCodeT) update(s *stateT) (stateT, outputT) {
 	}
 }
 
-func processLaunchApp(n normalApiInputT, s *stateT) (stateT, outputT) {
+func getDocHash(securityCode string, appCodes map[string][32]byte) ([32]byte, error) {
+	for sc, hash := range appCodes {
+		if strEq(sc, securityCode) {
+			return hash, nil
+		}
+	}
+	var empty [32]byte
+	return empty, nil
+}
+
+func byte32ToSlice(bs [32]byte) []byte {
+	r := make([]byte, 32)
+	for i, b := range bs {
+		r[i] = b
+	}
+	return r
+}
+
+func hashToStr(h [32]byte) string {
+	asSlice := byte32ToSlice(h)
+	return base64.RawURLEncoding.EncodeToString(asSlice)
+}
+
+func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
+	docHash, err := getDocHash(n.securityCode, s.appCodes)
+	if err != nil {
+		return *s, sendHttpErrorT{
+			w:      n.w,
+			msg:    "Bad security code.",
+			code:   400,
+			doneCh: n.doneCh,
+		}
+	}
+	return *s, serveDocT{
+		w:        n.w,
+		doneCh:   n.doneCh,
+		filePath: docsDir + "/" + hashToStr(docHash),
+	}
+}
+
+type serveDocT struct {
+	w        http.ResponseWriter
+	doneCh   chan endRequest
+	filePath string
+}
+
+func (s serveDocT) send() inputT {
+	fileHandle, err := os.Open(s.filePath)
+	if err != nil {
+		http.Error(s.w, err.Error(), 500)
+		s.doneCh <- endRequest{}
+		return noInputT{}
+	}
+	_, err = io.Copy(s.w, fileHandle)
+	if err != nil {
+		http.Error(s.w, err.Error(), 500)
+		s.doneCh <- endRequest{}
+		return noInputT{}
+	}
+	s.doneCh <- endRequest{}
+	return noInputT{}
+}
+
+func processMakeAppRoute(n normalApiInputT, s *stateT) (stateT, outputT) {
 	var makeAppRoute makeAppRouteT
 	err := json.Unmarshal(n.body, &makeAppRoute)
 	if err != nil {
