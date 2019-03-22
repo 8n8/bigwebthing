@@ -1,7 +1,11 @@
 Only accessible from the home session
 -------------------------------------
 
-+ func launchApp(appHash)
++ func makeAppRoute(appHash) securityCode
+    So the input should be {apphash: <base64 encoded 32-byte hash>}
+    And the response is a unicode-encoded random string.
++ func getApp()
+    Request to localhost:3000/getapp/securityCode
 + func saveApp() appHash
 + func sendApp(appHash, recipients [][]byte)
 + func setMetadata(tags []string, accessList [][]byte, appHash []byte)

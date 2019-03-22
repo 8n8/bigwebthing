@@ -7,6 +7,7 @@ index.html
 elm-stuff/
 go/bin/
 go/src/golang.org/
+go/src/goji.io/
 go/src/github.com/
 go/pkg/
 server.go
