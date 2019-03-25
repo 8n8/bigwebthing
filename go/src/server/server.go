@@ -532,24 +532,6 @@ type invitationT struct {
 const sigSize = sign.Overhead + blake2b.Size256
 const signedAuthSize = sign.Overhead + authCodeLength
 
-func hashToSlice(hash [32]byte) []byte {
-	newHash := make([]byte, 32)
-	for i, el := range hash {
-		newHash[i] = el
-	}
-	return newHash
-}
-
-func signMsg(msg []byte, sKey *[64]byte) [sigSize]byte {
-	hash := hashToSlice(blake2b.Sum256(msg))
-	sig := sign.Sign(make([]byte, 0), hash, sKey)
-	var sig96 [sigSize]byte
-	for i, el := range sig {
-		sig96[i] = el
-	}
-	return sig96
-}
-
 func convertSig(sig [sigSize]byte) []byte {
 	newSig := make([]byte, sigSize)
 	for i, el := range sig {

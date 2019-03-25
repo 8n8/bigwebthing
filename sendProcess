@@ -1,0 +1,19 @@
+1. Send a message containing the hash of the whole file and the signature of the hash.
+2. Read in 15968 - box.Overhead bytes from the file if they are there.
+3. Put the hash of the previous chunk on the front - if there isn't one, then use the hash of the empty message.
+4. Generate a random nonce.
+5. Encrypt the chunk using box, the nonce and the recipient's public key.
+6. Hash the encrypted chunk.
+7. Sign the hash with my private key.
+8. Construct metadata as follows:
+
+	blobhash: <32-byte hash of encrypted blob>
+	author: <my 32-byte public signing key>
+	recipient: <the 32-byte public key of the recipient>
+	nonce: <the 24-byte nonce used to encrypt the blob>
+	signature: <the signature of blobhash>
+
+9. Upload the metadata to the message server.
+10. Upload the encrypted blob to the message server.
+11. Wait for acknowledgement from recipient.
+12. Go to (2).
