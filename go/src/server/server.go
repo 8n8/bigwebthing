@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/blake2b"
-	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"io/ioutil"
 	"net/http"
@@ -153,11 +152,11 @@ func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 }
 
 type metadataT struct {
-	blobHash              [32]byte
-	author                [32]byte
-	recipient             [32]byte
-	encryptedSymmetricKey [encSymKeyLen]byte
-	signature             [sigSize]byte
+	blobhash [32]byte
+	author [32]byte
+	recipient [32]byte
+	nonce [24]byte
+	signature [sigSize]byte
 }
 
 func addBlobHash(
@@ -189,7 +188,7 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 		}
 	}
 
-	newState := addBlobHash(s, md.blobHash, md.recipient)
+	newState := addBlobHash(s, md.blobhash, md.recipient)
 	output := sendMsgT{
 		msg: umsg.msg.body,
 		ch:  recipientChans.out,
@@ -211,15 +210,48 @@ func addUninvite(s *stateT, uninvitation invitationT) stateT {
 	return newState
 }
 
+func sigToSlice(sig [sigSize]byte) []byte {
+	slice := make([]byte, sigSize)
+	for i, b := range sig {
+		slice[i] = b
+	}
+	return slice
+}
+
+func makeDigest(hash [32]byte, contextCode [16]byte) []byte {
+	digest := make([]byte, 48)
+	i := 0
+	for i < 32 {
+		digest[i] = hash[i]
+	}
+	for i < 48 {
+		digest[i] = contextCode[i-32]
+	}
+	return hashToSlice(blake2b.Sum256(digest))
+}
+
+func hashToSlice(hash [32]byte) []byte {
+	newHash := make([]byte, 32)
+	for i, el := range hash {
+		newHash[i] = el
+	}
+	return newHash
+}
+
+var appSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c, 0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
+
 func metadataErr(
 	metadata metadataT,
 	memberList map[[32]byte]bool) error {
 
-	validSignature := verifyDetached(
-		concatMd(metadata),
-		metadata.signature,
-		metadata.author)
-	if !validSignature {
+	actual, okSig := sign.Open(
+		make([]byte, 0),
+		sigToSlice(metadata.signature),
+		&metadata.author)
+	if !okSig {
+		return errors.New("Bad signature.")
+	}
+	if !bytes.Equal(makeDigest(metadata.blobhash, appSigCode), actual) {
 		return errors.New("Bad signature.")
 	}
 	_, authorIsMember := memberList[metadata.author]
@@ -647,27 +679,27 @@ const (
 	uninvitesFilePath = serverDir + "/uninvites.txt"
 )
 
-const encSymKeyLen = secretbox.Overhead + 32
-
-const concatMdLen = 32 + 32 + encSymKeyLen
-
-func concatMd(m metadataT) []byte {
-	result := make([]byte, concatMdLen)
-	i := 0
-	for i < 32 {
-		result[i] = m.blobHash[i]
-		i++
-	}
-	for i < 64 {
-		result[i] = m.recipient[i-32]
-		i++
-	}
-	for i < 64+encSymKeyLen {
-		result[i] = m.encryptedSymmetricKey[i-encSymKeyLen-32]
-		i++
-	}
-	return result
-}
+// const encSymKeyLen = secretbox.Overhead + 32
+// 
+// const concatMdLen = 32 + 32 + encSymKeyLen
+// 
+// func concatMd(m metadataT) []byte {
+// 	result := make([]byte, concatMdLen)
+// 	i := 0
+// 	for i < 32 {
+// 		result[i] = m.blobhash[i]
+// 		i++
+// 	}
+// 	for i < 64 {
+// 		result[i] = m.recipient[i-32]
+// 		i++
+// 	}
+// 	for i < 64+encSymKeyLen {
+// 		result[i] = m.encryptedSymmetricKey[i-encSymKeyLen-32]
+// 		i++
+// 	}
+// 	return result
+// }
 
 func parseMetadata(
 	raw []byte,

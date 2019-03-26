@@ -22,6 +22,21 @@ import (
 	"time"
 )
 
+var receiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
+	0x46, 0x5e, 0x02, 0x49, 0xb9, 0x4b, 0x69, 0xd0, 0x93, 0x4d}
+
+func makeDigest(hash [32]byte, contextCode [16]byte) []byte {
+	digest := make([]byte, 48)
+	i := 0
+	for i < 32 {
+		digest[i] = hash[i]
+	}
+	for i < 48 {
+		digest[i] = contextCode[i-32]
+	}
+	return hashToSlice(blake2b.Sum256(digest))
+}
+
 type inputT interface {
 	update(*stateT) (stateT, outputT)
 }
@@ -473,10 +488,12 @@ func (w writeSendErrT) send(inputCh chan inputT) {
 	logSendErr(w.err, w.appHash, w.recipient)
 }
 
+var appSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c, 0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
+
 func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 	sigSlice := sign.Sign(
 		make([]byte, 0),
-		hashToSlice(n.appHash),
+		makeDigest(n.appHash, appSigCode),
 		s.secretSign)
 	var sigArr [sigSize]byte
 	for i, sb := range sigSlice {
@@ -534,21 +551,6 @@ func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 
 var emptyHash = hashToSlice(blake2b.Sum256([]byte("")))
 
-var receiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
-	0x46, 0x5e, 0x02, 0x49, 0xb9, 0x4b, 0x69, 0xd0, 0x93, 0x4d}
-
-func makeReceipt(hash [32]byte) []byte {
-	receipt := make([]byte, 48)
-	i := 0
-	for i < 32 {
-		receipt[i] = hash[i]
-	}
-	for i < 48 {
-		receipt[i] = receiptCode[i-32]
-	}
-	return hashToSlice(blake2b.Sum256(receipt))
-}
-
 func checkReceipt(
 	raw []byte,
 	expectedHash [32]byte,
@@ -558,7 +560,7 @@ func checkReceipt(
 	if !validSig {
 		return errors.New("Bad signature.")
 	}
-	if !bytes.Equal(signed, makeReceipt(expectedHash)) {
+	if !bytes.Equal(signed, makeDigest(expectedHash, receiptCode)) {
 		return errors.New("Bad receipt.")
 	}
 	return nil
