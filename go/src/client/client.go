@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"bytes"
 	"fmt"
 	"crypto/subtle"
 	"github.com/gorilla/websocket"
@@ -26,7 +27,7 @@ type inputT interface {
 }
 
 type outputT interface {
-	send() inputT
+	send(chan inputT)
 }
 
 type stateT struct {
@@ -121,31 +122,32 @@ func writeAppToFile(w writeAppToFileT) (string, error) {
 	return hash, nil
 }
 
-func (w writeAppToFileT) send() inputT {
+func (w writeAppToFileT) send(inputCh chan inputT) {
 	hash, err := writeAppToFile(w)
 	if err != nil {
 		http.Error(w.w, err.Error(), 500)
 		w.doneCh <- endRequest{}
-		return noInputT{}
+		return
 	}
 	writer := w.w
 	writer.Write([]byte(hash))
 	w.doneCh <- endRequest{}
-	return noInputT{}
+	return
 }
 
-func (r readHttpInputT) send() inputT {
+func (r readHttpInputT) send(inputCh chan inputT) {
 	select {
 	case h := <-r.ch:
 		req := h.r
 		securityCode := pat.Param(h.r, "securitycode")
 		if h.route == "saveapp" {
-			return saveAppT{
+			inputCh <- saveAppT{
 				w:            h.w,
 				r:            h.r,
 				securityCode: securityCode,
 				doneCh:       h.doneCh,
 			}
+			return
 		}
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
@@ -154,18 +156,21 @@ func (r readHttpInputT) send() inputT {
 				err.Error(),
 				http.StatusInternalServerError)
 			h.doneCh <- endRequest{}
-			return noInputT{}
+			inputCh <- noInputT{}
+			return
 		}
-		return normalApiInputT{
+		inputCh <- normalApiInputT{
 			w:            h.w,
 			securityCode: securityCode,
 			body:         body,
 			route:        h.route,
 			doneCh:       h.doneCh,
 		}
+		return
 	default:
 	}
-	return noInputT{}
+	inputCh <- noInputT{}
+	return
 }
 
 type httpChansT struct {
@@ -207,10 +212,11 @@ type sendHttpErrorT struct {
 	doneCh chan endRequest
 }
 
-func (s sendHttpErrorT) send() inputT {
+func (s sendHttpErrorT) send(inputCh chan inputT) {
 	http.Error(s.w, s.msg, s.code)
 	s.doneCh <- endRequest{}
-	return noInputT{}
+	inputCh <- noInputT{}
+	return
 }
 
 func strEq(s1, s2 string) bool {
@@ -224,19 +230,21 @@ type genCodeForAppT struct {
 	doneCh  chan endRequest
 }
 
-func (g genCodeForAppT) send() inputT {
+func (g genCodeForAppT) send(inputCh chan inputT) {
 	newCode, err := genCode()
 	if err != nil {
 		http.Error(g.w, err.Error(), 500)
 		g.doneCh <- endRequest{}
-		return noInputT{}
+		inputCh <- noInputT{}
+		return
 	}
-	return newAppCodeT{
+	inputCh <- newAppCodeT{
 		w:       g.w,
 		appHash: g.appHash,
 		doneCh:  g.doneCh,
 		newCode: newCode,
 	}
+	return
 }
 
 type newAppCodeT struct {
@@ -299,28 +307,28 @@ type makeSendHandles struct {
 
 const wsUrl = "ws://localhost:4000"
 
-func (m makeSendHandles) send() inputT {
+func (m makeSendHandles) send(inputCh chan inputT) {
 	filehandle, err := os.Open(m.filepath)
 	if err != nil {
 		http.Error(m.w, err.Error(), 500)
 		m.doneCh <- endRequest{}
-		return noInputT{}
+		return
 	}
 
 	ws, _, err := websocket.DefaultDialer.Dial(wsUrl, nil)
 	if err != nil {
 		http.Error(m.w, err.Error(), 500)
 		m.doneCh <- endRequest{}
-		return noInputT{}
+		return
 	}
 	m.doneCh <- endRequest{}
 	newNonce, err := makeNonce()
 	if err != nil {
 		http.Error(m.w, err.Error(), 500)
 		m.doneCh <- endRequest{}
-		return noInputT{}
+		return
 	}
-	return newSendHandles{
+	inputCh <- newSendHandles{
 		appHash: m.appHash,
 		newNonce: newNonce,
 		ws: ws,
@@ -347,35 +355,6 @@ type readBytesToSendT struct {
 
 const blobLen = 16000 - 32 - box.Overhead
 
-func (r readBytesToSendT) send() inputT {
-	fileHandle := r.f
-	blob := make([]byte, blobLen)
-	n, err := fileHandle.Read(blob)
-	if err != nil {
-		logSendErr(err, r.appHash, r.recipients[0])
-		return noInputT{}
-	}
-	if n == 0 {
-		logSendErr(err, r.appHash, r.recipients[0])
-		return noInputT{}
-	}
-	newNonce, err := makeNonce()
-	if err != nil {
-		logSendErr(err, r.appHash, r.recipients[0])
-		return noInputT{}
-	}
-	return newPlainBytesT{
-		appHash: r.appHash,
-		newBytes: blob,
-		ws: r.ws,
-		f: r.f,
-		newNonce: newNonce,
-		endOfMsg: n != blobLen,
-		lastHash: r.lastHash,
-		recipients: r.recipients,
-	}
-}
-
 type logSendErrT struct {
 	posixTime int64
 	appHash [32]byte
@@ -391,6 +370,7 @@ func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 	msg := logSendErrT {
 		posixTime: time.Now().Unix(),
 		appHash: appHash,
+		recipient: recipient,
 		err: err,
 	}
 	encoded, jsonErr := json.Marshal(msg)
@@ -407,27 +387,40 @@ func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 	_, writeErr := f.Write(append([]byte("\n"), encoded...))
 	if writeErr != nil {
 		fmt.Print(writeErr)
+	}
+}
+
+type logSentSuccessT struct {
+	appHash [32]byte
+	recipient [32]byte
+}
+
+const sentMsgPath = "clientData/sentMsgs.txt"
+
+func logSentSuccess(appHash [32]byte, recipient [32]byte) {
+	msg := logSentSuccessT{
+		appHash: appHash,
+		recipient: recipient,
+	}
+	encoded, jsonErr := json.Marshal(msg)
+	if jsonErr != nil {
+		logSendErr(jsonErr, appHash, recipient)
 		return
+	}
+	f, openErr := os.OpenFile(sentMsgPath, appendFlags, 0600)
+	if openErr != nil {
+		logSendErr(openErr, appHash, recipient)
+		return
+	}
+	defer f.Close()
+	_, writeErr := f.Write(append([]byte("\n"), encoded...))
+	if writeErr != nil {
+		logSendErr(writeErr, appHash, recipient)
 	}
 }
 
 type readBytesErrT struct {
 	err error
-}
-
-type newPlainBytesT struct {
-	appHash [32]byte
-	newBytes []byte
-	endOfMsg bool
-	ws *websocket.Conn
-	f *os.File
-	newNonce [24]byte
-	lastHash [32]byte
-	recipients [][32]byte
-}
-
-func (n newPlainBytesT) update(s *stateT) (stateT, outputT) {
-
 }
 
 type blobReadyToGoT struct {
@@ -476,9 +469,8 @@ type writeSendErrT struct {
 	recipient [32]byte
 }
 
-func (w writeSendErrT) send() inputT {
+func (w writeSendErrT) send(inputCh chan inputT) {
 	logSendErr(w.err, w.appHash, w.recipient)
-	return noInputT{}
 }
 
 func (n newSendHandles) update(s *stateT) (stateT, outputT) {
@@ -525,7 +517,7 @@ func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 		return *s, writeSendErrT{appHash: n.appHash, err:err}
 	}
 	return *s, sendMsgT{
-		msg: encryptedMsg,
+		msg: append(emptyHash, encryptedMsg...),
 		header: headerEnc,
 		appHash: n.appHash,
 		ws: n.ws,
@@ -540,6 +532,57 @@ func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 // 	lastHash: blake2b.Sum256([]byte{}),
 // }
 
+var emptyHash = hashToSlice(blake2b.Sum256([]byte("")))
+
+var receiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
+	0x46, 0x5e, 0x02, 0x49, 0xb9, 0x4b, 0x69, 0xd0, 0x93, 0x4d}
+
+func makeReceipt(hash [32]byte) []byte {
+	receipt := make([]byte, 48)
+	i := 0
+	for i < 32 {
+		receipt[i] = hash[i]
+	}
+	for i < 48 {
+		receipt[i] = receiptCode[i-32]
+	}
+	return hashToSlice(blake2b.Sum256(receipt))
+}
+
+func checkReceipt(
+	raw []byte,
+	expectedHash [32]byte,
+	sender *[32]byte) error {
+
+	signed, validSig := sign.Open(make([]byte, 0), raw, sender)
+	if !validSig {
+		return errors.New("Bad signature.")
+	}
+	if !bytes.Equal(signed, makeReceipt(expectedHash)) {
+		return errors.New("Bad receipt.")
+	}
+	return nil
+}
+
+func sendMsg(
+	msg []byte,
+	ws *websocket.Conn,
+	recipient *[32]byte) error {
+
+	err := ws.WriteMessage(websocket.BinaryMessage, msg)
+	if err != nil {
+		return err
+	}
+	msgType, response, err := ws.ReadMessage()
+	if err != nil {
+		return err
+	}
+	if msgType != websocket.BinaryMessage {
+		return errors.New("Bad message type.")
+	}
+	return checkReceipt(response, blake2b.Sum256(msg), recipient)
+}
+
 type sendMsgT struct {
 	msg []byte
 	header []byte
@@ -547,16 +590,82 @@ type sendMsgT struct {
 	ws *websocket.Conn
 	f *os.File
 	recipients [][32]byte
+	secretEncrypt *[32]byte
+	secretSign *[64]byte
+	publicSign [32]byte
 }
 
-func (s sendMsgT) send() inputT {
-	ws := s.ws
-	err := ws.WriteMessage(websocket.BinaryMessage, s.header)
+func (s sendMsgT) send(inputCh chan inputT) {
+	recipient := s.recipients[0]
+	err := sendMsg(s.header, s.ws, &recipient)
 	if err != nil {
-		logSendErr(err, s.appHash, s.recipients[0])
-		return noInputT{}
+		logSendErr(err, s.appHash, recipient)
+		return
 	}
-	
+	err = sendMsg(s.msg, s.ws, &recipient)
+	if err != nil {
+		logSendErr(err, s.appHash, recipient)
+		return
+	}
+	lastChunkHash := hashToSlice(blake2b.Sum256(s.msg))
+
+	for {
+		fileHandle := s.f
+		plainBlob := make([]byte, blobLen)
+		n, err := fileHandle.Read(plainBlob)
+		if err != nil {
+			logSendErr(err, s.appHash, recipient)
+			return
+		}
+		if n == 0 {
+			logSentSuccess(s.appHash, recipient)
+			return
+		}
+		nonce, err := makeNonce()
+		if err != nil {
+			logSendErr(err, s.appHash, recipient)
+			return
+		}
+		encrBlob := box.Seal(
+			make([]byte, 0),
+			plainBlob,
+			&nonce,
+			&recipient,
+			s.secretEncrypt)
+		chunk := append(lastChunkHash, encrBlob...)
+		chunkHash := blake2b.Sum256(chunk)
+		lastChunkHash = hashToSlice(chunkHash)
+		blobSigSlice := sign.Sign(
+			make([]byte, 0),
+			hashToSlice(chunkHash),
+			s.secretSign)
+		var blobSigArr [sigSize]byte
+		for i, sb := range blobSigSlice {
+			blobSigArr[i] = sb
+		}
+		header := metadata {
+			blobhash: chunkHash,
+			author: s.publicSign,
+			recipient: recipient,
+			nonce: nonce,
+			signature: blobSigArr,
+		}
+		headerEnc, err := json.Marshal(header)
+		if err != nil {
+			logSendErr(err, s.appHash, recipient)
+			return
+		}
+		err = sendMsg(headerEnc, s.ws, &recipient)
+		if err != nil {
+			logSendErr(err, s.appHash, recipient)
+			return
+		}
+		err = sendMsg(chunk, s.ws, &recipient)
+		if err != nil {
+			logSendErr(err, s.appHash, recipient)
+			return
+		}
+	}
 }
 
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -619,21 +728,20 @@ type serveDocT struct {
 	filePath string
 }
 
-func (s serveDocT) send() inputT {
+func (s serveDocT) send(inputCh chan inputT) {
 	fileHandle, err := os.Open(s.filePath)
 	if err != nil {
 		http.Error(s.w, err.Error(), 500)
 		s.doneCh <- endRequest{}
-		return noInputT{}
+		return
 	}
 	_, err = io.Copy(s.w, fileHandle)
 	if err != nil {
 		http.Error(s.w, err.Error(), 500)
 		s.doneCh <- endRequest{}
-		return noInputT{}
+		return
 	}
 	s.doneCh <- endRequest{}
-	return noInputT{}
 }
 
 func processMakeAppRoute(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -668,11 +776,10 @@ type htmlOkResponseT struct {
 	doneCh chan endRequest
 }
 
-func (h htmlOkResponseT) send() inputT {
+func (h htmlOkResponseT) send(inputCh chan inputT) {
 	writer := h.w
 	writer.Write(h.msg)
 	h.doneCh <- endRequest{}
-	return noInputT{}
 }
 
 type httpInputT struct {
@@ -692,6 +799,9 @@ func makeNonce() ([24]byte, error) {
 	nonceSlice := make([]byte, 24)
 	var nonce [24]byte
 	n, err := rand.Read(nonceSlice)
+	if err != nil {
+		return nonce, err
+	}
 	if n != 24 {
 		return nonce, errors.New("Faulty random bytes reader.")
 	}
@@ -730,8 +840,14 @@ func main() {
 	go httpServer(state.httpChan)
 	var input inputT = noInputT{}
 	var output outputT = readHttpInputT{ch: state.httpChan}
+	var inputCh chan inputT
 	for {
-		input = output.send()
+		go output.send(inputCh)
+		select {
+		case input = <-inputCh:
+		default:
+			input = noInputT{}
+		}
 		state, output = input.update(&state)
 	}
 }
