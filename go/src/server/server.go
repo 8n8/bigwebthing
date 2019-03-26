@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"common"
 )
 
 type stateT struct {
@@ -151,14 +152,6 @@ func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
 	return newState, output
 }
 
-type metadataT struct {
-	blobhash [32]byte
-	author [32]byte
-	recipient [32]byte
-	nonce [24]byte
-	signature [sigSize]byte
-}
-
 func addBlobHash(
 	s *stateT,
 	blobHash [32]byte,
@@ -180,7 +173,7 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 		return *s, sendErrT{err: err, ch: umsg.errChan}
 	}
 
-	recipientChans, recipientOnline := s.connectedUsers[md.recipient]
+	recipientChans, recipientOnline := s.connectedUsers[md.Recipient]
 	if !recipientOnline {
 		return *s, sendMsgT{
 			msg: []byte{responseRecipientNotConnected},
@@ -188,7 +181,7 @@ func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 		}
 	}
 
-	newState := addBlobHash(s, md.blobhash, md.recipient)
+	newState := addBlobHash(s, md.Blobhash, md.Recipient)
 	output := sendMsgT{
 		msg: umsg.msg.body,
 		ch:  recipientChans.out,
@@ -218,51 +211,29 @@ func sigToSlice(sig [sigSize]byte) []byte {
 	return slice
 }
 
-func makeDigest(hash [32]byte, contextCode [16]byte) []byte {
-	digest := make([]byte, 48)
-	i := 0
-	for i < 32 {
-		digest[i] = hash[i]
-	}
-	for i < 48 {
-		digest[i] = contextCode[i-32]
-	}
-	return hashToSlice(blake2b.Sum256(digest))
-}
-
-func hashToSlice(hash [32]byte) []byte {
-	newHash := make([]byte, 32)
-	for i, el := range hash {
-		newHash[i] = el
-	}
-	return newHash
-}
-
-var appSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c, 0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
-
 func metadataErr(
-	metadata metadataT,
+	metadata common.MetadataT,
 	memberList map[[32]byte]bool) error {
 
 	actual, okSig := sign.Open(
 		make([]byte, 0),
-		sigToSlice(metadata.signature),
-		&metadata.author)
+		sigToSlice(metadata.Signature),
+		&metadata.Author)
 	if !okSig {
 		return errors.New("Bad signature.")
 	}
-	if !bytes.Equal(makeDigest(metadata.blobhash, appSigCode), actual) {
+	if !bytes.Equal(common.MakeDigest(metadata.Blobhash, common.AppSigCode), actual) {
 		return errors.New("Bad signature.")
 	}
-	_, authorIsMember := memberList[metadata.author]
+	_, authorIsMember := memberList[metadata.Author]
 	if !authorIsMember {
 		return errors.New("Author is not a member.")
 	}
-	_, recipientIsMember := memberList[metadata.recipient]
+	_, recipientIsMember := memberList[metadata.Recipient]
 	if !recipientIsMember {
 		return errors.New("Recipient is not a member.")
 	}
-	if metadata.author == metadata.recipient {
+	if metadata.Author == metadata.Recipient {
 		return errors.New("Can't send messages to yourself.")
 	}
 	return nil
@@ -703,12 +674,12 @@ const (
 
 func parseMetadata(
 	raw []byte,
-	memberList map[[32]byte]bool) (metadataT, error) {
+	memberList map[[32]byte]bool) (common.MetadataT, error) {
 
-	var metadata metadataT
+	var metadata common.MetadataT
 	jsonErr := json.Unmarshal(raw, &metadata)
 	if jsonErr != nil {
-		return metadataT{}, jsonErr
+		return common.MetadataT{}, jsonErr
 	}
 	return metadata, metadataErr(metadata, memberList)
 }

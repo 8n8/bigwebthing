@@ -20,22 +20,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"common"
 )
-
-var receiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
-	0x46, 0x5e, 0x02, 0x49, 0xb9, 0x4b, 0x69, 0xd0, 0x93, 0x4d}
-
-func makeDigest(hash [32]byte, contextCode [16]byte) []byte {
-	digest := make([]byte, 48)
-	i := 0
-	for i < 32 {
-		digest[i] = hash[i]
-	}
-	for i < 48 {
-		digest[i] = contextCode[i-32]
-	}
-	return hashToSlice(blake2b.Sum256(digest))
-}
 
 type inputT interface {
 	update(*stateT) (stateT, outputT)
@@ -447,31 +433,13 @@ type blobReadyToGoT struct {
 
 type headerMsgT struct {
 	msgHash [32]byte
-	signature [sigSize]byte
+	signature [common.SigSize]byte
 }
 
-type metadata struct {
-	blobhash [32]byte
-	author [32]byte
-	recipient [32]byte
-	nonce [24]byte
-	signature [sigSize]byte
-}
-
-const sigSize = sign.Overhead + blake2b.Size256
-
-func hashToSlice(hash [32]byte) []byte {
-	newHash := make([]byte, 32)
-	for i, el := range hash {
-		newHash[i] = el
-	}
-	return newHash
-}
-
-func signMsg(msg []byte, sKey *[64]byte) [sigSize]byte {
-	hash := hashToSlice(blake2b.Sum256(msg))
+func signMsg(msg []byte, sKey *[64]byte) [common.SigSize]byte {
+	hash := common.HashToSlice(blake2b.Sum256(msg))
 	sig := sign.Sign(make([]byte, 0), hash, sKey)
-	var sigSized [sigSize]byte
+	var sigSized [common.SigSize]byte
 	for i, el := range sig {
 		sigSized[i] = el
 	}
@@ -493,9 +461,9 @@ var appSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c, 0xd8, 0x6e, 0x52, 
 func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 	sigSlice := sign.Sign(
 		make([]byte, 0),
-		makeDigest(n.appHash, appSigCode),
+		common.MakeDigest(n.appHash, appSigCode),
 		s.secretSign)
-	var sigArr [sigSize]byte
+	var sigArr [common.SigSize]byte
 	for i, sb := range sigSlice {
 		sigArr[i] = sb
 	}
@@ -516,25 +484,25 @@ func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 	blobHash := blake2b.Sum256(encryptedMsg)
 	blobSigSlice := sign.Sign(
 		make([]byte, 0),
-		hashToSlice(blobHash),
+		common.HashToSlice(blobHash),
 		s.secretSign)
-	var blobSigArr [sigSize]byte
+	var blobSigArr [common.SigSize]byte
 	for i, sb := range blobSigSlice {
 		blobSigArr[i] = sb
 	}
-	headerPreEnc := metadata{
-		blobhash: blake2b.Sum256(encryptedMsg),
-		author: s.publicSign,
-		recipient: n.recipients[0],
-		nonce: n.newNonce,
-		signature: blobSigArr,
+	headerPreEnc := common.MetadataT{
+		Blobhash: blake2b.Sum256(encryptedMsg),
+		Author: s.publicSign,
+		Recipient: n.recipients[0],
+		Nonce: n.newNonce,
+		Signature: blobSigArr,
 	}
 	headerEnc, err := json.Marshal(headerPreEnc)
 	if err != nil {
 		return *s, writeSendErrT{appHash: n.appHash, err:err}
 	}
 	return *s, sendMsgT{
-		msg: append(emptyHash, encryptedMsg...),
+		msg: append(common.EmptyHash, encryptedMsg...),
 		header: headerEnc,
 		appHash: n.appHash,
 		ws: n.ws,
@@ -549,7 +517,6 @@ func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 // 	lastHash: blake2b.Sum256([]byte{}),
 // }
 
-var emptyHash = hashToSlice(blake2b.Sum256([]byte("")))
 
 func checkReceipt(
 	raw []byte,
@@ -560,7 +527,7 @@ func checkReceipt(
 	if !validSig {
 		return errors.New("Bad signature.")
 	}
-	if !bytes.Equal(signed, makeDigest(expectedHash, receiptCode)) {
+	if !bytes.Equal(signed, common.MakeDigest(expectedHash, common.ReceiptCode)) {
 		return errors.New("Bad receipt.")
 	}
 	return nil
@@ -609,7 +576,7 @@ func (s sendMsgT) send(inputCh chan inputT) {
 		logSendErr(err, s.appHash, recipient)
 		return
 	}
-	lastChunkHash := hashToSlice(blake2b.Sum256(s.msg))
+	lastChunkHash := common.HashToSlice(blake2b.Sum256(s.msg))
 
 	for {
 		fileHandle := s.f
@@ -636,21 +603,21 @@ func (s sendMsgT) send(inputCh chan inputT) {
 			s.secretEncrypt)
 		chunk := append(lastChunkHash, encrBlob...)
 		chunkHash := blake2b.Sum256(chunk)
-		lastChunkHash = hashToSlice(chunkHash)
+		lastChunkHash = common.HashToSlice(chunkHash)
 		blobSigSlice := sign.Sign(
 			make([]byte, 0),
-			hashToSlice(chunkHash),
+			common.HashToSlice(chunkHash),
 			s.secretSign)
-		var blobSigArr [sigSize]byte
+		var blobSigArr [common.SigSize]byte
 		for i, sb := range blobSigSlice {
 			blobSigArr[i] = sb
 		}
-		header := metadata {
-			blobhash: chunkHash,
-			author: s.publicSign,
-			recipient: recipient,
-			nonce: nonce,
-			signature: blobSigArr,
+		header := common.MetadataT {
+			Blobhash: chunkHash,
+			Author: s.publicSign,
+			Recipient: recipient,
+			Nonce: nonce,
+			Signature: blobSigArr,
 		}
 		headerEnc, err := json.Marshal(header)
 		if err != nil {
