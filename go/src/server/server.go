@@ -14,24 +14,16 @@ import (
 	"os"
 	"time"
 	"common"
+	"net"
 )
 
 type stateT struct {
-	mainChans      mainChansT
-	connectedUsers map[[32]byte]userChansT
-	invitations    invitesT
-	uninvitations  invitesT
-	memberList     map[[32]byte]bool
-	expectedBlobs  map[[32]byte][32]byte
-	authCodes      authCodesT
+	newConnChan chan tcpConnectionT
+	connectedUsers map[[32]byte]tcpConnectionT
 }
 
-type authCodesT map[[authCodeLength]byte]int64
-
-type invitesT map[invitationT]bool
-
 type outputT interface {
-	send() inputT
+	send(chan inputT)
 }
 
 const (
@@ -44,25 +36,50 @@ type inputT interface {
 }
 
 type readChansT struct {
-	chs            mainChansT
-	connectedUsers map[[32]byte]userChansT
+	newConnChan chan tcpConnectionT
+	conn
 }
 
-func (r readChansT) send() inputT {
+func (s stateT) send(inChan chan inputT) {
 	select {
-	case authChans := <-r.chs.getAuthCode:
+	case newConn := <-r.newConnChan:
+		conn := newConn.conn
 		authCode, err := genAuthCode()
 		if err != nil {
-			authChans.err <- err
-			return noInputT{}
+			fmt.Print(err)
+			encodedErr, encErr := common.EncodeErr(err)
+			if encErr != nil {
+				fmt.Print(encErr)
+				return
+			}
+			conn.Write(encodedErr)
+			conn.Close()
+			newConn.killChan <- killConn{}
+			return
 		}
-		authChans.main <- authCode
-		return noInputT{}
-	case newConnection := <-r.chs.setupConnection:
-		return newConnection
+		conn.Write(authCode)
+		authSig := make([]byte, common.AuthSigSize)
+		n, err := conn.Read(authSig)
+		if n != AuthSigSize {
+			fmt.Print("Auth sig too short.")
+			encodedErr, encErr := common.Encode("Auth sig too short.")
+			if encErr != nil {
+				fmt.Print(encErr)
+				return
+			}
+			conn.Write(encodedErr)
+			conn.Close()
+			newConn.killChan <- killConn{}
+			return
+		}
+		
+		returnedAuth, okSig := sign.Open(
+			make([]byte, 0),
+			authSig,
+			
 	default:
 	}
-	for author, userChans := range r.connectedUsers {
+	for author, connection := range r.connectedUsers {
 		select {
 		case msg := <-userChans.in:
 			return userMsgT{
@@ -105,14 +122,14 @@ const (
 
 func (u userMsgT) update(s *stateT) (stateT, outputT) {
 	switch u.msg.route {
-	case inInvitation:
-		return processInvitation(u, s)
-	case inUninvitation:
-		return processUninvitation(u, s)
-	case inMetadata:
-		return processMetadata(u, s)
-	case inBlob:
-		return processBlob(u, s)
+	// case inInvitation:
+	// 	return processInvitation(u, s)
+	// case inUninvitation:
+	// 	return processUninvitation(u, s)
+	// case inMetadata:
+	// 	return processMetadata(u, s)
+	// case inBlob:
+	// 	return processBlob(u, s)
 	}
 	err := errors.New("Bad router byte.")
 	return *s, sendErrT{err: err, ch: u.errChan}
@@ -167,41 +184,41 @@ func addBlobHash(
 	return newState
 }
 
-func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
-	md, err := parseMetadata(umsg.msg.body, s.memberList)
-	if err != nil {
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
+// func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
+// 	md, err := parseMetadata(umsg.msg.body, s.memberList)
+// 	if err != nil {
+// 		return *s, sendErrT{err: err, ch: umsg.errChan}
+// 	}
+// 
+// 	recipientChans, recipientOnline := s.connectedUsers[md.Recipient]
+// 	if !recipientOnline {
+// 		return *s, sendMsgT{
+// 			msg: []byte{responseRecipientNotConnected},
+// 			ch:  umsg.outChan,
+// 		}
+// 	}
+// 
+// 	newState := addBlobHash(s, md.Blobhash, md.Recipient)
+// 	output := sendMsgT{
+// 		msg: umsg.msg.body,
+// 		ch:  recipientChans.out,
+// 	}
+// 	return newState, output
+// }
 
-	recipientChans, recipientOnline := s.connectedUsers[md.Recipient]
-	if !recipientOnline {
-		return *s, sendMsgT{
-			msg: []byte{responseRecipientNotConnected},
-			ch:  umsg.outChan,
-		}
-	}
-
-	newState := addBlobHash(s, md.Blobhash, md.Recipient)
-	output := sendMsgT{
-		msg: umsg.msg.body,
-		ch:  recipientChans.out,
-	}
-	return newState, output
-}
-
-func addUninvite(s *stateT, uninvitation invitationT) stateT {
-	var newUninvites map[invitationT]bool
-	for u, _ := range s.uninvitations {
-		newUninvites[u] = true
-	}
-	newUninvites[uninvitation] = true
-	newState := *s
-	newState.uninvitations = newUninvites
-	newState.memberList = makeMemberList(
-		s.invitations,
-		newUninvites)
-	return newState
-}
+// func addUninvite(s *stateT, uninvitation invitationT) stateT {
+// 	var newUninvites map[invitationT]bool
+// 	for u, _ := range s.uninvitations {
+// 		newUninvites[u] = true
+// 	}
+// 	newUninvites[uninvitation] = true
+// 	newState := *s
+// 	newState.uninvitations = newUninvites
+// 	newState.memberList = makeMemberList(
+// 		s.invitations,
+// 		newUninvites)
+// 	return newState
+// }
 
 func sigToSlice(sig [sigSize]byte) []byte {
 	slice := make([]byte, sigSize)
@@ -239,53 +256,53 @@ func metadataErr(
 	return nil
 }
 
-func processUninvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
-	uninvitation, err := parseInviteLike(
-		umsg.msg.body,
-		s.memberList,
-		pleaseUninviteX)
-	if err != nil {
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
-	newState := addUninvite(s, uninvitation)
-	goodUninvite := appendToFileT{
-		filepath:   uninvitesFilePath,
-		bytesToAdd: umsg.msg.body,
-		errChan:    umsg.errChan,
-	}
-	return newState, goodUninvite
-}
+// func processUninvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
+// 	uninvitation, err := parseInviteLike(
+// 		umsg.msg.body,
+// 		s.memberList,
+// 		pleaseUninviteX)
+// 	if err != nil {
+// 		return *s, sendErrT{err: err, ch: umsg.errChan}
+// 	}
+// 	newState := addUninvite(s, uninvitation)
+// 	goodUninvite := appendToFileT{
+// 		filepath:   uninvitesFilePath,
+// 		bytesToAdd: umsg.msg.body,
+// 		errChan:    umsg.errChan,
+// 	}
+// 	return newState, goodUninvite
+// }
 
-func addInvite(s *stateT, invitation invitationT) stateT {
-	var newInvites map[invitationT]bool
-	for i, _ := range s.invitations {
-		newInvites[i] = true
-	}
-	newInvites[invitation] = true
-	newState := *s
-	newState.invitations = newInvites
-	newState.memberList = makeMemberList(
-		newInvites,
-		s.uninvitations)
-	return newState
-}
+// func addInvite(s *stateT, invitation invitationT) stateT {
+// 	var newInvites map[invitationT]bool
+// 	for i, _ := range s.invitations {
+// 		newInvites[i] = true
+// 	}
+// 	newInvites[invitation] = true
+// 	newState := *s
+// 	newState.invitations = newInvites
+// 	newState.memberList = makeMemberList(
+// 		newInvites,
+// 		s.uninvitations)
+// 	return newState
+// }
 
-func processInvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
-	invitation, err := parseInviteLike(
-		umsg.msg.body,
-		s.memberList,
-		pleaseInviteX)
-	if err != nil {
-		return *s, sendErrT{err: err, ch: umsg.errChan}
-	}
-	newState := addInvite(s, invitation)
-	goodInvite := appendToFileT{
-		filepath:   invitesFilePath,
-		bytesToAdd: umsg.msg.body,
-		errChan:    umsg.errChan,
-	}
-	return newState, goodInvite
-}
+// func processInvitation(umsg userMsgT, s *stateT) (stateT, outputT) {
+// 	invitation, err := parseInviteLike(
+// 		umsg.msg.body,
+// 		s.memberList,
+// 		pleaseInviteX)
+// 	if err != nil {
+// 		return *s, sendErrT{err: err, ch: umsg.errChan}
+// 	}
+// 	newState := addInvite(s, invitation)
+// 	goodInvite := appendToFileT{
+// 		filepath:   invitesFilePath,
+// 		bytesToAdd: umsg.msg.body,
+// 		errChan:    umsg.errChan,
+// 	}
+// 	return newState, goodInvite
+// }
 
 func (g appendToFileT) send() inputT {
 	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
@@ -417,32 +434,38 @@ func readInvites(filePath string) (invitesT, error) {
 	return parseInvites(rawContents)
 }
 
-func readFileData(s *stateT) error {
-	var err error
-	s.invitations, err = readInvites(invitesFilePath)
-	if err != nil {
-		fmt.Print(err.Error())
-		return err
-	}
-	s.uninvitations, err = readInvites(uninvitesFilePath)
-	if err != nil {
-		fmt.Print(err.Error())
-		return err
-	}
-	return nil
-}
+// func readFileData(s *stateT) error {
+// 	var err error
+// 	s.invitations, err = readInvites(invitesFilePath)
+// 	if err != nil {
+// 		fmt.Print(err.Error())
+// 		return err
+// 	}
+// 	s.uninvitations, err = readInvites(uninvitesFilePath)
+// 	if err != nil {
+// 		fmt.Print(err.Error())
+// 		return err
+// 	}
+// 	return nil
+// }
 
 func main() {
 	var state stateT
-	err := readFileData(&state)
-	if err != nil {
-		return
-	}
-	go httpServer(state.mainChans)
+	// err := readFileData(&state)
+	// if err != nil {
+	// 	return
+	// }
+	go tcpServer(state.mainChans)
 	var input inputT = noInputT{}
 	var output outputT = readChans(&state)
+	var inputCh chan inputT
 	for {
-		input = output.send()
+		go output.send(inputCh)
+		select {
+			case input = <-inputCh:
+			default:
+				input = noInputT{}
+		}
 		state, output = input.update(&state)
 	}
 }
@@ -825,11 +848,7 @@ func handler(
 const authCodeLength = 24
 
 type setupConnectionT struct {
-	chans          userChansT
-	author         [32]byte
-	signedAuthCode [signedAuthSize]byte
-	errChan        chan error
-	posixTime      int64
+	conn net.Conn
 }
 
 type authenticatorT struct {
@@ -842,10 +861,6 @@ type authCodeChans struct {
 	err  chan error
 }
 
-type mainChansT struct {
-	getAuthCode     chan authCodeChans
-	setupConnection chan setupConnectionT
-}
 
 func makeHandler(ch mainChansT) handlerT {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -853,7 +868,37 @@ func makeHandler(ch mainChansT) handlerT {
 	}
 }
 
-func httpServer(ch mainChansT) {
-	http.HandleFunc("/", makeHandler(ch))
-	http.ListenAndServe(":4000", nil)
+type killConn struct {}
+
+type tcpConnectionT struct {
+	dec *gob.Decoder
+	enc *gob.Encoder
+	conn chan net.Conn
+	killChan chan killConn
+}
+
+func tcpServer(newConnChan chan tcpConnectionT) {
+	ln, err := net.Listen("tcp", ":4000")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer ln.Close()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		go func() {
+			var killChan chan killConn
+			newConnChan <- newConnT{
+				dec: gob.NewDecoder(conn),
+				enc: gob.NewEncoder(conn),
+				conn: conn,
+				killChan: killChan,
+			}
+			<-killChan
+		}()
+	}
 }
