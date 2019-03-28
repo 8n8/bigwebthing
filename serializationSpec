@@ -1,0 +1,5 @@
+1. There is a set of Go structs shared between the client and the server in a common module.
+
+2. There is another set of Go structs in the client, which represents the different messages that can be passed between clients.
+
+ 

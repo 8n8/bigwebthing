@@ -32,7 +32,8 @@ var EmptyHash = HashToSlice(blake2b.Sum256([]byte("")))
 
 const SigSize = sign.Overhead + blake2b.Size256
 
-var AppSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c, 0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
+var AppSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c,
+	0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
 
 
 func HashToSlice(hash [32]byte) []byte {
@@ -42,3 +43,15 @@ func HashToSlice(hash [32]byte) []byte {
 	}
 	return newHash
 }
+
+type Msg interface {
+	Encode() ([]byte, error)
+	Decode() (Msg, error)
+}
+
+type ClientToClient struct {
+	msg []byte
+	recipient [32]byte
+}
+
+const clientToClientR = 0x00

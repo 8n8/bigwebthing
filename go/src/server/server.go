@@ -650,28 +650,6 @@ const (
 	uninvitesFilePath = serverDir + "/uninvites.txt"
 )
 
-// const encSymKeyLen = secretbox.Overhead + 32
-// 
-// const concatMdLen = 32 + 32 + encSymKeyLen
-// 
-// func concatMd(m metadataT) []byte {
-// 	result := make([]byte, concatMdLen)
-// 	i := 0
-// 	for i < 32 {
-// 		result[i] = m.blobhash[i]
-// 		i++
-// 	}
-// 	for i < 64 {
-// 		result[i] = m.recipient[i-32]
-// 		i++
-// 	}
-// 	for i < 64+encSymKeyLen {
-// 		result[i] = m.encryptedSymmetricKey[i-encSymKeyLen-32]
-// 		i++
-// 	}
-// 	return result
-// }
-
 func parseMetadata(
 	raw []byte,
 	memberList map[[32]byte]bool) (common.MetadataT, error) {
