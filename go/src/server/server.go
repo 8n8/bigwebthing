@@ -9,12 +9,12 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/sign"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"time"
 	"common"
 	"net"
+	"encoding/gob"
 )
 
 type stateT struct {
@@ -37,74 +37,108 @@ type inputT interface {
 
 type readChansT struct {
 	newConnChan chan tcpConnectionT
-	conn
+	connectedUsers  map[[32]byte]tcpConnectionT
 }
 
-func (s stateT) send(inChan chan inputT) {
+type endConnT struct {
+	id [32]byte
+}
+
+func (e endConnT) update(s *stateT) (stateT, outputT) {
+	var newConnUsers map[[32]byte]tcpConnectionT
+	for id, conn := range s.connectedUsers {
+		newConnUsers[id] = conn
+	}
+	delete(newConnUsers, e.id)
+	newState := *s
+	newState.connectedUsers = newConnUsers
+	return newState, readChans(s)
+}
+
+func authSigToSlice(sig [common.AuthSigSize]byte) []byte {
+	result := make([]byte, common.AuthSigSize)
+	for i := 0; i < common.AuthSigSize; i++ {
+		result[i] = sig[i]
+	}
+	return result
+}
+
+func inviteSigOk(i common.InviteT) bool {
+	untrusted, sigOk := sign.Open(
+		make([]byte, 0),
+		common.SigToSlice(i.Signature),
+		&i.Author)
+	return bytes.Equal(untrusted, common.InviteHash(i)) && sigOk
+}
+
+func isMember(
+	author [32]byte,
+	invites []common.InviteT,
+	tNow int64) bool {
+
+	for _, invite := range invites {
+		if invite.ExpiryPosix < tNow || !inviteSigOk(invite) {
+			return false
+		}
+	}
+	if !bytes.Equal(
+		common.HashToSlice(invites[0].Author),
+		common.HashToSlice(truesPubSign)) {
+
+		return false
+	}
+	for i := 1; i < len(invites); i++ {
+		linkOk := bytes.Equal(
+			common.HashToSlice(invites[i].Author),
+			common.HashToSlice(invites[i-1].Invitee))
+		if !linkOk {
+			return false
+		}
+	}
+	return true
+}
+
+func authOk(a common.AuthSigT, code [authCodeLength]byte, tNow int64) bool {
+	givenCode, sigOk := sign.Open(
+		make([]byte, 0),
+		authSigToSlice(a.Sig),
+		&a.Author)
+	okAuth := bytes.Equal(givenCode, authCodeToSlice(code))
+	return sigOk && okAuth && isMember(a.Author, a.Invites, tNow)
+}
+
+func (r readChansT) send(inChan chan inputT) {
 	select {
-	case newConn := <-r.newConnChan:
-		conn := newConn.conn
-		authCode, err := genAuthCode()
-		if err != nil {
-			fmt.Print(err)
-			encodedErr, encErr := common.EncodeErr(err)
-			if encErr != nil {
-				fmt.Print(encErr)
-				return
-			}
-			conn.Write(encodedErr)
-			conn.Close()
-			newConn.killChan <- killConn{}
-			return
-		}
-		conn.Write(authCode)
-		authSig := make([]byte, common.AuthSigSize)
-		n, err := conn.Read(authSig)
-		if n != AuthSigSize {
-			fmt.Print("Auth sig too short.")
-			encodedErr, encErr := common.Encode("Auth sig too short.")
-			if encErr != nil {
-				fmt.Print(encErr)
-				return
-			}
-			conn.Write(encodedErr)
-			conn.Close()
-			newConn.killChan <- killConn{}
-			return
-		}
-		
-		returnedAuth, okSig := sign.Open(
-			make([]byte, 0),
-			authSig,
-			
+	case conn := <-r.newConnChan:
+		inChan <- conn
 	default:
 	}
-	for author, connection := range r.connectedUsers {
+	for author, conn := range r.connectedUsers {
 		select {
-		case msg := <-userChans.in:
-			return userMsgT{
-				author:  author,
-				msg:     msg,
-				outChan: userChans.out,
-				errChan: userChans.errOut,
+		case msg := <-conn.in:
+			recip, ok := r.connectedUsers[msg.Recipient]
+			if !ok {
+				var errMsg common.ClientToClient
+				errMsg.Err = errors.New(
+					"Recipient not connected.")
+				conn.out <- errMsg
+				continue
 			}
-		case <-userChans.errIn:
-			userChans.errOut <- errors.New(
-				"WS reader has errored.")
-			return endWsSessionT{author: author}
+			recip.out <-msg
+		case <-conn.inErr:
+			inChan <- endConnT{author}
 		default:
 		}
 	}
-	return noInputT{}
 }
 
-type endWsSessionT struct {
-	author [32]byte
-}
+// type endWsSessionT struct {
+// 	author [32]byte
+// }
 
-func (k endWsSessionT) update(s *stateT) (stateT, outputT) {
-	return removeBlobHash(s, k.author), readChans(s)
-}
+// func (k endWsSessionT) update(s *stateT) (stateT, outputT) {
+// 	return removeBlobHash(s, k.author), readChans(s)
+// }
 
 type userMsgT struct {
 	author  [32]byte
@@ -120,69 +154,69 @@ const (
 	inBlob         byte = 0x03
 )
 
-func (u userMsgT) update(s *stateT) (stateT, outputT) {
-	switch u.msg.route {
-	// case inInvitation:
-	// 	return processInvitation(u, s)
-	// case inUninvitation:
-	// 	return processUninvitation(u, s)
-	// case inMetadata:
-	// 	return processMetadata(u, s)
-	// case inBlob:
-	// 	return processBlob(u, s)
-	}
-	err := errors.New("Bad router byte.")
-	return *s, sendErrT{err: err, ch: u.errChan}
-}
+// func (u userMsgT) update(s *stateT) (stateT, outputT) {
+// 	switch u.msg.route {
+// 	// case inInvitation:
+// 	// 	return processInvitation(u, s)
+// 	// case inUninvitation:
+// 	// 	return processUninvitation(u, s)
+// 	// case inMetadata:
+// 	// 	return processMetadata(u, s)
+// 	// case inBlob:
+// 	// 	return processBlob(u, s)
+// 	}
+// 	err := errors.New("Bad router byte.")
+// 	return *s, sendErrT{err: err, ch: u.errChan}
+// }
 
-func removeBlobHash(s *stateT, blobHash [32]byte) stateT {
-	var newExpectedBlobs map[[32]byte][32]byte
-	for hash, recipient := range s.expectedBlobs {
-		newExpectedBlobs[hash] = recipient
-	}
-	delete(newExpectedBlobs, blobHash)
-	newState := *s
-	newState.expectedBlobs = newExpectedBlobs
-	return newState
-}
+// func removeBlobHash(s *stateT, blobHash [32]byte) stateT {
+// 	var newExpectedBlobs map[[32]byte][32]byte
+// 	for hash, recipient := range s.expectedBlobs {
+// 		newExpectedBlobs[hash] = recipient
+// 	}
+// 	delete(newExpectedBlobs, blobHash)
+// 	newState := *s
+// 	newState.expectedBlobs = newExpectedBlobs
+// 	return newState
+// }
 
-func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
-	hash := blake2b.Sum256(umsg.msg.body)
-	recipient, blobExpected := s.expectedBlobs[hash]
-	if !blobExpected {
-		return *s, sendErrT{
-			err: errors.New("Blob not expected."),
-			ch:  umsg.errChan}
-	}
+// func processBlob(umsg userMsgT, s *stateT) (stateT, outputT) {
+// 	hash := blake2b.Sum256(umsg.msg.body)
+// 	recipient, blobExpected := s.expectedBlobs[hash]
+// 	if !blobExpected {
+// 		return *s, sendErrT{
+// 			err: errors.New("Blob not expected."),
+// 			ch:  umsg.errChan}
+// 	}
+// 
+// 	recipientChans, recipientOnline := s.connectedUsers[recipient]
+// 	if !recipientOnline {
+// 		return *s, sendErrT{
+// 			err: errors.New("Recipient offline."),
+// 			ch:  umsg.errChan}
+// 	}
+// 
+// 	newState := removeBlobHash(s, hash)
+// 	output := sendMsgT{
+// 		msg: umsg.msg.body,
+// 		ch:  recipientChans.out}
+// 	return newState, output
+// }
 
-	recipientChans, recipientOnline := s.connectedUsers[recipient]
-	if !recipientOnline {
-		return *s, sendErrT{
-			err: errors.New("Recipient offline."),
-			ch:  umsg.errChan}
-	}
-
-	newState := removeBlobHash(s, hash)
-	output := sendMsgT{
-		msg: umsg.msg.body,
-		ch:  recipientChans.out}
-	return newState, output
-}
-
-func addBlobHash(
-	s *stateT,
-	blobHash [32]byte,
-	recipient [32]byte) stateT {
-
-	var newExpectedBlobs map[[32]byte][32]byte
-	for hash, recipient := range s.expectedBlobs {
-		newExpectedBlobs[hash] = recipient
-	}
-	newExpectedBlobs[blobHash] = recipient
-	newState := *s
-	newState.expectedBlobs = newExpectedBlobs
-	return newState
-}
+// func addBlobHash(
+// 	s *stateT,
+// 	blobHash [32]byte,
+// 	recipient [32]byte) stateT {
+// 
+// 	var newExpectedBlobs map[[32]byte][32]byte
+// 	for hash, recipient := range s.expectedBlobs {
+// 		newExpectedBlobs[hash] = recipient
+// 	}
+// 	newExpectedBlobs[blobHash] = recipient
+// 	newState := *s
+// 	newState.expectedBlobs = newExpectedBlobs
+// 	return newState
+// }
 
 // func processMetadata(umsg userMsgT, s *stateT) (stateT, outputT) {
 // 	md, err := parseMetadata(umsg.msg.body, s.memberList)
@@ -324,7 +358,7 @@ type noInputT struct{}
 
 func readChans(s *stateT) readChansT {
 	return readChansT{
-		chs:            s.mainChans,
+		newConnChan:       s.newConnChan,
 		connectedUsers: s.connectedUsers,
 	}
 }
@@ -369,70 +403,70 @@ func authSliceToArray(authSlice []byte) [authCodeLength]byte {
 	return arr
 }
 
-func addUserConn(s *stateT, user [32]byte, chans userChansT) stateT {
-	var newConnUsers map[[32]byte]userChansT
-	for u, ch := range s.connectedUsers {
-		newConnUsers[u] = ch
-	}
-	newConnUsers[user] = chans
-	newState := *s
-	newState.connectedUsers = newConnUsers
-	return newState
-}
+// func addUserConn(s *stateT, user [32]byte, chans userChansT) stateT {
+// 	var newConnUsers map[[32]byte]userChansT
+// 	for u, ch := range s.connectedUsers {
+// 		newConnUsers[u] = ch
+// 	}
+// 	newConnUsers[user] = chans
+// 	newState := *s
+// 	newState.connectedUsers = newConnUsers
+// 	return newState
+// }
 
-func validSetupConn(c setupConnectionT, authCodes authCodesT) error {
-	authCode, validSignature := sign.Open(
-		make([]byte, 0),
-		signedAuthToSlice(c.signedAuthCode),
-		&c.author)
-	if !validSignature {
-		return errors.New("Bad signature.")
-	}
-	if !authOk(authCode, authCodes, c.posixTime) {
-		return errors.New("Bad auth code.")
-	}
-	return nil
-}
+// func validSetupConn(c setupConnectionT, authCodes authCodesT) error {
+// 	authCode, validSignature := sign.Open(
+// 		make([]byte, 0),
+// 		signedAuthToSlice(c.signedAuthCode),
+// 		&c.author)
+// 	if !validSignature {
+// 		return errors.New("Bad signature.")
+// 	}
+// 	if !authOk(authCode, authCodes, c.posixTime) {
+// 		return errors.New("Bad auth code.")
+// 	}
+// 	return nil
+// }
 
-func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
-	err := validSetupConn(c, s.authCodes)
-	if err != nil {
-		return *s, sendErrT{err: err, ch: c.errChan}
-	}
-	newState := addUserConn(s, c.author, c.chans)
-	output := sendErrT{err: nil, ch: c.errChan}
-	return newState, output
-}
+// func (c setupConnectionT) update(s *stateT) (stateT, outputT) {
+// 	err := validSetupConn(c, s.authCodes)
+// 	if err != nil {
+// 		return *s, sendErrT{err: err, ch: c.errChan}
+// 	}
+// 	newState := addUserConn(s, c.author, c.chans)
+// 	output := sendErrT{err: nil, ch: c.errChan}
+// 	return newState, output
+// }
 
-func parseInvites(rawBytes []byte) (invitesT, error) {
-	var invites invitesT
-	lines := bytes.Split(rawBytes, []byte("\n"))
-	var invite invitationT
-	for _, line := range lines {
-		jsonErr := json.Unmarshal(line, &invite)
-		if jsonErr != nil {
-			return invites, jsonErr
-		}
-		invites[invite] = true
-	}
-	return invites, nil
-}
+// func parseInvites(rawBytes []byte) (invitesT, error) {
+// 	var invites invitesT
+// 	lines := bytes.Split(rawBytes, []byte("\n"))
+// 	var invite invitationT
+// 	for _, line := range lines {
+// 		jsonErr := json.Unmarshal(line, &invite)
+// 		if jsonErr != nil {
+// 			return invites, jsonErr
+// 		}
+// 		invites[invite] = true
+// 	}
+// 	return invites, nil
+// }
 
-func readInvites(filePath string) (invitesT, error) {
-	var invites invitesT
-	f, openErr := os.Open(filePath)
-	if openErr != nil {
-		return invites, openErr
-	}
-	defer f.Close()
-
-	rawContents, readErr := ioutil.ReadAll(f)
-	if readErr != nil {
-		return invites, readErr
-	}
-
-	return parseInvites(rawContents)
-}
+// func readInvites(filePath string) (invitesT, error) {
+// 	var invites invitesT
+// 	f, openErr := os.Open(filePath)
+// 	if openErr != nil {
+// 		return invites, openErr
+// 	}
+// 	defer f.Close()
+// 
+// 	rawContents, readErr := ioutil.ReadAll(f)
+// 	if readErr != nil {
+// 		return invites, readErr
+// 	}
+// 
+// 	return parseInvites(rawContents)
+// }
 
 // func readFileData(s *stateT) error {
 // 	var err error
@@ -455,7 +489,7 @@ func main() {
 	// if err != nil {
 	// 	return
 	// }
-	go tcpServer(state.mainChans)
+	go tcpServer(state.newConnChan)
 	var input inputT = noInputT{}
 	var output outputT = readChans(&state)
 	var inputCh chan inputT
@@ -473,17 +507,6 @@ func main() {
 type httpInputT struct {
 	route byte
 	body  []byte
-}
-
-func authOk(
-	authSlice []byte,
-	authCodes map[[authCodeLength]byte]int64,
-	posixTime int64) bool {
-
-	authCode := authSliceToArray(authSlice)
-	authTime, authExists := authCodes[authCode]
-	authAge := posixTime - authTime
-	return authExists && (authAge <= 30) && (authAge >= 0)
 }
 
 type userChansT struct {
@@ -629,37 +652,37 @@ func authorAndInviteeEqual(a invitationT, b invitationT) bool {
 	return a.author == b.author && a.invitee == b.invitee
 }
 
-func countSimilarInvites(i invitationT, invites invitesT) int {
-	counter := 0
-	for invite, _ := range invites {
-		if authorAndInviteeEqual(i, invite) {
-			counter += 1
-		}
-	}
-	return counter
-}
+// func countSimilarInvites(i invitationT, invites invitesT) int {
+// 	counter := 0
+// 	for invite, _ := range invites {
+// 		if authorAndInviteeEqual(i, invite) {
+// 			counter += 1
+// 		}
+// 	}
+// 	return counter
+// }
 
-func makeMemberList(i invitesT, u invitesT) map[[32]byte]bool {
-	var m map[[32]byte]bool
-	lenm := 0
-	m[truesPubSign] = true
-	for len(m) > lenm {
-		for invite, _ := range i {
-			_, authorIsMember := m[invite.author]
-			if !authorIsMember {
-				continue
-			}
-			icount := countSimilarInvites(invite, i)
-			ucount := countSimilarInvites(invite, u)
-			if ucount >= icount {
-				continue
-			}
-			m[invite.invitee] = true
-			lenm++
-		}
-	}
-	return m
-}
+// func makeMemberList(i invitesT, u invitesT) map[[32]byte]bool {
+// 	var m map[[32]byte]bool
+// 	lenm := 0
+// 	m[truesPubSign] = true
+// 	for len(m) > lenm {
+// 		for invite, _ := range i {
+// 			_, authorIsMember := m[invite.author]
+// 			if !authorIsMember {
+// 				continue
+// 			}
+// 			icount := countSimilarInvites(invite, i)
+// 			ucount := countSimilarInvites(invite, u)
+// 			if ucount >= icount {
+// 				continue
+// 			}
+// 			m[invite.invitee] = true
+// 			lenm++
+// 		}
+// 	}
+// 	return m
+// }
 
 type appendToFileT struct {
 	filepath   string
@@ -772,32 +795,32 @@ func readAuthFromClient(ws *websocket.Conn) (authenticatorT, error) {
 	return auth, jsonErr
 }
 
-func authenticate(
-	ws *websocket.Conn,
-	mainChans mainChansT,
-	sessionChans userChansT) error {
-
-	genErr := genAuthAndSendToClient(ws, mainChans.getAuthCode)
-	if genErr != nil {
-		return genErr
-	}
-
-	authToken, authErr := readAuthFromClient(ws)
-	if authErr != nil {
-		return authErr
-	}
-
-	errChan := make(chan error)
-	setup := setupConnectionT{
-		chans:          sessionChans,
-		author:         authToken.author,
-		signedAuthCode: authToken.signedAuthCode,
-		errChan:        errChan,
-		posixTime:      time.Now().Unix(),
-	}
-	mainChans.setupConnection <- setup
-	return <-errChan
-}
+// func authenticate(
+// 	ws *websocket.Conn,
+// 	mainChans mainChansT,
+// 	sessionChans userChansT) error {
+// 
+// 	genErr := genAuthAndSendToClient(ws, mainChans.getAuthCode)
+// 	if genErr != nil {
+// 		return genErr
+// 	}
+// 
+// 	authToken, authErr := readAuthFromClient(ws)
+// 	if authErr != nil {
+// 		return authErr
+// 	}
+// 
+// 	errChan := make(chan error)
+// 	setup := setupConnectionT{
+// 		chans:          sessionChans,
+// 		author:         authToken.author,
+// 		signedAuthCode: authToken.signedAuthCode,
+// 		errChan:        errChan,
+// 		posixTime:      time.Now().Unix(),
+// 	}
+// 	mainChans.setupConnection <- setup
+// 	return <-errChan
+// }
 
 func writeWebsocket(
 	ws *websocket.Conn,
@@ -819,31 +842,31 @@ func writeWebsocket(
 	return nil
 }
 
-func handler(
-	mainChans mainChansT,
-	w http.ResponseWriter,
-	r *http.Request) {
-
-	ws, wsErr := upgrader.Upgrade(w, r, nil)
-	defer ws.Close()
-	if wsErr != nil {
-		return
-	}
-
-	var sessionChans userChansT
-
-	authErr := authenticate(ws, mainChans, sessionChans)
-	if authErr != nil {
-		fmt.Print(authErr.Error())
-		return
-	}
-
-	go readWebsocket(ws, sessionChans.errIn, sessionChans.in)
-	writeErr := writeWebsocket(ws, sessionChans)
-	if writeErr != nil {
-		fmt.Print(writeErr.Error())
-	}
-}
+// func handler(
+// 	mainChans mainChansT,
+// 	w http.ResponseWriter,
+// 	r *http.Request) {
+// 
+// 	ws, wsErr := upgrader.Upgrade(w, r, nil)
+// 	defer ws.Close()
+// 	if wsErr != nil {
+// 		return
+// 	}
+// 
+// 	var sessionChans userChansT
+// 
+// 	authErr := authenticate(ws, mainChans, sessionChans)
+// 	if authErr != nil {
+// 		fmt.Print(authErr.Error())
+// 		return
+// 	}
+// 
+// 	go readWebsocket(ws, sessionChans.errIn, sessionChans.in)
+// 	writeErr := writeWebsocket(ws, sessionChans)
+// 	if writeErr != nil {
+// 		fmt.Print(writeErr.Error())
+// 	}
+// }
 
 const authCodeLength = 24
 
@@ -862,19 +885,112 @@ type authCodeChans struct {
 }
 
 
-func makeHandler(ch mainChansT) handlerT {
-	return func(w http.ResponseWriter, r *http.Request) {
-		handler(ch, w, r)
-	}
-}
+// func makeHandler(ch mainChansT) handlerT {
+// 	return func(w http.ResponseWriter, r *http.Request) {
+// 		handler(ch, w, r)
+// 	}
+// }
 
 type killConn struct {}
 
+
 type tcpConnectionT struct {
-	dec *gob.Decoder
-	enc *gob.Encoder
-	conn chan net.Conn
-	killChan chan killConn
+	in chan common.ClientToClient
+	out chan common.ClientToClient
+	inErr chan error
+	outErr chan error
+}
+
+func (t tcpConnectionT) update(s *stateT) (stateT, outputT) {
+	var newConnUsers map[[32]byte]tcpConnectionT
+	for k, v := range s.connectedUsers {
+		newConnUsers[k] = v
+	}
+	newS := *s
+	newS.connectedUsers = newConnUsers
+	return newS, readChans(s)
+}
+
+// func setDeadline(conn *net.Conn, t int) {
+// 	conn.SetDeadline(time.Now().Add(time.Second * t))
+// }
+
+func handleConn(conn net.Conn, newConnChan chan tcpConnectionT) {
+	conn.SetDeadline(time.Now().Add(time.Second * 30))
+	authCode, err := genAuthCode()
+	if err != nil {
+		fmt.Print(err)
+		conn.Close()
+		return
+	}
+	enc := gob.NewEncoder(conn)
+	dec := gob.NewDecoder(conn)
+	err = enc.Encode(authCode)
+	if err != nil {
+		fmt.Print(err)
+		conn.Close()
+		return
+	}
+	var authSig common.AuthSigT
+	err = dec.Decode(&authSig)
+	if err != nil {
+		fmt.Print(err)
+		conn.Close()
+		return
+	}
+	timeNow := time.Now().Unix()
+	if !authOk(authSig, authCode, timeNow) {
+		fmt.Print(err)
+		conn.Close()
+		return
+	}
+	chs := tcpConnectionT{
+		in: make(chan common.ClientToClient),
+		out: make(chan common.ClientToClient),
+		inErr: make(chan error),
+		outErr: make(chan error),
+	}
+	newConnChan <-chs
+	conn.SetDeadline(time.Now().Add(time.Minute * 30))
+	go func() {
+		for {
+			var clientToClient common.ClientToClient
+			err = dec.Decode(&clientToClient)
+			if err != nil {
+				chs.inErr <- err
+				chs.outErr <- err
+				fmt.Print(err)
+				conn.Close()
+				return
+			}
+			chs.in <- clientToClient
+		}
+	}()
+	for {
+		conn.SetDeadline(time.Now().Add(time.Minute * 30))
+		select {
+		case newMsg := <-chs.out:
+			err = enc.Encode(newMsg)
+			if err != nil {
+				chs.inErr <- err
+				fmt.Print(err)
+				conn.Close()
+				return
+			}
+		case <-chs.outErr:
+			conn.Close()
+			return
+		default:
+		}
+	}
+}
+
+func authCodeToSlice(bs [authCodeLength]byte) []byte {
+	result := make([]byte, authCodeLength)
+	for i, b := range bs {
+		result[i] = b
+	}
+	return result
 }
 
 func tcpServer(newConnChan chan tcpConnectionT) {
@@ -890,15 +1006,7 @@ func tcpServer(newConnChan chan tcpConnectionT) {
 			fmt.Println(err)
 			continue
 		}
-		go func() {
-			var killChan chan killConn
-			newConnChan <- newConnT{
-				dec: gob.NewDecoder(conn),
-				enc: gob.NewEncoder(conn),
-				conn: conn,
-				killChan: killChan,
-			}
-			<-killChan
-		}()
+		go handleConn(conn, newConnChan)
 	}
 }
+

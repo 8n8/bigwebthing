@@ -36,6 +36,15 @@ const (
 	AuthSigSize = sign.Overhead + AuthLen
 )
 
+func SigToSlice(bs [SigSize]byte) []byte {
+	result := make([]byte, SigSize)
+	for i, b := range bs {
+		result[i] = b
+	}
+	return result
+}
+
+
 var AppSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c,
 	0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
 
@@ -54,8 +63,9 @@ type Msg interface {
 }
 
 type ClientToClient struct {
-	msg []byte
-	recipient [32]byte
+	Msg []byte
+	Recipient [32]byte
+	Err error
 }
 
 const (
@@ -65,59 +75,52 @@ const (
 	AuthSigR = 0x03
 )
 
-func EncodeErr(err error) ([]byte, error) {
-	errBytes := []byte(err.Error())
-	lenErr := len(errBytes)
-	if lenErr > 256*256 {
-		return make([]byte, 0), errors.New("Error too long.")
+func int64ToBytes(i int64) [8]byte {
+	u := uint64(i)
+	return [8]byte{
+		(byte)(u & 0xff),
+		(byte)(u & 0xff00),
+		(byte)(u & 0xff0000),
+		(byte)(u & 0xff000000),
+		(byte)(u & 0xff00000000),
+		(byte)(u & 0xff0000000000),
+		(byte)(u & 0xff000000000000),
+		(byte)(u & 0xff00000000000000)}
+}
+
+var inviteMeaning = []byte{0x1d, 0x4f, 0xc1, 0x13, 0x0e, 0xd7, 0x94, 0xae, 0x2a, 0x74, 0x9e, 0x49, 0xd0, 0xd2, 0x1b, 0x68}
+
+
+func InviteHash(invite InviteT) []byte {
+	// 0-8 is ExpiryPosix
+	// 8-40 is Invitee
+	// 40-72 is InviteMeaning
+	result := make([]byte, 72)
+	i := 0
+	expiryBytes := int64ToBytes(invite.ExpiryPosix)
+	for i < 8 {
+		result[i] = expiryBytes[i]
+		i++
 	}
-	result := make([]byte, lenErr + 3)
-	result[0] = lenErr & 0xff00
-	result[1] = lenErr & 0xff
-	result[2] = errorR
-	for i := 3; i < lenErr + 3; i++ {
-		result[i] = errBytes[i-3]
+	for i < 40 {
+		result[i] = invite.Invitee[i-8]
+		i++
 	}
-	return result, nil
+	for i < 72 {
+		result[i] = inviteMeaning[i-40]
+	}
+	return HashToSlice(blake2b.Sum256(result))
+}
+
+type InviteT struct {
+	ExpiryPosix int64
+	Invitee [32]byte
+	Author [32]byte
+	Signature [SigSize]byte
 }
 
 type AuthSigT struct {
-	author [32]byte
-	sig [AuthSigSize]byte
-}
-
-const encAuthLen = 3 + 32 + AuthSigSize
-
-func EncAuthSig(a AuthSig) []byte {
-	result := make([]byte, encAuthLen)
-	result[0] = 0x00
-	result[1] = 32 + AuthSigSize
-	result[2] = AuthSigR
-	for i := 3; i < 35; i++ {
-		result[i] = a.author[i-3]
-	}
-	for i := 35; i < encAuthLen; i++ {
-		result[i] = a.sig[i - 33]
-	}
-	return result
-}
-
-func DecAuthSig(bs []byte) (AuthSigT, error) {
-	var authSig AuthSig
-	lenBs := len(bs)
-	rightLen := 32 + AuthSigSize
-	if lenBs != rightLen {
-		return authSig, errors.New("Wrong length.")
-	}
-	var author [32]byte
-	for i := 0; i < 32; i++ {
-		author[i] = bs[i]
-	}
-	var sig [AuthSigSize]byte
-	for i := 0; i < AuthSigSize; i++ {
-	}
-	return AuthSigT{
-		author: bs[:32],
-		sig:
-	}
+	Author [32]byte
+	Invites []InviteT
+	Sig [AuthSigSize]byte
 }
