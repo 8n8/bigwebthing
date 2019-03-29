@@ -27,30 +27,6 @@ type inputT interface {
 	update(*stateT) (stateT, outputT)
 }
 
-// a. First byte is the routing byte 'clientToClientR'.
-// b. Next 32 bytes are the recipient.
-// c. Next 2 bytes are the length of the message.
-// d. Remainder is the message - max 15965 bytes.
-func (c ClientToClient) Encode() ([]byte, error) {
-	msgLen := len(c.msg)
-	if msgLen > 15965 {
-		return make([]byte, 0), errors.New("Message too long.")
-	}
-	resultLen := msgLen + 35
-	result := make([]byte, resultLen)
-	result[0] = clientToClientR
-	for i := 1; i < 33; i++ {
-		result[i] = c.recipient[i - 1]
-	}
-	result[i] = msgLen & 0xff00
-	i++
-	result[i] = msgLen & 0xff
-	for i < resultLen {
-		result[i] = c.msg[i - 35]
-	}
-	return result, nil
-}
-
 type outputT interface {
 	send(chan inputT)
 }

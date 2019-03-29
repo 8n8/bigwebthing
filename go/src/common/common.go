@@ -1,8 +1,8 @@
 package common
 
 import (
-	"golang.org/x/crypto/nacl/sign"
 	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/sign"
 )
 
 var ReceiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
@@ -21,19 +21,19 @@ func MakeDigest(hash [32]byte, contextCode [16]byte) []byte {
 }
 
 type MetadataT struct {
-	Blobhash [32]byte
-	Author [32]byte
+	Blobhash  [32]byte
+	Author    [32]byte
 	Recipient [32]byte
-	Nonce [24]byte
+	Nonce     [24]byte
 	Signature [SigSize]byte
 }
 
 var EmptyHash = HashToSlice(blake2b.Sum256([]byte("")))
 
 const (
-	AuthLen = 16
-	SigSize = sign.Overhead + blake2b.Size256
-	AuthSigSize = sign.Overhead + AuthLen
+	AuthLen        = 16
+	SigSize        = sign.Overhead + blake2b.Size256
+	AuthSigSize    = sign.Overhead + AuthLen
 	AuthCodeLength = 24
 )
 
@@ -59,10 +59,8 @@ func SigToSlice(bs [SigSize]byte) []byte {
 	return result
 }
 
-
 var AppSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c,
 	0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
-
 
 func HashToSlice(hash [32]byte) []byte {
 	newHash := make([]byte, 32)
@@ -78,39 +76,38 @@ type Msg interface {
 }
 
 type ClientToClient struct {
-	Msg []byte
+	Msg       []byte
 	Recipient [32]byte
-	Err error
+	Err       error
 }
 
 const (
 	ClientToClientR = 0x00
-	ErrorR = 0x01
-	AuthCodeR = 0x02
-	AuthSigR = 0x03
+	ErrorR          = 0x01
+	AuthCodeR       = 0x02
+	AuthSigR        = 0x03
 )
 
 func int64ToBytes(i int64) [8]byte {
 	u := uint64(i)
 	return [8]byte{
 		(byte)(u & 0xff),
-		(byte)(u & 0xff00),
-		(byte)(u & 0xff0000),
-		(byte)(u & 0xff000000),
-		(byte)(u & 0xff00000000),
-		(byte)(u & 0xff0000000000),
-		(byte)(u & 0xff000000000000),
-		(byte)(u & 0xff00000000000000)}
+		(byte)((u & 0xff00) >> 1),
+		(byte)((u & 0xff0000) >> 2),
+		(byte)((u & 0xff000000) >> 3),
+		(byte)((u & 0xff00000000) >> 4),
+		(byte)((u & 0xff0000000000) >> 5),
+		(byte)((u & 0xff000000000000) >> 6),
+		(byte)((u & 0xff00000000000000) >> 7)}
 }
 
 var inviteMeaning = []byte{0x1d, 0x4f, 0xc1, 0x13, 0x0e, 0xd7, 0x94, 0xae, 0x2a, 0x74, 0x9e, 0x49, 0xd0, 0xd2, 0x1b, 0x68}
 
-
 func InviteHash(invite InviteT) []byte {
 	// 0-8 is ExpiryPosix
 	// 8-40 is Invitee
-	// 40-72 is InviteMeaning
-	result := make([]byte, 72)
+	// 40-56 is InviteMeaning
+	result := make([]byte, 56)
 	i := 0
 	expiryBytes := int64ToBytes(invite.ExpiryPosix)
 	for i < 8 {
@@ -121,7 +118,7 @@ func InviteHash(invite InviteT) []byte {
 		result[i] = invite.Invitee[i-8]
 		i++
 	}
-	for i < 72 {
+	for i < 56 {
 		result[i] = inviteMeaning[i-40]
 	}
 	return HashToSlice(blake2b.Sum256(result))
@@ -129,13 +126,13 @@ func InviteHash(invite InviteT) []byte {
 
 type InviteT struct {
 	ExpiryPosix int64
-	Invitee [32]byte
-	Author [32]byte
-	Signature [SigSize]byte
+	Invitee     [32]byte
+	Author      [32]byte
+	Signature   [SigSize]byte
 }
 
 type AuthSigT struct {
-	Author [32]byte
+	Author  [32]byte
 	Invites []InviteT
-	Sig [AuthSigSize]byte
+	Sig     [AuthSigSize]byte
 }
