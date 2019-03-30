@@ -21,11 +21,6 @@ type outputT interface {
 	send(chan inputT)
 }
 
-const (
-	responseAuthCode              byte = 0x00
-	responseRecipientNotConnected byte = 0x01
-)
-
 type inputT interface {
 	update(*stateT) (stateT, outputT)
 }

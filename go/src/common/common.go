@@ -3,6 +3,7 @@ package common
 import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/sign"
+	"math"
 )
 
 var ReceiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,

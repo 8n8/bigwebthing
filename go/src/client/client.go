@@ -21,6 +21,7 @@ import (
 	"os"
 	"time"
 	"common"
+	"net"
 )
 
 type inputT interface {
@@ -315,8 +316,8 @@ func (m makeSendHandles) send(inputCh chan inputT) {
 		m.doneCh <- endRequest{}
 		return
 	}
-
-	ws, _, err := websocket.DefaultDialer.Dial(wsUrl, nil)
+	conn, err := net.Dial("tcp", "localhost:4000")
+	// ws, _, err := websocket.DefaultDialer.Dial(wsUrl, nil)
 	if err != nil {
 		http.Error(m.w, err.Error(), 500)
 		m.doneCh <- endRequest{}
@@ -332,7 +333,7 @@ func (m makeSendHandles) send(inputCh chan inputT) {
 	inputCh <- newSendHandles{
 		appHash: m.appHash,
 		newNonce: newNonce,
-		ws: ws,
+		conn: conn,
 		f: filehandle,
 		recipients: m.recipients,
 	}
@@ -340,7 +341,7 @@ func (m makeSendHandles) send(inputCh chan inputT) {
 
 type newSendHandles struct {
 	appHash [32]byte
-	ws *websocket.Conn
+	conn net.Conn
 	f *os.File
 	newNonce [24]byte
 	recipients [][32]byte
@@ -505,7 +506,7 @@ func (n newSendHandles) update(s *stateT) (stateT, outputT) {
 		msg: append(common.EmptyHash, encryptedMsg...),
 		header: headerEnc,
 		appHash: n.appHash,
-		ws: n.ws,
+		conn: n.conn,
 		f: n.f,
 		recipients: n.recipients,
 	}
@@ -533,12 +534,62 @@ func checkReceipt(
 	return nil
 }
 
+var receiptMeaning = []byte{0x3f, 0x0e, 0x0e, 0x46, 0xf8, 0xaa, 0xac, 0xa6, 0xf2, 0x59, 0xd8, 0x2d, 0xa7, 0x6f, 0x23, 0xd8}
+
+func receiptHash(r receiptMsg) []byte {
+	concat := make([]byte, 56)
+	timeBytes := common.int64ToBytes(r.posixTime)
+	i := 0
+	for i < 32 {
+		concat[i] = msgHash[i]
+		i++
+	}
+	for i < 40 {
+		result[i] = timeBytes[i-32]
+		i++
+	}
+	for i < 56 {
+		result[i] = receiptMeaning[i-40]
+	}
+	return common.HashToSlice(blake2b.Sum256(result))
+}
+
+type receiptMsg struct {
+	msgHash [32]byte
+	posixTime int64
+	signature [common.SigSize]byte
+	author [32]byte
+}
+
+func receiptOk(
+	r receiptMsg,
+	recipient [32]byte,
+	msgHash [32]byte,
+	timeNow int64) bool {
+
+	msgHashOk := bytes.Equal(
+		common.HashToSlice(r.msgHash),
+		common.HashToSlice(msgHash))
+	recipientOk := bytes.Equal(
+		common.HashToSlice(r.author),
+		common.HashToSlice(recipient))
+	timeDiff := timeNow - r.posixTime
+	timeOk := timeDiff > 0 && timeDiff < 60
+
+	givenHash, sigOk := sign.Open(
+		make([]byte, 0),
+		r.signature,
+		r.author)
+	signedOk := bytes.Equal(givenHash, receiptHash(r))
+	return msgHashOk && recipientOk && timeOk && signedOk
+}
+
 func sendMsg(
 	msg []byte,
-	ws *websocket.Conn,
+	conn net.Conn,
 	recipient *[32]byte) error {
 
-	err := ws.WriteMessage(websocket.BinaryMessage, msg)
+	err := conn.Write(msg)
 	if err != nil {
 		return err
 	}
@@ -556,7 +607,7 @@ type sendMsgT struct {
 	msg []byte
 	header []byte
 	appHash [32]byte
-	ws *websocket.Conn
+	conn net.Conn
 	f *os.File
 	recipients [][32]byte
 	secretEncrypt *[32]byte
