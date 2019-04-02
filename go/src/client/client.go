@@ -48,15 +48,8 @@ type stateT struct {
 }
 
 type readHttpInputT struct {
-	ch chan httpInputT
+	ch       chan httpInputT
 	homeCode string
-}
-
-type saveAppT struct {
-	w            http.ResponseWriter
-	r            *http.Request
-	securityCode string
-	doneCh       chan endRequest
 }
 
 func getPostFilePart(r *http.Request) (*multipart.Part, error) {
@@ -145,7 +138,6 @@ func (r readHttpInputT) send(inputCh chan inputT) {
 	default:
 	}
 	inputCh <- noInputT{}
-	return
 }
 
 const (
@@ -255,7 +247,7 @@ func getDocHash(
 		}
 	}
 	var empty [32]byte
-	return empty, nil
+	return empty, errors.New("Could not find document hash.")
 }
 
 func hashToStr(h [32]byte) string {
@@ -326,7 +318,9 @@ func logSentSuccess(appHash [32]byte, recipient [32]byte) {
 	}
 }
 
-var receiptMeaning = []byte{0x3f, 0x0e, 0x0e, 0x46, 0xf8, 0xaa, 0xac, 0xa6, 0xf2, 0x59, 0xd8, 0x2d, 0xa7, 0x6f, 0x23, 0xd8}
+var receiptMeaning = []byte{
+	0x3f, 0x0e, 0x0e, 0x46, 0xf8, 0xaa, 0xac, 0xa6, 0xf2, 0x59,
+	0xd8, 0x2d, 0xa7, 0x6f, 0x23, 0xd8}
 
 func receiptHash(msgHash [32]byte) [32]byte {
 	concat := make([]byte, 48)
@@ -418,7 +412,9 @@ func equalHashes(as [32]byte, bs [32]byte) bool {
 	return true
 }
 
-var appSigMeaning = []byte{0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6, 0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
+var appSigMeaning = []byte{
+	0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6,
+	0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
 
 type appSigMsgT struct {
 	appHash [32]byte
@@ -547,10 +543,12 @@ func sendFileToOne(
 			return err
 		}
 		if lastChunk {
-			return nil
+			break
 		}
 		counter++
 	}
+	logSentSuccess(s.appHash, recipient)
+	return nil
 }
 
 func (s sendFileT) send(inputCh chan inputT) {
@@ -824,7 +822,7 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 	}
 }
 
-var routes = []string{"makeapproute", "getapp"}
+var routes = []string{"makeapproute", "getapp", "sendapp"}
 
 func httpServer(inputChan chan httpInputT) {
 	mux := goji.NewMux()
