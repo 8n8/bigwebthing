@@ -38,7 +38,7 @@ type stateT struct {
 	appCodes      map[string][32]byte
 	publicSign    [32]byte
 	secretSign    [64]byte
-	secretEncrypt *[32]byte
+	secretEncrypt [32]byte
 	publicEncrypt [32]byte
 	conn          net.Conn
 	online        bool
@@ -128,11 +128,11 @@ func (r readHttpInputT) send(inputCh chan inputT) {
 			return
 		}
 		inputCh <- normalApiInputT{
-			w:            h.w,
-			securityCode: securityCode,
-			body:         body,
-			route:        h.route,
-			doneCh:       h.doneCh,
+			h.w,
+			securityCode,
+			body,
+			h.route,
+			h.doneCh,
 		}
 		return
 	default:
@@ -207,10 +207,10 @@ func (g genCodeForAppT) send(inputCh chan inputT) {
 		return
 	}
 	inputCh <- newAppCodeT{
-		w:       g.w,
-		appHash: g.appHash,
-		doneCh:  g.doneCh,
-		newCode: newCode,
+		g.w,
+		g.appHash,
+		g.doneCh,
+		newCode,
 	}
 	return
 }
@@ -231,9 +231,9 @@ func (n newAppCodeT) update(s *stateT) (stateT, outputT) {
 	newAppCodes[n.newCode] = n.appHash
 	newState.appCodes = newAppCodes
 	return newState, htmlOkResponseT{
-		msg:    []byte(n.newCode),
-		w:      n.w,
-		doneCh: n.doneCh,
+		[]byte(n.newCode),
+		n.w,
+		n.doneCh,
 	}
 }
 
@@ -269,10 +269,10 @@ type logSendErrT struct {
 
 func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 	msg := logSendErrT{
-		posixTime: time.Now().Unix(),
-		appHash:   appHash,
-		recipient: recipient,
-		err:       err,
+		time.Now().Unix(),
+		appHash,
+		recipient,
+		err,
 	}
 	encoded, jsonErr := json.Marshal(msg)
 	if jsonErr != nil {
@@ -297,10 +297,7 @@ type logSentSuccessT struct {
 }
 
 func logSentSuccess(appHash [32]byte, recipient [32]byte) {
-	msg := logSentSuccessT{
-		appHash:   appHash,
-		recipient: recipient,
-	}
+	msg := logSentSuccessT{appHash, recipient}
 	encoded, jsonErr := json.Marshal(msg)
 	if jsonErr != nil {
 		logSendErr(jsonErr, appHash, recipient)
@@ -452,38 +449,40 @@ func decodeReceipt(bs []byte) ([32]byte, error) {
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	if !strEq(n.securityCode, s.homeCode) {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    "Bad security code.",
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			"Bad security code.",
+			400,
+			n.doneCh,
 		}
 	}
 	var sendAppJson sendAppJsonT
 	err := json.Unmarshal(n.body, &sendAppJson)
 	if err != nil {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    "Could not decode Json.",
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			"Could not decode Json.",
+			400,
+			n.doneCh,
 		}
 	}
 	if len(sendAppJson.recipients) == 0 {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    "No recipients.",
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			"No recipients.",
+			400,
+			n.doneCh,
 		}
 	}
 	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
 	return *s, sendFileT{
-		appHash:    sendAppJson.appHash,
-		conn:       s.conn,
-		filepath:   filepath,
-		w:          n.w,
-		doneCh:     n.doneCh,
-		recipients: sendAppJson.recipients,
+		filepath,
+		s.conn,
+		n.w,
+		n.doneCh,
+		sendAppJson.recipients,
+		sendAppJson.appHash,
+		s.secretSign,
+		s.secretEncrypt,
 	}
 }
 
@@ -534,10 +533,10 @@ func sendFileToOne(
 		}
 		lastChunk := n < common.ChunkSize
 		err = sender(fileChunk{
-			appHash:   s.appHash,
-			chunk:     chunk,
-			counter:   counter,
-			lastChunk: lastChunk,
+			s.appHash,
+			chunk,
+			counter,
+			lastChunk,
 		})
 		if err != nil {
 			return err
@@ -575,16 +574,16 @@ func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
 	if err != nil {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    "Bad security code.",
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			"Bad security code.",
+			400,
+			n.doneCh,
 		}
 	}
 	return *s, serveDocT{
-		w:        n.w,
-		doneCh:   n.doneCh,
-		filePath: docsDir + "/" + hashToStr(docHash),
+		n.w,
+		n.doneCh,
+		docsDir + "/" + hashToStr(docHash),
 	}
 }
 
@@ -618,24 +617,24 @@ func processMakeAppRoute(
 	err := json.Unmarshal(n.body, &makeAppRoute)
 	if err != nil {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    err.Error(),
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			err.Error(),
+			400,
+			n.doneCh,
 		}
 	}
 	if !strEq(n.securityCode, s.homeCode) {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    "Bad security code.",
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			"Bad security code.",
+			400,
+			n.doneCh,
 		}
 	}
 	return *s, genCodeForAppT{
-		w:       n.w,
-		appHash: makeAppRoute.apphash,
-		doneCh:  n.doneCh,
+		n.w,
+		makeAppRoute.apphash,
+		n.doneCh,
 	}
 }
 
@@ -730,9 +729,9 @@ func (s setupTcpConn) send(inputCh chan inputT) {
 		return
 	}
 	authSig := common.AuthSigT{
-		Author:  s.publicSign,
-		Invites: s.invites,
-		Sig: signedAuthToSlice(sign.Sign(
+		s.publicSign,
+		s.invites,
+		signedAuthToSlice(sign.Sign(
 			make([]byte, 0),
 			common.AuthCodeToSlice(authCode),
 			&s.secretSign)),
@@ -812,12 +811,7 @@ type endRequest struct{}
 func handler(route string, inputChan chan httpInputT) handlerT {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var doneCh chan endRequest
-		inputChan <- httpInputT{
-			w:      w,
-			r:      r,
-			route:  route,
-			doneCh: doneCh,
-		}
+		inputChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
 	}
 }
