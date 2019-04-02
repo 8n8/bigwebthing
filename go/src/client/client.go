@@ -49,6 +49,7 @@ type stateT struct {
 
 type readHttpInputT struct {
 	ch chan httpInputT
+	homeCode string
 }
 
 type saveAppT struct {
@@ -56,28 +57,6 @@ type saveAppT struct {
 	r            *http.Request
 	securityCode string
 	doneCh       chan endRequest
-}
-
-func (a saveAppT) update(s *stateT) (stateT, outputT) {
-	if !strEq(a.securityCode, s.homeCode) {
-		return *s, sendHttpErrorT{
-			w:      a.w,
-			msg:    "Bad security code.",
-			code:   400,
-			doneCh: a.doneCh,
-		}
-	}
-	return *s, writeAppToFileT{
-		w:      a.w,
-		r:      a.r,
-		doneCh: a.doneCh,
-	}
-}
-
-type writeAppToFileT struct {
-	w      http.ResponseWriter
-	r      *http.Request
-	doneCh chan endRequest
 }
 
 func getPostFilePart(r *http.Request) (*multipart.Part, error) {
@@ -97,8 +76,8 @@ func getPostFilePart(r *http.Request) (*multipart.Part, error) {
 	return filepart, nil
 }
 
-func writeAppToFile(w writeAppToFileT) (string, error) {
-	filepart, err := getPostFilePart(w.r)
+func writeAppToFile(r *http.Request) (string, error) {
+	filepart, err := getPostFilePart(r)
 	if err != nil {
 		return "", err
 	}
@@ -129,31 +108,20 @@ func writeAppToFile(w writeAppToFileT) (string, error) {
 	return hash, nil
 }
 
-func (w writeAppToFileT) send(inputCh chan inputT) {
-	hash, err := writeAppToFile(w)
-	if err != nil {
-		http.Error(w.w, err.Error(), 500)
-		w.doneCh <- endRequest{}
-		return
-	}
-	writer := w.w
-	writer.Write([]byte(hash))
-	w.doneCh <- endRequest{}
-	return
-}
-
 func (r readHttpInputT) send(inputCh chan inputT) {
 	select {
 	case h := <-r.ch:
 		req := h.r
 		securityCode := pat.Param(h.r, "securitycode")
 		if h.route == "saveapp" {
-			inputCh <- saveAppT{
-				w:            h.w,
-				r:            h.r,
-				securityCode: securityCode,
-				doneCh:       h.doneCh,
+			hash, err := writeAppToFile(h.r)
+			if err != nil {
+				http.Error(h.w, err.Error(), 500)
+				h.doneCh <- endRequest{}
+				return
 			}
+			h.w.Write([]byte(hash))
+			h.doneCh <- endRequest{}
 			return
 		}
 		body, err := ioutil.ReadAll(req.Body)
@@ -695,7 +663,7 @@ type httpInputT struct {
 type noInputT struct{}
 
 func (n noInputT) update(s *stateT) (stateT, outputT) {
-	return *s, readHttpInputT{s.httpChan}
+	return *s, readHttpInputT{s.httpChan, s.homeCode}
 }
 
 func makeNonce() ([24]byte, error) {
@@ -782,7 +750,7 @@ func (s setupTcpConn) send(inputCh chan inputT) {
 func (n newTcpConn) update(s *stateT) (stateT, outputT) {
 	newS := *s
 	newS.conn = n.conn
-	return newS, readHttpInputT{s.httpChan}
+	return newS, readHttpInputT{s.httpChan, s.homeCode}
 }
 
 func pruneInvites(
@@ -806,7 +774,7 @@ func (f failedToGoOnline) update(s *stateT) (stateT, outputT) {
 	newS.invites = pruneInvites(s.invites, s.publicSign, f.tNow)
 	if len(newS.invites) == 0 {
 		newS.isMember = false
-		return newS, readHttpInputT{s.httpChan}
+		return newS, readHttpInputT{s.httpChan, s.homeCode}
 	}
 	return newS, setupTcpConn{
 		s.secretSign,
