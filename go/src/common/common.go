@@ -1,10 +1,11 @@
 package common
 
 import (
+	"bytes"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/sign"
-	"math"
 )
+
 
 var ReceiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
 	0x46, 0x5e, 0x02, 0x49, 0xb9, 0x4b, 0x69, 0xd0, 0x93, 0x4d}
@@ -19,6 +20,14 @@ func MakeDigest(hash [32]byte, contextCode [16]byte) []byte {
 		digest[i] = contextCode[i-32]
 	}
 	return HashToSlice(blake2b.Sum256(digest))
+}
+
+func AuthCodeToSlice(bs [AuthCodeLength]byte) []byte {
+	result := make([]byte, AuthCodeLength)
+	for i, b := range bs {
+		result[i] = b
+	}
+	return result
 }
 
 type MetadataT struct {
@@ -36,6 +45,7 @@ const (
 	SigSize        = sign.Overhead + blake2b.Size256
 	AuthSigSize    = sign.Overhead + AuthLen
 	AuthCodeLength = 24
+	ChunkSize = 16000
 )
 
 var TruesPubSign = [32]byte{
@@ -80,6 +90,7 @@ type ClientToClient struct {
 	Msg       []byte
 	Recipient [32]byte
 	Err       error
+	Nonce [24]byte
 }
 
 const (
@@ -89,7 +100,7 @@ const (
 	AuthSigR        = 0x03
 )
 
-func int64ToBytes(i int64) [8]byte {
+func Int64ToBytes(i int64) [8]byte {
 	u := uint64(i)
 	return [8]byte{
 		(byte)(u & 0xff),
@@ -110,7 +121,7 @@ func InviteHash(invite InviteT) []byte {
 	// 40-56 is InviteMeaning
 	result := make([]byte, 56)
 	i := 0
-	expiryBytes := int64ToBytes(invite.ExpiryPosix)
+	expiryBytes := Int64ToBytes(invite.ExpiryPosix)
 	for i < 8 {
 		result[i] = expiryBytes[i]
 		i++
@@ -136,4 +147,39 @@ type AuthSigT struct {
 	Author  [32]byte
 	Invites []InviteT
 	Sig     [AuthSigSize]byte
+}
+
+func IsMember(
+	author [32]byte,
+	invites []InviteT,
+	tNow int64) bool {
+
+	for _, invite := range invites {
+		if invite.ExpiryPosix < tNow || !inviteSigOk(invite) {
+			return false
+		}
+	}
+	if !bytes.Equal(
+		HashToSlice(invites[0].Author),
+		HashToSlice(TruesPubSign)) {
+
+		return false
+	}
+	for i := 1; i < len(invites); i++ {
+		linkOk := bytes.Equal(
+			HashToSlice(invites[i].Author),
+			HashToSlice(invites[i-1].Invitee))
+		if !linkOk {
+			return false
+		}
+	}
+	return true
+}
+
+func inviteSigOk(i InviteT) bool {
+	untrusted, sigOk := sign.Open(
+		make([]byte, 0),
+		SigToSlice(i.Signature),
+		&i.Author)
+	return bytes.Equal(untrusted, InviteHash(i)) && sigOk
 }

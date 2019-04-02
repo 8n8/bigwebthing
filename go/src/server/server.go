@@ -45,41 +45,6 @@ func (e endConnT) update(s *stateT) (stateT, outputT) {
 	return newState, readChans(s)
 }
 
-func inviteSigOk(i common.InviteT) bool {
-	untrusted, sigOk := sign.Open(
-		make([]byte, 0),
-		common.SigToSlice(i.Signature),
-		&i.Author)
-	return bytes.Equal(untrusted, common.InviteHash(i)) && sigOk
-}
-
-func isMember(
-	author [32]byte,
-	invites []common.InviteT,
-	tNow int64) bool {
-
-	for _, invite := range invites {
-		if invite.ExpiryPosix < tNow || !inviteSigOk(invite) {
-			return false
-		}
-	}
-	if !bytes.Equal(
-		common.HashToSlice(invites[0].Author),
-		common.HashToSlice(common.TruesPubSign)) {
-
-		return false
-	}
-	for i := 1; i < len(invites); i++ {
-		linkOk := bytes.Equal(
-			common.HashToSlice(invites[i].Author),
-			common.HashToSlice(invites[i-1].Invitee))
-		if !linkOk {
-			return false
-		}
-	}
-	return true
-}
-
 func authOk(
 	a common.AuthSigT,
 	code [common.AuthCodeLength]byte,
@@ -89,8 +54,8 @@ func authOk(
 		make([]byte, 0),
 		common.AuthSigToSlice(a.Sig),
 		&a.Author)
-	okAuth := bytes.Equal(givenCode, authCodeToSlice(code))
-	return sigOk && okAuth && isMember(a.Author, a.Invites, tNow)
+	okAuth := bytes.Equal(givenCode, common.AuthCodeToSlice(code))
+	return sigOk && okAuth && common.IsMember(a.Author, a.Invites, tNow)
 }
 
 func (r readChansT) send(inChan chan inputT) {
@@ -246,14 +211,6 @@ func handleConn(conn net.Conn, newConnChan chan tcpConnectionT) {
 		default:
 		}
 	}
-}
-
-func authCodeToSlice(bs [common.AuthCodeLength]byte) []byte {
-	result := make([]byte, common.AuthCodeLength)
-	for i, b := range bs {
-		result[i] = b
-	}
-	return result
 }
 
 func tcpServer(newConnChan chan tcpConnectionT) {

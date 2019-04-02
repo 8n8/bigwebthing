@@ -19,3 +19,5 @@ Accessible from all sessions
 + func writeFile(fileName string, contents []byte) error
 + func readFile(fileName string) ([]byte, error)
 + func quota() (spaceused int, spacefree int)
++ func amionline() error
++ func isMember() bool

@@ -1,14 +1,15 @@
 package main
 
 import (
-	"crypto/rand"
 	"bytes"
-	"fmt"
+	"common"
+	"crypto/rand"
 	"crypto/subtle"
-	"github.com/gorilla/websocket"
 	"encoding/base64"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"goji.io"
 	"goji.io/pat"
 	"golang.org/x/crypto/blake2b"
@@ -17,11 +18,10 @@ import (
 	"io"
 	"io/ioutil"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"time"
-	"common"
-	"net"
 )
 
 type inputT interface {
@@ -33,13 +33,18 @@ type outputT interface {
 }
 
 type stateT struct {
-	httpChan chan httpInputT
-	homeCode string
-	appCodes map[string][32]byte
-	publicSign [32]byte
-	secretSign *[64]byte
+	httpChan      chan httpInputT
+	homeCode      string
+	appCodes      map[string][32]byte
+	publicSign    [32]byte
+	secretSign    [64]byte
 	secretEncrypt *[32]byte
 	publicEncrypt [32]byte
+	conn          net.Conn
+	online        bool
+	cantGetOnline error
+	invites       [][]common.InviteT
+	isMember      bool
 }
 
 type readHttpInputT struct {
@@ -175,12 +180,13 @@ func (r readHttpInputT) send(inputCh chan inputT) {
 	return
 }
 
-type httpChansT struct {
-	homeIn chan httpInputT
-}
-
 const (
-	docsDir = "clientData/docs"
+	docsDir     = "clientData/docs"
+	wsUrl       = "ws://localhost:4000"
+	blobLen     = 16000 - 32 - box.Overhead
+	sendLogPath = "clientData/sendErrors.txt"
+	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
+	sentMsgPath = "clientData/sentMsgs.txt"
 )
 
 type normalApiInputT struct {
@@ -271,7 +277,10 @@ func (n newAppCodeT) update(s *stateT) (stateT, outputT) {
 	}
 }
 
-func getDocHash(securityCode string, appCodes map[string][32]byte) ([32]byte, error) {
+func getDocHash(
+	securityCode string,
+	appCodes map[string][32]byte) ([32]byte, error) {
+
 	for sc, hash := range appCodes {
 		if strEq(sc, securityCode) {
 			return hash, nil
@@ -281,99 +290,29 @@ func getDocHash(securityCode string, appCodes map[string][32]byte) ([32]byte, er
 	return empty, nil
 }
 
-func byte32ToSlice(bs [32]byte) []byte {
-	r := make([]byte, 32)
-	for i, b := range bs {
-		r[i] = b
-	}
-	return r
-}
-
 func hashToStr(h [32]byte) string {
-	asSlice := byte32ToSlice(h)
+	asSlice := common.HashToSlice(h)
 	return base64.RawURLEncoding.EncodeToString(asSlice)
 }
 
 type sendAppJsonT struct {
-	appHash [32]byte
+	appHash    [32]byte
 	recipients [][32]byte
 }
-
-type makeSendHandles struct {
-	filepath string
-	w http.ResponseWriter
-	doneCh chan endRequest
-	recipients [][32]byte
-	appHash [32]byte
-}
-
-const wsUrl = "ws://localhost:4000"
-
-func (m makeSendHandles) send(inputCh chan inputT) {
-	filehandle, err := os.Open(m.filepath)
-	if err != nil {
-		http.Error(m.w, err.Error(), 500)
-		m.doneCh <- endRequest{}
-		return
-	}
-	conn, err := net.Dial("tcp", "localhost:4000")
-	// ws, _, err := websocket.DefaultDialer.Dial(wsUrl, nil)
-	if err != nil {
-		http.Error(m.w, err.Error(), 500)
-		m.doneCh <- endRequest{}
-		return
-	}
-	m.doneCh <- endRequest{}
-	newNonce, err := makeNonce()
-	if err != nil {
-		http.Error(m.w, err.Error(), 500)
-		m.doneCh <- endRequest{}
-		return
-	}
-	inputCh <- newSendHandles{
-		appHash: m.appHash,
-		newNonce: newNonce,
-		conn: conn,
-		f: filehandle,
-		recipients: m.recipients,
-	}
-}
-
-type newSendHandles struct {
-	appHash [32]byte
-	conn net.Conn
-	f *os.File
-	newNonce [24]byte
-	recipients [][32]byte
-}
-
-type readBytesToSendT struct {
-	ws *websocket.Conn
-	f *os.File
-	lastHash [32]byte
-	appHash [32]byte
-	recipients [][32]byte
-}
-
-const blobLen = 16000 - 32 - box.Overhead
 
 type logSendErrT struct {
 	posixTime int64
-	appHash [32]byte
+	appHash   [32]byte
 	recipient [32]byte
-	err error
+	err       error
 }
 
-const sendLogPath = "clientData/sendErrors.txt"
-
-const appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
-
 func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
-	msg := logSendErrT {
+	msg := logSendErrT{
 		posixTime: time.Now().Unix(),
-		appHash: appHash,
+		appHash:   appHash,
 		recipient: recipient,
-		err: err,
+		err:       err,
 	}
 	encoded, jsonErr := json.Marshal(msg)
 	if jsonErr != nil {
@@ -393,15 +332,13 @@ func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 }
 
 type logSentSuccessT struct {
-	appHash [32]byte
+	appHash   [32]byte
 	recipient [32]byte
 }
 
-const sentMsgPath = "clientData/sentMsgs.txt"
-
 func logSentSuccess(appHash [32]byte, recipient [32]byte) {
 	msg := logSentSuccessT{
-		appHash: appHash,
+		appHash:   appHash,
 		recipient: recipient,
 	}
 	encoded, jsonErr := json.Marshal(msg)
@@ -421,279 +358,139 @@ func logSentSuccess(appHash [32]byte, recipient [32]byte) {
 	}
 }
 
-type readBytesErrT struct {
-	err error
-}
-
-type blobReadyToGoT struct {
-	blob []byte
-	metadata []byte
-	ws *websocket.Conn
-	f *os.File
-}
-
-type headerMsgT struct {
-	msgHash [32]byte
-	signature [common.SigSize]byte
-}
-
-func signMsg(msg []byte, sKey *[64]byte) [common.SigSize]byte {
-	hash := common.HashToSlice(blake2b.Sum256(msg))
-	sig := sign.Sign(make([]byte, 0), hash, sKey)
-	var sigSized [common.SigSize]byte
-	for i, el := range sig {
-		sigSized[i] = el
-	}
-	return sigSized
-}
-
-type writeSendErrT struct {
-	appHash [32]byte
-	err error
-	recipient [32]byte
-}
-
-func (w writeSendErrT) send(inputCh chan inputT) {
-	logSendErr(w.err, w.appHash, w.recipient)
-}
-
-var appSigCode = [16]byte{0xb3, 0x7b, 0x8d, 0x83, 0x9d, 0x6c, 0xd8, 0x6e, 0x52, 0x76, 0xb8, 0xf2, 0x2b, 0x0b, 0x9b, 0xc5}
-
-func (n newSendHandles) update(s *stateT) (stateT, outputT) {
-	sigSlice := sign.Sign(
-		make([]byte, 0),
-		common.MakeDigest(n.appHash, appSigCode),
-		s.secretSign)
-	var sigArr [common.SigSize]byte
-	for i, sb := range sigSlice {
-		sigArr[i] = sb
-	}
-	beforeEncoding := headerMsgT{
-		msgHash: n.appHash,
-		signature: sigArr,
-	}
-	plainMsg, err := json.Marshal(beforeEncoding)
-	if err != nil {
-		return *s, writeSendErrT{appHash: n.appHash, err: err}
-	}
-	encryptedMsg := box.Seal(
-		make([]byte, 0),
-		plainMsg,
-		&n.newNonce,
-		&n.recipients[0],
-		s.secretEncrypt)
-	blobHash := blake2b.Sum256(encryptedMsg)
-	blobSigSlice := sign.Sign(
-		make([]byte, 0),
-		common.HashToSlice(blobHash),
-		s.secretSign)
-	var blobSigArr [common.SigSize]byte
-	for i, sb := range blobSigSlice {
-		blobSigArr[i] = sb
-	}
-	headerPreEnc := common.MetadataT{
-		Blobhash: blake2b.Sum256(encryptedMsg),
-		Author: s.publicSign,
-		Recipient: n.recipients[0],
-		Nonce: n.newNonce,
-		Signature: blobSigArr,
-	}
-	headerEnc, err := json.Marshal(headerPreEnc)
-	if err != nil {
-		return *s, writeSendErrT{appHash: n.appHash, err:err}
-	}
-	return *s, sendMsgT{
-		msg: append(common.EmptyHash, encryptedMsg...),
-		header: headerEnc,
-		appHash: n.appHash,
-		conn: n.conn,
-		f: n.f,
-		recipients: n.recipients,
-	}
-}
-
-// readBytesToSendT{
-// 	ws: n.ws,
-// 	f: n.f,
-// 	lastHash: blake2b.Sum256([]byte{}),
-// }
-
-
-func checkReceipt(
-	raw []byte,
-	expectedHash [32]byte,
-	sender *[32]byte) error {
-
-	signed, validSig := sign.Open(make([]byte, 0), raw, sender)
-	if !validSig {
-		return errors.New("Bad signature.")
-	}
-	if !bytes.Equal(signed, common.MakeDigest(expectedHash, common.ReceiptCode)) {
-		return errors.New("Bad receipt.")
-	}
-	return nil
-}
-
 var receiptMeaning = []byte{0x3f, 0x0e, 0x0e, 0x46, 0xf8, 0xaa, 0xac, 0xa6, 0xf2, 0x59, 0xd8, 0x2d, 0xa7, 0x6f, 0x23, 0xd8}
 
-func receiptHash(r receiptMsg) []byte {
-	concat := make([]byte, 56)
-	timeBytes := common.int64ToBytes(r.posixTime)
+func receiptHash(msgHash [32]byte) [32]byte {
+	concat := make([]byte, 48)
 	i := 0
 	for i < 32 {
 		concat[i] = msgHash[i]
 		i++
 	}
-	for i < 40 {
-		result[i] = timeBytes[i-32]
+	for i < 48 {
+		concat[i] = receiptMeaning[i-32]
 		i++
 	}
-	for i < 56 {
-		result[i] = receiptMeaning[i-40]
-	}
-	return common.HashToSlice(blake2b.Sum256(result))
-}
-
-type receiptMsg struct {
-	msgHash [32]byte
-	posixTime int64
-	signature [common.SigSize]byte
-	author [32]byte
-}
-
-func receiptOk(
-	r receiptMsg,
-	recipient [32]byte,
-	msgHash [32]byte,
-	timeNow int64) bool {
-
-	msgHashOk := bytes.Equal(
-		common.HashToSlice(r.msgHash),
-		common.HashToSlice(msgHash))
-	recipientOk := bytes.Equal(
-		common.HashToSlice(r.author),
-		common.HashToSlice(recipient))
-	timeDiff := timeNow - r.posixTime
-	timeOk := timeDiff > 0 && timeDiff < 60
-
-	givenHash, sigOk := sign.Open(
-		make([]byte, 0),
-		r.signature,
-		r.author)
-	signedOk := bytes.Equal(givenHash, receiptHash(r))
-	return msgHashOk && recipientOk && timeOk && signedOk
+	return blake2b.Sum256(concat)
 }
 
 func sendMsg(
-	msg []byte,
+	msg interface{},
 	conn net.Conn,
-	recipient *[32]byte) error {
+	secretEncrypt [32]byte,
+	recipient [32]byte) error {
 
-	err := conn.Write(msg)
+	encoded, err := encodeData(msg)
 	if err != nil {
 		return err
 	}
-	msgType, response, err := ws.ReadMessage()
+
+	nonce, err := makeNonce()
 	if err != nil {
 		return err
 	}
-	if msgType != websocket.BinaryMessage {
-		return errors.New("Bad message type.")
+
+	encrypted := box.Seal(
+		make([]byte, 0),
+		encoded,
+		&nonce,
+		&recipient,
+		&secretEncrypt)
+
+	finalEncoded, err := encodeData(common.ClientToClient{
+		encrypted,
+		recipient,
+		nil,
+		nonce})
+	if err != nil {
+		return err
 	}
-	return checkReceipt(response, blake2b.Sum256(msg), recipient)
+
+	conn.Write(finalEncoded)
+
+	dec := gob.NewDecoder(conn)
+	var response common.ClientToClient
+	err = dec.Decode(&response)
+	if err != nil {
+		return err
+	}
+	if response.Err != nil {
+		return err
+	}
+
+	decryptedReceipt, ok := box.Open(
+		make([]byte, 0),
+		response.Msg,
+		&response.Nonce,
+		&recipient,
+		&secretEncrypt)
+	if !ok {
+		return errors.New("Could not decrypt receipt.")
+	}
+
+	receipt, err := decodeReceipt(decryptedReceipt)
+	if err != nil {
+		return err
+	}
+
+	expectedReceipt := receiptHash(blake2b.Sum256(finalEncoded))
+	if !equalHashes(receipt, expectedReceipt) {
+		return errors.New("Bad receipt.")
+	}
+
+	return nil
 }
 
-type sendMsgT struct {
-	msg []byte
-	header []byte
+func equalHashes(as [32]byte, bs [32]byte) bool {
+	for i, a := range as {
+		if a != bs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+var appSigMeaning = []byte{0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6, 0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
+
+type appSigMsgT struct {
 	appHash [32]byte
-	conn net.Conn
-	f *os.File
-	recipients [][32]byte
-	secretEncrypt *[32]byte
-	secretSign *[64]byte
-	publicSign [32]byte
+	sig     [common.SigSize]byte
 }
 
-func (s sendMsgT) send(inputCh chan inputT) {
-	recipient := s.recipients[0]
-	err := sendMsg(s.header, s.ws, &recipient)
-	if err != nil {
-		logSendErr(err, s.appHash, recipient)
-		return
-	}
-	err = sendMsg(s.msg, s.ws, &recipient)
-	if err != nil {
-		logSendErr(err, s.appHash, recipient)
-		return
-	}
-	lastChunkHash := common.HashToSlice(blake2b.Sum256(s.msg))
+func appSigHash(appHash [32]byte) []byte {
+	return common.HashToSlice(blake2b.Sum256(append(
+		common.HashToSlice(appHash),
+		appSigMeaning...)))
+}
 
-	for {
-		fileHandle := s.f
-		plainBlob := make([]byte, blobLen)
-		n, err := fileHandle.Read(plainBlob)
-		if err != nil {
-			logSendErr(err, s.appHash, recipient)
-			return
-		}
-		if n == 0 {
-			logSentSuccess(s.appHash, recipient)
-			return
-		}
-		nonce, err := makeNonce()
-		if err != nil {
-			logSendErr(err, s.appHash, recipient)
-			return
-		}
-		encrBlob := box.Seal(
-			make([]byte, 0),
-			plainBlob,
-			&nonce,
-			&recipient,
-			s.secretEncrypt)
-		chunk := append(lastChunkHash, encrBlob...)
-		chunkHash := blake2b.Sum256(chunk)
-		lastChunkHash = common.HashToSlice(chunkHash)
-		blobSigSlice := sign.Sign(
-			make([]byte, 0),
-			common.HashToSlice(chunkHash),
-			s.secretSign)
-		var blobSigArr [common.SigSize]byte
-		for i, sb := range blobSigSlice {
-			blobSigArr[i] = sb
-		}
-		header := common.MetadataT {
-			Blobhash: chunkHash,
-			Author: s.publicSign,
-			Recipient: recipient,
-			Nonce: nonce,
-			Signature: blobSigArr,
-		}
-		headerEnc, err := json.Marshal(header)
-		if err != nil {
-			logSendErr(err, s.appHash, recipient)
-			return
-		}
-		err = sendMsg(headerEnc, s.ws, &recipient)
-		if err != nil {
-			logSendErr(err, s.appHash, recipient)
-			return
-		}
-		err = sendMsg(chunk, s.ws, &recipient)
-		if err != nil {
-			logSendErr(err, s.appHash, recipient)
-			return
-		}
+func encodeData(a interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(a)
+	if err != nil {
+		return make([]byte, 0), err
 	}
+	return buf.Bytes(), nil
+}
+
+func decodeReceipt(bs []byte) ([32]byte, error) {
+	var buf bytes.Buffer
+	buf.Write(bs)
+	dec := gob.NewDecoder(&buf)
+	var receipt [32]byte
+	err := dec.Decode(&receipt)
+	if err != nil {
+		return receipt, err
+	}
+	return receipt, nil
 }
 
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	if !strEq(n.securityCode, s.homeCode) {
-		return *s, sendHttpErrorT {
-			w: n.w,
-			msg: "Bad security code.",
-			code: 400,
+		return *s, sendHttpErrorT{
+			w:      n.w,
+			msg:    "Bad security code.",
+			code:   400,
 			doneCh: n.doneCh,
 		}
 	}
@@ -701,28 +498,111 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	err := json.Unmarshal(n.body, &sendAppJson)
 	if err != nil {
 		return *s, sendHttpErrorT{
-			w: n.w,
-			msg: "Could not decode Json.",
-			code: 400,
+			w:      n.w,
+			msg:    "Could not decode Json.",
+			code:   400,
 			doneCh: n.doneCh,
 		}
 	}
 	if len(sendAppJson.recipients) == 0 {
 		return *s, sendHttpErrorT{
-			w: n.w,
-			msg: "No recipients.",
-			code: 400,
+			w:      n.w,
+			msg:    "No recipients.",
+			code:   400,
 			doneCh: n.doneCh,
 		}
 	}
 	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
-	return *s, makeSendHandles {
-		appHash: sendAppJson.appHash,
-		filepath: filepath,
-		w: n.w,
-		doneCh: n.doneCh,
+	return *s, sendFileT{
+		appHash:    sendAppJson.appHash,
+		conn:       s.conn,
+		filepath:   filepath,
+		w:          n.w,
+		doneCh:     n.doneCh,
 		recipients: sendAppJson.recipients,
 	}
+}
+
+func sliceToSig(bs []byte) [common.SigSize]byte {
+	var result [common.SigSize]byte
+	for i, b := range bs {
+		result[i] = b
+	}
+	return result
+}
+
+type fileChunk struct {
+	appHash   [32]byte
+	chunk     []byte
+	counter   int
+	lastChunk bool
+}
+
+func sendFileToOne(
+	s sendFileT,
+	recipient [32]byte,
+	fileHandle *os.File) error {
+
+	sender := func(msg interface{}) error {
+		return sendMsg(
+			msg,
+			s.conn,
+			s.secretEncrypt,
+			recipient)
+	}
+
+	err := sender(appSigMsgT{
+		s.appHash,
+		sliceToSig(sign.Sign(
+			make([]byte, 0),
+			appSigHash(s.appHash),
+			&s.secretSign))})
+	if err != nil {
+		return err
+	}
+
+	counter := 0
+	for {
+		chunk := make([]byte, common.ChunkSize)
+		n, err := fileHandle.Read(chunk)
+		if err != nil {
+			return err
+		}
+		lastChunk := n < common.ChunkSize
+		err = sender(fileChunk{
+			appHash:   s.appHash,
+			chunk:     chunk,
+			counter:   counter,
+			lastChunk: lastChunk,
+		})
+		if err != nil {
+			return err
+		}
+		if lastChunk {
+			return nil
+		}
+		counter++
+	}
+}
+
+func (s sendFileT) send(inputCh chan inputT) {
+	fileHandle, err := os.Open(s.filepath)
+	errOut := func(err error) {
+		logSendErr(err, s.appHash, s.recipients[0])
+		http.Error(s.w, err.Error(), 500)
+		s.doneCh <- endRequest{}
+	}
+	if err != nil {
+		errOut(err)
+		return
+	}
+	for _, recipient := range s.recipients {
+		err := sendFileToOne(s, recipient, fileHandle)
+		if err != nil {
+			errOut(err)
+		}
+	}
+	s.doneCh <- endRequest{}
 }
 
 func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -764,7 +644,10 @@ func (s serveDocT) send(inputCh chan inputT) {
 	s.doneCh <- endRequest{}
 }
 
-func processMakeAppRoute(n normalApiInputT, s *stateT) (stateT, outputT) {
+func processMakeAppRoute(
+	n normalApiInputT,
+	s *stateT) (stateT, outputT) {
+
 	var makeAppRoute makeAppRouteT
 	err := json.Unmarshal(n.body, &makeAppRoute)
 	if err != nil {
@@ -840,23 +723,107 @@ func genCode() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(authSlice), nil
 }
 
-func initState() (stateT, error) {
-	homeCode, err := genCode()
+type setupTcpConn struct {
+	secretSign [64]byte
+	publicSign [32]byte
+	invites    []common.InviteT
+}
+
+type newTcpConn struct {
+	conn net.Conn
+}
+
+type failedToGoOnline struct {
+	err  error
+	tNow int64
+}
+
+type sendFileT struct {
+	filepath      string
+	conn          net.Conn
+	w             http.ResponseWriter
+	doneCh        chan endRequest
+	recipients    [][32]byte
+	appHash       [32]byte
+	secretSign    [64]byte
+	secretEncrypt [32]byte
+}
+
+func (s setupTcpConn) send(inputCh chan inputT) {
+	conn, err := net.Dial("tcp", "localhost:4000")
 	if err != nil {
-		return stateT{}, err
+		inputCh <- failedToGoOnline{err, time.Now().Unix()}
+		return
 	}
-	return stateT{
-		httpChan: make(chan httpInputT),
-		homeCode: homeCode,
-	}, nil
+	enc := gob.NewEncoder(conn)
+	dec := gob.NewDecoder(conn)
+	var authCode [common.AuthCodeLength]byte
+	err = dec.Decode(&authCode)
+	if err != nil {
+		inputCh <- failedToGoOnline{err, time.Now().Unix()}
+		return
+	}
+	authSig := common.AuthSigT{
+		Author:  s.publicSign,
+		Invites: s.invites,
+		Sig: signedAuthToSlice(sign.Sign(
+			make([]byte, 0),
+			common.AuthCodeToSlice(authCode),
+			&s.secretSign)),
+	}
+	err = enc.Encode(authSig)
+	if err != nil {
+		inputCh <- failedToGoOnline{err, time.Now().Unix()}
+		return
+	}
+	inputCh <- newTcpConn{conn}
+}
+
+func (n newTcpConn) update(s *stateT) (stateT, outputT) {
+	newS := *s
+	newS.conn = n.conn
+	return newS, readHttpInputT{s.httpChan}
+}
+
+func pruneInvites(
+	invites [][]common.InviteT,
+	myId [32]byte,
+	tNow int64) [][]common.InviteT {
+
+	var result [][]common.InviteT
+	for _, invite := range invites {
+		if !common.IsMember(myId, invite, tNow) {
+			continue
+		}
+		result = append(result, invite)
+	}
+	return result
+}
+
+func (f failedToGoOnline) update(s *stateT) (stateT, outputT) {
+	newS := *s
+	newS.cantGetOnline = f.err
+	newS.invites = pruneInvites(s.invites, s.publicSign, f.tNow)
+	if len(newS.invites) == 0 {
+		newS.isMember = false
+		return newS, readHttpInputT{s.httpChan}
+	}
+	return newS, setupTcpConn{
+		s.secretSign,
+		s.publicSign,
+		newS.invites[0]}
+}
+
+func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
+	var result [common.AuthSigSize]byte
+	for i, b := range bs {
+		result[i] = b
+	}
+	return result
 }
 
 func main() {
 	var state stateT
-	// err := readFileData(&state)
-	// if err != nil {
-	// 	return
-	// }
 	go httpServer(state.httpChan)
 	var input inputT = noInputT{}
 	var output outputT = readHttpInputT{ch: state.httpChan}
@@ -869,13 +836,6 @@ func main() {
 			input = noInputT{}
 		}
 		state, output = input.update(&state)
-	}
-}
-
-func staticFileHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		f := http.FileServer(http.Dir("/home/t/bigwebthing"))
-		f.ServeHTTP(w, r)
 	}
 }
 
