@@ -81,6 +81,14 @@ func HashToSlice(hash [32]byte) []byte {
 	return newHash
 }
 
+func SliceToHash(sl []byte) [32]byte {
+	var newHash [32]byte
+	for i, el := range sl {
+		newHash[i] = el
+	}
+	return newHash
+}
+
 type Msg interface {
 	Encode() ([]byte, error)
 	Decode() (Msg, error)

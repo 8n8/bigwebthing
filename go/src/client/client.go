@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"goji.io"
@@ -15,6 +16,10 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/sign"
+	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/crypto/argon2"
+	"syscall"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -141,6 +146,8 @@ func (r readHttpInputT) send(inputCh chan inputT) {
 }
 
 const (
+	invitesFile = "clientData/invitations.txt"
+	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	docsDir     = "clientData/docs"
 	wsUrl       = "ws://localhost:4000"
 	blobLen     = 16000 - 32 - box.Overhead
@@ -663,6 +670,33 @@ func (n noInputT) update(s *stateT) (stateT, outputT) {
 	return *s, readHttpInputT{s.httpChan, s.homeCode}
 }
 
+const pwlen = 5
+
+func makePassword() ([]byte, error) {
+	pw := make([]byte, pwlen)
+	n, err := rand.Read(pw)
+	if n != pwlen {
+		return pw, errors.New("Wrong number of bytes.")
+	}
+	return pw, err
+}
+
+func makeSalt() ([32]byte, error) {
+	nonceSlice := make([]byte, 32)
+	var nonce [32]byte
+	n, err := rand.Read(nonceSlice)
+	if err != nil {
+		return nonce, err
+	}
+	if n != 32 {
+		return nonce, errors.New("Faulty random bytes reader.")
+	}
+	for i, b := range nonceSlice {
+		nonce[i] = b
+	}
+	return nonce, nil
+}
+
 func makeNonce() ([24]byte, error) {
 	nonceSlice := make([]byte, 24)
 	var nonce [24]byte
@@ -787,12 +821,193 @@ func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
 	return result
 }
 
+type secretsFileT struct {
+	Publicsign [32]byte
+	Publicencrypt [32]byte
+	Nonce [24]byte
+	Salt [32]byte
+	Secretkeys []byte
+}
+
+type secretKeysT struct {
+	Secretsign [64]byte
+	Secretencrypt [32]byte
+}
+
+type keysT struct {
+	publicsign [32]byte
+	publicencrypt [32]byte
+	secretsign [64]byte
+	secretencrypt [32]byte
+}
+
+func slowHash(pw []byte, salt [32]byte) [32]byte {
+	return common.SliceToHash(argon2.IDKey(
+		pw,
+		common.HashToSlice(salt),
+		300,
+		64*1024,
+		4,
+		32))
+}
+
+func extractKeys(password []byte, secretsFile []byte) (keysT, error) {
+	var decoded secretsFileT
+	err := json.Unmarshal(secretsFile, &decoded)
+	var keys keysT
+	if err != nil {
+		return keys, err
+	}
+	symmetricKey := slowHash(password, decoded.Salt)
+	decryptedKeys, ok := secretbox.Open(
+		make([]byte, 0),
+		decoded.Secretkeys,
+		&decoded.Nonce,
+		&symmetricKey)
+	if !ok {
+		return keys, errors.New("Could not decrypt keys.")
+	}
+	var decodedKeys secretKeysT
+	err = json.Unmarshal(decryptedKeys, &decodedKeys)
+	if err != nil {
+		return keys, err
+	}
+	return keysT{
+		decoded.Publicsign,
+		decoded.Publicencrypt,
+		decodedKeys.Secretsign,
+		decodedKeys.Secretencrypt}, nil
+}
+
+func createKeys() error {
+	pubEnc, secretEnc, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	pubSign, secretSign, err := sign.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	nonce, err := makeNonce()
+	if err != nil {
+		return err
+	}
+	salt, err := makeSalt()
+	if err != nil {
+		return err
+	}
+	secretKeys := secretKeysT{*secretSign, *secretEnc}
+	encodedSecrets, err := json.Marshal(secretKeys)
+	if err != nil {
+		return err
+	}
+	password, err := makePassword()
+	if err != nil {
+		return err
+	}
+	fmt.Println(hex.EncodeToString(password))
+	fmt.Println("c")
+	secretKey := slowHash(password, salt)
+	encryptedSecrets := secretbox.Seal(
+		make([]byte, 0),
+		encodedSecrets,
+		&nonce,
+		&secretKey)
+	secretsFile := secretsFileT{
+		Publicsign: *pubSign,
+		Publicencrypt: *pubEnc,
+		Nonce: nonce,
+		Salt: salt,
+		Secretkeys: encryptedSecrets,
+	}
+	encodedFile, err := json.Marshal(secretsFile)
+	if err != nil {
+		fmt.Println("Could not encode.")
+		return err
+	}
+	err = ioutil.WriteFile(keysFile, encodedFile, 0600)
+	return err
+}
+
+func initState() (stateT, error) {
+	homeCode, err := genCode()
+	var s stateT
+	if err != nil {
+		return s, err
+	}
+	rawSecrets, err := ioutil.ReadFile(keysFile)
+	if err != nil {
+		err := createKeys()
+		if err != nil {
+			return s, err
+		}
+		rawSecrets, err = ioutil.ReadFile(keysFile)
+		if err != nil {
+			return s, err
+		}
+	}
+	fmt.Println("Please enter your password:")
+	passwordtxt, err := terminal.ReadPassword(int(syscall.Stdin))
+	password := make([]byte, hex.DecodedLen(len(passwordtxt)))
+	_, err = hex.Decode(password, passwordtxt)
+	if err != nil {
+		return s, err
+	}
+	keys, err := extractKeys(password, rawSecrets)
+	if err != nil {
+		return s, err
+	}
+	var invites [][]common.InviteT
+	rawInvites, err := ioutil.ReadFile(invitesFile)
+	if err == nil {
+		err = json.Unmarshal(rawInvites, &invites)
+		if err != nil {
+			return s, err
+		}
+		invites := pruneInvites(
+			invites,
+			keys.publicsign,
+			time.Now().Unix())
+		encodedInvites, err := json.Marshal(invites)
+		if err != nil {
+			return s, err
+		}
+		err = ioutil.WriteFile(
+			invitesFile,
+			encodedInvites,
+			0600)
+		if err != nil {
+			return s, err
+		}
+	}
+	var conn net.Conn
+	return stateT{
+		httpChan: make(chan httpInputT),
+		homeCode: homeCode,
+		appCodes: make(map[string][32]byte),
+		publicSign: keys.publicsign,
+		secretSign: keys.secretsign,
+		secretEncrypt: keys.secretencrypt,
+		publicEncrypt: keys.publicencrypt,
+		conn: conn,
+		online: false,
+		cantGetOnline: nil,
+		invites: invites,
+		isMember: len(invites) == 0,
+	}, nil
+}
+
 func main() {
-	var state stateT
+	state, err := initState()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	go httpServer(state.httpChan)
 	var input inputT = noInputT{}
 	var output outputT = readHttpInputT{ch: state.httpChan}
 	var inputCh chan inputT
+	return
 	for {
 		go output.send(inputCh)
 		select {
