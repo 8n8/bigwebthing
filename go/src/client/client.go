@@ -7,25 +7,25 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/gob"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"goji.io"
 	"goji.io/pat"
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/crypto/nacl/sign"
 	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/nacl/sign"
 	"golang.org/x/crypto/ssh/terminal"
-	"golang.org/x/crypto/argon2"
-	"syscall"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
+	"syscall"
 	"time"
 )
 
@@ -34,7 +34,7 @@ type inputT interface {
 }
 
 type outputT interface {
-	send(chan inputT)
+	send() inputT
 }
 
 type stateT struct {
@@ -106,7 +106,7 @@ func writeAppToFile(r *http.Request) (string, error) {
 	return hash, nil
 }
 
-func (r readHttpInputT) send(inputCh chan inputT) {
+func (r readHttpInputT) send() inputT {
 	select {
 	case h := <-r.ch:
 		req := h.r
@@ -116,11 +116,11 @@ func (r readHttpInputT) send(inputCh chan inputT) {
 			if err != nil {
 				http.Error(h.w, err.Error(), 500)
 				h.doneCh <- endRequest{}
-				return
+				return noInputT{}
 			}
 			h.w.Write([]byte(hash))
 			h.doneCh <- endRequest{}
-			return
+			return noInputT{}
 		}
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
@@ -129,20 +129,18 @@ func (r readHttpInputT) send(inputCh chan inputT) {
 				err.Error(),
 				http.StatusInternalServerError)
 			h.doneCh <- endRequest{}
-			inputCh <- noInputT{}
-			return
+			return noInputT{}
 		}
-		inputCh <- normalApiInputT{
+		return normalApiInputT{
 			h.w,
 			securityCode,
 			body,
 			h.route,
 			h.doneCh,
 		}
-		return
 	default:
 	}
-	inputCh <- noInputT{}
+	return noInputT{}
 }
 
 const (
@@ -187,11 +185,10 @@ type sendHttpErrorT struct {
 	doneCh chan endRequest
 }
 
-func (s sendHttpErrorT) send(inputCh chan inputT) {
+func (s sendHttpErrorT) send() inputT {
 	http.Error(s.w, s.msg, s.code)
 	s.doneCh <- endRequest{}
-	inputCh <- noInputT{}
-	return
+	return noInputT{}
 }
 
 func strEq(s1, s2 string) bool {
@@ -205,21 +202,19 @@ type genCodeForAppT struct {
 	doneCh  chan endRequest
 }
 
-func (g genCodeForAppT) send(inputCh chan inputT) {
+func (g genCodeForAppT) send() inputT {
 	newCode, err := genCode()
 	if err != nil {
 		http.Error(g.w, err.Error(), 500)
 		g.doneCh <- endRequest{}
-		inputCh <- noInputT{}
-		return
+		return noInputT{}
 	}
-	inputCh <- newAppCodeT{
+	return newAppCodeT{
 		g.w,
 		g.appHash,
 		g.doneCh,
 		newCode,
 	}
-	return
 }
 
 type newAppCodeT struct {
@@ -557,7 +552,7 @@ func sendFileToOne(
 	return nil
 }
 
-func (s sendFileT) send(inputCh chan inputT) {
+func (s sendFileT) send() inputT {
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
 		logSendErr(err, s.appHash, s.recipients[0])
@@ -566,15 +561,17 @@ func (s sendFileT) send(inputCh chan inputT) {
 	}
 	if err != nil {
 		errOut(err)
-		return
+		return noInputT{}
 	}
 	for _, recipient := range s.recipients {
 		err := sendFileToOne(s, recipient, fileHandle)
 		if err != nil {
 			errOut(err)
+			return noInputT{}
 		}
 	}
 	s.doneCh <- endRequest{}
+	return noInputT{}
 }
 
 func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -600,20 +597,21 @@ type serveDocT struct {
 	filePath string
 }
 
-func (s serveDocT) send(inputCh chan inputT) {
+func (s serveDocT) send() inputT {
 	fileHandle, err := os.Open(s.filePath)
 	if err != nil {
 		http.Error(s.w, err.Error(), 500)
 		s.doneCh <- endRequest{}
-		return
+		return noInputT{}
 	}
 	_, err = io.Copy(s.w, fileHandle)
 	if err != nil {
 		http.Error(s.w, err.Error(), 500)
 		s.doneCh <- endRequest{}
-		return
+		return noInputT{}
 	}
 	s.doneCh <- endRequest{}
+	return noInputT{}
 }
 
 func processMakeAppRoute(
@@ -651,10 +649,11 @@ type htmlOkResponseT struct {
 	doneCh chan endRequest
 }
 
-func (h htmlOkResponseT) send(inputCh chan inputT) {
+func (h htmlOkResponseT) send() inputT {
 	writer := h.w
 	writer.Write(h.msg)
 	h.doneCh <- endRequest{}
+	return noInputT{}
 }
 
 type httpInputT struct {
@@ -748,19 +747,17 @@ type sendFileT struct {
 	secretEncrypt [32]byte
 }
 
-func (s setupTcpConn) send(inputCh chan inputT) {
+func (s setupTcpConn) send() inputT {
 	conn, err := net.Dial("tcp", "localhost:4000")
 	if err != nil {
-		inputCh <- failedToGoOnline{err, time.Now().Unix()}
-		return
+		return failedToGoOnline{err, time.Now().Unix()}
 	}
 	enc := gob.NewEncoder(conn)
 	dec := gob.NewDecoder(conn)
 	var authCode [common.AuthCodeLength]byte
 	err = dec.Decode(&authCode)
 	if err != nil {
-		inputCh <- failedToGoOnline{err, time.Now().Unix()}
-		return
+		return failedToGoOnline{err, time.Now().Unix()}
 	}
 	authSig := common.AuthSigT{
 		s.publicSign,
@@ -772,10 +769,9 @@ func (s setupTcpConn) send(inputCh chan inputT) {
 	}
 	err = enc.Encode(authSig)
 	if err != nil {
-		inputCh <- failedToGoOnline{err, time.Now().Unix()}
-		return
+		return failedToGoOnline{err, time.Now().Unix()}
 	}
-	inputCh <- newTcpConn{conn}
+	return newTcpConn{conn}
 }
 
 func (n newTcpConn) update(s *stateT) (stateT, outputT) {
@@ -822,22 +818,22 @@ func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
 }
 
 type secretsFileT struct {
-	Publicsign [32]byte
+	Publicsign    [32]byte
 	Publicencrypt [32]byte
-	Nonce [24]byte
-	Salt [32]byte
-	Secretkeys []byte
+	Nonce         [24]byte
+	Salt          [32]byte
+	Secretkeys    []byte
 }
 
 type secretKeysT struct {
-	Secretsign [64]byte
+	Secretsign    [64]byte
 	Secretencrypt [32]byte
 }
 
 type keysT struct {
-	publicsign [32]byte
+	publicsign    [32]byte
 	publicencrypt [32]byte
-	secretsign [64]byte
+	secretsign    [64]byte
 	secretencrypt [32]byte
 }
 
@@ -914,11 +910,11 @@ func createKeys() error {
 		&nonce,
 		&secretKey)
 	secretsFile := secretsFileT{
-		Publicsign: *pubSign,
+		Publicsign:    *pubSign,
 		Publicencrypt: *pubEnc,
-		Nonce: nonce,
-		Salt: salt,
-		Secretkeys: encryptedSecrets,
+		Nonce:         nonce,
+		Salt:          salt,
+		Secretkeys:    encryptedSecrets,
 	}
 	encodedFile, err := json.Marshal(secretsFile)
 	if err != nil {
@@ -982,18 +978,18 @@ func initState() (stateT, error) {
 	}
 	var conn net.Conn
 	return stateT{
-		httpChan: make(chan httpInputT),
-		homeCode: homeCode,
-		appCodes: make(map[string][32]byte),
-		publicSign: keys.publicsign,
-		secretSign: keys.secretsign,
+		httpChan:      make(chan httpInputT),
+		homeCode:      homeCode,
+		appCodes:      make(map[string][32]byte),
+		publicSign:    keys.publicsign,
+		secretSign:    keys.secretsign,
 		secretEncrypt: keys.secretencrypt,
 		publicEncrypt: keys.publicencrypt,
-		conn: conn,
-		online: false,
+		conn:          conn,
+		online:        false,
 		cantGetOnline: nil,
-		invites: invites,
-		isMember: len(invites) == 0,
+		invites:       invites,
+		isMember:      len(invites) == 0,
 	}, nil
 }
 
@@ -1004,17 +1000,9 @@ func main() {
 		return
 	}
 	go httpServer(state.httpChan)
-	var input inputT = noInputT{}
 	var output outputT = readHttpInputT{ch: state.httpChan}
-	var inputCh chan inputT
-	return
 	for {
-		go output.send(inputCh)
-		select {
-		case input = <-inputCh:
-		default:
-			input = noInputT{}
-		}
+		input := output.send()
 		state, output = input.update(&state)
 	}
 }
