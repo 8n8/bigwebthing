@@ -722,7 +722,7 @@ func genCode() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(authSlice), nil
 }
 
-type setupTcpConn struct {
+type setupTcpConnT struct {
 	secretSign [64]byte
 	publicSign [32]byte
 	invites    []common.InviteT
@@ -748,7 +748,9 @@ type sendFileT struct {
 	secretEncrypt [32]byte
 }
 
-func (s setupTcpConn) send() inputT {
+func setupTcpConn(s setupTcpConnT) error {
+
+func (s setupTcpConnT) send() inputT {
 	conn, err := net.Dial("tcp", "localhost:4000")
 	if err != nil {
 		return failedToGoOnline{err, time.Now().Unix()}
@@ -804,7 +806,7 @@ func (f failedToGoOnline) update(s *stateT) (stateT, outputT) {
 		newS.isMember = false
 		return newS, readHttpInputT{s.httpChan, s.homeCode}
 	}
-	return newS, setupTcpConn{
+	return newS, setupTcpConnT{
 		s.secretSign,
 		s.publicSign,
 		newS.invites[0]}
