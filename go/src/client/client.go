@@ -39,7 +39,7 @@ type outputT interface {
 
 type stateT struct {
 	httpChan      chan httpInputT
-	tcpChan chan common.ClientToClient
+	tcpChans      tcpServerChansT
 	homeCode      string
 	appCodes      map[string][32]byte
 	publicSign    [32]byte
@@ -142,6 +142,79 @@ func (r readHttpInputT) send() inputT {
 	default:
 	}
 	return noInputT{}
+}
+
+type tcpServerChansT struct {
+	in  chan common.ClientToClient
+	out chan common.ClientToClient
+}
+
+type stopListenT struct{}
+
+func tcpServer(
+	ch tcpServerChansT,
+	secretSign [64]byte,
+	publicSign [32]byte) {
+
+	var conn net.Conn
+	connErr := errors.New("Not connected yet.")
+	var stopListenChan chan stopListenT
+	for {
+		if connErr != nil {
+			conn, connErr := net.Dial(
+				"tcp",
+				"localhost:4000")
+			if connErr != nil {
+				continue
+			}
+			enc := gob.NewEncoder(conn)
+			dec := gob.NewDecoder(conn)
+			var authCode [common.AuthCodeLength]byte
+			connErr = dec.Decode(&authCode)
+			if connErr != nil {
+				continue
+			}
+			authSig := common.AuthSigT{
+				publicSign,
+				signedAuthToSlice(sign.Sign(
+					make([]byte, 0),
+					common.AuthCodeToSlice(
+						authCode),
+					&secretSign)),
+			}
+			connErr = enc.Encode(authSig)
+			if connErr != nil {
+				continue
+			}
+			go func() {
+				dec := gob.NewDecoder(conn)
+				var msg common.ClientToClient
+				for {
+					decErr := dec.Decode(&msg)
+					if decErr != nil {
+						continue
+					}
+					ch.in <- msg
+					select {
+					case <-stopListenChan:
+						return
+					default:
+					}
+				}
+			}()
+		}
+
+		select {
+		case toSend := <-ch.out:
+			enc := gob.NewEncoder(conn)
+			err := enc.Encode(toSend)
+			if err != nil {
+				stopListenChan <- stopListenT{}
+				connErr = errors.New(
+					"Could not encode message.")
+			}
+		}
+	}
 }
 
 const (
@@ -748,40 +821,67 @@ type sendFileT struct {
 	secretEncrypt [32]byte
 }
 
-func setupTcpConn(s setupTcpConnT) error {
+// func setupTcpConn(
+// 	secretSign [64]byte,
+// 	publicSign [32]byte) (net.Conn, error) {
+//
+// 	conn, err := net.Dial("tcp", "localhost:4000")
+// 	if err != nil {
+// 		return conn, err
+// 	}
+// 	enc := gob.NewEncoder(conn)
+// 	dec := gob.NewDecoder(conn)
+// 	var authCode [common.AuthCodeLength]byte
+// 	err = dec.Decode(&authCode)
+// 	if err != nil {
+// 		return conn, err
+// 	}
+// 	authSig := common.AuthSigT{
+// 		s.publicSign,
+// 		s.invites,
+// 		signedAuthToSlice(sign.Sign(
+// 			make([]byte, 0),
+// 			common.AuthCodeToSlice(authCode),
+// 			&s.secretSign)),
+// 	}
+// 	err = enc.Encode(authSig)
+// 	if err != nil {
+// 		return conn, err
+// 	}
+// 	return conn, nil
 
-func (s setupTcpConnT) send() inputT {
-	conn, err := net.Dial("tcp", "localhost:4000")
-	if err != nil {
-		return failedToGoOnline{err, time.Now().Unix()}
-	}
-	enc := gob.NewEncoder(conn)
-	dec := gob.NewDecoder(conn)
-	var authCode [common.AuthCodeLength]byte
-	err = dec.Decode(&authCode)
-	if err != nil {
-		return failedToGoOnline{err, time.Now().Unix()}
-	}
-	authSig := common.AuthSigT{
-		s.publicSign,
-		s.invites,
-		signedAuthToSlice(sign.Sign(
-			make([]byte, 0),
-			common.AuthCodeToSlice(authCode),
-			&s.secretSign)),
-	}
-	err = enc.Encode(authSig)
-	if err != nil {
-		return failedToGoOnline{err, time.Now().Unix()}
-	}
-	return newTcpConn{conn}
-}
+// func (s setupTcpConnT) send() inputT {
+// 	conn, err := net.Dial("tcp", "localhost:4000")
+// 	if err != nil {
+// 		return failedToGoOnline{err, time.Now().Unix()}
+// 	}
+// 	enc := gob.NewEncoder(conn)
+// 	dec := gob.NewDecoder(conn)
+// 	var authCode [common.AuthCodeLength]byte
+// 	err = dec.Decode(&authCode)
+// 	if err != nil {
+// 		return failedToGoOnline{err, time.Now().Unix()}
+// 	}
+// 	authSig := common.AuthSigT{
+// 		s.publicSign,
+// 		s.invites,
+// 		signedAuthToSlice(sign.Sign(
+// 			make([]byte, 0),
+// 			common.AuthCodeToSlice(authCode),
+// 			&s.secretSign)),
+// 	}
+// 	err = enc.Encode(authSig)
+// 	if err != nil {
+// 		return failedToGoOnline{err, time.Now().Unix()}
+// 	}
+// 	return newTcpConn{conn}
+// }
 
-func (n newTcpConn) update(s *stateT) (stateT, outputT) {
-	newS := *s
-	newS.conn = n.conn
-	return newS, readHttpInputT{s.httpChan, s.homeCode}
-}
+// func (n newTcpConn) update(s *stateT) (stateT, outputT) {
+// 	newS := *s
+// 	newS.conn = n.conn
+// 	return newS, readHttpInputT{s.httpChan, s.homeCode}
+// }
 
 func pruneInvites(
 	invites [][]common.InviteT,
@@ -798,19 +898,19 @@ func pruneInvites(
 	return result
 }
 
-func (f failedToGoOnline) update(s *stateT) (stateT, outputT) {
-	newS := *s
-	newS.cantGetOnline = f.err
-	newS.invites = pruneInvites(s.invites, s.publicSign, f.tNow)
-	if len(newS.invites) == 0 {
-		newS.isMember = false
-		return newS, readHttpInputT{s.httpChan, s.homeCode}
-	}
-	return newS, setupTcpConnT{
-		s.secretSign,
-		s.publicSign,
-		newS.invites[0]}
-}
+// func (f failedToGoOnline) update(s *stateT) (stateT, outputT) {
+// 	newS := *s
+// 	newS.cantGetOnline = f.err
+// 	newS.invites = pruneInvites(s.invites, s.publicSign, f.tNow)
+// 	if len(newS.invites) == 0 {
+// 		newS.isMember = false
+// 		return newS, readHttpInputT{s.httpChan, s.homeCode}
+// 	}
+// 	return newS, setupTcpConnT{
+// 		s.secretSign,
+// 		s.publicSign,
+// 		newS.invites[0]}
+// }
 
 func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
 	var result [common.AuthSigSize]byte
@@ -979,17 +1079,16 @@ func initState() (stateT, error) {
 			return s, err
 		}
 	}
-	var conn net.Conn
 	return stateT{
 		httpChan:      make(chan httpInputT),
-		tcpChan: make(chan common.ClientToClient),
+		tcpChans:      *new(tcpServerChansT),
 		homeCode:      homeCode,
 		appCodes:      make(map[string][32]byte),
 		publicSign:    keys.publicsign,
 		secretSign:    keys.secretsign,
 		secretEncrypt: keys.secretencrypt,
 		publicEncrypt: keys.publicencrypt,
-		conn:          conn,
+		conn:          *new(net.Conn),
 		online:        false,
 		cantGetOnline: nil,
 		invites:       invites,
@@ -1003,6 +1102,10 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+	go tcpServer(
+		state.tcpChans,
+		state.secretSign,
+		state.publicSign)
 	go httpServer(state.httpChan)
 	var output outputT = readHttpInputT{ch: state.httpChan}
 	for {

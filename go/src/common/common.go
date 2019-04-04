@@ -153,7 +153,6 @@ type InviteT struct {
 
 type AuthSigT struct {
 	Author  [32]byte
-	Invites []InviteT
 	Sig     [AuthSigSize]byte
 }
 
