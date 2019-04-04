@@ -39,6 +39,7 @@ type outputT interface {
 
 type stateT struct {
 	httpChan      chan httpInputT
+	tcpChan chan common.ClientToClient
 	homeCode      string
 	appCodes      map[string][32]byte
 	publicSign    [32]byte
@@ -979,6 +980,7 @@ func initState() (stateT, error) {
 	var conn net.Conn
 	return stateT{
 		httpChan:      make(chan httpInputT),
+		tcpChan: make(chan common.ClientToClient),
 		homeCode:      homeCode,
 		appCodes:      make(map[string][32]byte),
 		publicSign:    keys.publicsign,
@@ -1004,6 +1006,22 @@ func main() {
 	for {
 		input := output.send()
 		state, output = input.update(&state)
+	}
+}
+
+func tcpListener(
+	conn net.Conn,
+	tcpInChan chan common.ClientToClient) {
+
+	dec := gob.NewDecoder(conn)
+	for {
+		var msg common.ClientToClient
+		err := dec.Decode(&msg)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		tcpInChan <- msg
 	}
 }
 
