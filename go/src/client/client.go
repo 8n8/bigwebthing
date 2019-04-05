@@ -55,6 +55,7 @@ type stateT struct {
 
 type readHttpInputT struct {
 	ch       chan httpInputT
+	tcpCh chan chan common.ClientToClient
 	homeCode string
 }
 
@@ -139,6 +140,8 @@ func (r readHttpInputT) send() inputT {
 			h.route,
 			h.doneCh,
 		}
+	case tcpIn := <-r.tcpCh:
+		return tcpIn
 	default:
 	}
 	return noInputT{}
@@ -204,15 +207,13 @@ func tcpServer(
 			}()
 		}
 
-		select {
-		case toSend := <-ch.out:
-			enc := gob.NewEncoder(conn)
-			err := enc.Encode(toSend)
-			if err != nil {
-				stopListenChan <- stopListenT{}
-				connErr = errors.New(
-					"Could not encode message.")
-			}
+		toSend := <-ch.out
+		enc := gob.NewEncoder(conn)
+		err := enc.Encode(toSend)
+		if err != nil {
+			stopListenChan <- stopListenT{}
+			connErr = errors.New(
+				"Could not encode message.")
 		}
 	}
 }
@@ -821,68 +822,6 @@ type sendFileT struct {
 	secretEncrypt [32]byte
 }
 
-// func setupTcpConn(
-// 	secretSign [64]byte,
-// 	publicSign [32]byte) (net.Conn, error) {
-//
-// 	conn, err := net.Dial("tcp", "localhost:4000")
-// 	if err != nil {
-// 		return conn, err
-// 	}
-// 	enc := gob.NewEncoder(conn)
-// 	dec := gob.NewDecoder(conn)
-// 	var authCode [common.AuthCodeLength]byte
-// 	err = dec.Decode(&authCode)
-// 	if err != nil {
-// 		return conn, err
-// 	}
-// 	authSig := common.AuthSigT{
-// 		s.publicSign,
-// 		s.invites,
-// 		signedAuthToSlice(sign.Sign(
-// 			make([]byte, 0),
-// 			common.AuthCodeToSlice(authCode),
-// 			&s.secretSign)),
-// 	}
-// 	err = enc.Encode(authSig)
-// 	if err != nil {
-// 		return conn, err
-// 	}
-// 	return conn, nil
-
-// func (s setupTcpConnT) send() inputT {
-// 	conn, err := net.Dial("tcp", "localhost:4000")
-// 	if err != nil {
-// 		return failedToGoOnline{err, time.Now().Unix()}
-// 	}
-// 	enc := gob.NewEncoder(conn)
-// 	dec := gob.NewDecoder(conn)
-// 	var authCode [common.AuthCodeLength]byte
-// 	err = dec.Decode(&authCode)
-// 	if err != nil {
-// 		return failedToGoOnline{err, time.Now().Unix()}
-// 	}
-// 	authSig := common.AuthSigT{
-// 		s.publicSign,
-// 		s.invites,
-// 		signedAuthToSlice(sign.Sign(
-// 			make([]byte, 0),
-// 			common.AuthCodeToSlice(authCode),
-// 			&s.secretSign)),
-// 	}
-// 	err = enc.Encode(authSig)
-// 	if err != nil {
-// 		return failedToGoOnline{err, time.Now().Unix()}
-// 	}
-// 	return newTcpConn{conn}
-// }
-
-// func (n newTcpConn) update(s *stateT) (stateT, outputT) {
-// 	newS := *s
-// 	newS.conn = n.conn
-// 	return newS, readHttpInputT{s.httpChan, s.homeCode}
-// }
-
 func pruneInvites(
 	invites [][]common.InviteT,
 	myId [32]byte,
@@ -897,20 +836,6 @@ func pruneInvites(
 	}
 	return result
 }
-
-// func (f failedToGoOnline) update(s *stateT) (stateT, outputT) {
-// 	newS := *s
-// 	newS.cantGetOnline = f.err
-// 	newS.invites = pruneInvites(s.invites, s.publicSign, f.tNow)
-// 	if len(newS.invites) == 0 {
-// 		newS.isMember = false
-// 		return newS, readHttpInputT{s.httpChan, s.homeCode}
-// 	}
-// 	return newS, setupTcpConnT{
-// 		s.secretSign,
-// 		s.publicSign,
-// 		newS.invites[0]}
-// }
 
 func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
 	var result [common.AuthSigSize]byte
