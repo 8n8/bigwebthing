@@ -39,6 +39,8 @@ type outputT interface {
 
 type stateT struct {
 	httpChan      chan httpInputT
+	tcpInChan     chan envelopeT
+	tcpOutChan    chan envelopeT
 	tcpChans      tcpServerChansT
 	homeCode      string
 	appCodes      map[string][32]byte
@@ -54,9 +56,9 @@ type stateT struct {
 }
 
 type readHttpInputT struct {
-	ch       chan httpInputT
-	tcpCh chan chan common.ClientToClient
-	homeCode string
+	httpChan  chan httpInputT
+	tcpInChan chan envelopeT
+	homeCode  string
 }
 
 func getPostFilePart(r *http.Request) (*multipart.Part, error) {
@@ -110,7 +112,7 @@ func writeAppToFile(r *http.Request) (string, error) {
 
 func (r readHttpInputT) send() inputT {
 	select {
-	case h := <-r.ch:
+	case h := <-r.httpChan:
 		req := h.r
 		securityCode := pat.Param(h.r, "securitycode")
 		if h.route == "saveapp" {
@@ -140,7 +142,7 @@ func (r readHttpInputT) send() inputT {
 			h.route,
 			h.doneCh,
 		}
-	case tcpIn := <-r.tcpCh:
+	case tcpIn := <-r.tcpInChan:
 		return tcpIn
 	default:
 	}
@@ -154,9 +156,73 @@ type tcpServerChansT struct {
 
 type stopListenT struct{}
 
+type msgT interface {
+	code() byte
+}
+
+func intToTwoBytes(i int) ([]byte, error) {
+	if i < 0 {
+		return *new([]byte), errors.New("Int less than zero.")
+	}
+	if i > 256*256 {
+		return *new([]byte), errors.New(
+			"Int greater than 256*256.")
+	}
+	u := uint(i)
+	return []byte{
+		(byte)(u & 0xff),
+		(byte)((u & 0xff00) >> 8)}, nil
+}
+
+func encodeMsg(
+	envelope envelopeT,
+	publicSign [32]byte,
+	secretEncrypt [32]byte,
+	nonce [24]byte) ([]byte, error) {
+
+	rawEncoded, err := encodeData(envelope.msg)
+	if err != nil {
+		return *new([]byte), err
+	}
+	encodedMsg := append(
+		[]byte{envelope.msg.code()},
+		rawEncoded...)
+	encryptedMsg := box.Seal(
+		make([]byte, 0),
+		encodedMsg,
+		&nonce,
+		&envelope.correspondent,
+		&secretEncrypt)
+	outerMsg, err := encodeData(common.ClientToClient{
+		encryptedMsg,
+		envelope.correspondent,
+		nonce,
+		publicSign,
+	})
+	if err != nil {
+		return *new([]byte), err
+	}
+	lenOuterMsg := len(outerMsg)
+	if lenOuterMsg > 16000 {
+		return *new([]byte), errors.New("Message too long.")
+	}
+	lenInBytes, err := intToTwoBytes(lenOuterMsg)
+	if err != nil {
+		return *new([]byte), err
+	}
+	return append(lenInBytes, outerMsg...), nil
+}
+
+type envelopeT struct {
+	msg           msgT
+	correspondent [32]byte
+}
+
 func tcpServer(
-	ch tcpServerChansT,
+	inChan chan envelopeT,
+	outChan chan envelopeT,
 	secretSign [64]byte,
+	secretEncrypt [32]byte,
 	publicSign [32]byte) {
 
 	var conn net.Conn
@@ -190,14 +256,32 @@ func tcpServer(
 				continue
 			}
 			go func() {
-				dec := gob.NewDecoder(conn)
-				var msg common.ClientToClient
 				for {
-					decErr := dec.Decode(&msg)
-					if decErr != nil {
+					msgLenB := make([]byte, 2)
+					n, err := conn.Read(msgLenB)
+					if n != 2 {
 						continue
 					}
-					ch.in <- msg
+					if err != nil {
+						return
+					}
+					mLen := twoBytesToInt(msgLenB)
+					msg := make([]byte, mLen)
+					n, err = conn.Read(msg)
+					if n != mLen {
+						continue
+					}
+					if err != nil {
+						return
+					}
+					decoded, author, err := decodeMsg(msg, secretEncrypt)
+					if err != nil {
+						continue
+					}
+					inChan <- envelopeT{
+						msg:           decoded,
+						correspondent: author,
+					}
 					select {
 					case <-stopListenChan:
 						return
@@ -207,13 +291,24 @@ func tcpServer(
 			}()
 		}
 
-		toSend := <-ch.out
-		enc := gob.NewEncoder(conn)
-		err := enc.Encode(toSend)
+		toSend := <-outChan
+		nonce, err := makeNonce()
 		if err != nil {
+			panic(err.Error())
+		}
+		encoded, err := encodeMsg(toSend, publicSign, secretEncrypt, nonce)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		n, connErr := conn.Write(encoded)
+		if connErr != nil {
 			stopListenChan <- stopListenT{}
-			connErr = errors.New(
-				"Could not encode message.")
+			continue
+		}
+		if n != len(encoded) {
+			connErr = errors.New("Didn't send whole message.")
+			stopListenChan <- stopListenT{}
 		}
 	}
 }
@@ -243,10 +338,10 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 		return processMakeAppRoute(n, s)
 	case "getapp":
 		return processGetApp(n, s)
-	case "sendapp":
-		return processSendApp(n, s)
+		// case "sendapp":
+		// 	return processSendApp(n, s)
 	}
-	return *s, readHttpInputT{ch: s.httpChan}
+	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
 }
 
 type makeAppRouteT struct {
@@ -410,72 +505,69 @@ func receiptHash(msgHash [32]byte) [32]byte {
 	return blake2b.Sum256(concat)
 }
 
-func sendMsg(
-	msg interface{},
-	conn net.Conn,
-	secretEncrypt [32]byte,
-	recipient [32]byte) error {
-
-	encoded, err := encodeData(msg)
-	if err != nil {
-		return err
-	}
-
-	nonce, err := makeNonce()
-	if err != nil {
-		return err
-	}
-
-	encrypted := box.Seal(
-		make([]byte, 0),
-		encoded,
-		&nonce,
-		&recipient,
-		&secretEncrypt)
-
-	finalEncoded, err := encodeData(common.ClientToClient{
-		encrypted,
-		recipient,
-		nil,
-		nonce})
-	if err != nil {
-		return err
-	}
-
-	conn.Write(finalEncoded)
-
-	dec := gob.NewDecoder(conn)
-	var response common.ClientToClient
-	err = dec.Decode(&response)
-	if err != nil {
-		return err
-	}
-	if response.Err != nil {
-		return err
-	}
-
-	decryptedReceipt, ok := box.Open(
-		make([]byte, 0),
-		response.Msg,
-		&response.Nonce,
-		&recipient,
-		&secretEncrypt)
-	if !ok {
-		return errors.New("Could not decrypt receipt.")
-	}
-
-	receipt, err := decodeReceipt(decryptedReceipt)
-	if err != nil {
-		return err
-	}
-
-	expectedReceipt := receiptHash(blake2b.Sum256(finalEncoded))
-	if !equalHashes(receipt, expectedReceipt) {
-		return errors.New("Bad receipt.")
-	}
-
-	return nil
-}
+// func sendMsg(
+// 	msg interface{},
+// 	conn net.Conn,
+// 	secretEncrypt [32]byte,
+// 	recipient [32]byte) error {
+//
+// 	encoded, err := encodeData(msg)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	nonce, err := makeNonce()
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	encrypted := box.Seal(
+// 		make([]byte, 0),
+// 		encoded,
+// 		&nonce,
+// 		&recipient,
+// 		&secretEncrypt)
+//
+// 	finalEncoded, err := encodeData(common.ClientToClient{
+// 		encrypted,
+// 		recipient,
+// 		nonce,
+// 		})
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	conn.Write(finalEncoded)
+//
+// 	dec := gob.NewDecoder(conn)
+// 	var response common.ClientToClient
+// 	err = dec.Decode(&response)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	decryptedReceipt, ok := box.Open(
+// 		make([]byte, 0),
+// 		response.Msg,
+// 		&response.Nonce,
+// 		&recipient,
+// 		&secretEncrypt)
+// 	if !ok {
+// 		return errors.New("Could not decrypt receipt.")
+// 	}
+//
+// 	receipt, err := decodeReceipt(decryptedReceipt)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	expectedReceipt := receiptHash(blake2b.Sum256(finalEncoded))
+// 	if !equalHashes(receipt, expectedReceipt) {
+// 		return errors.New("Bad receipt.")
+// 	}
+//
+// 	return nil
+// }
 
 func equalHashes(as [32]byte, bs [32]byte) bool {
 	for i, a := range as {
@@ -523,45 +615,45 @@ func decodeReceipt(bs []byte) ([32]byte, error) {
 	return receipt, nil
 }
 
-func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
-	if !strEq(n.securityCode, s.homeCode) {
-		return *s, sendHttpErrorT{
-			n.w,
-			"Bad security code.",
-			400,
-			n.doneCh,
-		}
-	}
-	var sendAppJson sendAppJsonT
-	err := json.Unmarshal(n.body, &sendAppJson)
-	if err != nil {
-		return *s, sendHttpErrorT{
-			n.w,
-			"Could not decode Json.",
-			400,
-			n.doneCh,
-		}
-	}
-	if len(sendAppJson.recipients) == 0 {
-		return *s, sendHttpErrorT{
-			n.w,
-			"No recipients.",
-			400,
-			n.doneCh,
-		}
-	}
-	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
-	return *s, sendFileT{
-		filepath,
-		s.conn,
-		n.w,
-		n.doneCh,
-		sendAppJson.recipients,
-		sendAppJson.appHash,
-		s.secretSign,
-		s.secretEncrypt,
-	}
-}
+// func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
+// 	if !strEq(n.securityCode, s.homeCode) {
+// 		return *s, sendHttpErrorT{
+// 			n.w,
+// 			"Bad security code.",
+// 			400,
+// 			n.doneCh,
+// 		}
+// 	}
+// 	var sendAppJson sendAppJsonT
+// 	err := json.Unmarshal(n.body, &sendAppJson)
+// 	if err != nil {
+// 		return *s, sendHttpErrorT{
+// 			n.w,
+// 			"Could not decode Json.",
+// 			400,
+// 			n.doneCh,
+// 		}
+// 	}
+// 	if len(sendAppJson.recipients) == 0 {
+// 		return *s, sendHttpErrorT{
+// 			n.w,
+// 			"No recipients.",
+// 			400,
+// 			n.doneCh,
+// 		}
+// 	}
+// 	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
+// 	return *s, sendFileT{
+// 		filepath,
+// 		s.conn,
+// 		n.w,
+// 		n.doneCh,
+// 		sendAppJson.recipients,
+// 		sendAppJson.appHash,
+// 		s.secretSign,
+// 		s.secretEncrypt,
+// 	}
+// }
 
 func sliceToSig(bs []byte) [common.SigSize]byte {
 	var result [common.SigSize]byte
@@ -578,76 +670,76 @@ type fileChunk struct {
 	lastChunk bool
 }
 
-func sendFileToOne(
-	s sendFileT,
-	recipient [32]byte,
-	fileHandle *os.File) error {
+// func sendFileToOne(
+// 	s sendFileT,
+// 	recipient [32]byte,
+// 	fileHandle *os.File) error {
+//
+// 	sender := func(msg interface{}) error {
+// 		return sendMsg(
+// 			msg,
+// 			s.conn,
+// 			s.secretEncrypt,
+// 			recipient)
+// 	}
+//
+// 	err := sender(appSigMsgT{
+// 		s.appHash,
+// 		sliceToSig(sign.Sign(
+// 			make([]byte, 0),
+// 			appSigHash(s.appHash),
+// 			&s.secretSign))})
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	counter := 0
+// 	for {
+// 		chunk := make([]byte, common.ChunkSize)
+// 		n, err := fileHandle.Read(chunk)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		lastChunk := n < common.ChunkSize
+// 		err = sender(fileChunk{
+// 			s.appHash,
+// 			chunk,
+// 			counter,
+// 			lastChunk,
+// 		})
+// 		if err != nil {
+// 			return err
+// 		}
+// 		if lastChunk {
+// 			break
+// 		}
+// 		counter++
+// 	}
+// 	logSentSuccess(s.appHash, recipient)
+// 	return nil
+// }
 
-	sender := func(msg interface{}) error {
-		return sendMsg(
-			msg,
-			s.conn,
-			s.secretEncrypt,
-			recipient)
-	}
-
-	err := sender(appSigMsgT{
-		s.appHash,
-		sliceToSig(sign.Sign(
-			make([]byte, 0),
-			appSigHash(s.appHash),
-			&s.secretSign))})
-	if err != nil {
-		return err
-	}
-
-	counter := 0
-	for {
-		chunk := make([]byte, common.ChunkSize)
-		n, err := fileHandle.Read(chunk)
-		if err != nil {
-			return err
-		}
-		lastChunk := n < common.ChunkSize
-		err = sender(fileChunk{
-			s.appHash,
-			chunk,
-			counter,
-			lastChunk,
-		})
-		if err != nil {
-			return err
-		}
-		if lastChunk {
-			break
-		}
-		counter++
-	}
-	logSentSuccess(s.appHash, recipient)
-	return nil
-}
-
-func (s sendFileT) send() inputT {
-	fileHandle, err := os.Open(s.filepath)
-	errOut := func(err error) {
-		logSendErr(err, s.appHash, s.recipients[0])
-		http.Error(s.w, err.Error(), 500)
-		s.doneCh <- endRequest{}
-	}
-	if err != nil {
-		errOut(err)
-		return noInputT{}
-	}
-	for _, recipient := range s.recipients {
-		err := sendFileToOne(s, recipient, fileHandle)
-		if err != nil {
-			errOut(err)
-			return noInputT{}
-		}
-	}
-	s.doneCh <- endRequest{}
-	return noInputT{}
-}
+// func (s sendFileT) send() inputT {
+// 	fileHandle, err := os.Open(s.filepath)
+// 	errOut := func(err error) {
+// 		logSendErr(err, s.appHash, s.recipients[0])
+// 		http.Error(s.w, err.Error(), 500)
+// 		s.doneCh <- endRequest{}
+// 	}
+// 	if err != nil {
+// 		errOut(err)
+// 		return noInputT{}
+// 	}
+// 	for _, recipient := range s.recipients {
+// 		err := sendFileToOne(s, recipient, fileHandle)
+// 		if err != nil {
+// 			errOut(err)
+// 			return noInputT{}
+// 		}
+// 	}
+// 	s.doneCh <- endRequest{}
+// 	return noInputT{}
+// }
 
 func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
@@ -741,7 +833,7 @@ type httpInputT struct {
 type noInputT struct{}
 
 func (n noInputT) update(s *stateT) (stateT, outputT) {
-	return *s, readHttpInputT{s.httpChan, s.homeCode}
+	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
 }
 
 const pwlen = 5
@@ -1006,7 +1098,8 @@ func initState() (stateT, error) {
 	}
 	return stateT{
 		httpChan:      make(chan httpInputT),
-		tcpChans:      *new(tcpServerChansT),
+		tcpInChan:     make(chan envelopeT),
+		tcpOutChan:    make(chan envelopeT),
 		homeCode:      homeCode,
 		appCodes:      make(map[string][32]byte),
 		publicSign:    keys.publicsign,
@@ -1028,11 +1121,13 @@ func main() {
 		return
 	}
 	go tcpServer(
-		state.tcpChans,
+		state.tcpInChan,
+		state.tcpOutChan,
 		state.secretSign,
+		state.secretEncrypt,
 		state.publicSign)
 	go httpServer(state.httpChan)
-	var output outputT = readHttpInputT{ch: state.httpChan}
+	var output outputT = readHttpInputT{state.httpChan, state.tcpInChan, state.homeCode}
 	for {
 		input := output.send()
 		state, output = input.update(&state)
@@ -1067,7 +1162,88 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 	}
 }
 
+func (e envelopeT) update(s *stateT) (stateT, outputT) {
+	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+}
+
+func decodeClientToClient(msg []byte) (common.ClientToClient, error) {
+	var buf bytes.Buffer
+	n, err := buf.Write(msg)
+	var cToC common.ClientToClient
+	if err != nil {
+		return cToC, err
+	}
+	if n != len(msg) {
+		return cToC, errors.New(
+			"Could not write message to buffer.")
+	}
+	err = gob.NewDecoder(&buf).Decode(&cToC)
+	if err != nil {
+		return cToC, err
+	}
+	return cToC, nil
+}
+
+type exampleMsgT struct {
+	field bool
+}
+
+func (e exampleMsgT) code() byte {
+	return exampleMsgB
+}
+
+const (
+	exampleMsgB = 0x00
+)
+
+func decodeLow(bs []byte, result msgT) (msgT, error) {
+	var buf bytes.Buffer
+	n, err := buf.Write(bs)
+	var msg msgT
+	if n != len(bs) {
+		return msg, errors.New("Could not read whole message.")
+	}
+	if err != nil {
+		return msg, err
+	}
+	dec := gob.NewDecoder(&buf)
+	err = dec.Decode(&result)
+	if err != nil {
+		return msg, err
+	}
+	return result, nil
+}
+
+func decodeMsg(raw []byte, secretEncrypt [32]byte) (msgT, [32]byte, error) {
+	cToC, err := decodeClientToClient(raw)
+	if err != nil {
+		return *new(msgT), *new([32]byte), err
+	}
+	decrypted, ok := box.Open(
+		make([]byte, 0),
+		cToC.Msg,
+		&cToC.Nonce,
+		&cToC.Author,
+		&secretEncrypt)
+	if !ok {
+		return *new(msgT), *new([32]byte), errors.New("Could not decrypt message.")
+	}
+	typeByte := decrypted[0]
+	msg := decrypted[1:]
+	switch typeByte {
+	case exampleMsgB:
+		decoded, err := decodeLow(msg, *new(exampleMsgT))
+		return decoded, cToC.Author, err
+	}
+	return *new(msgT), *new([32]byte), errors.New(
+		"Message type byte unknown.")
+}
+
 var routes = []string{"makeapproute", "getapp", "sendapp"}
+
+func twoBytesToInt(bs []byte) int {
+	return (int)(bs[0]) + (int)(bs[1])*256
+}
 
 func httpServer(inputChan chan httpInputT) {
 	mux := goji.NewMux()

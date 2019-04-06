@@ -97,8 +97,8 @@ type Msg interface {
 type ClientToClient struct {
 	Msg       []byte
 	Recipient [32]byte
-	Err       error
 	Nonce [24]byte
+	Author [32]byte
 }
 
 const (
