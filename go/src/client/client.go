@@ -338,8 +338,8 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 		return processMakeAppRoute(n, s)
 	case "getapp":
 		return processGetApp(n, s)
-		// case "sendapp":
-		// 	return processSendApp(n, s)
+	case "sendapp":
+		return processSendApp(n, s)
 	}
 	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
 }
@@ -505,69 +505,40 @@ func receiptHash(msgHash [32]byte) [32]byte {
 	return blake2b.Sum256(concat)
 }
 
-// func sendMsg(
-// 	msg interface{},
-// 	conn net.Conn,
-// 	secretEncrypt [32]byte,
-// 	recipient [32]byte) error {
-//
-// 	encoded, err := encodeData(msg)
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	nonce, err := makeNonce()
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	encrypted := box.Seal(
-// 		make([]byte, 0),
-// 		encoded,
-// 		&nonce,
-// 		&recipient,
-// 		&secretEncrypt)
-//
-// 	finalEncoded, err := encodeData(common.ClientToClient{
-// 		encrypted,
-// 		recipient,
-// 		nonce,
-// 		})
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	conn.Write(finalEncoded)
-//
-// 	dec := gob.NewDecoder(conn)
-// 	var response common.ClientToClient
-// 	err = dec.Decode(&response)
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	decryptedReceipt, ok := box.Open(
-// 		make([]byte, 0),
-// 		response.Msg,
-// 		&response.Nonce,
-// 		&recipient,
-// 		&secretEncrypt)
-// 	if !ok {
-// 		return errors.New("Could not decrypt receipt.")
-// 	}
-//
-// 	receipt, err := decodeReceipt(decryptedReceipt)
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	expectedReceipt := receiptHash(blake2b.Sum256(finalEncoded))
-// 	if !equalHashes(receipt, expectedReceipt) {
-// 		return errors.New("Bad receipt.")
-// 	}
-//
-// 	return nil
-// }
+func sendMsg(
+	envelope envelopeT,
+	tcpInChan chan envelopeT,
+	tcpOutChan chan envelopeT) error {
+
+	tcpOutChan <- envelope
+	select {
+	case response := <-tcpInChan:
+		receipt, ok := (response.msg).(receiptT)
+		if !ok {
+			return errors.New("Bad receipt.")
+		}
+		expectedHash, err := hash(envelope.msg)
+		if err != nil {
+			return err
+		}
+		receiptHash, ok := sign.Open(
+			make([]byte, 0),
+			common.SigToSlice(receipt.hashSig),
+			&receipt.author)
+		if !ok {
+			return errors.New("Bad receipt.")
+		}
+		if !bytes.Equal(
+			receiptHash,
+			common.HashToSlice(expectedHash)) {
+
+			return errors.New("Bad receipt.")
+		}
+	case <-time.After(5 * time.Second):
+		return errors.New("No receipt.")
+	}
+	return nil
+}
 
 func equalHashes(as [32]byte, bs [32]byte) bool {
 	for i, a := range as {
@@ -585,6 +556,24 @@ var appSigMeaning = []byte{
 type appSigMsgT struct {
 	appHash [32]byte
 	sig     [common.SigSize]byte
+}
+
+func (a appSigMsgT) code() byte {
+	return appSigMsgB
+}
+
+func (a appSigMsgT) hash() [32]byte {
+	concat := make([]byte, 32+common.SigSize)
+	i := 0
+	for i < 32 {
+		concat[i] = a.appHash[i]
+		i++
+	}
+	for i < 32+common.SigSize {
+		concat[i] = a.sig[i-32]
+		i++
+	}
+	return blake2b.Sum256(concat)
 }
 
 func appSigHash(appHash [32]byte) []byte {
@@ -615,45 +604,46 @@ func decodeReceipt(bs []byte) ([32]byte, error) {
 	return receipt, nil
 }
 
-// func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
-// 	if !strEq(n.securityCode, s.homeCode) {
-// 		return *s, sendHttpErrorT{
-// 			n.w,
-// 			"Bad security code.",
-// 			400,
-// 			n.doneCh,
-// 		}
-// 	}
-// 	var sendAppJson sendAppJsonT
-// 	err := json.Unmarshal(n.body, &sendAppJson)
-// 	if err != nil {
-// 		return *s, sendHttpErrorT{
-// 			n.w,
-// 			"Could not decode Json.",
-// 			400,
-// 			n.doneCh,
-// 		}
-// 	}
-// 	if len(sendAppJson.recipients) == 0 {
-// 		return *s, sendHttpErrorT{
-// 			n.w,
-// 			"No recipients.",
-// 			400,
-// 			n.doneCh,
-// 		}
-// 	}
-// 	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
-// 	return *s, sendFileT{
-// 		filepath,
-// 		s.conn,
-// 		n.w,
-// 		n.doneCh,
-// 		sendAppJson.recipients,
-// 		sendAppJson.appHash,
-// 		s.secretSign,
-// 		s.secretEncrypt,
-// 	}
-// }
+func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
+	if !strEq(n.securityCode, s.homeCode) {
+		return *s, sendHttpErrorT{
+			n.w,
+			"Bad security code.",
+			400,
+			n.doneCh,
+		}
+	}
+	var sendAppJson sendAppJsonT
+	err := json.Unmarshal(n.body, &sendAppJson)
+	if err != nil {
+		return *s, sendHttpErrorT{
+			n.w,
+			"Could not decode Json.",
+			400,
+			n.doneCh,
+		}
+	}
+	if len(sendAppJson.recipients) == 0 {
+		return *s, sendHttpErrorT{
+			n.w,
+			"No recipients.",
+			400,
+			n.doneCh,
+		}
+	}
+	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
+	return *s, sendFileT{
+		s.tcpInChan,
+		s.tcpOutChan,
+		filepath,
+		n.w,
+		n.doneCh,
+		sendAppJson.recipients,
+		sendAppJson.appHash,
+		s.secretSign,
+		s.secretEncrypt,
+	}
+}
 
 func sliceToSig(bs []byte) [common.SigSize]byte {
 	var result [common.SigSize]byte
@@ -670,76 +660,75 @@ type fileChunk struct {
 	lastChunk bool
 }
 
-// func sendFileToOne(
-// 	s sendFileT,
-// 	recipient [32]byte,
-// 	fileHandle *os.File) error {
-//
-// 	sender := func(msg interface{}) error {
-// 		return sendMsg(
-// 			msg,
-// 			s.conn,
-// 			s.secretEncrypt,
-// 			recipient)
-// 	}
-//
-// 	err := sender(appSigMsgT{
-// 		s.appHash,
-// 		sliceToSig(sign.Sign(
-// 			make([]byte, 0),
-// 			appSigHash(s.appHash),
-// 			&s.secretSign))})
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	counter := 0
-// 	for {
-// 		chunk := make([]byte, common.ChunkSize)
-// 		n, err := fileHandle.Read(chunk)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		lastChunk := n < common.ChunkSize
-// 		err = sender(fileChunk{
-// 			s.appHash,
-// 			chunk,
-// 			counter,
-// 			lastChunk,
-// 		})
-// 		if err != nil {
-// 			return err
-// 		}
-// 		if lastChunk {
-// 			break
-// 		}
-// 		counter++
-// 	}
-// 	logSentSuccess(s.appHash, recipient)
-// 	return nil
-// }
+func sendFileToOne(
+	s sendFileT,
+	recipient [32]byte,
+	fileHandle *os.File) error {
 
-// func (s sendFileT) send() inputT {
-// 	fileHandle, err := os.Open(s.filepath)
-// 	errOut := func(err error) {
-// 		logSendErr(err, s.appHash, s.recipients[0])
-// 		http.Error(s.w, err.Error(), 500)
-// 		s.doneCh <- endRequest{}
-// 	}
-// 	if err != nil {
-// 		errOut(err)
-// 		return noInputT{}
-// 	}
-// 	for _, recipient := range s.recipients {
-// 		err := sendFileToOne(s, recipient, fileHandle)
-// 		if err != nil {
-// 			errOut(err)
-// 			return noInputT{}
-// 		}
-// 	}
-// 	s.doneCh <- endRequest{}
-// 	return noInputT{}
-// }
+	sender := func(msg msgT) error {
+		return sendMsg(
+			envelopeT{msg, recipient},
+			s.tcpInChan,
+			s.tcpOutChan)
+	}
+
+	err := sender(appSigMsgT{
+		s.appHash,
+		sliceToSig(sign.Sign(
+			make([]byte, 0),
+			appSigHash(s.appHash),
+			&s.secretSign))})
+	if err != nil {
+		return err
+	}
+
+	counter := 0
+	for {
+		chunk := make([]byte, common.ChunkSize)
+		n, err := fileHandle.Read(chunk)
+		if err != nil {
+			return err
+		}
+		lastChunk := n < common.ChunkSize
+		err = sender(fileChunk{
+			s.appHash,
+			chunk,
+			counter,
+			lastChunk,
+		})
+		if err != nil {
+			return err
+		}
+		if lastChunk {
+			break
+		}
+		counter++
+	}
+	logSentSuccess(s.appHash, recipient)
+	return nil
+}
+
+func (s sendFileT) send() inputT {
+	fileHandle, err := os.Open(s.filepath)
+	errOut := func(err error) {
+		logSendErr(err, s.appHash, s.recipients[0])
+		http.Error(s.w, err.Error(), 500)
+		s.doneCh <- endRequest{}
+	}
+	if err != nil {
+		errOut(err)
+		return noInputT{}
+	}
+	for _, recipient := range s.recipients {
+		err := sendFileToOne(s, recipient, fileHandle)
+		if err != nil {
+			errOut(err)
+			return noInputT{}
+		}
+	}
+	s.doneCh <- endRequest{}
+	return noInputT{}
+}
 
 func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
@@ -904,8 +893,9 @@ type failedToGoOnline struct {
 }
 
 type sendFileT struct {
+	tcpInChan     chan envelopeT
+	tcpOutChan    chan envelopeT
 	filepath      string
-	conn          net.Conn
 	w             http.ResponseWriter
 	doneCh        chan endRequest
 	recipients    [][32]byte
@@ -1184,16 +1174,33 @@ func decodeClientToClient(msg []byte) (common.ClientToClient, error) {
 	return cToC, nil
 }
 
-type exampleMsgT struct {
-	field bool
+type receiptT struct {
+	hashSig [common.SigSize]byte
+	author  [32]byte
 }
 
-func (e exampleMsgT) code() byte {
-	return exampleMsgB
+func hash(i interface{}) ([32]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(&i)
+	if err != nil {
+		return *new([32]byte), err
+	}
+	return blake2b.Sum256(buf.Bytes()), nil
+}
+
+func (r receiptT) code() byte {
+	return receiptMsgB
+}
+
+func (f fileChunk) code() byte {
+	return fileChunkMsgB
 }
 
 const (
-	exampleMsgB = 0x00
+	receiptMsgB   = 0x00
+	appSigMsgB    = 0x01
+	fileChunkMsgB = 0x02
 )
 
 func decodeLow(bs []byte, result msgT) (msgT, error) {
@@ -1231,8 +1238,11 @@ func decodeMsg(raw []byte, secretEncrypt [32]byte) (msgT, [32]byte, error) {
 	typeByte := decrypted[0]
 	msg := decrypted[1:]
 	switch typeByte {
-	case exampleMsgB:
-		decoded, err := decodeLow(msg, *new(exampleMsgT))
+	case receiptMsgB:
+		decoded, err := decodeLow(msg, *new(receiptT))
+		return decoded, cToC.Author, err
+	case appSigMsgB:
+		decoded, err := decodeLow(msg, *new(appSigMsgT))
 		return decoded, cToC.Author, err
 	}
 	return *new(msgT), *new([32]byte), errors.New(
