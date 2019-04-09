@@ -53,6 +53,7 @@ type stateT struct {
 	cantGetOnline error
 	invites       [][]common.InviteT
 	isMember      bool
+	chunksLoading map[[32]byte][]fileChunkPtrT
 }
 
 type readHttpInputT struct {
@@ -314,6 +315,7 @@ func tcpServer(
 }
 
 const (
+	tmpDir      = "clientData/tmp"
 	invitesFile = "clientData/invitations.txt"
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	docsDir     = "clientData/docs"
@@ -651,6 +653,12 @@ func sliceToSig(bs []byte) [common.SigSize]byte {
 		result[i] = b
 	}
 	return result
+}
+
+type fileChunkPtrT struct {
+	chunkHash [32]byte
+	counter   int
+	lastChunk bool
 }
 
 type fileChunk struct {
@@ -1117,7 +1125,10 @@ func main() {
 		state.secretEncrypt,
 		state.publicSign)
 	go httpServer(state.httpChan)
-	var output outputT = readHttpInputT{state.httpChan, state.tcpInChan, state.homeCode}
+	var output outputT = readHttpInputT{
+		state.httpChan,
+		state.tcpInChan,
+		state.homeCode}
 	for {
 		input := output.send()
 		state, output = input.update(&state)
@@ -1153,7 +1164,91 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 }
 
 func (e envelopeT) update(s *stateT) (stateT, outputT) {
-	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+	readInP := readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+	switch e.msg.code() {
+	case receiptMsgB:
+		return *s, readInP
+	case fileChunkMsgB:
+		return processNewFileChunk(e, s)
+	case appSigMsgB:
+	}
+	return *s, readInP
+}
+
+func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
+	chunk, ok := (e.msg).(fileChunk)
+	readInP := readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+	if !ok {
+		return *s, readInP
+	}
+	previousChunks, ok := s.chunksLoading[e.correspondent]
+	lastChunk := previousChunks[len(previousChunks)-1]
+	if lastChunk.lastChunk {
+		return *s, readInP
+	}
+	var newChunksLoading map[[32]byte][]fileChunkPtrT
+	for appHash, chunkPtr := range s.chunksLoading {
+		newChunksLoading[appHash] = chunkPtr
+	}
+	chunkHash, err := hash(e.msg)
+	if err != nil {
+		return *s, readInP
+	}
+	if !ok && chunk.counter != 0 {
+		return *s, readInP
+	}
+	if !ok {
+		newChunksLoading[chunk.appHash] = []fileChunkPtrT{
+			fileChunkPtrT{
+				chunkHash: chunkHash,
+				counter:   chunk.counter,
+				lastChunk: chunk.lastChunk,
+			}}
+	} else {
+		if lastChunk.counter != chunk.counter-1 {
+			return *s, readInP
+		}
+		newChunksLoading[chunk.appHash] = append(
+			newChunksLoading[chunk.appHash],
+			fileChunkPtrT{
+				chunkHash: chunkHash,
+				counter:   chunk.counter,
+				lastChunk: chunk.lastChunk,
+			})
+	}
+	newS := *s
+	newS.chunksLoading = newChunksLoading
+	tmpFileName := base64.RawURLEncoding.EncodeToString(
+		common.HashToSlice(chunkHash))
+	return newS, writeToFileT{
+		chunk.appHash,
+		tmpDir + "/" + tmpFileName,
+		chunk.chunk}
+}
+
+type writeToFileT struct {
+	appHash  [32]byte
+	filePath string
+	chunk    []byte
+}
+
+func (w writeToFileT) send() inputT {
+	err := ioutil.WriteFile(w.filePath, w.chunk, 0600)
+	if err != nil {
+		return chunksFinishedT{w.appHash}
+	}
+	return noInputT{}
+}
+
+type chunksFinishedT struct {
+	appHash [32]byte
+}
+
+func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
+	newS := *s
+	newS.chunksLoading = *new(map[[32]byte][]fileChunkPtrT)
+	return newS, readHttpInputT{
+		s.httpChan, s.tcpInChan, s.homeCode}
 }
 
 func decodeClientToClient(msg []byte) (common.ClientToClient, error) {
