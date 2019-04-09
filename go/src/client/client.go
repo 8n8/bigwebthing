@@ -316,6 +316,7 @@ func tcpServer(
 
 const (
 	tmpDir      = "clientData/tmp"
+	appsDir = "clientData/apps"
 	invitesFile = "clientData/invitations.txt"
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	docsDir     = "clientData/docs"
@@ -1171,8 +1172,95 @@ func (e envelopeT) update(s *stateT) (stateT, outputT) {
 	case fileChunkMsgB:
 		return processNewFileChunk(e, s)
 	case appSigMsgB:
+		return processAppSigMsg(e, s)
 	}
 	return *s, readInP
+}
+
+func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
+	appSig, ok := (e.msg).(appSigMsgT)
+	var newChunksLoading map[[32]byte][]fileChunkPtrT
+	for appHash, chunkPtr := range s.chunksLoading {
+		newChunksLoading[appHash] = chunkPtr
+	}
+	newS := *s
+	delete(newChunksLoading, appSig.appHash)
+	newS.chunksLoading = newChunksLoading
+	readInP := readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+	if !ok {
+		return newS, readInP
+	}
+	signedHash, ok := sign.Open(
+		make([]byte, 0),
+		common.SigToSlice(appSig.sig),
+		&e.correspondent)
+	hashOk := bytes.Equal(
+		appSigHash(appSig.appHash),
+		signedHash)
+	if !(ok && hashOk) {
+		return newS, readInP
+	}
+	chunkPtrs, ok := s.chunksLoading[appSig.appHash]
+	if !ok {
+		return newS, readInP
+	}
+	finalChunkPtr := chunkPtrs[len(chunkPtrs)-1]
+	if !finalChunkPtr.lastChunk {
+		return newS, readInP
+	}
+	filePaths := make([]string, len(chunkPtrs))
+	for i, chunkPtr := range chunkPtrs {
+		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash)
+	}
+	tmpPath := makeChunkFilePath(appSig.appHash)
+	finalName := base64.RawURLEncoding.EncodeToString(
+		common.HashToSlice(appSig.appHash))
+	finalPath := appsDir + "/" + finalName
+	return newS, assembleApp{
+		filePaths: filePaths,
+		appHash: appSig.appHash,
+		tmpPath: tmpPath,
+		finalPath: finalPath,
+		}
+}
+
+func makeChunkFilePath(chunkHash [32]byte) string {
+	filename := base64.RawURLEncoding.EncodeToString(
+		common.HashToSlice(chunkHash))
+	return tmpDir + "/" + filename
+}
+
+type assembleApp struct {
+	filePaths []string
+	appHash [32]byte
+	tmpPath string
+	finalPath string
+}
+
+func (a assembleApp) send() inputT {
+	tmpDestF, err := os.OpenFile(a.tmpPath, appendFlags, 0600)
+	for _, filePath := range a.filePaths {
+		chunk, err := ioutil.ReadFile(filePath)
+		if err != nil {
+			return chunksFinishedT{a.appHash}
+		}
+		n, err := tmpDestF.Write(chunk)
+		if n != len(chunk) || err != nil {
+			return chunksFinishedT{a.appHash}
+		}
+	}
+	hasher, err := blake2b.New256(nil)
+	if err != nil {
+		return chunksFinishedT{a.appHash}
+	}
+	if !bytes.Equal(
+		hasher.Sum(nil),
+		common.HashToSlice(a.appHash)) {
+
+		return chunksFinishedT{a.appHash}
+	}
+	_ = os.Rename(a.tmpPath, a.finalPath)
+	return chunksFinishedT{a.appHash}
 }
 
 func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
@@ -1246,7 +1334,12 @@ type chunksFinishedT struct {
 
 func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 	newS := *s
-	newS.chunksLoading = *new(map[[32]byte][]fileChunkPtrT)
+	var newChunksLoading map[[32]byte][]fileChunkPtrT
+	for k, v := range s.chunksLoading {
+		newChunksLoading[k] = v
+	}
+	delete(newChunksLoading, t.appHash)
+	newS.chunksLoading = newChunksLoading
 	return newS, readHttpInputT{
 		s.httpChan, s.tcpInChan, s.homeCode}
 }
