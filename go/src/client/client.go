@@ -11,14 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"goji.io"
-	"goji.io/pat"
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/blake2b"
-	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/crypto/nacl/secretbox"
-	"golang.org/x/crypto/nacl/sign"
-	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -27,6 +19,15 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"goji.io"
+	"goji.io/pat"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/nacl/sign"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 type inputT interface {
@@ -38,28 +39,112 @@ type outputT interface {
 }
 
 type stateT struct {
-	httpChan      chan httpInputT
-	tcpInChan     chan envelopeT
-	tcpOutChan    chan envelopeT
-	tcpChans      tcpServerChansT
-	homeCode      string
-	appCodes      map[string][32]byte
-	publicSign    [32]byte
-	secretSign    [64]byte
-	secretEncrypt [32]byte
-	publicEncrypt [32]byte
-	conn          net.Conn
-	online        bool
-	cantGetOnline error
-	invites       [][]common.InviteT
-	isMember      bool
-	chunksLoading map[[32]byte][]fileChunkPtrT
+	httpChan       chan httpInputT
+	tcpInChan      chan envelopeT
+	tcpOutChan     chan envelopeT
+	tcpChans       tcpServerChansT
+	getInvitesChan chan chan map[inviteT]dontCareT
+	homeCode       string
+	appCodes       map[string][32]byte
+	publicSign     [32]byte
+	secretSign     [64]byte
+	secretEncrypt  [32]byte
+	publicEncrypt  [32]byte
+	conn           net.Conn
+	online         bool
+	cantGetOnline  error
+	invites        map[inviteT]dontCareT
+	uninvites      map[inviteT]dontCareT
+	members        map[[32]byte]dontCareT
+	isMember       bool
+	isMemberCh     chan isMemberT
+	chunksLoading  map[[32]byte][]fileChunkPtrT
+}
+
+type isMemberT struct {
+	returnCh  chan bool
+	candidate [32]byte
+}
+
+func makeMemberList(
+	invites map[inviteT]dontCareT,
+	uninvites map[inviteT]dontCareT) map[[32]byte]dontCareT {
+
+	var members map[[32]byte]dontCareT
+	members[common.TruesPubSign] = dontCareT{}
+	addedMember := true
+	for addedMember {
+		addedMember = false
+		for invite, _ := range invites {
+			_, ok := members[invite.Author]
+			if !ok {
+				continue
+			}
+			for uninvite, _ := range uninvites {
+				if uninviteCancels(uninvite, invite) {
+					continue
+				}
+			}
+			members[invite.Invitee] = dontCareT{}
+			addedMember = true
+		}
+	}
+	return members
+}
+
+func isMember(
+	invites map[inviteT]dontCareT,
+	uninvites map[inviteT]dontCareT,
+	candidate [32]byte) bool {
+
+	_, ok := makeMemberList(invites, uninvites)[candidate]
+	return ok
+}
+
+type dontCareT struct{}
+
+func readInvites(filePath string) (map[inviteT]dontCareT, error) {
+	rawInvites, err := ioutil.ReadFile(filePath)
+	var invites map[inviteT]dontCareT
+	if err != nil {
+		return invites, err
+	}
+	err = json.Unmarshal(rawInvites, &invites)
+	return invites, err
 }
 
 type readHttpInputT struct {
-	httpChan  chan httpInputT
-	tcpInChan chan envelopeT
-	homeCode  string
+	httpChan   chan httpInputT
+	tcpInChan  chan envelopeT
+	homeCode   string
+	invitesCh  chan isMemberT
+	memberList map[[32]byte]dontCareT
+}
+
+func equalHashes(as [32]byte, bs [32]byte) bool {
+	for i, b := range bs {
+		if as[i] != b {
+			return false
+		}
+	}
+	return true
+}
+
+func uninviteCancels(u inviteT, i inviteT) bool {
+	if !equalHashes(u.Invitee, i.Invitee) {
+		return false
+	}
+	if !equalHashes(u.Author, i.Author) {
+		return false
+	}
+	return u.PosixTime > i.PosixTime
+}
+
+type inviteT struct {
+	PosixTime int64
+	Invitee   [32]byte
+	Author    [32]byte
+	Signature [common.SigSize]byte
 }
 
 func getPostFilePart(r *http.Request) (*multipart.Part, error) {
@@ -145,6 +230,10 @@ func (r readHttpInputT) send() inputT {
 		}
 	case tcpIn := <-r.tcpInChan:
 		return tcpIn
+	case request := <-r.invitesCh:
+		_, ok := r.memberList[request.candidate]
+		request.returnCh <- ok
+		return noInputT{}
 	default:
 	}
 	return noInputT{}
@@ -222,6 +311,7 @@ type envelopeT struct {
 func tcpServer(
 	inChan chan envelopeT,
 	outChan chan envelopeT,
+	isMemberCh chan isMemberT,
 	secretSign [64]byte,
 	secretEncrypt [32]byte,
 	publicSign [32]byte) {
@@ -267,6 +357,9 @@ func tcpServer(
 						return
 					}
 					mLen := twoBytesToInt(msgLenB)
+					if mLen > 16000 {
+						return
+					}
 					msg := make([]byte, mLen)
 					n, err = conn.Read(msg)
 					if n != mLen {
@@ -275,7 +368,17 @@ func tcpServer(
 					if err != nil {
 						return
 					}
-					decoded, author, err := decodeMsg(msg, secretEncrypt)
+					cToC, err := decodeClientToClient(msg)
+					if err != nil {
+						continue
+					}
+					var okCh chan bool
+					isMemberCh <- isMemberT{
+						okCh, cToC.Author}
+					if !<-okCh {
+						continue
+					}
+					decoded, author, err := decodeMsg(cToC, secretEncrypt)
 					if err != nil {
 						continue
 					}
@@ -308,7 +411,8 @@ func tcpServer(
 			continue
 		}
 		if n != len(encoded) {
-			connErr = errors.New("Didn't send whole message.")
+			connErr = errors.New(
+				"Didn't send whole message.")
 			stopListenChan <- stopListenT{}
 		}
 	}
@@ -342,7 +446,7 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 	case "sendapp":
 		return processSendApp(n, s)
 	}
-	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+	return *s, readHttpIn(s)
 }
 
 type makeAppRouteT struct {
@@ -810,7 +914,7 @@ type httpInputT struct {
 type noInputT struct{}
 
 func (n noInputT) update(s *stateT) (stateT, outputT) {
-	return *s, readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
+	return *s, readHttpIn(s)
 }
 
 const pwlen = 5
@@ -1036,29 +1140,16 @@ func initState() (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	var invites [][]common.InviteT
-	rawInvites, err := ioutil.ReadFile(invitesFile)
-	if err == nil {
-		err = json.Unmarshal(rawInvites, &invites)
-		if err != nil {
-			return s, err
-		}
-		invites := pruneInvites(
-			invites,
-			keys.publicsign,
-			time.Now().Unix())
-		encodedInvites, err := json.Marshal(invites)
-		if err != nil {
-			return s, err
-		}
-		err = ioutil.WriteFile(
-			invitesFile,
-			encodedInvites,
-			0600)
-		if err != nil {
-			return s, err
-		}
+	invites, err := readInvites("clientData/invites.txt")
+	if err != nil {
+		return s, err
 	}
+	uninvites, err := readInvites("clientData/uninvites.txt")
+	if err != nil {
+		return s, err
+	}
+	memberList := makeMemberList(invites, uninvites)
+	_, mem := memberList[keys.publicsign]
 	return stateT{
 		httpChan:      make(chan httpInputT),
 		tcpInChan:     make(chan envelopeT),
@@ -1073,7 +1164,9 @@ func initState() (stateT, error) {
 		online:        false,
 		cantGetOnline: nil,
 		invites:       invites,
-		isMember:      len(invites) == 0,
+		uninvites:     uninvites,
+		members:       memberList,
+		isMember:      mem,
 	}, nil
 }
 
@@ -1086,14 +1179,12 @@ func main() {
 	go tcpServer(
 		state.tcpInChan,
 		state.tcpOutChan,
+		state.isMemberCh,
 		state.secretSign,
 		state.secretEncrypt,
 		state.publicSign)
 	go httpServer(state.httpChan)
-	var output outputT = readHttpInputT{
-		state.httpChan,
-		state.tcpInChan,
-		state.homeCode}
+	var output outputT = readHttpIn(&state)
 	for {
 		input := output.send()
 		state, output = input.update(&state)
@@ -1113,16 +1204,15 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 }
 
 func (e envelopeT) update(s *stateT) (stateT, outputT) {
-	readInP := readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
 	switch e.msg.code() {
 	case receiptMsgB:
-		return *s, readInP
+		return *s, readHttpIn(s)
 	case fileChunkMsgB:
 		return processNewFileChunk(e, s)
 	case appSigMsgB:
 		return processAppSigMsg(e, s)
 	}
-	return *s, readInP
+	return *s, readHttpIn(s)
 }
 
 func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
@@ -1134,9 +1224,8 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 	newS := *s
 	delete(newChunksLoading, appSig.appHash)
 	newS.chunksLoading = newChunksLoading
-	readInP := readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
 	if !ok {
-		return newS, readInP
+		return newS, readHttpIn(s)
 	}
 	signedHash, ok := sign.Open(
 		make([]byte, 0),
@@ -1146,15 +1235,15 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 		appSigHash(appSig.appHash),
 		signedHash)
 	if !(ok && hashOk) {
-		return newS, readInP
+		return newS, readHttpIn(s)
 	}
 	chunkPtrs, ok := s.chunksLoading[appSig.appHash]
 	if !ok {
-		return newS, readInP
+		return newS, readHttpIn(s)
 	}
 	finalChunkPtr := chunkPtrs[len(chunkPtrs)-1]
 	if !finalChunkPtr.lastChunk {
-		return newS, readInP
+		return newS, readHttpIn(s)
 	}
 	filePaths := make([]string, len(chunkPtrs))
 	for i, chunkPtr := range chunkPtrs {
@@ -1231,14 +1320,13 @@ func (a assembleApp) send() inputT {
 
 func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
 	chunk, ok := (e.msg).(fileChunk)
-	readInP := readHttpInputT{s.httpChan, s.tcpInChan, s.homeCode}
 	if !ok {
-		return *s, readInP
+		return *s, readHttpIn(s)
 	}
 	previousChunks, ok := s.chunksLoading[e.correspondent]
 	lastChunk := previousChunks[len(previousChunks)-1]
 	if lastChunk.lastChunk {
-		return *s, readInP
+		return *s, readHttpIn(s)
 	}
 	var newChunksLoading map[[32]byte][]fileChunkPtrT
 	for appHash, chunkPtr := range s.chunksLoading {
@@ -1246,10 +1334,10 @@ func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
 	}
 	chunkHash, err := hash(e.msg)
 	if err != nil {
-		return *s, readInP
+		return *s, readHttpIn(s)
 	}
 	if !ok && chunk.counter != 0 {
-		return *s, readInP
+		return *s, readHttpIn(s)
 	}
 	if !ok {
 		newChunksLoading[chunk.appHash] = []fileChunkPtrT{
@@ -1260,7 +1348,7 @@ func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
 			}}
 	} else {
 		if lastChunk.counter != chunk.counter-1 {
-			return *s, readInP
+			return *s, readHttpIn(s)
 		}
 		newChunksLoading[chunk.appHash] = append(
 			newChunksLoading[chunk.appHash],
@@ -1298,6 +1386,15 @@ type chunksFinishedT struct {
 	appHash [32]byte
 }
 
+func readHttpIn(s *stateT) readHttpInputT {
+	return readHttpInputT{
+		s.httpChan,
+		s.tcpInChan,
+		s.homeCode,
+		s.isMemberCh,
+		s.members}
+}
+
 func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 	newS := *s
 	var newChunksLoading map[[32]byte][]fileChunkPtrT
@@ -1306,8 +1403,7 @@ func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 	}
 	delete(newChunksLoading, t.appHash)
 	newS.chunksLoading = newChunksLoading
-	return newS, readHttpInputT{
-		s.httpChan, s.tcpInChan, s.homeCode}
+	return newS, readHttpIn(s)
 }
 
 func decodeClientToClient(msg []byte) (common.ClientToClient, error) {
@@ -1384,11 +1480,10 @@ func decodeLow(bs []byte, result msgT) (msgT, error) {
 	return result, nil
 }
 
-func decodeMsg(raw []byte, secretEncrypt [32]byte) (msgT, [32]byte, error) {
-	cToC, err := decodeClientToClient(raw)
-	if err != nil {
-		return *new(msgT), *new([32]byte), err
-	}
+func decodeMsg(
+	cToC common.ClientToClient,
+	secretEncrypt [32]byte) (msgT, [32]byte, error) {
+
 	decrypted, ok := box.Open(
 		make([]byte, 0),
 		cToC.Msg,
@@ -1396,7 +1491,8 @@ func decodeMsg(raw []byte, secretEncrypt [32]byte) (msgT, [32]byte, error) {
 		&cToC.Author,
 		&secretEncrypt)
 	if !ok {
-		return *new(msgT), *new([32]byte), errors.New("Could not decrypt message.")
+		err := errors.New("Could not decrypt message.")
+		return *new(msgT), *new([32]byte), err
 	}
 	typeByte := decrypted[0]
 	msg := decrypted[1:]
@@ -1408,8 +1504,8 @@ func decodeMsg(raw []byte, secretEncrypt [32]byte) (msgT, [32]byte, error) {
 		decoded, err := decodeLow(msg, *new(appSigMsgT))
 		return decoded, cToC.Author, err
 	}
-	return *new(msgT), *new([32]byte), errors.New(
-		"Message type byte unknown.")
+	err := errors.New("Message type byte unknown.")
+	return *new(msgT), *new([32]byte), err
 }
 
 var routes = []string{"makeapproute", "getapp", "sendapp"}
