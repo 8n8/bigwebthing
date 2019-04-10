@@ -316,7 +316,7 @@ func tcpServer(
 
 const (
 	tmpDir      = "clientData/tmp"
-	appsDir = "clientData/apps"
+	appsDir     = "clientData/apps"
 	invitesFile = "clientData/invitations.txt"
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	docsDir     = "clientData/docs"
@@ -494,20 +494,6 @@ var receiptMeaning = []byte{
 	0x3f, 0x0e, 0x0e, 0x46, 0xf8, 0xaa, 0xac, 0xa6, 0xf2, 0x59,
 	0xd8, 0x2d, 0xa7, 0x6f, 0x23, 0xd8}
 
-func receiptHash(msgHash [32]byte) [32]byte {
-	concat := make([]byte, 48)
-	i := 0
-	for i < 32 {
-		concat[i] = msgHash[i]
-		i++
-	}
-	for i < 48 {
-		concat[i] = receiptMeaning[i-32]
-		i++
-	}
-	return blake2b.Sum256(concat)
-}
-
 func sendMsg(
 	envelope envelopeT,
 	tcpInChan chan envelopeT,
@@ -524,7 +510,7 @@ func sendMsg(
 		if err != nil {
 			return err
 		}
-		receiptHash, ok := sign.Open(
+		givenReceiptHash, ok := sign.Open(
 			make([]byte, 0),
 			common.SigToSlice(receipt.hashSig),
 			&receipt.author)
@@ -532,8 +518,8 @@ func sendMsg(
 			return errors.New("Bad receipt.")
 		}
 		if !bytes.Equal(
-			receiptHash,
-			common.HashToSlice(expectedHash)) {
+			givenReceiptHash,
+			receiptHash(expectedHash, receiptCode)) {
 
 			return errors.New("Bad receipt.")
 		}
@@ -542,6 +528,26 @@ func sendMsg(
 	}
 	return nil
 }
+
+var receiptCode = [16]byte{
+	0xdc, 0x61, 0x9b, 0xd6, 0xec, 0xb3, 0xe8, 0x24, 0x23, 0xcc,
+	0x4b, 0xef, 0xbe, 0xae, 0xb4, 0xeb}
+
+func receiptHash(appHash [32]byte, contextCode [16]byte) []byte {
+	concat := make([]byte, 48)
+	i := 0
+	for ; i < 32; i++ {
+		concat[i] = appHash[i]
+	}
+	for ; i < 48; i++ {
+		concat[i] = contextCode[i-32]
+	}
+	return common.HashToSlice(blake2b.Sum256(concat))
+}
+
+var appReceiptCode = [16]byte{
+	0xaf, 0xa1, 0x4b, 0xde, 0x8c, 0x62, 0x94, 0x65, 0xe6, 0x1b,
+	0x8f, 0xee, 0x21, 0x1b, 0x22, 0x82}
 
 func equalHashes(as [32]byte, bs [32]byte) bool {
 	for i, a := range as {
@@ -1217,11 +1223,15 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 		common.HashToSlice(appSig.appHash))
 	finalPath := appsDir + "/" + finalName
 	return newS, assembleApp{
-		filePaths: filePaths,
-		appHash: appSig.appHash,
-		tmpPath: tmpPath,
-		finalPath: finalPath,
-		}
+		filePaths:  filePaths,
+		appHash:    appSig.appHash,
+		tmpPath:    tmpPath,
+		finalPath:  finalPath,
+		appAuthor:  e.correspondent,
+		tcpInChan:  s.tcpInChan,
+		tcpOutChan: s.tcpOutChan,
+		secretSign: s.secretSign,
+	}
 }
 
 func makeChunkFilePath(chunkHash [32]byte) string {
@@ -1231,10 +1241,14 @@ func makeChunkFilePath(chunkHash [32]byte) string {
 }
 
 type assembleApp struct {
-	filePaths []string
-	appHash [32]byte
-	tmpPath string
-	finalPath string
+	filePaths  []string
+	appHash    [32]byte
+	tmpPath    string
+	finalPath  string
+	appAuthor  [32]byte
+	tcpInChan  chan envelopeT
+	tcpOutChan chan envelopeT
+	secretSign [64]byte
 }
 
 func (a assembleApp) send() inputT {
@@ -1253,14 +1267,24 @@ func (a assembleApp) send() inputT {
 	if err != nil {
 		return chunksFinishedT{a.appHash}
 	}
+	finalHash := hasher.Sum(nil)
 	if !bytes.Equal(
-		hasher.Sum(nil),
+		finalHash,
 		common.HashToSlice(a.appHash)) {
 
 		return chunksFinishedT{a.appHash}
 	}
 	_ = os.Rename(a.tmpPath, a.finalPath)
+	receipt := appReceiptT{sliceToSig(sign.Sign(
+		make([]byte, 0),
+		receiptHash(a.appHash, appReceiptCode),
+		&a.secretSign))}
+	_ = sendMsg(
+		envelopeT{receipt, a.appAuthor},
+		a.tcpInChan,
+		a.tcpOutChan)
 	return chunksFinishedT{a.appHash}
+
 }
 
 func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
@@ -1367,6 +1391,10 @@ type receiptT struct {
 	author  [32]byte
 }
 
+type appReceiptT struct {
+	hashSig [common.SigSize]byte
+}
+
 func hash(i interface{}) ([32]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -1385,10 +1413,15 @@ func (f fileChunk) code() byte {
 	return fileChunkMsgB
 }
 
+func (a appReceiptT) code() byte {
+	return appReceiptMsgB
+}
+
 const (
-	receiptMsgB   = 0x00
-	appSigMsgB    = 0x01
-	fileChunkMsgB = 0x02
+	receiptMsgB    = 0x00
+	appSigMsgB     = 0x01
+	fileChunkMsgB  = 0x02
+	appReceiptMsgB = 0x03
 )
 
 func decodeLow(bs []byte, result msgT) (msgT, error) {
