@@ -320,8 +320,6 @@ const (
 	invitesFile = "clientData/invitations.txt"
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	docsDir     = "clientData/docs"
-	wsUrl       = "ws://localhost:4000"
-	blobLen     = 16000 - 32 - box.Overhead
 	sendLogPath = "clientData/sendErrors.txt"
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	sentMsgPath = "clientData/sentMsgs.txt"
@@ -490,10 +488,6 @@ func logSentSuccess(appHash [32]byte, recipient [32]byte) {
 	}
 }
 
-var receiptMeaning = []byte{
-	0x3f, 0x0e, 0x0e, 0x46, 0xf8, 0xaa, 0xac, 0xa6, 0xf2, 0x59,
-	0xd8, 0x2d, 0xa7, 0x6f, 0x23, 0xd8}
-
 func sendMsg(
 	envelope envelopeT,
 	tcpInChan chan envelopeT,
@@ -549,15 +543,6 @@ var appReceiptCode = [16]byte{
 	0xaf, 0xa1, 0x4b, 0xde, 0x8c, 0x62, 0x94, 0x65, 0xe6, 0x1b,
 	0x8f, 0xee, 0x21, 0x1b, 0x22, 0x82}
 
-func equalHashes(as [32]byte, bs [32]byte) bool {
-	for i, a := range as {
-		if a != bs[i] {
-			return false
-		}
-	}
-	return true
-}
-
 var appSigMeaning = []byte{
 	0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6,
 	0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
@@ -599,18 +584,6 @@ func encodeData(a interface{}) ([]byte, error) {
 		return make([]byte, 0), err
 	}
 	return buf.Bytes(), nil
-}
-
-func decodeReceipt(bs []byte) ([32]byte, error) {
-	var buf bytes.Buffer
-	buf.Write(bs)
-	dec := gob.NewDecoder(&buf)
-	var receipt [32]byte
-	err := dec.Decode(&receipt)
-	if err != nil {
-		return receipt, err
-	}
-	return receipt, nil
 }
 
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -892,21 +865,6 @@ func genCode() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(authSlice), nil
 }
 
-type setupTcpConnT struct {
-	secretSign [64]byte
-	publicSign [32]byte
-	invites    []common.InviteT
-}
-
-type newTcpConn struct {
-	conn net.Conn
-}
-
-type failedToGoOnline struct {
-	err  error
-	tNow int64
-}
-
 type sendFileT struct {
 	tcpInChan     chan envelopeT
 	tcpOutChan    chan envelopeT
@@ -1139,22 +1097,6 @@ func main() {
 	for {
 		input := output.send()
 		state, output = input.update(&state)
-	}
-}
-
-func tcpListener(
-	conn net.Conn,
-	tcpInChan chan common.ClientToClient) {
-
-	dec := gob.NewDecoder(conn)
-	for {
-		var msg common.ClientToClient
-		err := dec.Decode(&msg)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		tcpInChan <- msg
 	}
 }
 
