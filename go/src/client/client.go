@@ -46,7 +46,6 @@ type stateT struct {
 	httpChan       chan httpInputT
 	tcpInChan      chan envelopeT
 	tcpOutChan     chan envelopeT
-	tcpChans       tcpServerChansT
 	getInvitesChan chan chan map[inviteT]dontCareT
 	homeCode       string
 	appCodes       map[string][32]byte
@@ -161,9 +160,7 @@ type inviteT struct {
 	Signature [common.SigSize]byte
 }
 
-func getPostParts(
-	r *http.Request) (*multipart.Part, []byte, error) {
-
+func getPostParts(r *http.Request) (*multipart.Part, []byte, error) {
 	var filepart *multipart.Part
 	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
@@ -198,7 +195,7 @@ func writeAppToFile(r *http.Request) (string, map[string]dontCareT, error) {
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
-	tmpPath := appsDir + "/" + tmpFileName
+	tmpPath := tmpDir + "/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
@@ -276,10 +273,10 @@ func (n newAppT) update(s *stateT) (stateT, outputT) {
 	appHash, err := hashFromString(n.hash)
 	if err != nil {
 		return *s, sendHttpErrorT{
-			w:      n.w,
-			msg:    err.Error(),
-			code:   400,
-			doneCh: n.doneCh,
+			n.w,
+			err.Error(),
+			400,
+			n.doneCh,
 		}
 	}
 	app := appMsgT{
@@ -377,11 +374,6 @@ func (r readHttpInputT) send() inputT {
 	return noInputT{}
 }
 
-type tcpServerChansT struct {
-	in  chan common.ClientToClient
-	out chan common.ClientToClient
-}
-
 type stopListenT struct{}
 
 type msgT interface {
@@ -446,6 +438,89 @@ type envelopeT struct {
 	correspondent [32]byte
 }
 
+func makeConn(
+	publicSign [32]byte,
+	secretSign [64]byte) (net.Conn, error) {
+
+	conn, connErr := net.Dial(
+		"tcp",
+		"localhost:4000")
+	if connErr != nil {
+		return conn, connErr
+	}
+	enc := gob.NewEncoder(conn)
+	dec := gob.NewDecoder(conn)
+	var authCode [common.AuthCodeLength]byte
+	connErr = dec.Decode(&authCode)
+	if connErr != nil {
+		return conn, connErr
+	}
+	authSig := common.AuthSigT{
+		publicSign,
+		signedAuthToSlice(sign.Sign(
+			make([]byte, 0),
+			common.AuthCodeToSlice(
+				authCode),
+			&secretSign)),
+	}
+	connErr = enc.Encode(authSig)
+	return conn, connErr
+}
+
+func tcpListen(
+	conn net.Conn,
+	isMemberCh chan isMemberT,
+	secretEncrypt [32]byte,
+	inChan chan envelopeT,
+	stopListenChan chan stopListenT) {
+
+	for {
+		msgLenB := make([]byte, 2)
+		n, err := conn.Read(msgLenB)
+		if n != 2 {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		mLen := twoBytesToInt(msgLenB)
+		if mLen > 16000 {
+			return
+		}
+		msg := make([]byte, mLen)
+		n, err = conn.Read(msg)
+		if n != mLen {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		cToC, err := decodeClientToClient(msg)
+		if err != nil {
+			continue
+		}
+		var okCh chan bool
+		isMemberCh <- isMemberT{
+			okCh, cToC.Author}
+		if !<-okCh {
+			continue
+		}
+		decoded, author, err := decodeMsg(cToC, secretEncrypt)
+		if err != nil {
+			continue
+		}
+		inChan <- envelopeT{
+			msg:           decoded,
+			correspondent: author,
+		}
+		select {
+		case <-stopListenChan:
+			return
+		default:
+		}
+	}
+}
+
 func tcpServer(
 	inChan chan envelopeT,
 	outChan chan envelopeT,
@@ -459,78 +534,18 @@ func tcpServer(
 	var stopListenChan chan stopListenT
 	for {
 		if connErr != nil {
-			conn, connErr := net.Dial(
-				"tcp",
-				"localhost:4000")
-			if connErr != nil {
-				continue
-			}
-			enc := gob.NewEncoder(conn)
-			dec := gob.NewDecoder(conn)
-			var authCode [common.AuthCodeLength]byte
-			connErr = dec.Decode(&authCode)
-			if connErr != nil {
-				continue
-			}
-			authSig := common.AuthSigT{
+			conn, connErr := makeConn(
 				publicSign,
-				signedAuthToSlice(sign.Sign(
-					make([]byte, 0),
-					common.AuthCodeToSlice(
-						authCode),
-					&secretSign)),
-			}
-			connErr = enc.Encode(authSig)
+				secretSign)
 			if connErr != nil {
 				continue
 			}
-			go func() {
-				for {
-					msgLenB := make([]byte, 2)
-					n, err := conn.Read(msgLenB)
-					if n != 2 {
-						continue
-					}
-					if err != nil {
-						return
-					}
-					mLen := twoBytesToInt(msgLenB)
-					if mLen > 16000 {
-						return
-					}
-					msg := make([]byte, mLen)
-					n, err = conn.Read(msg)
-					if n != mLen {
-						continue
-					}
-					if err != nil {
-						return
-					}
-					cToC, err := decodeClientToClient(msg)
-					if err != nil {
-						continue
-					}
-					var okCh chan bool
-					isMemberCh <- isMemberT{
-						okCh, cToC.Author}
-					if !<-okCh {
-						continue
-					}
-					decoded, author, err := decodeMsg(cToC, secretEncrypt)
-					if err != nil {
-						continue
-					}
-					inChan <- envelopeT{
-						msg:           decoded,
-						correspondent: author,
-					}
-					select {
-					case <-stopListenChan:
-						return
-					default:
-					}
-				}
-			}()
+			go tcpListen(
+				conn,
+				isMemberCh,
+				secretEncrypt,
+				inChan,
+				stopListenChan)
 		}
 
 		toSend := <-outChan
@@ -538,7 +553,11 @@ func tcpServer(
 		if err != nil {
 			panic(err.Error())
 		}
-		encoded, err := encodeMsg(toSend, publicSign, secretEncrypt, nonce)
+		encoded, err := encodeMsg(
+			toSend,
+			publicSign,
+			secretEncrypt,
+			nonce)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -559,9 +578,7 @@ func tcpServer(
 const (
 	tmpDir      = "clientData/tmp"
 	appsDir     = "clientData/apps"
-	invitesFile = "clientData/invitations.txt"
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
-	sendLogPath = "clientData/sendErrors.txt"
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	sentMsgPath = "clientData/sentMsgs.txt"
 )
@@ -693,7 +710,10 @@ func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 		fmt.Print(jsonErr)
 		return
 	}
-	f, openErr := os.OpenFile(sendLogPath, appendFlags, 0600)
+	f, openErr := os.OpenFile(
+		"clientData/sendErrors.txt",
+		appendFlags,
+		0600)
 	if openErr != nil {
 		fmt.Print(openErr)
 		return
@@ -838,20 +858,6 @@ func (a appMsgT) code() byte {
 	return appMsgB
 }
 
-// func (a appMsgT) hash() [32]byte {
-// 	concat := make([]byte, 32+common.SigSize)
-// 	i := 0
-// 	for i < 32 {
-// 		concat[i] = a.appHash[i]
-// 		i++
-// 	}
-// 	for i < 32+common.SigSize {
-// 		concat[i] = a.sig[i-32]
-// 		i++
-// 	}
-// 	return blake2b.Sum256(concat)
-// }
-
 func appSigHash(appHash [32]byte) []byte {
 	return common.HashToSlice(blake2b.Sum256(append(
 		common.HashToSlice(appHash),
@@ -869,31 +875,19 @@ func encodeData(a interface{}) ([]byte, error) {
 }
 
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
+	sendErr := func(msg string) sendHttpErrorT {
+		return sendHttpErrorT{n.w, msg, 400, n.doneCh}
+	}
 	if !strEq(n.securityCode, s.homeCode) {
-		return *s, sendHttpErrorT{
-			n.w,
-			"Bad security code.",
-			400,
-			n.doneCh,
-		}
+		return *s, sendErr("Bad security code.")
 	}
 	var sendAppJson sendAppJsonT
 	err := json.Unmarshal(n.body, &sendAppJson)
 	if err != nil {
-		return *s, sendHttpErrorT{
-			n.w,
-			"Could not decode Json.",
-			400,
-			n.doneCh,
-		}
+		return *s, sendErr("Could not decode Json.")
 	}
 	if len(sendAppJson.recipients) == 0 {
-		return *s, sendHttpErrorT{
-			n.w,
-			"No recipients.",
-			400,
-			n.doneCh,
-		}
+		return *s, sendErr("No recipients.")
 	}
 	var app appMsgT
 	for _, thisApp := range s.apps {
@@ -951,12 +945,6 @@ func sendFileToOne(
 	}
 
 	err := sender(s.appMsg)
-	// appMsgT{
-	// s.appHash,
-	// sliceToSig(sign.Sign(
-	// 	make([]byte, 0),
-	// 	appSigHash(s.appHash),
-	// 	&s.secretSign))})
 	if err != nil {
 		return err
 	}
