@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +42,7 @@ type outputT interface {
 }
 
 type stateT struct {
+	apps           []appMsgT
 	httpChan       chan httpInputT
 	tcpInChan      chan envelopeT
 	tcpOutChan     chan envelopeT
@@ -113,6 +117,16 @@ func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 	return invites, err
 }
 
+func readApps() ([]appMsgT, error) {
+	rawApps, err := ioutil.ReadFile("clientdata/apps.txt")
+	var apps []appMsgT
+	if err != nil {
+		return apps, err
+	}
+	err = json.Unmarshal(rawApps, &apps)
+	return apps, err
+}
+
 type readHttpInputT struct {
 	httpChan   chan httpInputT
 	tcpInChan  chan envelopeT
@@ -147,53 +161,174 @@ type inviteT struct {
 	Signature [common.SigSize]byte
 }
 
-func getPostFilePart(r *http.Request) (*multipart.Part, error) {
+func getPostParts(
+	r *http.Request) (*multipart.Part, []byte, error) {
+
 	var filepart *multipart.Part
 	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
-		return filepart, err
+		return filepart, *new([]byte), err
 	}
 	filepart, err = bodyFileReader.NextPart()
 	if err != nil {
-		return filepart, err
+		return filepart, *new([]byte), err
 	}
-	if filepart.FormName() != "upload" {
+	if filepart.FormName() != "file" {
 		msg := "Could not find form element \"upload\"."
-		return filepart, errors.New(msg)
+		return filepart, *new([]byte), errors.New(msg)
 	}
-	return filepart, nil
+	tagsPart, err := bodyFileReader.NextPart()
+	if tagsPart.FormName() != "tags" {
+		msg := "Could not find form elemtn \"tags\"."
+		return filepart, *new([]byte), errors.New(msg)
+	}
+	tags, err := ioutil.ReadAll(tagsPart)
+	if err != nil {
+		return filepart, *new([]byte), err
+	}
+	return filepart, tags, nil
 }
 
-func writeAppToFile(r *http.Request) (string, error) {
-	filepart, err := getPostFilePart(r)
+func writeAppToFile(r *http.Request) (string, map[string]dontCareT, error) {
+	filepart, tagBytes, err := getPostParts(r)
 	if err != nil {
-		return "", err
+		return "", *new(map[string]dontCareT), err
 	}
 	tmpFileName, err := genCode()
 	if err != nil {
-		return "", err
+		return "", *new(map[string]dontCareT), err
 	}
-	tmpPath := docsDir + "/" + tmpFileName
+	tmpPath := appsDir + "/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
-		return "", err
+		return "", *new(map[string]dontCareT), err
 	}
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		return "", err
+		return "", *new(map[string]dontCareT), err
 	}
 	tee := io.TeeReader(filepart, hasher)
 	_, err = io.Copy(fileHandle, tee)
 	if err != nil {
-		return "", err
+		return "", *new(map[string]dontCareT), err
 	}
 	hash := base64.RawURLEncoding.EncodeToString(hasher.Sum(nil))
-	err = os.Rename(tmpPath, docsDir+"/"+hash)
+	err = os.Rename(tmpPath, appsDir+"/"+hash)
 	if err != nil {
-		return "", err
+		return "", *new(map[string]dontCareT), err
+	}
+	tags, err := parseTags(tagBytes)
+	if err != nil {
+		return "", *new(map[string]dontCareT), err
+	}
+	return hash, tags, nil
+}
+
+func tagOk(tag string) error {
+	if len(tag) < 100 {
+		return errors.New("Tag too long.")
+	}
+	return nil
+}
+
+func parseTags(bs []byte) (map[string]dontCareT, error) {
+	f := func(c rune) bool {
+		return c == ' ' || c == ';'
+	}
+	tagslice := strings.FieldsFunc(string(bs), f)
+	var tagmap map[string]dontCareT
+	for _, tag := range tagslice {
+		err := tagOk(tag)
+		if err != nil {
+			return tagmap, err
+		}
+		tagmap[tag] = dontCareT{}
+	}
+	return tagmap, nil
+}
+
+type newAppT struct {
+	tags      map[string]dontCareT
+	hash      string
+	w         http.ResponseWriter
+	doneCh    chan endRequest
+	posixTime int64
+}
+
+func hashFromString(s string) ([32]byte, error) {
+	hashSlice, err := hex.DecodeString(s)
+	if err != nil {
+		return *new([32]byte), err
+	}
+	if len(hashSlice) != 32 {
+		return *new([32]byte), errors.New(
+			"Hash wrong length.")
+	}
+	var hash [32]byte
+	for i, b := range hashSlice {
+		hash[i] = b
 	}
 	return hash, nil
+}
+
+func (n newAppT) update(s *stateT) (stateT, outputT) {
+	appHash, err := hashFromString(n.hash)
+	if err != nil {
+		return *s, sendHttpErrorT{
+			w:      n.w,
+			msg:    err.Error(),
+			code:   400,
+			doneCh: n.doneCh,
+		}
+	}
+	app := appMsgT{
+		s.publicSign,
+		n.tags,
+		appHash,
+		n.posixTime,
+		sliceToSig(sign.Sign(
+			make([]byte, 0),
+			common.HashToSlice(hashApp(
+				n.tags, appHash, n.posixTime)),
+			&s.secretSign)),
+	}
+	newApps := make([]appMsgT, len(s.apps))
+	for i, thisApp := range s.apps {
+		newApps[i] = thisApp
+	}
+	newApps = append(newApps, app)
+	newS := *s
+	newS.apps = newApps
+	encodedApps, err := json.Marshal(newApps)
+	if err != nil {
+		return *s, sendHttpErrorT{
+			w:      n.w,
+			msg:    err.Error(),
+			code:   500,
+			doneCh: n.doneCh,
+		}
+	}
+	return newS, writeNewAppsT{
+		"clientData/apps.txt",
+		encodedApps,
+		n.w,
+		n.doneCh,
+		common.HashToSlice(appHash),
+	}
+}
+
+func (w writeNewAppsT) send() inputT {
+	err := ioutil.WriteFile(w.filePath, w.encodedApps, 0600)
+	if err != nil {
+		fmt.Println("Could not write apps to file.")
+		http.Error(w.w, err.Error(), 500)
+		w.doneCh <- endRequest{}
+		return noInputT{}
+	}
+	w.w.Write(w.appHash)
+	w.doneCh <- endRequest{}
+	return noInputT{}
 }
 
 func (r readHttpInputT) send() inputT {
@@ -202,15 +337,18 @@ func (r readHttpInputT) send() inputT {
 		req := h.r
 		securityCode := pat.Param(h.r, "securitycode")
 		if h.route == "saveapp" {
-			hash, err := writeAppToFile(h.r)
+			hash, tags, err := writeAppToFile(h.r)
 			if err != nil {
 				http.Error(h.w, err.Error(), 500)
 				h.doneCh <- endRequest{}
 				return noInputT{}
 			}
-			h.w.Write([]byte(hash))
-			h.doneCh <- endRequest{}
-			return noInputT{}
+			return newAppT{
+				tags,
+				hash,
+				h.w,
+				h.doneCh,
+				time.Now().Unix()}
 		}
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
@@ -423,7 +561,6 @@ const (
 	appsDir     = "clientData/apps"
 	invitesFile = "clientData/invitations.txt"
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
-	docsDir     = "clientData/docs"
 	sendLogPath = "clientData/sendErrors.txt"
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	sentMsgPath = "clientData/sentMsgs.txt"
@@ -507,7 +644,7 @@ func (n newAppCodeT) update(s *stateT) (stateT, outputT) {
 	}
 	newAppCodes[n.newCode] = n.appHash
 	newState.appCodes = newAppCodes
-	return newState, htmlOkResponseT{
+	return newState, httpOkResponseT{
 		[]byte(n.newCode),
 		n.w,
 		n.doneCh,
@@ -651,28 +788,69 @@ var appSigMeaning = []byte{
 	0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6,
 	0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
 
-type appMsgT struct {
-	appHash [32]byte
-	sig     [common.SigSize]byte
-}
-
-func (a appMsgT) code() byte {
-	return appSigMsgB
-}
-
-func (a appMsgT) hash() [32]byte {
-	concat := make([]byte, 32+common.SigSize)
+func concatTags(t map[string]dontCareT) []byte {
+	tagSlice := make([]string, len(t))
 	i := 0
-	for i < 32 {
-		concat[i] = a.appHash[i]
-		i++
+	for tag, _ := range t {
+		tagSlice[i] = tag
 	}
-	for i < 32+common.SigSize {
-		concat[i] = a.sig[i-32]
-		i++
+	sort.Strings(tagSlice)
+	strConcat := ""
+	for _, tag := range tagSlice {
+		strConcat = strConcat + tag
+	}
+	return []byte(strConcat)
+}
+
+func encodeInt64(i int64) []byte {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, uint64(i))
+	return b
+}
+
+func hashApp(tags map[string]dontCareT, appHash [32]byte, posixTime int64) [32]byte {
+	tagBytes := concatTags(tags)
+	lenTags := len(tagBytes)
+	concat := make([]byte, lenTags+32+8)
+	i := 0
+	for ; i < lenTags; i++ {
+		concat[i] = tagBytes[i]
+	}
+	for ; i < lenTags+32; i++ {
+		concat[i] = appHash[i-32]
+	}
+	timeBytes := encodeInt64(posixTime)
+	for ; i < lenTags+32+8; i++ {
+		concat[i] = timeBytes[i-lenTags-32]
 	}
 	return blake2b.Sum256(concat)
 }
+
+type appMsgT struct {
+	author    [32]byte
+	tags      map[string]dontCareT
+	appHash   [32]byte
+	posixTime int64
+	sig       [common.SigSize]byte
+}
+
+func (a appMsgT) code() byte {
+	return appMsgB
+}
+
+// func (a appMsgT) hash() [32]byte {
+// 	concat := make([]byte, 32+common.SigSize)
+// 	i := 0
+// 	for i < 32 {
+// 		concat[i] = a.appHash[i]
+// 		i++
+// 	}
+// 	for i < 32+common.SigSize {
+// 		concat[i] = a.sig[i-32]
+// 		i++
+// 	}
+// 	return blake2b.Sum256(concat)
+// }
 
 func appSigHash(appHash [32]byte) []byte {
 	return common.HashToSlice(blake2b.Sum256(append(
@@ -717,8 +895,16 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 			n.doneCh,
 		}
 	}
-	filepath := docsDir + "/" + hashToStr(sendAppJson.appHash)
-	return *s, sendFileT{
+	var app appMsgT
+	for _, thisApp := range s.apps {
+		if equalHashes(thisApp.appHash, sendAppJson.appHash) {
+			app = thisApp
+			break
+		}
+	}
+	filepath := appsDir + "/" + hashToStr(sendAppJson.appHash)
+	return *s, sendAppT{
+		app,
 		s.tcpInChan,
 		s.tcpOutChan,
 		filepath,
@@ -753,7 +939,7 @@ type fileChunk struct {
 }
 
 func sendFileToOne(
-	s sendFileT,
+	s sendAppT,
 	recipient [32]byte,
 	fileHandle *os.File) error {
 
@@ -764,12 +950,13 @@ func sendFileToOne(
 			s.tcpOutChan)
 	}
 
-	err := sender(appMsgT{
-		s.appHash,
-		sliceToSig(sign.Sign(
-			make([]byte, 0),
-			appSigHash(s.appHash),
-			&s.secretSign))})
+	err := sender(s.appMsg)
+	// appMsgT{
+	// s.appHash,
+	// sliceToSig(sign.Sign(
+	// 	make([]byte, 0),
+	// 	appSigHash(s.appHash),
+	// 	&s.secretSign))})
 	if err != nil {
 		return err
 	}
@@ -800,7 +987,7 @@ func sendFileToOne(
 	return nil
 }
 
-func (s sendFileT) send() inputT {
+func (s sendAppT) send() inputT {
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
 		logSendErr(err, s.appHash, s.recipients[0])
@@ -835,7 +1022,7 @@ func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	return *s, serveDocT{
 		n.w,
 		n.doneCh,
-		docsDir + "/" + hashToStr(docHash),
+		appsDir + "/" + hashToStr(docHash),
 	}
 }
 
@@ -891,13 +1078,13 @@ func processMakeAppRoute(
 	}
 }
 
-type htmlOkResponseT struct {
+type httpOkResponseT struct {
 	msg    []byte
 	w      http.ResponseWriter
 	doneCh chan endRequest
 }
 
-func (h htmlOkResponseT) send() inputT {
+func (h httpOkResponseT) send() inputT {
 	writer := h.w
 	writer.Write(h.msg)
 	h.doneCh <- endRequest{}
@@ -969,7 +1156,8 @@ func genCode() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(authSlice), nil
 }
 
-type sendFileT struct {
+type sendAppT struct {
+	appMsg        appMsgT
 	tcpInChan     chan envelopeT
 	tcpOutChan    chan envelopeT
 	filepath      string
@@ -1148,6 +1336,10 @@ func initState() (stateT, error) {
 	if err != nil {
 		return s, err
 	}
+	apps, err := readApps()
+	if err != nil {
+		return s, err
+	}
 	memberList := makeMemberList(invites, uninvites)
 	_, mem := memberList[keys.publicsign]
 	return stateT{
@@ -1167,6 +1359,7 @@ func initState() (stateT, error) {
 		uninvites:     uninvites,
 		members:       memberList,
 		isMember:      mem,
+		apps:          apps,
 	}, nil
 }
 
@@ -1209,7 +1402,7 @@ func (e envelopeT) update(s *stateT) (stateT, outputT) {
 		return *s, readHttpIn(s)
 	case fileChunkMsgB:
 		return processNewFileChunk(e, s)
-	case appSigMsgB:
+	case appMsgB:
 		return processAppSigMsg(e, s)
 	}
 	return *s, readHttpIn(s)
@@ -1382,6 +1575,14 @@ func (w writeToFileT) send() inputT {
 	return noInputT{}
 }
 
+type writeNewAppsT struct {
+	filePath    string
+	encodedApps []byte
+	w           http.ResponseWriter
+	doneCh      chan endRequest
+	appHash     []byte
+}
+
 type chunksFinishedT struct {
 	appHash [32]byte
 }
@@ -1457,7 +1658,7 @@ func (a appReceiptT) code() byte {
 
 const (
 	receiptMsgB    = 0x00
-	appSigMsgB     = 0x01
+	appMsgB        = 0x01
 	fileChunkMsgB  = 0x02
 	appReceiptMsgB = 0x03
 )
@@ -1500,7 +1701,7 @@ func decodeMsg(
 	case receiptMsgB:
 		decoded, err := decodeLow(msg, *new(receiptT))
 		return decoded, cToC.Author, err
-	case appSigMsgB:
+	case appMsgB:
 		decoded, err := decodeLow(msg, *new(appMsgT))
 		return decoded, cToC.Author, err
 	}
@@ -1508,7 +1709,7 @@ func decodeMsg(
 	return *new(msgT), *new([32]byte), err
 }
 
-var routes = []string{"makeapproute", "getapp", "sendapp"}
+var routes = []string{"makeapproute", "getapp", "sendapp", "saveapp"}
 
 func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
