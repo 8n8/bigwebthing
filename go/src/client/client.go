@@ -651,16 +651,16 @@ var appSigMeaning = []byte{
 	0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6,
 	0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
 
-type appSigMsgT struct {
+type appMsgT struct {
 	appHash [32]byte
 	sig     [common.SigSize]byte
 }
 
-func (a appSigMsgT) code() byte {
+func (a appMsgT) code() byte {
 	return appSigMsgB
 }
 
-func (a appSigMsgT) hash() [32]byte {
+func (a appMsgT) hash() [32]byte {
 	concat := make([]byte, 32+common.SigSize)
 	i := 0
 	for i < 32 {
@@ -764,7 +764,7 @@ func sendFileToOne(
 			s.tcpOutChan)
 	}
 
-	err := sender(appSigMsgT{
+	err := sender(appMsgT{
 		s.appHash,
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
@@ -1216,7 +1216,7 @@ func (e envelopeT) update(s *stateT) (stateT, outputT) {
 }
 
 func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
-	appSig, ok := (e.msg).(appSigMsgT)
+	appSig, ok := (e.msg).(appMsgT)
 	var newChunksLoading map[[32]byte][]fileChunkPtrT
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
@@ -1501,7 +1501,7 @@ func decodeMsg(
 		decoded, err := decodeLow(msg, *new(receiptT))
 		return decoded, cToC.Author, err
 	case appSigMsgB:
-		decoded, err := decodeLow(msg, *new(appSigMsgT))
+		decoded, err := decodeLow(msg, *new(appMsgT))
 		return decoded, cToC.Author, err
 	}
 	err := errors.New("Message type byte unknown.")
