@@ -73,7 +73,7 @@ func makeMemberList(
 	invites map[inviteT]dontCareT,
 	uninvites map[inviteT]dontCareT) map[[32]byte]dontCareT {
 
-	var members map[[32]byte]dontCareT
+	members := make(map[[32]byte]dontCareT)
 	members[common.TruesPubSign] = dontCareT{}
 	addedMember := true
 	for addedMember {
@@ -110,7 +110,7 @@ func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 	rawInvites, err := ioutil.ReadFile(filePath)
 	var invites map[inviteT]dontCareT
 	if err != nil {
-		return invites, err
+		return invites, nil
 	}
 	err = json.Unmarshal(rawInvites, &invites)
 	return invites, err
@@ -120,7 +120,7 @@ func readApps() ([]appMsgT, error) {
 	rawApps, err := ioutil.ReadFile("clientdata/apps.txt")
 	var apps []appMsgT
 	if err != nil {
-		return apps, err
+		return apps, nil
 	}
 	err = json.Unmarshal(rawApps, &apps)
 	return apps, err
@@ -369,7 +369,6 @@ func (r readHttpInputT) send() inputT {
 		_, ok := r.memberList[request.candidate]
 		request.returnCh <- ok
 		return noInputT{}
-	default:
 	}
 	return noInputT{}
 }

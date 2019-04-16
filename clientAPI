@@ -8,7 +8,7 @@ Only accessible from the home session
     Request to localhost:3000/getapp/securityCode
 + DONE func saveApp() appHash
 + DONE func sendApp(appHash, recipients [][]byte)
-+ func searchApps(tags []string, searchString string) metadata
++ DONE func searchApps(tags []string, searchString string) metadata
 
 
 Accessible from all sessions
