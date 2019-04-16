@@ -599,6 +599,8 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 		return processGetApp(n, s)
 	case "sendapp":
 		return processSendApp(n, s)
+	case "searchapps":
+		return processSearchApps(n, s)
 	}
 	return *s, readHttpIn(s)
 }
@@ -854,6 +856,13 @@ type appMsgT struct {
 	sig       [common.SigSize]byte
 }
 
+type searchResultT struct {
+	author    []byte
+	tags      []string
+	hash      []byte
+	posixtime int64
+}
+
 func (a appMsgT) code() byte {
 	return appMsgB
 }
@@ -995,6 +1004,104 @@ func (s sendAppT) send() inputT {
 	}
 	s.doneCh <- endRequest{}
 	return noInputT{}
+}
+
+type searchQueryT struct {
+	tags         []string
+	searchString string
+}
+
+func sliceToSet(slice []string) map[string]dontCareT {
+	var set map[string]dontCareT
+	for _, s := range slice {
+		set[s] = dontCareT{}
+	}
+	return set
+}
+
+func isSubset(sub []string, super map[string]dontCareT) bool {
+	for _, s := range sub {
+		_, ok := super[s]
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func matchesSearch(searchString string, tags map[string]dontCareT) bool {
+	for tag, _ := range tags {
+		if strings.Contains(searchString, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchingApp(app appMsgT, q searchQueryT) bool {
+	return isSubset(q.tags, app.tags) &&
+		matchesSearch(q.searchString, app.tags)
+}
+
+func filterApps(all []appMsgT, q searchQueryT) []appMsgT {
+	var filtered []appMsgT
+	for _, app := range all {
+		if matchingApp(app, q) {
+			filtered = append(filtered, app)
+		}
+	}
+	return filtered
+}
+
+func setToSlice(set map[string]dontCareT) []string {
+	result := make([]string, len(set))
+	i := 0
+	for s, _ := range set {
+		result[i] = s
+		i++
+	}
+	return result
+}
+
+func appToSearchResult(app appMsgT) searchResultT {
+	return searchResultT{
+		common.HashToSlice(app.author),
+		setToSlice(app.tags),
+		common.HashToSlice(app.appHash),
+		app.posixTime,
+	}
+}
+
+func search(apps []appMsgT, q searchQueryT) []searchResultT {
+	filtered := filterApps(apps, q)
+	searchResults := make([]searchResultT, len(filtered))
+	for i, app := range filtered {
+		searchResults[i] = appToSearchResult(app)
+	}
+	return searchResults
+}
+
+func processSearchApps(
+	n normalApiInputT,
+	s *stateT) (stateT, outputT) {
+
+	sendErr := func(msg string) sendHttpErrorT {
+		return sendHttpErrorT{n.w, msg, 400, n.doneCh}
+	}
+	if !strEq(n.securityCode, s.homeCode) {
+		return *s, sendErr("Bad security code.")
+	}
+	var searchQuery searchQueryT
+	err := json.Unmarshal(n.body, &searchQuery)
+	if err != nil {
+		return *s, sendErr("Could not decode Json.")
+	}
+	matchingApps := search(s.apps, searchQuery)
+	encoded, err := json.Marshal(matchingApps)
+	if err != nil {
+		return *s, sendErr("Couldn't encode search results.")
+	}
+	return *s, httpOkResponseT{encoded, n.w, n.doneCh}
 }
 
 func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -1697,7 +1804,7 @@ func decodeMsg(
 	return *new(msgT), *new([32]byte), err
 }
 
-var routes = []string{"makeapproute", "getapp", "sendapp", "saveapp"}
+var routes = []string{"makeapproute", "getapp", "sendapp", "saveapp", "searchapps"}
 
 func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
