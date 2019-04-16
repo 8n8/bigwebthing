@@ -333,13 +333,7 @@ func (r readHttpInputT) send() inputT {
 	case h := <-r.httpChan:
 		req := h.r
 		securityCode := pat.Param(h.r, "securitycode")
-		route := pat.Param(h.r, "route")
-		_, ok := routes[route]
-		if !ok {
-			http.Error(h.w, "Bad route.", 400)
-			return noInputT{}
-		}
-		if route == "saveapp" {
+		if h.route == "saveapp" {
 			hash, tags, err := writeAppToFile(h.r)
 			if err != nil {
 				http.Error(h.w, err.Error(), 500)
@@ -366,7 +360,7 @@ func (r readHttpInputT) send() inputT {
 			h.w,
 			securityCode,
 			body,
-			route,
+			h.route,
 			h.doneCh,
 		}
 	case tcpIn := <-r.tcpInChan:
@@ -1194,6 +1188,7 @@ func (h httpOkResponseT) send() inputT {
 type httpInputT struct {
 	w      http.ResponseWriter
 	r      *http.Request
+	route  string
 	doneCh chan endRequest
 }
 
@@ -1487,10 +1482,10 @@ type handlerT func(http.ResponseWriter, *http.Request)
 
 type endRequest struct{}
 
-func handler(inputChan chan httpInputT) handlerT {
+func handler(route string, inputChan chan httpInputT) handlerT {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var doneCh chan endRequest
-		inputChan <- httpInputT{w, r, doneCh}
+		inputChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
 	}
 }
@@ -1808,14 +1803,7 @@ func decodeMsg(
 	return *new(msgT), *new([32]byte), err
 }
 
-var routes = map[string]dontCareT{
-	"makeapproute": dontCareT{},
-	"getapp": dontCareT{},
-	"sendapp": dontCareT{},
-	"saveapp": dontCareT{},
-	"searchapps": dontCareT{},
-}
-
+var routes = []string{"makeapproute", "getapp", "sendapp", "saveapp", "searchapps"}
 
 func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
@@ -1823,7 +1811,11 @@ func twoBytesToInt(bs []byte) int {
 
 func httpServer(inputChan chan httpInputT) {
 	mux := goji.NewMux()
-	path := "/:route/:securityCode"
-	mux.HandleFunc(pat.Post(path), handler(inputChan))
+	for _, route := range routes {
+		path := "/" + route + "/:securityCode"
+		mux.HandleFunc(
+			pat.Post(path),
+			handler(route, inputChan))
+	}
 	http.ListenAndServe(":3000", nil)
 }
