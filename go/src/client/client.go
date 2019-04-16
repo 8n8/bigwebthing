@@ -20,6 +20,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"github.com/pkg/browser"
 	"syscall"
 	"time"
 
@@ -1470,7 +1471,14 @@ func main() {
 		state.secretSign,
 		state.secretEncrypt,
 		state.publicSign)
-	go httpServer(state.httpChan)
+	go httpServer(state.httpChan, state.homeCode)
+	fmt.Print(state.homeCode)
+	err = browser.OpenURL(
+		"http://localhost:3000/" + state.homeCode)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	var output outputT = readHttpIn(&state)
 	for {
 		input := output.send()
@@ -1809,7 +1817,7 @@ func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
 }
 
-func httpServer(inputChan chan httpInputT) {
+func httpServer(inputChan chan httpInputT, homeCode string) {
 	mux := goji.NewMux()
 	for _, route := range routes {
 		path := "/" + route + "/:securityCode"
@@ -1817,5 +1825,9 @@ func httpServer(inputChan chan httpInputT) {
 			pat.Post(path),
 			handler(route, inputChan))
 	}
+	home := "/" + homeCode
+	http.Handle(
+		home,
+		http.StripPrefix(home, http.FileServer(http.Dir("./home"))))
 	http.ListenAndServe(":3000", nil)
 }

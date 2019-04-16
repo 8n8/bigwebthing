@@ -14,6 +14,7 @@ import Html.Events exposing (onClick, onInput)
 import Http
 import List as L
 import Url
+import Url.Parser as Up exposing ((</>))
 
 
 main =
@@ -23,19 +24,34 @@ main =
         , update = update
         , subscriptions = \_ -> Sub.none
         , onUrlRequest = \_ -> DoNothing
-        , onUrlChange = \url -> NewUrl url.path
+        , onUrlChange = \url -> NewUrl url
         }
 
-urlToPage path = case path of
-    "/" -> Home
-    "/newdocument" -> NewDoc
-    "/members" -> Members
-    _ -> Unknown
+parseRoute : Up.Parser ((Page, Maybe String) -> a) a
+parseRoute =
+    Up.oneOf
+        [ Up.map (\x -> (Home, Just x)) Up.string
+        , Up.map (\x -> (NewDoc, Just x)) (Up.string </> Up.s "newdocument")
+        , Up.map (\x -> (Members, Just x)) (Up.string </> Up.s "members")
+        ]
+
+urlToPage : Url.Url -> (Page, Maybe String)
+urlToPage url =
+        Debug.log "Just" <| case Up.parse parseRoute url of
+            Nothing -> (Unknown, Nothing)
+            Just result -> result
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
-    ( { boxStr = "", displayStr = "", page = urlToPage url.path, key = key }, Cmd.none )
-
+    case urlToPage url of
+        (page, securityCode) ->
+            ( { boxStr = ""
+              , displayStr = ""
+              , page = page
+              , key = key
+              , securityCode = securityCode
+              }
+            , Cmd.none )
 
 type Msg
     = TypedIn String
@@ -44,7 +60,7 @@ type Msg
     | MembershipButtonClick
     | HomeButtonClick
     | DoNothing
-    | NewUrl String
+    | NewUrl Url.Url
     | UploadDoc
 
 
@@ -57,6 +73,7 @@ type Page
 
 type alias Model =
     { page : Page
+    , securityCode : Maybe String
     , boxStr : String
     , displayStr : String
     , key : Nav.Key
@@ -74,10 +91,12 @@ postMsg txt =
 
 setNewDocUrl key = Nav.pushUrl key "/newdocument"
 
+update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
     case msg of
-        NewUrl path ->
-            ( { model | page = urlToPage path }, Cmd.none ) 
+        NewUrl path -> case urlToPage path of
+            (page, _) ->
+                ( { model | page = page }, Cmd.none ) 
 
         TypedIn txt ->
             ( { model | boxStr = txt }, postMsg txt )
@@ -95,17 +114,28 @@ update msg model =
             ( model, Cmd.none )
 
         MembershipButtonClick ->
-            ( { model | page = Members }
-            , Nav.pushUrl model.key "/members"
-            )
+            case model.securityCode of
+                Nothing -> ( { model | page = Unknown }, Cmd.none)
+                Just code ->
+                    ( { model | page = Members }
+                    , Nav.pushUrl model.key <| "/" ++ code ++ "/members"
+                    )
 
         NewDocumentButtonClick ->
-            ( { model | page = NewDoc }
-            , Nav.pushUrl model.key "/newdocument"
-            )
-
+            case model.securityCode of
+                Nothing -> ( { model | page = Unknown }, Cmd.none)
+                Just code ->
+                    ( { model | page = NewDoc }
+                    , Nav.pushUrl model.key <| "/" ++ code ++ "/newdocument"
+                    )
+        
         HomeButtonClick ->
-            ( { model | page = Home }, Cmd.none )
+            case model.securityCode of
+                Nothing -> ( { model | page = Unknown }, Cmd.none)
+                Just code -> 
+                    ( { model | page = Home }
+                    , Nav.pushUrl model.key <| "/" ++ code
+                    )
 
 
 view model =
@@ -254,7 +284,9 @@ mainEl model = case model.page of
     Home -> homePage model
     NewDoc -> newDocPage model
     Members -> memberPage model
-    Unknown -> E.none
+    Unknown -> unknownPage
+
+unknownPage = E.el [] <| E.text "Page doesn't exist"
 
 memberPage model =
     E.column
