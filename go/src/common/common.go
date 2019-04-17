@@ -41,9 +41,8 @@ type MetadataT struct {
 var EmptyHash = HashToSlice(blake2b.Sum256([]byte("")))
 
 const (
-	AuthLen        = 16
 	SigSize        = sign.Overhead + blake2b.Size256
-	AuthSigSize    = sign.Overhead + AuthLen
+	AuthSigSize    = sign.Overhead + AuthCodeLength
 	AuthCodeLength = 24
 	ChunkSize = 16000
 )

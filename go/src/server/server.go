@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"common"
+	"github.com/pkg/profile"
 	"crypto/rand"
 	"encoding/gob"
 	"encoding/json"
@@ -110,9 +111,9 @@ func (n noInputT) update(s *stateT) (stateT, outputT) {
 }
 
 func readMembers() (map[[32]byte]dontCare, error) {
-	var result map[[32]byte]dontCare
+	result := make(map[[32]byte]dontCare)
 	var members [][32]byte
-	contents, err := ioutil.ReadFile("serverData/member.txt")
+	contents, err := ioutil.ReadFile("serverData/members.txt")
 	if err != nil {
 		return result, err
 	}
@@ -127,6 +128,7 @@ func readMembers() (map[[32]byte]dontCare, error) {
 }
 
 func main() {
+	defer profile.Start().Stop()
 	var state stateT
 	members, err := readMembers()
 	if err != nil {
