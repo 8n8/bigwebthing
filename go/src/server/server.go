@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"common"
-	"github.com/pkg/profile"
 	"crypto/rand"
 	"encoding/gob"
 	"encoding/json"
@@ -16,9 +15,21 @@ import (
 
 type stateT struct {
 	newConnChan    chan tcpConnectionT
-	connectedUsers map[[32]byte]tcpConnectionT
+	errInChan chan errMsgT
+	msgInChan chan common.ClientToClient
+	connectedUsers map[[32]byte]tcpOutChansT
 	isMember       chan isMemberT
 	members        map[[32]byte]dontCare
+}
+
+type errMsgT struct {
+	id [32]byte
+	err error
+}
+
+type tcpOutChansT struct {
+	err chan error
+	msg chan common.ClientToClient
 }
 
 type dontCare struct{}
@@ -38,8 +49,10 @@ type inputT interface {
 
 type readChansT struct {
 	isMember       chan isMemberT
+	errInChan chan errMsgT
+	msgInChan chan common.ClientToClient
 	newConnChan    chan tcpConnectionT
-	connectedUsers map[[32]byte]tcpConnectionT
+	connectedUsers map[[32]byte]tcpOutChansT
 	members        map[[32]byte]dontCare
 }
 
@@ -48,7 +61,7 @@ type endConnT struct {
 }
 
 func (e endConnT) update(s *stateT) (stateT, outputT) {
-	var newConnUsers map[[32]byte]tcpConnectionT
+	newConnUsers := make(map[[32]byte]tcpOutChansT)
 	for id, conn := range s.connectedUsers {
 		newConnUsers[id] = conn
 	}
@@ -77,20 +90,15 @@ func (r readChansT) send() inputT {
 	case isMember := <-r.isMember:
 		_, ok := r.members[isMember.id]
 		isMember.returnChan <- ok
-	default:
-	}
-	for author, conn := range r.connectedUsers {
-		select {
-		case msg := <-conn.in:
-			recip, ok := r.connectedUsers[msg.Recipient]
-			if !ok {
-				continue
-			}
-			recip.out <- msg
-		case <-conn.inErr:
-			return endConnT{author}
-		default:
+	case errIn := <-r.errInChan:
+		fmt.Println(errIn)
+		return endConnT{errIn.id}
+	case msgIn := <-r.msgInChan:
+		recipCh, ok := r.connectedUsers[msgIn.Recipient]
+		if !ok {
+			return noInputT{}
 		}
+		recipCh.msg <- msgIn
 	}
 	return noInputT{}
 }
@@ -128,7 +136,6 @@ func readMembers() (map[[32]byte]dontCare, error) {
 }
 
 func main() {
-	defer profile.Start().Stop()
 	var state stateT
 	members, err := readMembers()
 	if err != nil {
@@ -140,7 +147,11 @@ func main() {
 		return
 	}
 	state.members = members
-	go tcpServer(state.newConnChan, state.isMember)
+	go tcpServer(
+		state.newConnChan,
+		state.isMember,
+		state.errInChan,
+		state.msgInChan)
 	var output outputT = readChans(&state)
 	for {
 		input := output.send()
@@ -162,25 +173,29 @@ func genAuthCode() ([common.AuthCodeLength]byte, error) {
 }
 
 type tcpConnectionT struct {
-	in     chan common.ClientToClient
 	out    chan common.ClientToClient
-	inErr  chan error
 	outErr chan error
 	id     [32]byte
 }
 
 func (t tcpConnectionT) update(s *stateT) (stateT, outputT) {
-	var newConnUsers map[[32]byte]tcpConnectionT
+	newConnUsers := make(map[[32]byte]tcpOutChansT)
 	for k, v := range s.connectedUsers {
 		newConnUsers[k] = v
 	}
-	newConnUsers[t.id] = t
+	newConnUsers[t.id] = tcpOutChansT{t.outErr, t.out}
 	newS := *s
 	newS.connectedUsers = newConnUsers
 	return newS, readChans(s)
 }
 
-func handleConn(conn net.Conn, newConnChan chan tcpConnectionT, isMemberChan chan isMemberT) {
+func handleConn(
+	conn net.Conn,
+	newConnChan chan tcpConnectionT,
+	isMemberChan chan isMemberT,
+	errInChan chan errMsgT,
+	msgInChan chan common.ClientToClient) {
+
 	conn.SetDeadline(time.Now().Add(time.Second * 30))
 	authCode, err := genAuthCode()
 	if err != nil {
@@ -215,9 +230,7 @@ func handleConn(conn net.Conn, newConnChan chan tcpConnectionT, isMemberChan cha
 		return
 	}
 	chs := tcpConnectionT{
-		in:     make(chan common.ClientToClient),
 		out:    make(chan common.ClientToClient),
-		inErr:  make(chan error),
 		outErr: make(chan error),
 		id:     authSig.Author,
 	}
@@ -228,13 +241,13 @@ func handleConn(conn net.Conn, newConnChan chan tcpConnectionT, isMemberChan cha
 			var clientToClient common.ClientToClient
 			err = dec.Decode(&clientToClient)
 			if err != nil {
-				chs.inErr <- err
+				errInChan <- errMsgT{authSig.Author, err}
 				chs.outErr <- err
 				fmt.Print(err)
 				conn.Close()
 				return
 			}
-			chs.in <- clientToClient
+			msgInChan <- clientToClient
 		}
 	}()
 	for {
@@ -243,7 +256,7 @@ func handleConn(conn net.Conn, newConnChan chan tcpConnectionT, isMemberChan cha
 		case newMsg := <-chs.out:
 			err = enc.Encode(newMsg)
 			if err != nil {
-				chs.inErr <- err
+				errInChan <- errMsgT{authSig.Author, err}
 				fmt.Print(err)
 				conn.Close()
 				return
@@ -256,7 +269,12 @@ func handleConn(conn net.Conn, newConnChan chan tcpConnectionT, isMemberChan cha
 	}
 }
 
-func tcpServer(newConnChan chan tcpConnectionT, isMember chan isMemberT) {
+func tcpServer(
+	newConnChan chan tcpConnectionT,
+	isMember chan isMemberT,
+	errInChan chan errMsgT,
+	msgInChan chan common.ClientToClient) {
+
 	ln, err := net.Listen("tcp", ":4000")
 	if err != nil {
 		fmt.Println(err)
@@ -269,6 +287,6 @@ func tcpServer(newConnChan chan tcpConnectionT, isMember chan isMemberT) {
 			fmt.Println(err)
 			continue
 		}
-		go handleConn(conn, newConnChan, isMember)
+		go handleConn(conn, newConnChan, isMember, errInChan, msgInChan)
 	}
 }
