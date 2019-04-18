@@ -8,6 +8,8 @@ import Element.Background as Bg
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Ei
+import File
+import File.Select as Fs
 import Html exposing (Html, button, div, input, text)
 import Html.Attributes as Hat
 import Html.Events exposing (onClick, onInput)
@@ -27,34 +29,49 @@ main =
         , onUrlChange = \url -> NewUrl url
         }
 
-parseRoute : Up.Parser ((Page, Maybe String) -> a) a
+
+parseRoute : Up.Parser (( Page, Maybe String ) -> a) a
 parseRoute =
     Up.oneOf
-        [ Up.map (\x -> (Home, Just x)) Up.string
-        , Up.map (\x -> (NewDoc, Just x)) (Up.string </> Up.s "newdocument")
-        , Up.map (\x -> (Members, Just x)) (Up.string </> Up.s "members")
+        [ Up.map (\x -> ( Home, Just x )) Up.string
+        , Up.map (\x -> ( NewDoc, Just x )) <|
+            Up.string
+                </> Up.s "newdocument"
+        , Up.map (\x -> ( Members, Just x )) <|
+            Up.string
+                </> Up.s "members"
         ]
 
-urlToPage : Url.Url -> (Page, Maybe String)
+
+urlToPage : Url.Url -> ( Page, Maybe String )
 urlToPage url =
-        Debug.log "Just" <| case Up.parse parseRoute url of
-            Nothing -> (Unknown, Nothing)
-            Just result -> result
+        case Up.parse parseRoute url of
+            Nothing ->
+                ( Unknown, Nothing )
+
+            Just result ->
+                result
+
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
     case urlToPage url of
-        (page, securityCode) ->
-            ( { boxStr = ""
-              , displayStr = ""
-              , page = page
-              , key = key
+        ( page, securityCode ) ->
+            ( { page = page
               , securityCode = securityCode
+              , boxStr = ""
+              , displayStr = ""
+              , key = key
+              , tags = ""
+              , uploadStatus = Ok ()
               }
-            , Cmd.none )
+            , Cmd.none
+            )
+
 
 type Msg
     = TypedIn String
+    | TagBox String
     | FromServer (Result Http.Error String)
     | NewDocumentButtonClick
     | MembershipButtonClick
@@ -62,6 +79,8 @@ type Msg
     | DoNothing
     | NewUrl Url.Url
     | UploadDoc
+    | DocLoaded File.File
+    | AppHash (Result Http.Error ())
 
 
 type Page
@@ -77,6 +96,8 @@ type alias Model =
     , boxStr : String
     , displayStr : String
     , key : Nav.Key
+    , tags : String
+    , uploadStatus : Result Http.Error ()
     }
 
 
@@ -89,14 +110,42 @@ postMsg txt =
         }
 
 
-setNewDocUrl key = Nav.pushUrl key "/newdocument"
+setNewDocUrl key =
+    Nav.pushUrl key "/newdocument"
 
-update : Msg -> Model -> (Model, Cmd Msg)
+
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        NewUrl path -> case urlToPage path of
-            (page, _) ->
-                ( { model | page = page }, Cmd.none ) 
+        TagBox tags ->
+            ( { model | tags = tags }, Cmd.none)
+        DocLoaded file ->
+            case model.securityCode of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just code ->
+                    ( model
+                    , Http.post
+                        { url = "/saveapp/" ++ code
+                        , body = Debug.log "body" <|
+                            Http.multipartBody
+                                [ Http.filePart "file" file
+                                , Http.stringPart "tags" model.tags
+                                ]
+                        , expect = Http.expectWhatever AppHash
+                        }
+                    )
+
+        AppHash status ->
+            ( { model | uploadStatus = status }
+            , Cmd.none
+            )
+
+        NewUrl path ->
+            case urlToPage path of
+                ( page, _ ) ->
+                    ( { model | page = page }, Cmd.none )
 
         TypedIn txt ->
             ( { model | boxStr = txt }, postMsg txt )
@@ -108,31 +157,43 @@ update msg model =
             ( { model | displayStr = str }, Cmd.none )
 
         UploadDoc ->
-            ( model, Cmd.none )
- 
+            ( model, Fs.file [ "application/octet-stream" ] DocLoaded )
+
         DoNothing ->
             ( model, Cmd.none )
 
         MembershipButtonClick ->
             case model.securityCode of
-                Nothing -> ( { model | page = Unknown }, Cmd.none)
+                Nothing ->
+                    ( { model | page = Unknown }, Cmd.none )
+
                 Just code ->
                     ( { model | page = Members }
-                    , Nav.pushUrl model.key <| "/" ++ code ++ "/members"
+                    , Nav.pushUrl model.key <|
+                        "/"
+                            ++ code
+                            ++ "/members"
                     )
 
         NewDocumentButtonClick ->
             case model.securityCode of
-                Nothing -> ( { model | page = Unknown }, Cmd.none)
+                Nothing ->
+                    ( { model | page = Unknown }, Cmd.none )
+
                 Just code ->
                     ( { model | page = NewDoc }
-                    , Nav.pushUrl model.key <| "/" ++ code ++ "/newdocument"
+                    , Nav.pushUrl model.key <|
+                        "/"
+                            ++ code
+                            ++ "/newdocument"
                     )
-        
+
         HomeButtonClick ->
             case model.securityCode of
-                Nothing -> ( { model | page = Unknown }, Cmd.none)
-                Just code -> 
+                Nothing ->
+                    ( { model | page = Unknown }, Cmd.none )
+
+                Just code ->
                     ( { model | page = Home }
                     , Nav.pushUrl model.key <| "/" ++ code
                     )
@@ -208,16 +269,19 @@ topButtonStyle =
     , Font.family [ Font.typeface "Georgia", Font.serif ]
     ]
 
+
 buttonColor p1 p2 =
     if p1 == p2 then
         Bg.color (E.rgb255 201 221 255)
+
     else
         Bg.color (E.rgb255 255 255 255)
 
+
 makeTopButton : Page -> ( Msg, Page, String ) -> E.Element Msg
 makeTopButton page ( msg, buttonPage, label ) =
-    E.el ((buttonColor page buttonPage) :: topButtonStyle) <|
-        Ei.button [E.padding 5]
+    E.el (buttonColor page buttonPage :: topButtonStyle) <|
+        Ei.button [ E.padding 5 ]
             { onPress = Just msg
             , label = E.text label
             }
@@ -256,22 +320,38 @@ homeTopSection txt =
         , myId
         ]
 
-newDocTopSection =
-    E.row [ E.width E.fill, E.spacing 20 ]
-        [ E.column [E.alignTop, E.height E.fill]
-            [ topButtons NewDoc
+
+newDocTopSection tagText =
+    E.column [ E.width E.fill ]
+        [ E.row [ E.width E.fill, E.spacing 20 ]
+            [ E.column
+                [ E.alignTop, E.height E.fill ]
+                [ topButtons NewDoc ]
+            , myId
+            ]
+        , E.row [ E.spacing 20 ]
+            [ E.el [] <| Ei.text
+                [ E.width <| E.px 600, E.height <| E.px 50 ]
+                { onChange = TagBox
+                , text = tagText
+                , placeholder = Just <| Ei.placeholder [] <|
+                    E.text "Type tags separated by commas"
+                , label = Ei.labelAbove [] E.none
+                }                     
             , Ei.button
                 [ E.alignBottom
                 , E.padding 5
-                , Border.rounded 18
                 , Border.width 1
+                , E.height <| E.px 50
                 ]
                 { onPress = Just UploadDoc
-                , label = E.el [ E.padding 3 ] <| E.text "Choose local file"
+                , label =
+                    E.el [ E.padding 3 ] <|
+                        E.text "Choose local file"
                 }
             ]
-        , myId
         ]
+
 
 membersTopSection =
     E.row [ E.width E.fill, E.spacing 20 ]
@@ -279,14 +359,26 @@ membersTopSection =
         , myId
         ]
 
-mainEl : Model -> E.Element Msg
-mainEl model = case model.page of
-    Home -> homePage model
-    NewDoc -> newDocPage model
-    Members -> memberPage model
-    Unknown -> unknownPage
 
-unknownPage = E.el [] <| E.text "Page doesn't exist"
+mainEl : Model -> E.Element Msg
+mainEl model =
+    case model.page of
+        Home ->
+            homePage model
+
+        NewDoc ->
+            newDocPage model
+
+        Members ->
+            memberPage model
+
+        Unknown ->
+            unknownPage
+
+
+unknownPage =
+    E.el [] <| E.text "Page doesn't exist"
+
 
 memberPage model =
     E.column
@@ -296,6 +388,7 @@ memberPage model =
         [ membersTopSection
         ]
 
+
 homePage model =
     E.column
         [ E.width E.fill
@@ -304,10 +397,11 @@ homePage model =
         [ homeTopSection model.boxStr
         ]
 
-newDocPage model = 
+
+newDocPage model =
     E.column
-         [ E.width E.fill
-         , E.padding 20
-         ]
-         [ newDocTopSection
-         ]
+        [ E.width E.fill
+        , E.padding 20
+        ]
+        [ newDocTopSection model.tags
+        ]

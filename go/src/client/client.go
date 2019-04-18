@@ -161,34 +161,69 @@ type inviteT struct {
 	Signature [common.SigSize]byte
 }
 
-func getPostParts(r *http.Request) (*multipart.Part, []byte, error) {
-	var filepart *multipart.Part
-	bodyFileReader, err := r.MultipartReader()
+func getFilePart(bodyFileReader *multipart.Reader) (*multipart.Part, error) {
+	filepart, err := bodyFileReader.NextPart()
 	if err != nil {
-		return filepart, *new([]byte), err
+		return filepart, err
 	}
-	filepart, err = bodyFileReader.NextPart()
-	if err != nil {
-		return filepart, *new([]byte), err
+	var filepartname string = filepart.FormName()
+	if filepartname != "file" {
+		msg := "Could not find form element \"file\"."
+		return filepart, errors.New(msg)
 	}
-	if filepart.FormName() != "file" {
-		msg := "Could not find form element \"upload\"."
-		return filepart, *new([]byte), errors.New(msg)
-	}
-	tagsPart, err := bodyFileReader.NextPart()
-	if tagsPart.FormName() != "tags" {
-		msg := "Could not find form elemtn \"tags\"."
-		return filepart, *new([]byte), errors.New(msg)
-	}
-	tags, err := ioutil.ReadAll(tagsPart)
-	if err != nil {
-		return filepart, *new([]byte), err
-	}
-	return filepart, tags, nil
+	return filepart, nil
 }
 
-func writeAppToFile(r *http.Request) (string, map[string]dontCareT, error) {
-	filepart, tagBytes, err := getPostParts(r)
+func getTagsPart(bodyFileReader *multipart.Reader) ([]byte, error) {
+	tagsPart, err := bodyFileReader.NextPart()
+	if err != nil {
+		return *new([]byte), err
+	}
+	if tagsPart.FormName() != "tags" {
+		msg := "Could not find form element \"tags\"."
+		return *new([]byte), errors.New(msg)
+	}
+	return ioutil.ReadAll(tagsPart)
+}
+
+// func getPostParts(r *http.Request) (*multipart.Part, []byte, error) {
+// 	var filepart *multipart.Part
+// 	bodyFileReader, err := r.MultipartReader()
+// 	if err != nil {
+// 		return filepart, *new([]byte), err
+// 	}
+// 	filepart, err = bodyFileReader.NextPart()
+// 	if err != nil {
+// 		return filepart, *new([]byte), err
+// 	}
+// 	var filepartname string = filepart.FormName()
+// 	if filepartname != "file" {
+// 		msg := "Could not find form element \"file\"."
+// 		return filepart, *new([]byte), errors.New(msg)
+// 	}
+// 	bod, err := ioutil.ReadAll(filepart)
+// 	if err != nil { fmt.Println("No good at all, at all.") }
+// 	fmt.Println(string(bod[:]))
+// 	tagsPart, err := bodyFileReader.NextPart()
+// 	if tagsPart.FormName() != "tags" {
+// 		msg := "Could not find form element \"tags\"."
+// 		return filepart, *new([]byte), errors.New(msg)
+// 	}
+// 	tags, err := ioutil.ReadAll(tagsPart)
+// 	if err != nil {
+// 		return filepart, *new([]byte), err
+// 	}
+// 	return filepart, tags, nil
+// }
+
+func writeAppToFile(
+	r *http.Request) (string, map[string]dontCareT, error) {
+
+	bodyFileReader, err := r.MultipartReader()
+	filepart, err := getFilePart(bodyFileReader)
+	if err != nil {
+		return "", *new(map[string]dontCareT), err
+	}
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
@@ -208,11 +243,16 @@ func writeAppToFile(r *http.Request) (string, map[string]dontCareT, error) {
 	}
 	tee := io.TeeReader(filepart, hasher)
 	_, err = io.Copy(fileHandle, tee)
+	_, err = io.Copy(fileHandle, filepart)
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
 	hash := base64.RawURLEncoding.EncodeToString(hasher.Sum(nil))
 	err = os.Rename(tmpPath, appsDir+"/"+hash)
+	if err != nil {
+		return "", *new(map[string]dontCareT), err
+	}
+	tagBytes, err := getTagsPart(bodyFileReader)
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
@@ -224,7 +264,7 @@ func writeAppToFile(r *http.Request) (string, map[string]dontCareT, error) {
 }
 
 func tagOk(tag string) error {
-	if len(tag) < 100 {
+	if len(tag) > 100 {
 		return errors.New("Tag too long.")
 	}
 	return nil
@@ -235,7 +275,7 @@ func parseTags(bs []byte) (map[string]dontCareT, error) {
 		return c == ' ' || c == ';'
 	}
 	tagslice := strings.FieldsFunc(string(bs), f)
-	var tagmap map[string]dontCareT
+	tagmap := make(map[string]dontCareT)
 	for _, tag := range tagslice {
 		err := tagOk(tag)
 		if err != nil {
@@ -255,7 +295,8 @@ type newAppT struct {
 }
 
 func hashFromString(s string) ([32]byte, error) {
-	hashSlice, err := hex.DecodeString(s)
+	// hashSlice, err := hex.DecodeString(s)
+	hashSlice, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return *new([32]byte), err
 	}
@@ -319,7 +360,6 @@ func (n newAppT) update(s *stateT) (stateT, outputT) {
 func (w writeNewAppsT) send() inputT {
 	err := ioutil.WriteFile(w.filePath, w.encodedApps, 0600)
 	if err != nil {
-		fmt.Println("Could not write apps to file.")
 		http.Error(w.w, err.Error(), 500)
 		w.doneCh <- endRequest{}
 		return noInputT{}
@@ -333,10 +373,11 @@ func (r readHttpInputT) send() inputT {
 	select {
 	case h := <-r.httpChan:
 		req := h.r
-		securityCode := pat.Param(h.r, "securitycode")
+		securityCode := pat.Param(h.r, "securityCode")
 		if h.route == "saveapp" {
 			hash, tags, err := writeAppToFile(h.r)
 			if err != nil {
+				fmt.Println(err)
 				http.Error(h.w, err.Error(), 500)
 				h.doneCh <- endRequest{}
 				return noInputT{}
@@ -839,7 +880,7 @@ func hashApp(tags map[string]dontCareT, appHash [32]byte, posixTime int64) [32]b
 		concat[i] = tagBytes[i]
 	}
 	for ; i < lenTags+32; i++ {
-		concat[i] = appHash[i-32]
+		concat[i] = appHash[i-lenTags]
 	}
 	timeBytes := encodeInt64(posixTime)
 	for ; i < lenTags+32+8; i++ {
@@ -849,11 +890,11 @@ func hashApp(tags map[string]dontCareT, appHash [32]byte, posixTime int64) [32]b
 }
 
 type appMsgT struct {
-	author    [32]byte
-	tags      map[string]dontCareT
-	appHash   [32]byte
-	posixTime int64
-	sig       [common.SigSize]byte
+	Author    [32]byte
+	Tags      map[string]dontCareT
+	AppHash   [32]byte
+	PosixTime int64
+	Sig       [common.SigSize]byte
 }
 
 type searchResultT struct {
@@ -900,7 +941,7 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	}
 	var app appMsgT
 	for _, thisApp := range s.apps {
-		if equalHashes(thisApp.appHash, sendAppJson.appHash) {
+		if equalHashes(thisApp.AppHash, sendAppJson.appHash) {
 			app = thisApp
 			break
 		}
@@ -1039,8 +1080,8 @@ func matchesSearch(searchString string, tags map[string]dontCareT) bool {
 }
 
 func matchingApp(app appMsgT, q searchQueryT) bool {
-	return isSubset(q.tags, app.tags) &&
-		matchesSearch(q.searchString, app.tags)
+	return isSubset(q.tags, app.Tags) &&
+		matchesSearch(q.searchString, app.Tags)
 }
 
 func filterApps(all []appMsgT, q searchQueryT) []appMsgT {
@@ -1065,10 +1106,10 @@ func setToSlice(set map[string]dontCareT) []string {
 
 func appToSearchResult(app appMsgT) searchResultT {
 	return searchResultT{
-		common.HashToSlice(app.author),
-		setToSlice(app.tags),
-		common.HashToSlice(app.appHash),
-		app.posixTime,
+		common.HashToSlice(app.Author),
+		setToSlice(app.Tags),
+		common.HashToSlice(app.AppHash),
+		app.PosixTime,
 	}
 }
 
@@ -1372,7 +1413,6 @@ func createKeys() error {
 		return err
 	}
 	fmt.Println(hex.EncodeToString(password))
-	fmt.Println("c")
 	secretKey := slowHash(password, salt)
 	encryptedSecrets := secretbox.Seal(
 		make([]byte, 0),
@@ -1492,7 +1532,7 @@ type endRequest struct{}
 
 func handler(route string, inputChan chan httpInputT) handlerT {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var doneCh chan endRequest
+		doneCh := make(chan endRequest)
 		inputChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
 	}
@@ -1517,22 +1557,22 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 		newChunksLoading[appHash] = chunkPtr
 	}
 	newS := *s
-	delete(newChunksLoading, appSig.appHash)
+	delete(newChunksLoading, appSig.AppHash)
 	newS.chunksLoading = newChunksLoading
 	if !ok {
 		return newS, readHttpIn(s)
 	}
 	signedHash, ok := sign.Open(
 		make([]byte, 0),
-		common.SigToSlice(appSig.sig),
+		common.SigToSlice(appSig.Sig),
 		&e.correspondent)
 	hashOk := bytes.Equal(
-		appSigHash(appSig.appHash),
+		appSigHash(appSig.AppHash),
 		signedHash)
 	if !(ok && hashOk) {
 		return newS, readHttpIn(s)
 	}
-	chunkPtrs, ok := s.chunksLoading[appSig.appHash]
+	chunkPtrs, ok := s.chunksLoading[appSig.AppHash]
 	if !ok {
 		return newS, readHttpIn(s)
 	}
@@ -1544,13 +1584,13 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 	for i, chunkPtr := range chunkPtrs {
 		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash)
 	}
-	tmpPath := makeChunkFilePath(appSig.appHash)
+	tmpPath := makeChunkFilePath(appSig.AppHash)
 	finalName := base64.RawURLEncoding.EncodeToString(
-		common.HashToSlice(appSig.appHash))
+		common.HashToSlice(appSig.AppHash))
 	finalPath := appsDir + "/" + finalName
 	return newS, assembleApp{
 		filePaths:  filePaths,
-		appHash:    appSig.appHash,
+		appHash:    appSig.AppHash,
 		tmpPath:    tmpPath,
 		finalPath:  finalPath,
 		appAuthor:  e.correspondent,
@@ -1826,8 +1866,8 @@ func httpServer(inputChan chan httpInputT, homeCode string) {
 			handler(route, inputChan))
 	}
 	home := "/" + homeCode
-	http.Handle(
-		home,
+	mux.Handle(
+		pat.Get("/" + homeCode),
 		http.StripPrefix(home, http.FileServer(http.Dir("./home"))))
-	http.ListenAndServe(":3000", nil)
+	http.ListenAndServe(":3000", mux)
 }
