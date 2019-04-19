@@ -17,6 +17,9 @@ import Http
 import List as L
 import Url
 import Url.Parser as Up exposing ((</>))
+import Json.Decode as Jd
+import Json.Encode as Je
+import Set
 
 
 main =
@@ -52,28 +55,34 @@ urlToPage url =
             Just result ->
                 result
 
+initModel page securityCode key =
+    { page = page
+    , securityCode = securityCode
+    , searchStr = ""
+    , fileUpload = Nothing
+    , searchResults = Ok []
+    , key = key
+    , newTagsBox = ""
+    , selectedTags = []
+    , uploadStatus = Ok ()
+    }
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
     case urlToPage url of
         ( page, securityCode ) ->
-            ( { page = page
-              , securityCode = securityCode
-              , boxStr = ""
-              , displayStr = ""
-              , key = key
-              , tags = ""
-              , uploadStatus = Ok ()
-              }
-            , Cmd.none
+            ( initModel page securityCode key
+            , case securityCode of
+                Nothing -> Cmd.none
+                Just code -> postMsg "" [] code
             )
 
 
 type Msg
-    = TypedIn String
+    = SearchBox String
     | TagBox String
-    | FromServer (Result Http.Error String)
     | NewDocumentButtonClick
+    | SearchResults (Result Http.Error (List SearchResult))
     | MembershipButtonClick
     | HomeButtonClick
     | DoNothing
@@ -81,6 +90,9 @@ type Msg
     | UploadDoc
     | DocLoaded File.File
     | AppHash (Result Http.Error ())
+    | UnchooseTag String
+    | ChooseTag String
+    | ChooseDoc
 
 
 type Page
@@ -89,24 +101,48 @@ type Page
     | Members
     | Unknown
 
+type alias SearchResult =
+    { author : String
+    , tags : List String
+    , hash : String
+    , posixTime : Int
+    }
+
+decodeSearchResult : Jd.Decoder SearchResult
+decodeSearchResult =
+    Jd.map4 SearchResult
+        (Jd.field "Author" Jd.string)
+        (Jd.field "Tags" (Jd.list Jd.string))
+        (Jd.field "Hash" Jd.string)
+        (Jd.field "Posixtime" Jd.int)
+
+decodeSearchResults : Jd.Decoder (List SearchResult)
+decodeSearchResults = Jd.list decodeSearchResult
 
 type alias Model =
     { page : Page
     , securityCode : Maybe String
-    , boxStr : String
-    , displayStr : String
+    , searchStr : String
+    , searchResults : Result Http.Error (List SearchResult)
     , key : Nav.Key
-    , tags : String
+    , newTagsBox : String
+    , selectedTags : List String
+    , fileUpload : Maybe File.File
     , uploadStatus : Result Http.Error ()
     }
 
+encodeSearchQuery tags searchString =
+    Je.object
+        [ ("Tags", (Je.list Je.string) tags)
+        , ("SearchString", Je.string searchString)
+        ]
 
-postMsg : String -> Cmd Msg
-postMsg txt =
+postMsg : String -> List String -> String -> Cmd Msg
+postMsg searchString tags securityCode =
     Http.post
-        { url = "http://localhost:3000"
-        , expect = Http.expectString FromServer
-        , body = Http.stringBody "text/plain; charset=utf-8" txt
+        { url = "http://localhost:3000/searchapps/" ++ securityCode
+        , expect = Http.expectJson SearchResults decodeSearchResults
+        , body = Http.jsonBody <| encodeSearchQuery tags searchString
         }
 
 
@@ -117,25 +153,46 @@ setNewDocUrl key =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        TagBox tags ->
-            ( { model | tags = tags }, Cmd.none)
-        DocLoaded file ->
-            case model.securityCode of
-                Nothing ->
-                    ( model, Cmd.none )
-
+        ChooseTag tag ->
+            let newTags = tag :: model.selectedTags
+            in case model.securityCode of
+                Nothing -> ( model, Cmd.none )
                 Just code ->
-                    ( model
+                    ( { model | selectedTags = newTags }
+                    , postMsg model.searchStr newTags code
+                    )
+        UnchooseTag tag ->
+            let
+                newTags = List.filter ((/=) tag) model.selectedTags
+            in case model.securityCode of
+                Nothing -> ( model, Cmd.none)
+                Just code ->
+                    ( { model | selectedTags = newTags }
+                    , postMsg model.searchStr newTags code
+                    )
+        SearchResults results ->
+            ( { model | searchResults = results }, Cmd.none )
+        TagBox tags ->
+            ( { model | newTagsBox = tags }, Cmd.none)
+        DocLoaded file ->
+            ( { model | fileUpload = Just file }, Cmd.none)
+        UploadDoc ->
+            case (model.securityCode, model.fileUpload) of
+                (Just code, Just file) ->
+                    ( { model | fileUpload = Nothing }
                     , Http.post
                         { url = "/saveapp/" ++ code
                         , body = Debug.log "body" <|
                             Http.multipartBody
                                 [ Http.filePart "file" file
-                                , Http.stringPart "tags" model.tags
+                                , Http.stringPart "tags" model.newTagsBox
                                 ]
                         , expect = Http.expectWhatever AppHash
                         }
                     )
+
+                _ ->
+                    ( model, Cmd.none )
 
         AppHash status ->
             ( { model | uploadStatus = status }
@@ -147,16 +204,19 @@ update msg model =
                 ( page, _ ) ->
                     ( { model | page = page }, Cmd.none )
 
-        TypedIn txt ->
-            ( { model | boxStr = txt }, postMsg txt )
+        SearchBox txt ->
+            case model.securityCode of
+                Nothing -> ( { model | page = Unknown }, Cmd.none )
+                Just code ->
+                    ( { model | searchStr = txt }, postMsg txt model.selectedTags code )
 
-        FromServer (Err err) ->
-            ( model, Cmd.none )
+        -- FromServer (Err err) ->
+        --     ( model, Cmd.none )
 
-        FromServer (Ok str) ->
-            ( { model | displayStr = str }, Cmd.none )
+        -- FromServer (Ok searchResults) ->
+        --     ( { model | displayStr = str }, Cmd.none )
 
-        UploadDoc ->
+        ChooseDoc ->
             ( model, Fs.file [ "application/octet-stream" ] DocLoaded )
 
         DoNothing ->
@@ -195,7 +255,13 @@ update msg model =
 
                 Just code ->
                     ( { model | page = Home }
-                    , Nav.pushUrl model.key <| "/" ++ code
+                    , Cmd.batch
+                        [ Nav.pushUrl model.key <| "/" ++ code
+                        , postMsg
+                            model.searchStr
+                            model.selectedTags
+                            code
+                        ]
                     )
 
 
@@ -245,7 +311,7 @@ idtxt =
 
 myId =
     E.column
-        [ Font.family [ Font.typeface "Courier" ]
+        [ Font.family [ Font.typeface "Courier", Font.monospace ]
         , Font.size 20
         , E.alignRight
         , E.alignTop
@@ -265,17 +331,24 @@ searchBoxStyle =
 topButtonStyle =
     [ E.alignLeft
     , E.alignTop
-    , Font.size 28
+    , Font.size 33 
     , Font.family [ Font.typeface "Georgia", Font.serif ]
     ]
 
 
+
+-- blue = E.rgb255 201 221 255
+blue = E.rgb255 132 179 255
+paleBlue = E.rgb255 201 221 255
+grey = E.rgb255 169 169 169
+white = E.rgb255 255 255 255
+
 buttonColor p1 p2 =
     if p1 == p2 then
-        Bg.color (E.rgb255 201 221 255)
+        Bg.color blue
 
     else
-        Bg.color (E.rgb255 255 255 255)
+        Bg.color paleBlue
 
 
 makeTopButton : Page -> ( Msg, Page, String ) -> E.Element Msg
@@ -300,7 +373,7 @@ searchBox txt =
     E.el searchBoxStyle <|
         Ei.text
             searchStyle
-            { onChange = TypedIn
+            { onChange = SearchBox
             , text = txt
             , placeholder = Just placeholder
             , label = Ei.labelAbove [] E.none
@@ -320,8 +393,22 @@ homeTopSection txt =
         , myId
         ]
 
+newDocButtonStyle =
+                [ E.alignBottom
+                , E.padding 5
+                , Border.width 1
+                , E.height <| E.px 50
+                ]
 
-newDocTopSection tagText =
+
+greyNewDocButtonStyle =
+        newDocButtonStyle ++
+        [ Border.color grey
+        , Font.color grey
+        , E.htmlAttribute <| Hat.style "box-shadow" "none"
+        ]
+
+newDocTopSection tagText fileUpload =
     E.column [ E.width E.fill ]
         [ E.row [ E.width E.fill, E.spacing 20 ]
             [ E.column
@@ -338,16 +425,21 @@ newDocTopSection tagText =
                     E.text "Type tags separated by commas"
                 , label = Ei.labelAbove [] E.none
                 }                     
-            , Ei.button
-                [ E.alignBottom
-                , E.padding 5
-                , Border.width 1
-                , E.height <| E.px 50
-                ]
-                { onPress = Just UploadDoc
+            , Ei.button newDocButtonStyle
+                { onPress = Just ChooseDoc
                 , label =
                     E.el [ E.padding 3 ] <|
                         E.text "Choose local file"
+                }
+            , Ei.button
+                (case fileUpload of
+                    Nothing -> greyNewDocButtonStyle
+                    Just _ -> newDocButtonStyle)
+                { onPress = case fileUpload of
+                      Nothing -> Nothing
+                      Just _ -> Just UploadDoc
+                , label = E.el [ E.padding 3 ] <|
+                    E.text "Upload file"
                 }
             ]
         ]
@@ -389,12 +481,58 @@ memberPage model =
         ]
 
 
+tagStyle color =
+    [ Bg.color color
+    , E.alignLeft
+    , Font.size 24 
+    , Font.family [ Font.typeface "Courier", Font.monospace ]
+    , E.paddingXY 0 5
+    ]
+
+showTag msg color tag =
+   Ei.button (tagStyle color) {onPress = Just (msg tag), label = E.text tag}
+
+
+homeShowTags msgFun tags color =
+    case tags of
+        [] -> E.none
+        _ -> E.wrappedRow [E.spacing 15, E.paddingXY 0 10] <|
+                List.map (showTag msgFun color) tags
+
+addToSet : List String -> Set.Set String -> Set.Set String
+addToSet ls accum = Set.union accum (Set.fromList ls)
+
+choosableTags : Result Http.Error (List SearchResult) -> List String
+choosableTags searchResults = case searchResults of
+    Err _ -> []
+    Ok results ->
+        let
+            tags = List.map .tags results
+        in Set.toList <| List.foldl addToSet Set.empty tags
+        
+viewSearchResult result =
+    E.column []
+        [ E.text result.author
+        , homeShowTags ChooseTag result.tags paleBlue
+        , E.text result.hash
+        , E.text <| String.fromInt result.posixTime
+        ]
+
+homeSearchResults results =
+    case results of
+        Err _ -> E.text "No results"
+        Ok r -> E.column [] <| List.map viewSearchResult r
+
+homePage : Model -> E.Element Msg
 homePage model =
     E.column
         [ E.width E.fill
         , E.padding 20
         ]
-        [ homeTopSection model.boxStr
+        [ homeTopSection model.searchStr
+        , homeShowTags UnchooseTag model.selectedTags blue
+        , homeShowTags ChooseTag (choosableTags model.searchResults) paleBlue
+        , homeSearchResults model.searchResults
         ]
 
 
@@ -403,5 +541,5 @@ newDocPage model =
         [ E.width E.fill
         , E.padding 20
         ]
-        [ newDocTopSection model.tags
+        [ newDocTopSection model.newTagsBox model.fileUpload
         ]

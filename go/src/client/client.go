@@ -118,7 +118,7 @@ func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 }
 
 func readApps() ([]appMsgT, error) {
-	rawApps, err := ioutil.ReadFile("clientdata/apps.txt")
+	rawApps, err := ioutil.ReadFile("clientData/apps.txt")
 	var apps []appMsgT
 	if err != nil {
 		return apps, nil
@@ -272,7 +272,7 @@ func tagOk(tag string) error {
 
 func parseTags(bs []byte) (map[string]dontCareT, error) {
 	f := func(c rune) bool {
-		return c == ' ' || c == ';'
+		return c == ','
 	}
 	tagslice := strings.FieldsFunc(string(bs), f)
 	tagmap := make(map[string]dontCareT)
@@ -295,7 +295,6 @@ type newAppT struct {
 }
 
 func hashFromString(s string) ([32]byte, error) {
-	// hashSlice, err := hex.DecodeString(s)
 	hashSlice, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return *new([32]byte), err
@@ -898,10 +897,10 @@ type appMsgT struct {
 }
 
 type searchResultT struct {
-	author    []byte
-	tags      []string
-	hash      []byte
-	posixtime int64
+	Author    []byte
+	Tags      []string
+	Hash      []byte
+	Posixtime int64
 }
 
 func (a appMsgT) code() byte {
@@ -1048,8 +1047,8 @@ func (s sendAppT) send() inputT {
 }
 
 type searchQueryT struct {
-	tags         []string
-	searchString string
+	Tags         []string
+	SearchString string
 }
 
 func sliceToSet(slice []string) map[string]dontCareT {
@@ -1061,6 +1060,10 @@ func sliceToSet(slice []string) map[string]dontCareT {
 }
 
 func isSubset(sub []string, super map[string]dontCareT) bool {
+	fmt.Println(">>>>>>")
+	fmt.Println(sub)
+	fmt.Println(super)
+	fmt.Println("<<<<<<")
 	for _, s := range sub {
 		_, ok := super[s]
 		if !ok {
@@ -1071,17 +1074,25 @@ func isSubset(sub []string, super map[string]dontCareT) bool {
 }
 
 func matchesSearch(searchString string, tags map[string]dontCareT) bool {
+	fmt.Println("********")
+	fmt.Println(searchString)
+	fmt.Println(tags)
+	fmt.Println("^^^^^^^^")
 	for tag, _ := range tags {
-		if strings.Contains(searchString, tag) {
+		fmt.Println(tag)
+		if strings.Contains(tag, searchString) {
+			fmt.Println("true")
 			return true
 		}
 	}
+	fmt.Println("false")
 	return false
 }
 
 func matchingApp(app appMsgT, q searchQueryT) bool {
-	return isSubset(q.tags, app.Tags) &&
-		matchesSearch(q.searchString, app.Tags)
+	fmt.Println("top of matchingApp")
+	return isSubset(q.Tags, app.Tags) &&
+		matchesSearch(q.SearchString, app.Tags)
 }
 
 func filterApps(all []appMsgT, q searchQueryT) []appMsgT {
@@ -1114,6 +1125,7 @@ func appToSearchResult(app appMsgT) searchResultT {
 }
 
 func search(apps []appMsgT, q searchQueryT) []searchResultT {
+	fmt.Println(apps)
 	filtered := filterApps(apps, q)
 	searchResults := make([]searchResultT, len(filtered))
 	for i, app := range filtered {
@@ -1137,6 +1149,7 @@ func processSearchApps(
 	if err != nil {
 		return *s, sendErr("Could not decode Json.")
 	}
+	fmt.Println(searchQuery)
 	matchingApps := search(s.apps, searchQuery)
 	encoded, err := json.Marshal(matchingApps)
 	if err != nil {
