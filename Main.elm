@@ -69,6 +69,7 @@ initModel page securityCode key =
     , uploadStatus = Ok ()
     , zone = Time.utc
     , checkedBoxes = Set.empty
+    , selectAll = False
     }
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -146,6 +147,7 @@ type alias Model =
     , uploadStatus : Result Http.Error ()
     , zone : Time.Zone
     , checkedBoxes : Set.Set String
+    , selectAll : Bool
     }
 
 encodeSearchQuery tags searchString =
@@ -172,11 +174,15 @@ update msg model =
     case msg of
         TickAll True ->
             case model.searchResults of
-                Err _ -> ( model, Cmd.none )
+                Err _ -> ( { model | selectAll = True }, Cmd.none )
                 Ok results ->
-                    ( { model | checkedBoxes = Set.fromList (List.map .hash results.apps)}, Cmd.none)
+                    ( { model |
+                          checkedBoxes = Set.fromList (List.map .hash results.apps),
+                          selectAll = True }
+                    , Cmd.none)
         TickAll False ->
-            ( { model | checkedBoxes = Set.empty }, Cmd.none )
+            ( { model | checkedBoxes = Set.empty,
+                        selectAll = False }, Cmd.none )
         FileSelected hash False ->
             ( { model
                  | checkedBoxes = Set.remove hash model.checkedBoxes
@@ -697,13 +703,13 @@ defaultCheckbox checked =
             E.none
          )  
 
-homeSearchResults results zone checkedBoxes =
+homeSearchResults results zone checkedBoxes selectAll =
     case results of
         Err _ -> E.text "No results"
         Ok r ->
             E.column
                 [E.spacing 30, E.paddingXY 0 10] <|
-                (E.el [] <| bigCheckbox TickAll (allChecked r.apps checkedBoxes)) :: 
+                (E.el [] <| bigCheckbox TickAll selectAll) :: 
                 (List.map (viewSearchResult zone checkedBoxes) r.apps)
 
 allChecked searchResults checkedBoxes =
@@ -723,7 +729,7 @@ homePage model =
             (choosableTags model.searchResults)
             paleBlue
             (E.padding 0)
-        , homeSearchResults model.searchResults model.zone model.checkedBoxes
+        , homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll
         ]
 
 
