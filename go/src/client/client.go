@@ -1124,14 +1124,28 @@ func appToSearchResult(app appMsgT) searchResultT {
 	}
 }
 
-func search(apps []appMsgT, q searchQueryT) []searchResultT {
+func search(apps []appMsgT, q searchQueryT) searchResultsT {
 	fmt.Println(apps)
 	filtered := filterApps(apps, q)
-	searchResults := make([]searchResultT, len(filtered))
+	matchingApps := make([]searchResultT, len(filtered))
+	matchingTags := make(map[string]dontCareT)
 	for i, app := range filtered {
-		searchResults[i] = appToSearchResult(app)
+		matchingApps[i] = appToSearchResult(app)
+		for tag, _ := range app.Tags {
+			if strings.Contains(tag, q.SearchString) {
+				matchingTags[tag] = dontCareT{}
+			}
+		}
 	}
-	return searchResults
+	return searchResultsT{
+		Apps: matchingApps,
+		Tags: setToSlice(matchingTags),
+	}
+}
+
+type searchResultsT struct {
+	Apps []searchResultT
+	Tags []string
 }
 
 func processSearchApps(
