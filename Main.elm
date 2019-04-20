@@ -65,7 +65,8 @@ initModel page securityCode key =
     , searchResults = Ok {apps = [], tags = []}
     , key = key
     , newTagsBox = ""
-    , selectedTags = []
+    , selectedTags = Set.empty
+    , unselectedTags = Set.empty
     , uploadStatus = Ok ()
     , zone = Time.utc
     , checkedBoxes = Set.empty
@@ -142,7 +143,8 @@ type alias Model =
     , searchResults : Result Http.Error SearchResults
     , key : Nav.Key
     , newTagsBox : String
-    , selectedTags : List String
+    , unselectedTags : Set.Set String
+    , selectedTags : Set.Set String
     , fileUpload : Maybe File.File
     , uploadStatus : Result Http.Error ()
     , zone : Time.Zone
@@ -197,24 +199,32 @@ update msg model =
             )
         Zone zone -> ( { model | zone = zone }, Cmd.none )
         ChooseTag tag ->
-            let newTags = tag :: model.selectedTags
+            let newTags = Set.insert tag model.selectedTags
             in case model.securityCode of
                 Nothing -> ( model, Cmd.none )
                 Just code ->
                     ( { model | selectedTags = newTags }
-                    , postMsg model.searchStr newTags code
+                    , postMsg model.searchStr (Set.toList newTags) code
                     )
         UnchooseTag tag ->
             let
-                newTags = List.filter ((/=) tag) model.selectedTags
+                newTags = Set.remove tag model.selectedTags
             in case model.securityCode of
                 Nothing -> ( model, Cmd.none)
                 Just code ->
                     ( { model | selectedTags = newTags }
-                    , postMsg model.searchStr newTags code
+                    , postMsg model.searchStr (Set.toList newTags) code
                     )
         NewSearchResults results ->
-            ( { model | searchResults = results }, Cmd.none )
+            ( { model |
+                  searchResults = results,
+                  unselectedTags = case results of
+                      Err _ -> model.unselectedTags
+                      Ok r ->
+                          let newTags = Set.fromList r.tags
+                          in Set.diff newTags model.selectedTags
+              }
+            , Cmd.none )
         TagBox tags ->
             ( { model | newTagsBox = tags }, Cmd.none)
         DocLoaded file ->
@@ -251,7 +261,7 @@ update msg model =
             case model.securityCode of
                 Nothing -> ( { model | page = Unknown }, Cmd.none )
                 Just code ->
-                    ( { model | searchStr = txt }, postMsg txt model.selectedTags code )
+                    ( { model | searchStr = txt }, postMsg txt (Set.toList model.selectedTags) code )
 
         -- FromServer (Err err) ->
         --     ( model, Cmd.none )
@@ -302,7 +312,7 @@ update msg model =
                         [ Nav.pushUrl model.key <| "/" ++ code
                         , postMsg
                             model.searchStr
-                            model.selectedTags
+                            (Set.toList model.selectedTags)
                             code
                         ]
                     )
@@ -533,12 +543,20 @@ tagStyle color =
 showTag msg color tag =
    Ei.button (tagStyle color) {onPress = Just (msg tag), label = E.text tag}
 
+tagSort = L.sortWith tagCompare
 
+tagCompare a b =
+    case compare (String.length a) (String.length b) of
+        LT -> LT
+        GT -> GT
+        EQ -> compare a b
+
+homeShowTags : (String -> Msg) -> List String -> E.Color -> E.Attribute Msg -> E.Element Msg
 homeShowTags msgFun tags color padding =
     case tags of
         [] -> E.none
         _ -> E.wrappedRow [E.spacing 15, padding] <|
-                List.map (showTag msgFun color) tags
+                List.map (showTag msgFun color) (tagSort tags)
 
 addToSet : List String -> Set.Set String -> Set.Set String
 addToSet ls accum = Set.union accum (Set.fromList ls)
@@ -634,10 +652,13 @@ viewSearchResult zone checkedBoxes result =
                 [ E.el normalText <| E.text "Document ID: "
                 , E.el idStyle <| E.text result.hash
                 ]
-            , E.el normalText <| E.text <|
-                prettyTime
-                    (Time.millisToPosix <| result.posixTime*1000)
-                    zone
+            , E.row []
+                [ E.el normalText <| E.text "Date: "
+                , E.el normalText <| E.text <|
+                    prettyTime
+                        (Time.millisToPosix <| result.posixTime*1000)
+                        zone
+                ]
             ]
         ]
 
@@ -703,17 +724,21 @@ defaultCheckbox checked =
             E.none
          )  
 
+noResults = E.text "No results."
+
 homeSearchResults results zone checkedBoxes selectAll =
     case results of
-        Err _ -> E.text "No results"
-        Ok r ->
-            E.column
+        Err _ -> noResults
+        Ok r -> case r.apps of
+            [] -> noResults
+            _ -> E.column
                 [E.spacing 30, E.paddingXY 0 10] <|
                 (E.el [] <| bigCheckbox TickAll selectAll) :: 
                 (List.map (viewSearchResult zone checkedBoxes) r.apps)
 
 allChecked searchResults checkedBoxes =
     checkedBoxes == Set.fromList (List.map .hash searchResults)
+
 
 homePage : Model -> E.Element Msg
 homePage model =
@@ -723,10 +748,10 @@ homePage model =
         , E.spacing 20
         ]
         [ homeTopSection model.searchStr
-        , homeShowTags UnchooseTag model.selectedTags blue (E.padding 0)
+        , homeShowTags UnchooseTag (Set.toList model.selectedTags) blue (E.padding 0)
         , homeShowTags
             ChooseTag
-            (choosableTags model.searchResults)
+            (Set.toList model.unselectedTags)
             paleBlue
             (E.padding 0)
         , homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll
