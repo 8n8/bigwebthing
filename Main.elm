@@ -2,7 +2,6 @@ module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
-import Debug
 import Element as E
 import Element.Background as Bg
 import Element.Border as Border
@@ -235,7 +234,7 @@ update msg model =
                     ( { model | fileUpload = Nothing }
                     , Http.post
                         { url = "/saveapp/" ++ code
-                        , body = Debug.log "body" <|
+                        , body =
                             Http.multipartBody
                                 [ Http.filePart "file" file
                                 , Http.stringPart "tags" model.newTagsBox
@@ -320,7 +319,7 @@ update msg model =
 
 view model =
     { title = "BigWebThing"
-    , body = [ E.layout [] (mainEl <| Debug.log "model" model) ]
+    , body = [ E.layout [] (mainEl model) ]
     }
 
 

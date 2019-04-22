@@ -20,3 +20,7 @@ common.go
 members
 newdocument
 clientData/
+home/
+index.min.html
+main.js
+main.min.js

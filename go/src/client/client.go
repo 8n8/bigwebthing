@@ -32,6 +32,7 @@ import (
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"golang.org/x/crypto/ssh/terminal"
+	"archive/tar"
 )
 
 type inputT interface {
@@ -667,17 +668,54 @@ func strEq(s1, s2 string) bool {
 	return eq == 1
 }
 
-type genCodeForAppT struct {
+type unpackAppT struct {
 	w       http.ResponseWriter
 	appHash [32]byte
 	doneCh  chan endRequest
+	appPath string
+	tmpPath string
 }
 
-func (g genCodeForAppT) send() inputT {
-	newCode, err := genCode()
-	if err != nil {
+func (g unpackAppT) send() inputT {
+	sendErr := func(err error) {
 		http.Error(g.w, err.Error(), 500)
 		g.doneCh <- endRequest{}
+	}
+	fileHandle, err := os.Open(g.appPath)
+	if err != nil {
+		sendErr(err)
+		return noInputT{}
+	}
+	err = os.Mkdir(g.tmpPath, 0755)
+	if err != nil {
+		sendErr(err)
+		return noInputT{}
+	}
+	tr := tar.NewReader(fileHandle)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			sendErr(err)
+			return noInputT{}
+		}
+		sourcePath := g.tmpPath + "/" + hdr.Name
+		sourceHandle, err := os.Create(sourcePath)
+		if err != nil {
+			sendErr(err)
+			return noInputT{}
+		}
+		_, err = io.Copy(sourceHandle, tr)
+		if err != nil {
+			sendErr(err)
+			return noInputT{}
+		}
+	}
+	newCode, err := genCode()
+	if err != nil {
+		sendErr(err)
 		return noInputT{}
 	}
 	return newAppCodeT{
@@ -1234,10 +1272,12 @@ func processMakeAppRoute(
 			n.doneCh,
 		}
 	}
-	return *s, genCodeForAppT{
+	return *s, unpackAppT{
 		n.w,
 		makeAppRoute.apphash,
 		n.doneCh,
+		appsDir + "/" + hashToStr(makeAppRoute.apphash),
+		tmpDir + "/" + hashToStr(makeAppRoute.apphash),
 	}
 }
 
