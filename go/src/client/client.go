@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"common"
 	"crypto/rand"
@@ -12,18 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"mime/multipart"
-	"net"
-	"net/http"
-	"os"
-	"sort"
-	"strings"
 	"github.com/pkg/browser"
-	"syscall"
-	"time"
-
 	"goji.io"
 	"goji.io/pat"
 	"golang.org/x/crypto/argon2"
@@ -32,7 +22,16 @@ import (
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"golang.org/x/crypto/ssh/terminal"
-	"archive/tar"
+	"io"
+	"io/ioutil"
+	"mime/multipart"
+	"net"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
 )
 
 type inputT interface {
@@ -248,7 +247,7 @@ func writeAppToFile(
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
-	hash := base64.RawURLEncoding.EncodeToString(hasher.Sum(nil))
+	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 	err = os.Rename(tmpPath, appsDir+"/"+hash)
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
@@ -296,7 +295,7 @@ type newAppT struct {
 }
 
 func hashFromString(s string) ([32]byte, error) {
-	hashSlice, err := base64.RawURLEncoding.DecodeString(s)
+	hashSlice, err := base64.URLEncoding.DecodeString(s)
 	if err != nil {
 		return *new([32]byte), err
 	}
@@ -374,7 +373,10 @@ func (r readHttpInputT) send() inputT {
 	case h := <-r.httpChan:
 		req := h.r
 		securityCode := pat.Param(h.r, "securityCode")
-		subRoute := pat.Param(h.r, "subroute")
+		subRoute := ""
+		if h.route == "getapp" || h.route == "makeapproute" {
+			subRoute = pat.Param(h.r, "subRoute")
+		}
 		if h.route == "saveapp" {
 			hash, tags, err := writeAppToFile(h.r)
 			if err != nil {
@@ -624,6 +626,7 @@ const (
 	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	sentMsgPath = "clientData/sentMsgs.txt"
+	homeDir     = "home"
 )
 
 type normalApiInputT struct {
@@ -631,7 +634,7 @@ type normalApiInputT struct {
 	securityCode string
 	body         []byte
 	route        string
-	subRoute string
+	subRoute     string
 	doneCh       chan endRequest
 }
 
@@ -650,7 +653,7 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 }
 
 type makeAppRouteT struct {
-	apphash [32]byte
+	Apphash []byte
 }
 
 type sendHttpErrorT struct {
@@ -672,51 +675,82 @@ func strEq(s1, s2 string) bool {
 }
 
 type unpackAppT struct {
-	w       http.ResponseWriter
-	appHash [32]byte
-	doneCh  chan endRequest
-	appPath string
-	tmpPath string
+	appCodes map[string][32]byte
+	w        http.ResponseWriter
+	appHash  [32]byte
+	doneCh   chan endRequest
+	appPath  string
+	tmpPath  string
 }
 
 func (g unpackAppT) send() inputT {
 	sendErr := func(err error) {
+		fmt.Println(err)
 		http.Error(g.w, err.Error(), 500)
 		g.doneCh <- endRequest{}
 	}
+	_, err := os.Stat(g.tmpPath)
+	if err == nil {
+		fmt.Println("alreadydone")
+		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
+		if err != nil {
+			sendErr(err)
+			return noInputT{}
+		}
+		err = browser.OpenURL(
+			"http://localhost:3000/getapp/" + appCode + "/index.html")
+		if err != nil {
+			sendErr(err)
+			return noInputT{}
+		}
+		g.doneCh <- endRequest{}
+		return noInputT{}
+	}
 	fileHandle, err := os.Open(g.appPath)
 	if err != nil {
+		fmt.Println("no file handle")
 		sendErr(err)
 		return noInputT{}
 	}
 	err = os.Mkdir(g.tmpPath, 0755)
 	if err != nil {
+		fmt.Println("mkdir failed")
 		sendErr(err)
 		return noInputT{}
 	}
 	tr := tar.NewReader(fileHandle)
 	for {
+		fmt.Println("top of loop")
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			fmt.Println("not a tar archive")
 			sendErr(err)
 			return noInputT{}
 		}
 		sourcePath := g.tmpPath + "/" + hdr.Name
+		fmt.Println(hdr.Name)
 		sourceHandle, err := os.Create(sourcePath)
 		if err != nil {
+			fmt.Println("handleErr")
 			sendErr(err)
 			return noInputT{}
 		}
 		_, err = io.Copy(sourceHandle, tr)
 		if err != nil {
+			fmt.Println("copyErr")
 			sendErr(err)
 			return noInputT{}
 		}
 	}
 	newCode, err := genCode()
+	if err != nil {
+		sendErr(err)
+		return noInputT{}
+	}
+	err = browser.OpenURL("http://localhost:3000/getapp/" + newCode + "/index.html")
 	if err != nil {
 		sendErr(err)
 		return noInputT{}
@@ -738,14 +772,14 @@ type newAppCodeT struct {
 
 func (n newAppCodeT) update(s *stateT) (stateT, outputT) {
 	newState := *s
-	var newAppCodes map[string][32]byte
+	newAppCodes := make(map[string][32]byte)
 	for code, hash := range s.appCodes {
 		newAppCodes[code] = hash
 	}
 	newAppCodes[n.newCode] = n.appHash
 	newState.appCodes = newAppCodes
 	return newState, httpOkResponseT{
-		[]byte(n.newCode),
+		[]byte{},
 		n.w,
 		n.doneCh,
 	}
@@ -766,7 +800,7 @@ func getDocHash(
 
 func hashToStr(h [32]byte) string {
 	asSlice := common.HashToSlice(h)
-	return base64.RawURLEncoding.EncodeToString(asSlice)
+	return base64.URLEncoding.EncodeToString(asSlice)
 }
 
 type sendAppJsonT struct {
@@ -938,9 +972,9 @@ type appMsgT struct {
 }
 
 type searchResultT struct {
-	Author    []byte
+	Author    string
 	Tags      []string
-	Hash      []byte
+	Hash      string
 	Posixtime int64
 }
 
@@ -1101,10 +1135,6 @@ func sliceToSet(slice []string) map[string]dontCareT {
 }
 
 func isSubset(sub []string, super map[string]dontCareT) bool {
-	fmt.Println(">>>>>>")
-	fmt.Println(sub)
-	fmt.Println(super)
-	fmt.Println("<<<<<<")
 	for _, s := range sub {
 		_, ok := super[s]
 		if !ok {
@@ -1115,23 +1145,15 @@ func isSubset(sub []string, super map[string]dontCareT) bool {
 }
 
 func matchesSearch(searchString string, tags map[string]dontCareT) bool {
-	fmt.Println("********")
-	fmt.Println(searchString)
-	fmt.Println(tags)
-	fmt.Println("^^^^^^^^")
 	for tag, _ := range tags {
-		fmt.Println(tag)
 		if strings.Contains(tag, searchString) {
-			fmt.Println("true")
 			return true
 		}
 	}
-	fmt.Println("false")
 	return false
 }
 
 func matchingApp(app appMsgT, q searchQueryT) bool {
-	fmt.Println("top of matchingApp")
 	return isSubset(q.Tags, app.Tags) &&
 		matchesSearch(q.SearchString, app.Tags)
 }
@@ -1157,16 +1179,17 @@ func setToSlice(set map[string]dontCareT) []string {
 }
 
 func appToSearchResult(app appMsgT) searchResultT {
+	author := base64.URLEncoding.EncodeToString(common.HashToSlice(app.Author))
+	appHash := base64.URLEncoding.EncodeToString(common.HashToSlice(app.AppHash))
 	return searchResultT{
-		common.HashToSlice(app.Author),
+		author,
 		setToSlice(app.Tags),
-		common.HashToSlice(app.AppHash),
+		appHash,
 		app.PosixTime,
 	}
 }
 
-func search(apps []appMsgT, q searchQueryT) searchResultsT {
-	fmt.Println(apps)
+func search(apps []appMsgT, q searchQueryT) (searchResultsT, error) {
 	filtered := filterApps(apps, q)
 	matchingApps := make([]searchResultT, len(filtered))
 	matchingTags := make(map[string]dontCareT)
@@ -1181,7 +1204,7 @@ func search(apps []appMsgT, q searchQueryT) searchResultsT {
 	return searchResultsT{
 		Apps: matchingApps,
 		Tags: setToSlice(matchingTags),
-	}
+	}, nil
 }
 
 type searchResultsT struct {
@@ -1204,8 +1227,10 @@ func processSearchApps(
 	if err != nil {
 		return *s, sendErr("Could not decode Json.")
 	}
-	fmt.Println(searchQuery)
-	matchingApps := search(s.apps, searchQuery)
+	matchingApps, err := search(s.apps, searchQuery)
+	if err != nil {
+		return *s, sendErr(err.Error())
+	}
 	encoded, err := json.Marshal(matchingApps)
 	if err != nil {
 		return *s, sendErr("Couldn't encode search results.")
@@ -1214,6 +1239,13 @@ func processSearchApps(
 }
 
 func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
+	if strEq(n.securityCode, s.homeCode) {
+		return *s, serveDocT{
+			n.w,
+			n.doneCh,
+			homeDir + "/" + n.subRoute,
+		}
+	}
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
 	if err != nil {
 		return *s, sendHttpErrorT{
@@ -1257,10 +1289,8 @@ func processMakeAppRoute(
 	n normalApiInputT,
 	s *stateT) (stateT, outputT) {
 
-	var makeAppRoute makeAppRouteT
-	err := json.Unmarshal(n.body, &makeAppRoute)
-	if err != nil {
-		return *s, sendHttpErrorT{
+	sendErr := func(err error) sendHttpErrorT {
+		return sendHttpErrorT{
 			n.w,
 			err.Error(),
 			400,
@@ -1268,20 +1298,35 @@ func processMakeAppRoute(
 		}
 	}
 	if !strEq(n.securityCode, s.homeCode) {
-		return *s, sendHttpErrorT{
-			n.w,
-			"Bad security code.",
-			400,
-			n.doneCh,
+		err := errors.New("Bad security code.")
+		return *s, sendErr(err)
+	}
+	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
+	if err != nil {
+		fmt.Println(">>>>")
+		fmt.Println(n.subRoute)
+		fmt.Println("base64 decode err")
+		return *s, sendErr(err)
+	}
+	hash := common.SliceToHash(hashSlice)
+	hashStr := hashToStr(hash)
+	return *s, unpackAppT{
+		s.appCodes,
+		n.w,
+		hash,
+		n.doneCh,
+		appsDir + "/" + hashStr,
+		tmpDir + "/" + hashStr,
+	}
+}
+
+func getHashSecurityCode(appCodes map[string][32]byte, hash [32]byte) (string, error) {
+	for c, h := range appCodes {
+		if equalHashes(h, hash) {
+			return c, nil
 		}
 	}
-	return *s, unpackAppT{
-		n.w,
-		makeAppRoute.apphash,
-		n.doneCh,
-		appsDir + "/" + hashToStr(makeAppRoute.apphash),
-		tmpDir + "/" + hashToStr(makeAppRoute.apphash),
-	}
+	return "", errors.New("Could not find app.")
 }
 
 type httpOkResponseT struct {
@@ -1359,7 +1404,7 @@ func genCode() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(authSlice), nil
+	return base64.URLEncoding.EncodeToString(authSlice), nil
 }
 
 type sendAppT struct {
@@ -1569,6 +1614,16 @@ func initState() (stateT, error) {
 }
 
 func main() {
+	err := os.RemoveAll(tmpDir)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	err = os.Mkdir(tmpDir, 0755)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	state, err := initState()
 	if err != nil {
 		fmt.Println(err)
@@ -1584,7 +1639,7 @@ func main() {
 	go httpServer(state.httpChan, state.homeCode)
 	fmt.Print(state.homeCode)
 	err = browser.OpenURL(
-		"http://localhost:3000/" + state.homeCode)
+		"http://localhost:3000/getapp/" + state.homeCode + "/index.html")
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1605,6 +1660,7 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 		doneCh := make(chan endRequest)
 		inputChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
+		fmt.Println("end of request")
 	}
 }
 
@@ -1655,7 +1711,7 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash)
 	}
 	tmpPath := makeChunkFilePath(appSig.AppHash)
-	finalName := base64.RawURLEncoding.EncodeToString(
+	finalName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(appSig.AppHash))
 	finalPath := appsDir + "/" + finalName
 	return newS, assembleApp{
@@ -1671,7 +1727,7 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 }
 
 func makeChunkFilePath(chunkHash [32]byte) string {
-	filename := base64.RawURLEncoding.EncodeToString(
+	filename := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
 	return tmpDir + "/" + filename
 }
@@ -1765,7 +1821,7 @@ func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
 	}
 	newS := *s
 	newS.chunksLoading = newChunksLoading
-	tmpFileName := base64.RawURLEncoding.EncodeToString(
+	tmpFileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
 	return newS, writeToFileT{
 		chunk.appHash,
@@ -1921,7 +1977,7 @@ func decodeMsg(
 	return *new(msgT), *new([32]byte), err
 }
 
-var routes = []string{"makeapproute", "getapp", "sendapp", "saveapp", "searchapps"}
+var routes = []string{"sendapp", "saveapp", "searchapps"}
 
 func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
@@ -1929,15 +1985,17 @@ func twoBytesToInt(bs []byte) int {
 
 func httpServer(inputChan chan httpInputT, homeCode string) {
 	mux := goji.NewMux()
+	mux.HandleFunc(
+		pat.Get("/getapp/:securityCode/:subRoute"),
+		handler("getapp", inputChan))
+	mux.HandleFunc(
+		pat.Get("/makeapproute/:securityCode/:subRoute"),
+		handler("makeapproute", inputChan))
 	for _, route := range routes {
-		path := "/" + route + "/:securityCode/:subRoute"
+		path := "/" + route + "/:securityCode"
 		mux.HandleFunc(
 			pat.Post(path),
 			handler(route, inputChan))
 	}
-	home := "/" + homeCode
-	mux.Handle(
-		pat.Get("/" + homeCode),
-		http.StripPrefix(home, http.FileServer(http.Dir("./home"))))
 	http.ListenAndServe(":3000", mux)
 }

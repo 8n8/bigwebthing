@@ -13,14 +13,14 @@ import Html exposing (Html, button, div, input, text)
 import Html.Attributes as Hat
 import Html.Events exposing (onClick, onInput)
 import Http
-import List as L
-import Url
-import Url.Parser as Up exposing ((</>))
 import Json.Decode as Jd
 import Json.Encode as Je
+import List as L
 import Set
-import Time
 import Task
+import Time
+import Url
+import Url.Parser as Up exposing ((</>))
 
 
 main =
@@ -36,32 +36,36 @@ main =
 
 parseRoute : Up.Parser (( Page, Maybe String ) -> a) a
 parseRoute =
-    Up.oneOf
-        [ Up.map (\x -> ( Home, Just x )) Up.string
-        , Up.map (\x -> ( NewDoc, Just x )) <|
-            Up.string
-                </> Up.s "newdocument"
-        , Up.map (\x -> ( Members, Just x )) <|
-            Up.string
-                </> Up.s "members"
-        ]
+    (</>) (Up.s "getapp") <|
+        Up.oneOf
+            [ Up.map (\x -> ( Home, Just x )) <|
+                Up.string
+                    </> Up.s "index.html"
+            , Up.map (\x -> ( NewDoc, Just x )) <|
+                Up.string
+                    </> Up.s "newdocument"
+            , Up.map (\x -> ( Members, Just x )) <|
+                Up.string
+                    </> Up.s "members"
+            ]
 
 
 urlToPage : Url.Url -> ( Page, Maybe String )
 urlToPage url =
-        case Up.parse parseRoute url of
-            Nothing ->
-                ( Unknown, Nothing )
+    case Up.parse parseRoute url of
+        Nothing ->
+            ( Unknown, Nothing )
 
-            Just result ->
-                result
+        Just result ->
+            result
+
 
 initModel page securityCode key =
     { page = page
     , securityCode = securityCode
     , searchStr = ""
     , fileUpload = Nothing
-    , searchResults = Ok {apps = [], tags = []}
+    , searchResults = Ok { apps = [], tags = [] }
     , key = key
     , newTagsBox = ""
     , selectedTags = Set.empty
@@ -72,15 +76,19 @@ initModel page securityCode key =
     , selectAll = False
     }
 
+
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
     case urlToPage url of
         ( page, securityCode ) ->
             ( initModel page securityCode key
             , case securityCode of
-                Nothing -> Cmd.none
-                Just code -> Cmd.batch
-                    [ postMsg "" [] code, Task.perform Zone Time.here ]
+                Nothing ->
+                    Cmd.none
+
+                Just code ->
+                    Cmd.batch
+                        [ postMsg "" [] code, Task.perform Zone Time.here ]
             )
 
 
@@ -102,6 +110,9 @@ type Msg
     | Zone Time.Zone
     | FileSelected String Bool
     | TickAll Bool
+    | LaunchApp String
+    | AppLaunched (Result Http.Error ())
+
 
 type Page
     = Home
@@ -109,12 +120,14 @@ type Page
     | Members
     | Unknown
 
+
 type alias SearchResult =
     { author : String
     , tags : List String
     , hash : String
     , posixTime : Int
     }
+
 
 decodeSearchResult : Jd.Decoder SearchResult
 decodeSearchResult =
@@ -124,16 +137,19 @@ decodeSearchResult =
         (Jd.field "Hash" Jd.string)
         (Jd.field "Posixtime" Jd.int)
 
+
 type alias SearchResults =
     { apps : List SearchResult
     , tags : List String
     }
+
 
 decodeSearchResults : Jd.Decoder SearchResults
 decodeSearchResults =
     Jd.map2 SearchResults
         (Jd.field "Apps" (Jd.list decodeSearchResult))
         (Jd.field "Tags" (Jd.list Jd.string))
+
 
 type alias Model =
     { page : Page
@@ -151,11 +167,13 @@ type alias Model =
     , selectAll : Bool
     }
 
+
 encodeSearchQuery tags searchString =
     Je.object
-        [ ("Tags", (Je.list Je.string) tags)
-        , ("SearchString", Je.string searchString)
+        [ ( "Tags", Je.list Je.string tags )
+        , ( "SearchString", Je.string searchString )
         ]
+
 
 postMsg : String -> List String -> String -> Cmd Msg
 postMsg searchString tags securityCode =
@@ -166,71 +184,118 @@ postMsg searchString tags securityCode =
         }
 
 
-setNewDocUrl key =
-    Nav.pushUrl key "/newdocument"
-
-
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        AppLaunched _ ->
+            ( model, Cmd.none )
+
+        LaunchApp str ->
+            case model.securityCode of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just code ->
+                    ( model
+                    , Http.get
+                        { url = "http://localhost:3000/makeapproute/" ++ code ++ "/" ++ str
+                        , expect = Http.expectWhatever AppLaunched
+                        }
+                    )
+
         TickAll True ->
             case model.searchResults of
-                Err _ -> ( { model | selectAll = True }, Cmd.none )
+                Err _ ->
+                    ( { model | selectAll = True }, Cmd.none )
+
                 Ok results ->
-                    ( { model |
-                          checkedBoxes = Set.fromList (List.map .hash results.apps),
-                          selectAll = True }
-                    , Cmd.none)
+                    ( { model
+                        | checkedBoxes = Set.fromList (List.map .hash results.apps)
+                        , selectAll = True
+                      }
+                    , Cmd.none
+                    )
+
         TickAll False ->
-            ( { model | checkedBoxes = Set.empty,
-                        selectAll = False }, Cmd.none )
+            ( { model
+                | checkedBoxes = Set.empty
+                , selectAll = False
+              }
+            , Cmd.none
+            )
+
         FileSelected hash False ->
             ( { model
-                 | checkedBoxes = Set.remove hash model.checkedBoxes
+                | checkedBoxes = Set.remove hash model.checkedBoxes
               }
             , Cmd.none
             )
+
         FileSelected hash True ->
             ( { model
-                 | checkedBoxes = Set.insert hash model.checkedBoxes
+                | checkedBoxes = Set.insert hash model.checkedBoxes
               }
             , Cmd.none
             )
-        Zone zone -> ( { model | zone = zone }, Cmd.none )
+
+        Zone zone ->
+            ( { model | zone = zone }, Cmd.none )
+
         ChooseTag tag ->
-            let newTags = Set.insert tag model.selectedTags
-            in case model.securityCode of
-                Nothing -> ( model, Cmd.none )
+            let
+                newTags =
+                    Set.insert tag model.selectedTags
+            in
+            case model.securityCode of
+                Nothing ->
+                    ( model, Cmd.none )
+
                 Just code ->
                     ( { model | selectedTags = newTags }
                     , postMsg model.searchStr (Set.toList newTags) code
                     )
+
         UnchooseTag tag ->
             let
-                newTags = Set.remove tag model.selectedTags
-            in case model.securityCode of
-                Nothing -> ( model, Cmd.none)
+                newTags =
+                    Set.remove tag model.selectedTags
+            in
+            case model.securityCode of
+                Nothing ->
+                    ( model, Cmd.none )
+
                 Just code ->
                     ( { model | selectedTags = newTags }
                     , postMsg model.searchStr (Set.toList newTags) code
                     )
+
         NewSearchResults results ->
-            ( { model |
-                  searchResults = results,
-                  unselectedTags = case results of
-                      Err _ -> model.unselectedTags
-                      Ok r ->
-                          let newTags = Set.fromList r.tags
-                          in Set.diff newTags model.selectedTags
+            ( { model
+                | searchResults = results
+                , unselectedTags =
+                    case results of
+                        Err _ ->
+                            model.unselectedTags
+
+                        Ok r ->
+                            let
+                                newTags =
+                                    Set.fromList r.tags
+                            in
+                            Set.diff newTags model.selectedTags
               }
-            , Cmd.none )
+            , Cmd.none
+            )
+
         TagBox tags ->
-            ( { model | newTagsBox = tags }, Cmd.none)
+            ( { model | newTagsBox = tags }, Cmd.none )
+
         DocLoaded file ->
-            ( { model | fileUpload = Just file }, Cmd.none)
+            ( { model | fileUpload = Just file }, Cmd.none )
+
         UploadDoc ->
-            case (model.securityCode, model.fileUpload) of
-                (Just code, Just file) ->
+            case ( model.securityCode, model.fileUpload ) of
+                ( Just code, Just file ) ->
                     ( { model | fileUpload = Nothing }
                     , Http.post
                         { url = "/saveapp/" ++ code
@@ -258,16 +323,16 @@ update msg model =
 
         SearchBox txt ->
             case model.securityCode of
-                Nothing -> ( { model | page = Unknown }, Cmd.none )
+                Nothing ->
+                    ( { model | page = Unknown }, Cmd.none )
+
                 Just code ->
                     ( { model | searchStr = txt }, postMsg txt (Set.toList model.selectedTags) code )
 
         -- FromServer (Err err) ->
         --     ( model, Cmd.none )
-
         -- FromServer (Ok searchResults) ->
         --     ( { model | displayStr = str }, Cmd.none )
-
         ChooseDoc ->
             ( model, Fs.file [ "application/octet-stream" ] DocLoaded )
 
@@ -282,7 +347,7 @@ update msg model =
                 Just code ->
                     ( { model | page = Members }
                     , Nav.pushUrl model.key <|
-                        "/"
+                        "/getapp/"
                             ++ code
                             ++ "/members"
                     )
@@ -295,7 +360,7 @@ update msg model =
                 Just code ->
                     ( { model | page = NewDoc }
                     , Nav.pushUrl model.key <|
-                        "/"
+                        "/getapp/"
                             ++ code
                             ++ "/newdocument"
                     )
@@ -308,7 +373,7 @@ update msg model =
                 Just code ->
                     ( { model | page = Home }
                     , Cmd.batch
-                        [ Nav.pushUrl model.key <| "/" ++ code
+                        [ Nav.pushUrl model.key <| "/getapp/" ++ code ++ "/index.html"
                         , postMsg
                             model.searchStr
                             (Set.toList model.selectedTags)
@@ -363,10 +428,11 @@ idtxt =
 
 myId =
     E.column
-        (idStyle ++
-        [ E.alignRight
-        , E.alignTop
-        ])
+        (idStyle
+            ++ [ E.alignRight
+               , E.alignTop
+               ]
+        )
     <|
         (E.el [ Font.bold ] <| E.text "Public ID:")
             :: L.map E.text idtxt
@@ -382,16 +448,26 @@ searchBoxStyle =
 topButtonStyle =
     [ E.alignLeft
     , E.alignTop
-    , Font.size 33 
+    , Font.size 33
     , Font.family [ Font.typeface "Georgia", Font.serif ]
     ]
 
 
+blue =
+    E.rgb255 132 179 255
 
-blue = E.rgb255 132 179 255
-paleBlue = E.rgb255 214 229 255
-grey = E.rgb255 169 169 169
-white = E.rgb255 255 255 255
+
+paleBlue =
+    E.rgb255 214 229 255
+
+
+grey =
+    E.rgb255 169 169 169
+
+
+white =
+    E.rgb255 255 255 255
+
 
 buttonColor p1 p2 =
     if p1 == p2 then
@@ -443,20 +519,22 @@ homeTopSection txt =
         , myId
         ]
 
+
 newDocButtonStyle =
-                [ E.alignBottom
-                , E.padding 5
-                , Border.width 1
-                , E.height <| E.px 50
-                ]
+    [ E.alignBottom
+    , E.padding 5
+    , Border.width 1
+    , E.height <| E.px 50
+    ]
 
 
 greyNewDocButtonStyle =
-        newDocButtonStyle ++
-        [ Border.color grey
-        , Font.color grey
-        , E.htmlAttribute <| Hat.style "box-shadow" "none"
-        ]
+    newDocButtonStyle
+        ++ [ Border.color grey
+           , Font.color grey
+           , E.htmlAttribute <| Hat.style "box-shadow" "none"
+           ]
+
 
 newDocTopSection tagText fileUpload =
     E.column [ E.width E.fill ]
@@ -467,14 +545,17 @@ newDocTopSection tagText fileUpload =
             , myId
             ]
         , E.row [ E.spacing 20 ]
-            [ E.el [] <| Ei.text
-                [ E.width <| E.px 600, E.height <| E.px 50 ]
-                { onChange = TagBox
-                , text = tagText
-                , placeholder = Just <| Ei.placeholder [] <|
-                    E.text "Type tags separated by commas"
-                , label = Ei.labelAbove [] E.none
-                }                     
+            [ E.el [] <|
+                Ei.text
+                    [ E.width <| E.px 600, E.height <| E.px 50 ]
+                    { onChange = TagBox
+                    , text = tagText
+                    , placeholder =
+                        Just <|
+                            Ei.placeholder [] <|
+                                E.text "Type tags separated by commas"
+                    , label = Ei.labelAbove [] E.none
+                    }
             , Ei.button newDocButtonStyle
                 { onPress = Just ChooseDoc
                 , label =
@@ -483,13 +564,22 @@ newDocTopSection tagText fileUpload =
                 }
             , Ei.button
                 (case fileUpload of
-                    Nothing -> greyNewDocButtonStyle
-                    Just _ -> newDocButtonStyle)
-                { onPress = case fileUpload of
-                      Nothing -> Nothing
-                      Just _ -> Just UploadDoc
-                , label = E.el [ E.padding 3 ] <|
-                    E.text "Upload file"
+                    Nothing ->
+                        greyNewDocButtonStyle
+
+                    Just _ ->
+                        newDocButtonStyle
+                )
+                { onPress =
+                    case fileUpload of
+                        Nothing ->
+                            Nothing
+
+                        Just _ ->
+                            Just UploadDoc
+                , label =
+                    E.el [ E.padding 3 ] <|
+                        E.text "Upload file"
                 }
             ]
         ]
@@ -534,114 +624,194 @@ memberPage model =
 tagStyle color =
     [ Bg.color color
     , E.alignLeft
-    , Font.size 24 
+    , Font.size 24
     , Font.family [ Font.typeface "Courier", Font.monospace ]
     , E.paddingXY 0 5
     ]
 
-showTag msg color tag =
-   Ei.button (tagStyle color) {onPress = Just (msg tag), label = E.text tag}
 
-tagSort = L.sortWith tagCompare
+showTag msg color tag =
+    Ei.button (tagStyle color) { onPress = Just (msg tag), label = E.text tag }
+
+
+tagSort =
+    L.sortWith tagCompare
+
 
 tagCompare a b =
     case compare (String.length a) (String.length b) of
-        LT -> LT
-        GT -> GT
-        EQ -> compare a b
+        LT ->
+            LT
+
+        GT ->
+            GT
+
+        EQ ->
+            compare a b
+
 
 homeShowTags : (String -> Msg) -> List String -> E.Color -> E.Attribute Msg -> E.Element Msg
 homeShowTags msgFun tags color padding =
     case tags of
-        [] -> E.none
-        _ -> E.wrappedRow [E.spacing 15, padding] <|
+        [] ->
+            E.none
+
+        _ ->
+            E.wrappedRow [ E.spacing 15, padding ] <|
                 List.map (showTag msgFun color) (tagSort tags)
 
+
 addToSet : List String -> Set.Set String -> Set.Set String
-addToSet ls accum = Set.union accum (Set.fromList ls)
+addToSet ls accum =
+    Set.union accum (Set.fromList ls)
+
 
 choosableTags : Result Http.Error SearchResults -> List String
-choosableTags searchResults = case searchResults of
-    Err _ -> []
-    Ok results -> results.tags
-        
+choosableTags searchResults =
+    case searchResults of
+        Err _ ->
+            []
+
+        Ok results ->
+            results.tags
+
+
 idStyle =
     [ Font.family [ Font.typeface "Courier", Font.monospace ]
     , Font.size 20
     ]
+
 
 normalText =
     [ Font.family [ Font.typeface "Georgia", Font.serif ]
     , Font.size 20
     ]
 
+
 dayToStr : Time.Weekday -> String
-dayToStr weekday = case weekday of
-    Time.Mon -> "Monday"
-    Time.Tue -> "Tuesday"
-    Time.Wed -> "Wednesday"
-    Time.Thu -> "Thursday"
-    Time.Fri -> "Friday"
-    Time.Sat -> "Saturday"
-    Time.Sun -> "Sunday"
+dayToStr weekday =
+    case weekday of
+        Time.Mon ->
+            "Monday"
+
+        Time.Tue ->
+            "Tuesday"
+
+        Time.Wed ->
+            "Wednesday"
+
+        Time.Thu ->
+            "Thursday"
+
+        Time.Fri ->
+            "Friday"
+
+        Time.Sat ->
+            "Saturday"
+
+        Time.Sun ->
+            "Sunday"
+
 
 monthToStr : Time.Month -> String
-monthToStr month = case month of
-    Time.Jan -> "January"
-    Time.Feb -> "February"
-    Time.Mar -> "March"
-    Time.Apr -> "April"
-    Time.May -> "May"
-    Time.Jun -> "June"
-    Time.Jul -> "July"
-    Time.Aug -> "August"
-    Time.Sep -> "September"
-    Time.Oct -> "October"
-    Time.Nov -> "November"
-    Time.Dec -> "December"
+monthToStr month =
+    case month of
+        Time.Jan ->
+            "January"
+
+        Time.Feb ->
+            "February"
+
+        Time.Mar ->
+            "March"
+
+        Time.Apr ->
+            "April"
+
+        Time.May ->
+            "May"
+
+        Time.Jun ->
+            "June"
+
+        Time.Jul ->
+            "July"
+
+        Time.Aug ->
+            "August"
+
+        Time.Sep ->
+            "September"
+
+        Time.Oct ->
+            "October"
+
+        Time.Nov ->
+            "November"
+
+        Time.Dec ->
+            "December"
+
 
 prettyTime posix zone =
     let
-        year = Time.toYear zone posix
-        month = Time.toMonth zone posix
-        day = Time.toDay zone posix
-        dayName = Time.toWeekday zone posix
-        hour = Time.toHour zone posix
-        minute = Time.toMinute zone posix
+        year =
+            Time.toYear zone posix
+
+        month =
+            Time.toMonth zone posix
+
+        day =
+            Time.toDay zone posix
+
+        dayName =
+            Time.toWeekday zone posix
+
+        hour =
+            Time.toHour zone posix
+
+        minute =
+            Time.toMinute zone posix
     in
-        (dayToStr dayName) ++
-        " " ++
-        (String.fromInt day) ++
-        " " ++
-        (monthToStr month) ++
-        " " ++
-        (String.fromInt year) ++
-        ", " ++
-        (String.fromInt hour) ++
-        ":" ++
-        (let strMin = (String.fromInt minute)
-         in case String.length strMin of
-                1 -> "0" ++ strMin
-                _ -> strMin)
-        
+    dayToStr dayName
+        ++ " "
+        ++ String.fromInt day
+        ++ " "
+        ++ monthToStr month
+        ++ " "
+        ++ String.fromInt year
+        ++ ", "
+        ++ String.fromInt hour
+        ++ ":"
+        ++ (let
+                strMin =
+                    String.fromInt minute
+            in
+            case String.length strMin of
+                1 ->
+                    "0" ++ strMin
+
+                _ ->
+                    strMin
+           )
+
 
 bigCheckbox onChange checked =
     Ei.checkbox
-            [ E.alignTop
-            , E.alignLeft
-            ]
-            { onChange = onChange
-            , icon = defaultCheckbox
-            , checked = checked
-            , label = Ei.labelHidden "Select document"
-            }
+        [ E.alignTop
+        , E.alignLeft
+        ]
+        { onChange = onChange
+        , icon = defaultCheckbox
+        , checked = checked
+        , label = Ei.labelHidden "Select document"
+        }
 
 
-
-viewSearchResult zone checkedBoxes result =
-    E.row [E.spacing 30]
+viewSearchResult zone checkedBoxes securityCode result =
+    E.row [ E.spacing 30 ]
         [ bigCheckbox (FileSelected result.hash) (Set.member result.hash checkedBoxes)
-        , E.column [E.spacing 10]
+        , E.column [ E.spacing 10 ]
             [ homeShowTags ChooseTag result.tags paleBlue (E.padding 0)
             , E.row []
                 [ E.el normalText <| E.text "Author ID: "
@@ -649,17 +819,19 @@ viewSearchResult zone checkedBoxes result =
                 ]
             , E.row []
                 [ E.el normalText <| E.text "Document ID: "
-                , E.el idStyle <| E.text result.hash
+                , E.el idStyle <| Ei.button [] { onPress = Just (LaunchApp result.hash), label = E.text result.hash }
                 ]
             , E.row []
                 [ E.el normalText <| E.text "Date: "
-                , E.el normalText <| E.text <|
-                    prettyTime
-                        (Time.millisToPosix <| result.posixTime*1000)
-                        zone
+                , E.el normalText <|
+                    E.text <|
+                        prettyTime
+                            (Time.millisToPosix <| result.posixTime * 1000)
+                            zone
                 ]
             ]
         ]
+
 
 defaultCheckbox : Bool -> E.Element msg
 defaultCheckbox checked =
@@ -721,19 +893,31 @@ defaultCheckbox checked =
 
          else
             E.none
-         )  
+        )
 
-noResults = E.text "No results."
 
-homeSearchResults results zone checkedBoxes selectAll =
+noResults =
+    E.text "No results."
+
+
+homeSearchResults : Result Http.Error SearchResults -> Time.Zone -> Set.Set String -> Bool -> String -> E.Element Msg
+homeSearchResults results zone checkedBoxes selectAll securityCode =
     case results of
-        Err _ -> noResults
-        Ok r -> case r.apps of
-            [] -> noResults
-            _ -> E.column
-                [E.spacing 30, E.paddingXY 0 10] <|
-                (E.el [] <| bigCheckbox TickAll selectAll) :: 
-                (List.map (viewSearchResult zone checkedBoxes) r.apps)
+        Err _ ->
+            noResults
+
+        Ok r ->
+            case r.apps of
+                [] ->
+                    noResults
+
+                _ ->
+                    E.column
+                        [ E.spacing 30, E.paddingXY 0 10 ]
+                    <|
+                        (E.el [] <| bigCheckbox TickAll selectAll)
+                            :: List.map (viewSearchResult zone checkedBoxes securityCode) r.apps
+
 
 allChecked searchResults checkedBoxes =
     checkedBoxes == Set.fromList (List.map .hash searchResults)
@@ -753,7 +937,12 @@ homePage model =
             (Set.toList model.unselectedTags)
             paleBlue
             (E.padding 0)
-        , homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll
+        , case model.securityCode of
+            Nothing ->
+                E.text "Internal error: no security code."
+
+            Just code ->
+                homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll code
         ]
 
 
