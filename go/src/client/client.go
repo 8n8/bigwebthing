@@ -374,6 +374,7 @@ func (r readHttpInputT) send() inputT {
 	case h := <-r.httpChan:
 		req := h.r
 		securityCode := pat.Param(h.r, "securityCode")
+		subRoute := pat.Param(h.r, "subroute")
 		if h.route == "saveapp" {
 			hash, tags, err := writeAppToFile(h.r)
 			if err != nil {
@@ -403,6 +404,7 @@ func (r readHttpInputT) send() inputT {
 			securityCode,
 			body,
 			h.route,
+			subRoute,
 			h.doneCh,
 		}
 	case tcpIn := <-r.tcpInChan:
@@ -629,6 +631,7 @@ type normalApiInputT struct {
 	securityCode string
 	body         []byte
 	route        string
+	subRoute string
 	doneCh       chan endRequest
 }
 
@@ -1223,7 +1226,7 @@ func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	return *s, serveDocT{
 		n.w,
 		n.doneCh,
-		appsDir + "/" + hashToStr(docHash),
+		tmpDir + "/" + hashToStr(docHash) + "/" + n.subRoute,
 	}
 }
 
@@ -1927,7 +1930,7 @@ func twoBytesToInt(bs []byte) int {
 func httpServer(inputChan chan httpInputT, homeCode string) {
 	mux := goji.NewMux()
 	for _, route := range routes {
-		path := "/" + route + "/:securityCode"
+		path := "/" + route + "/:securityCode/:subRoute"
 		mux.HandleFunc(
 			pat.Post(path),
 			handler(route, inputChan))
