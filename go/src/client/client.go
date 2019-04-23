@@ -188,36 +188,6 @@ func getTagsPart(bodyFileReader *multipart.Reader) ([]byte, error) {
 	return ioutil.ReadAll(tagsPart)
 }
 
-// func getPostParts(r *http.Request) (*multipart.Part, []byte, error) {
-// 	var filepart *multipart.Part
-// 	bodyFileReader, err := r.MultipartReader()
-// 	if err != nil {
-// 		return filepart, *new([]byte), err
-// 	}
-// 	filepart, err = bodyFileReader.NextPart()
-// 	if err != nil {
-// 		return filepart, *new([]byte), err
-// 	}
-// 	var filepartname string = filepart.FormName()
-// 	if filepartname != "file" {
-// 		msg := "Could not find form element \"file\"."
-// 		return filepart, *new([]byte), errors.New(msg)
-// 	}
-// 	bod, err := ioutil.ReadAll(filepart)
-// 	if err != nil { fmt.Println("No good at all, at all.") }
-// 	fmt.Println(string(bod[:]))
-// 	tagsPart, err := bodyFileReader.NextPart()
-// 	if tagsPart.FormName() != "tags" {
-// 		msg := "Could not find form element \"tags\"."
-// 		return filepart, *new([]byte), errors.New(msg)
-// 	}
-// 	tags, err := ioutil.ReadAll(tagsPart)
-// 	if err != nil {
-// 		return filepart, *new([]byte), err
-// 	}
-// 	return filepart, tags, nil
-// }
-
 func writeAppToFile(
 	r *http.Request,
 	dataDir string) (string, map[string]dontCareT, error) {
@@ -725,7 +695,6 @@ func (g unpackAppT) send() inputT {
 	}
 	tr := tar.NewReader(fileHandle)
 	for {
-		fmt.Println("top of loop")
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -736,16 +705,13 @@ func (g unpackAppT) send() inputT {
 			return noInputT{}
 		}
 		sourcePath := g.tmpPath + "/" + hdr.Name
-		fmt.Println(hdr.Name)
 		sourceHandle, err := os.Create(sourcePath)
 		if err != nil {
-			fmt.Println("handleErr")
 			sendErr(err)
 			return noInputT{}
 		}
 		_, err = io.Copy(sourceHandle, tr)
 		if err != nil {
-			fmt.Println("copyErr")
 			sendErr(err)
 			return noInputT{}
 		}
@@ -809,8 +775,8 @@ func hashToStr(h [32]byte) string {
 }
 
 type sendAppJsonT struct {
-	appHash    [32]byte
-	recipients [][32]byte
+	AppHash    [32]byte
+	Recipients [][32]byte
 }
 
 type logSendErrT struct {
@@ -1019,17 +985,17 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	if err != nil {
 		return *s, sendErr("Could not decode Json.")
 	}
-	if len(sendAppJson.recipients) == 0 {
+	if len(sendAppJson.Recipients) == 0 {
 		return *s, sendErr("No recipients.")
 	}
 	var app appMsgT
 	for _, thisApp := range s.apps {
-		if equalHashes(thisApp.AppHash, sendAppJson.appHash) {
+		if equalHashes(thisApp.AppHash, sendAppJson.AppHash) {
 			app = thisApp
 			break
 		}
 	}
-	filepath := s.dataDir + "/apps/" + hashToStr(sendAppJson.appHash)
+	filepath := s.dataDir + "/apps/" + hashToStr(sendAppJson.AppHash)
 	return *s, sendAppT{
 		app,
 		s.tcpInChan,
@@ -1037,8 +1003,8 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 		filepath,
 		n.w,
 		n.doneCh,
-		sendAppJson.recipients,
-		sendAppJson.appHash,
+		sendAppJson.Recipients,
+		sendAppJson.AppHash,
 		s.secretSign,
 		s.secretEncrypt,
 		s.dataDir,
@@ -1313,9 +1279,6 @@ func processMakeAppRoute(
 	}
 	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
-		fmt.Println(">>>>")
-		fmt.Println(n.subRoute)
-		fmt.Println("base64 decode err")
 		return *s, sendErr(err)
 	}
 	hash := common.SliceToHash(hashSlice)
@@ -1631,6 +1594,10 @@ func initState(dataDir string) (stateT, error) {
 
 func main() {
 	args := os.Args
+	if len(args) != 3 {
+		fmt.Println("There must be two command-line arguments.")
+		return
+	}
 	port := args[1]
 	dataDir := args[2]
 	err := os.RemoveAll(dataDir + "/tmp")

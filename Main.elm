@@ -74,6 +74,7 @@ initModel page securityCode key =
     , zone = Time.utc
     , checkedBoxes = Set.empty
     , selectAll = False
+    , sendDrawOpen = Nothing
     }
 
 
@@ -112,6 +113,10 @@ type Msg
     | TickAll Bool
     | LaunchApp String
     | AppLaunched (Result Http.Error ())
+    | AppSent (Result Http.Error ())
+    | OpenSendDrawer String
+    | UpdateSendDrawer SendDrawer
+    | SendApp
 
 
 type Page
@@ -150,13 +155,13 @@ decodeSearchResults =
         (Jd.field "Apps" (Jd.list decodeSearchResult))
         (Jd.field "Tags" (Jd.list Jd.string))
 
-
 type alias Model =
     { page : Page
     , securityCode : Maybe String
     , searchStr : String
     , searchResults : Result Http.Error SearchResults
     , key : Nav.Key
+    , sendDrawOpen : Maybe SendDrawer
     , newTagsBox : String
     , unselectedTags : Set.Set String
     , selectedTags : Set.Set String
@@ -167,6 +172,10 @@ type alias Model =
     , selectAll : Bool
     }
 
+type alias SendDrawer =
+    { recipient : String
+    , appHash : String
+    }
 
 encodeSearchQuery tags searchString =
     Je.object
@@ -174,11 +183,24 @@ encodeSearchQuery tags searchString =
         , ( "SearchString", Je.string searchString )
         ]
 
+encodeSendApp sendDrawer = -- apphash recipients =
+    Je.object
+        [ ( "AppHash", Je.string sendDrawer.appHash )
+        , ( "Recipients", Je.list Je.string [sendDrawer.recipient] )
+        ]
+
+postSendApp sendDrawer securityCode =
+    Http.post
+        { url = "/sendapp/" ++ securityCode
+        , expect = Http.expectWhatever AppSent
+        , body = Http.jsonBody <| encodeSendApp sendDrawer
+        }
+
 
 postMsg : String -> List String -> String -> Cmd Msg
 postMsg searchString tags securityCode =
     Http.post
-        { url = "http://localhost:3000/searchapps/" ++ securityCode
+        { url = "/searchapps/" ++ securityCode
         , expect = Http.expectJson NewSearchResults decodeSearchResults
         , body = Http.jsonBody <| encodeSearchQuery tags searchString
         }
@@ -187,6 +209,28 @@ postMsg searchString tags securityCode =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        OpenSendDrawer hash ->
+            ( { model | sendDrawOpen = Just
+                    { recipient = ""
+                    , appHash = hash
+                    }
+              }
+            , Cmd.none
+            )
+
+        UpdateSendDrawer newDrawer ->
+            ( { model | sendDrawOpen = Just newDrawer }, Cmd.none )
+            
+        SendApp -> case (model.sendDrawOpen, model.securityCode) of
+            (Just drawer, Just code) ->
+                ( { model | sendDrawOpen = Nothing }
+                , postSendApp drawer code
+                )
+            _ -> ( model, Cmd.none )
+
+        AppSent _ ->
+            ( model, Cmd.none )
+
         AppLaunched _ ->
             ( model, Cmd.none )
 
@@ -198,7 +242,7 @@ update msg model =
                 Just code ->
                     ( model
                     , Http.get
-                        { url = "http://localhost:3000/makeapproute/" ++ code ++ "/" ++ str
+                        { url = "/makeapproute/" ++ code ++ "/" ++ str
                         , expect = Http.expectWhatever AppLaunched
                         }
                     )
@@ -808,7 +852,8 @@ bigCheckbox onChange checked =
         }
 
 
-viewSearchResult zone checkedBoxes securityCode result =
+viewSearchResult : Time.Zone -> Set.Set String -> String -> Maybe SendDrawer -> SearchResult -> E.Element Msg
+viewSearchResult zone checkedBoxes securityCode sendDrawOpen result =
     E.row [ E.spacing 30 ]
         [ bigCheckbox (FileSelected result.hash) (Set.member result.hash checkedBoxes)
         , E.column [ E.spacing 10 ]
@@ -829,6 +874,29 @@ viewSearchResult zone checkedBoxes securityCode result =
                             (Time.millisToPosix <| result.posixTime * 1000)
                             zone
                 ]
+            , let button = Ei.button [] { onPress = Just (OpenSendDrawer result.hash), label = E.text "Send this app" }
+                  drawer recipStr = E.row []
+                      [ Ei.text []
+                          { onChange = \txt -> UpdateSendDrawer
+                              { recipient = txt
+                              , appHash = result.hash
+                              }
+                          , text = recipStr
+                          , placeholder = Just <| Ei.placeholder [] <| E.text "Type recipient ID code"
+                          , label = Ei.labelAbove [] E.none
+                          }
+                      , Ei.button []
+                          { onPress = Just SendApp
+                          , label = E.text "Send"
+                          }
+                      ]
+              in case sendDrawOpen of
+                  Nothing -> button
+                  Just draw ->
+                      if draw.appHash == result.hash then
+                          drawer draw.recipient
+                      else
+                          button
             ]
         ]
 
@@ -900,8 +968,8 @@ noResults =
     E.text "No results."
 
 
-homeSearchResults : Result Http.Error SearchResults -> Time.Zone -> Set.Set String -> Bool -> String -> E.Element Msg
-homeSearchResults results zone checkedBoxes selectAll securityCode =
+homeSearchResults : Result Http.Error SearchResults -> Time.Zone -> Set.Set String -> Bool -> String -> Maybe SendDrawer -> E.Element Msg
+homeSearchResults results zone checkedBoxes selectAll securityCode sendDrawOpen =
     case results of
         Err _ ->
             noResults
@@ -916,7 +984,7 @@ homeSearchResults results zone checkedBoxes selectAll securityCode =
                         [ E.spacing 30, E.paddingXY 0 10 ]
                     <|
                         (E.el [] <| bigCheckbox TickAll selectAll)
-                            :: List.map (viewSearchResult zone checkedBoxes securityCode) r.apps
+                            :: List.map (viewSearchResult zone checkedBoxes securityCode sendDrawOpen) r.apps
 
 
 allChecked searchResults checkedBoxes =
@@ -942,7 +1010,7 @@ homePage model =
                 E.text "Internal error: no security code."
 
             Just code ->
-                homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll code
+                homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll code model.sendDrawOpen
         ]
 
 
