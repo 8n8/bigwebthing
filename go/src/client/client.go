@@ -63,6 +63,7 @@ type stateT struct {
 	isMember       bool
 	isMemberCh     chan isMemberT
 	chunksLoading  map[[32]byte][]fileChunkPtrT
+	dataDir string
 }
 
 type isMemberT struct {
@@ -117,8 +118,8 @@ func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 	return invites, err
 }
 
-func readApps() ([]appMsgT, error) {
-	rawApps, err := ioutil.ReadFile("clientData/apps.txt")
+func readApps(dataDir string) ([]appMsgT, error) {
+	rawApps, err := ioutil.ReadFile(dataDir + "/apps.txt")
 	var apps []appMsgT
 	if err != nil {
 		return apps, nil
@@ -133,6 +134,7 @@ type readHttpInputT struct {
 	homeCode   string
 	invitesCh  chan isMemberT
 	memberList map[[32]byte]dontCareT
+	dataDir string
 }
 
 func equalHashes(as [32]byte, bs [32]byte) bool {
@@ -217,7 +219,8 @@ func getTagsPart(bodyFileReader *multipart.Reader) ([]byte, error) {
 // }
 
 func writeAppToFile(
-	r *http.Request) (string, map[string]dontCareT, error) {
+	r *http.Request,
+	dataDir string) (string, map[string]dontCareT, error) {
 
 	bodyFileReader, err := r.MultipartReader()
 	filepart, err := getFilePart(bodyFileReader)
@@ -231,7 +234,7 @@ func writeAppToFile(
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
-	tmpPath := tmpDir + "/" + tmpFileName
+	tmpPath := dataDir + "/tmp/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
@@ -248,7 +251,7 @@ func writeAppToFile(
 		return "", *new(map[string]dontCareT), err
 	}
 	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
-	err = os.Rename(tmpPath, appsDir+"/"+hash)
+	err = os.Rename(tmpPath, dataDir + "/apps/" + hash)
 	if err != nil {
 		return "", *new(map[string]dontCareT), err
 	}
@@ -348,7 +351,7 @@ func (n newAppT) update(s *stateT) (stateT, outputT) {
 		}
 	}
 	return newS, writeNewAppsT{
-		"clientData/apps.txt",
+		s.dataDir + "/apps.txt",
 		encodedApps,
 		n.w,
 		n.doneCh,
@@ -378,7 +381,7 @@ func (r readHttpInputT) send() inputT {
 			subRoute = pat.Param(h.r, "subRoute")
 		}
 		if h.route == "saveapp" {
-			hash, tags, err := writeAppToFile(h.r)
+			hash, tags, err := writeAppToFile(h.r, r.dataDir)
 			if err != nil {
 				fmt.Println(err)
 				http.Error(h.w, err.Error(), 500)
@@ -621,13 +624,16 @@ func tcpServer(
 }
 
 const (
-	tmpDir      = "clientData/tmp"
-	appsDir     = "clientData/apps"
-	keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
+	//appsDir     = "clientData/apps"
+	//keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
-	sentMsgPath = "clientData/sentMsgs.txt"
+	//sentMsgPath = "clientData/sentMsgs.txt"
 	homeDir     = "home"
 )
+
+func sentMsgPath(dataDir string) string {
+	return dataDir + "/sentMsgPath"
+}
 
 type normalApiInputT struct {
 	w            http.ResponseWriter
@@ -691,7 +697,6 @@ func (g unpackAppT) send() inputT {
 	}
 	_, err := os.Stat(g.tmpPath)
 	if err == nil {
-		fmt.Println("alreadydone")
 		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
 		if err != nil {
 			sendErr(err)
@@ -815,7 +820,11 @@ type logSendErrT struct {
 	err       error
 }
 
-func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
+func sendErrFile(dataDir string) string {
+	return dataDir + "sendErrors.txt"
+}
+
+func logSendErr(err error, appHash [32]byte, recipient [32]byte, dataDir string) {
 	msg := logSendErrT{
 		time.Now().Unix(),
 		appHash,
@@ -828,7 +837,7 @@ func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 		return
 	}
 	f, openErr := os.OpenFile(
-		"clientData/sendErrors.txt",
+		sendErrFile(dataDir),
 		appendFlags,
 		0600)
 	if openErr != nil {
@@ -847,22 +856,22 @@ type logSentSuccessT struct {
 	recipient [32]byte
 }
 
-func logSentSuccess(appHash [32]byte, recipient [32]byte) {
+func logSentSuccess(appHash [32]byte, recipient [32]byte, dataDir string) {
 	msg := logSentSuccessT{appHash, recipient}
 	encoded, jsonErr := json.Marshal(msg)
 	if jsonErr != nil {
-		logSendErr(jsonErr, appHash, recipient)
+		logSendErr(jsonErr, appHash, recipient, dataDir)
 		return
 	}
-	f, openErr := os.OpenFile(sentMsgPath, appendFlags, 0600)
+	f, openErr := os.OpenFile(sentMsgPath(dataDir), appendFlags, 0600)
 	if openErr != nil {
-		logSendErr(openErr, appHash, recipient)
+		logSendErr(openErr, appHash, recipient, dataDir)
 		return
 	}
 	defer f.Close()
 	_, writeErr := f.Write(append([]byte("\n"), encoded...))
 	if writeErr != nil {
-		logSendErr(writeErr, appHash, recipient)
+		logSendErr(writeErr, appHash, recipient, dataDir)
 	}
 }
 
@@ -1020,7 +1029,7 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 			break
 		}
 	}
-	filepath := appsDir + "/" + hashToStr(sendAppJson.appHash)
+	filepath := s.dataDir + "/apps/" + hashToStr(sendAppJson.appHash)
 	return *s, sendAppT{
 		app,
 		s.tcpInChan,
@@ -1032,6 +1041,7 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 		sendAppJson.appHash,
 		s.secretSign,
 		s.secretEncrypt,
+		s.dataDir,
 	}
 }
 
@@ -1095,14 +1105,14 @@ func sendFileToOne(
 		}
 		counter++
 	}
-	logSentSuccess(s.appHash, recipient)
+	logSentSuccess(s.appHash, recipient, s.dataDir)
 	return nil
 }
 
 func (s sendAppT) send() inputT {
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
-		logSendErr(err, s.appHash, s.recipients[0])
+		logSendErr(err, s.appHash, s.recipients[0], s.dataDir)
 		http.Error(s.w, err.Error(), 500)
 		s.doneCh <- endRequest{}
 	}
@@ -1258,7 +1268,7 @@ func processGetApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	return *s, serveDocT{
 		n.w,
 		n.doneCh,
-		tmpDir + "/" + hashToStr(docHash) + "/" + n.subRoute,
+		s.dataDir + "/tmp/" + hashToStr(docHash) + "/" + n.subRoute,
 	}
 }
 
@@ -1315,8 +1325,8 @@ func processMakeAppRoute(
 		n.w,
 		hash,
 		n.doneCh,
-		appsDir + "/" + hashStr,
-		tmpDir + "/" + hashStr,
+		s.dataDir + "/apps/" + hashStr,
+		s.dataDir + "/tmp/" + hashStr,
 	}
 }
 
@@ -1418,6 +1428,7 @@ type sendAppT struct {
 	appHash       [32]byte
 	secretSign    [64]byte
 	secretEncrypt [32]byte
+	dataDir string
 }
 
 func pruneInvites(
@@ -1501,7 +1512,7 @@ func extractKeys(password []byte, secretsFile []byte) (keysT, error) {
 		decodedKeys.Secretencrypt}, nil
 }
 
-func createKeys() error {
+func createKeys(dataDir string) error {
 	pubEnc, secretEnc, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		return err
@@ -1546,23 +1557,27 @@ func createKeys() error {
 		fmt.Println("Could not encode.")
 		return err
 	}
-	err = ioutil.WriteFile(keysFile, encodedFile, 0600)
+	err = ioutil.WriteFile(keysFile(dataDir), encodedFile, 0600)
 	return err
 }
 
-func initState() (stateT, error) {
+func keysFile(dataDir string) string {
+	return dataDir + "/TOP_SECRET_DONT_SHARE.txt"
+}
+
+func initState(dataDir string) (stateT, error) {
 	homeCode, err := genCode()
 	var s stateT
 	if err != nil {
 		return s, err
 	}
-	rawSecrets, err := ioutil.ReadFile(keysFile)
+	rawSecrets, err := ioutil.ReadFile(keysFile(dataDir))
 	if err != nil {
-		err := createKeys()
+		err := createKeys(dataDir)
 		if err != nil {
 			return s, err
 		}
-		rawSecrets, err = ioutil.ReadFile(keysFile)
+		rawSecrets, err = ioutil.ReadFile(keysFile(dataDir))
 		if err != nil {
 			return s, err
 		}
@@ -1578,21 +1593,22 @@ func initState() (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	invites, err := readInvites("clientData/invites.txt")
+	invites, err := readInvites(dataDir + "/invites.txt")
 	if err != nil {
 		return s, err
 	}
-	uninvites, err := readInvites("clientData/uninvites.txt")
+	uninvites, err := readInvites(dataDir + "/uninvites.txt")
 	if err != nil {
 		return s, err
 	}
-	apps, err := readApps()
+	apps, err := readApps(dataDir)
 	if err != nil {
 		return s, err
 	}
 	memberList := makeMemberList(invites, uninvites)
 	_, mem := memberList[keys.publicsign]
 	return stateT{
+		dataDir: dataDir,
 		httpChan:      make(chan httpInputT),
 		tcpInChan:     make(chan envelopeT),
 		tcpOutChan:    make(chan envelopeT),
@@ -1614,17 +1630,20 @@ func initState() (stateT, error) {
 }
 
 func main() {
-	err := os.RemoveAll(tmpDir)
+	args := os.Args
+	port := args[1]
+	dataDir := args[2]
+	err := os.RemoveAll(dataDir + "/tmp")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	err = os.Mkdir(tmpDir, 0755)
+	err = os.Mkdir(dataDir + "/tmp", 0755)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	state, err := initState()
+	state, err := initState(dataDir)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1636,10 +1655,10 @@ func main() {
 		state.secretSign,
 		state.secretEncrypt,
 		state.publicSign)
-	go httpServer(state.httpChan, state.homeCode)
+	go httpServer(state.httpChan, state.homeCode, port)
 	fmt.Print(state.homeCode)
 	err = browser.OpenURL(
-		"http://localhost:3000/getapp/" + state.homeCode + "/index.html")
+		"http://localhost:" + port + "/getapp/" + state.homeCode + "/index.html")
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1660,7 +1679,6 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 		doneCh := make(chan endRequest)
 		inputChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
-		fmt.Println("end of request")
 	}
 }
 
@@ -1708,12 +1726,12 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 	}
 	filePaths := make([]string, len(chunkPtrs))
 	for i, chunkPtr := range chunkPtrs {
-		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash)
+		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash, s.dataDir)
 	}
-	tmpPath := makeChunkFilePath(appSig.AppHash)
+	tmpPath := makeChunkFilePath(appSig.AppHash, s.dataDir)
 	finalName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(appSig.AppHash))
-	finalPath := appsDir + "/" + finalName
+	finalPath := s.dataDir + "/apps/" + finalName
 	return newS, assembleApp{
 		filePaths:  filePaths,
 		appHash:    appSig.AppHash,
@@ -1726,10 +1744,10 @@ func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
 	}
 }
 
-func makeChunkFilePath(chunkHash [32]byte) string {
+func makeChunkFilePath(chunkHash [32]byte, dataDir string) string {
 	filename := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
-	return tmpDir + "/" + filename
+	return dataDir + "/tmp/" + filename
 }
 
 type assembleApp struct {
@@ -1825,7 +1843,7 @@ func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
 		common.HashToSlice(chunkHash))
 	return newS, writeToFileT{
 		chunk.appHash,
-		tmpDir + "/" + tmpFileName,
+		s.dataDir + "/tmp/" + tmpFileName,
 		chunk.chunk}
 }
 
@@ -1861,7 +1879,8 @@ func readHttpIn(s *stateT) readHttpInputT {
 		s.tcpInChan,
 		s.homeCode,
 		s.isMemberCh,
-		s.members}
+		s.members,
+		s.dataDir}
 }
 
 func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
@@ -1983,7 +2002,7 @@ func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
 }
 
-func httpServer(inputChan chan httpInputT, homeCode string) {
+func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:subRoute"),
@@ -1997,5 +2016,5 @@ func httpServer(inputChan chan httpInputT, homeCode string) {
 			pat.Post(path),
 			handler(route, inputChan))
 	}
-	http.ListenAndServe(":3000", mux)
+	http.ListenAndServe(":" + port, mux)
 }
