@@ -63,6 +63,7 @@ urlToPage url =
 initModel page securityCode key =
     { page = page
     , securityCode = securityCode
+    , inviteeBox = ""
     , searchStr = ""
     , fileUpload = Nothing
     , searchResults = Ok { apps = [], tags = [] }
@@ -117,6 +118,9 @@ type Msg
     | OpenSendDrawer String
     | UpdateSendDrawer SendDrawer
     | SendApp
+    | SendInvite
+    | InviteeBox String
+    | InviteSent (Result Http.Error ())
 
 
 type Page
@@ -157,6 +161,7 @@ decodeSearchResults =
 
 type alias Model =
     { page : Page
+    , inviteeBox : String
     , securityCode : Maybe String
     , searchStr : String
     , searchResults : Result Http.Error SearchResults
@@ -183,7 +188,7 @@ encodeSearchQuery tags searchString =
         , ( "SearchString", Je.string searchString )
         ]
 
-encodeSendApp sendDrawer = -- apphash recipients =
+encodeSendApp sendDrawer =
     Je.object
         [ ( "AppHash", Je.string sendDrawer.appHash )
         , ( "Recipients", Je.list Je.string [sendDrawer.recipient] )
@@ -209,6 +214,20 @@ postMsg searchString tags securityCode =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        InviteeBox str -> ({ model | inviteeBox = str }, Cmd.none)
+        InviteSent _ ->
+            (model, Cmd.none)
+        SendInvite ->
+            case model.securityCode of
+                Nothing -> (model, Cmd.none)
+                Just code ->
+                    ( { model | inviteeBox = "" }
+                    , Http.post
+                        { url = "/invite/" ++ code ++ "/" ++ model.inviteeBox
+                        , expect = Http.expectWhatever InviteSent 
+                        , body = Http.emptyBody
+                        }
+                    )
         OpenSendDrawer hash ->
             ( { model | sendDrawOpen = Just
                     { recipient = ""
@@ -662,6 +681,19 @@ memberPage model =
         , E.padding 20
         ]
         [ membersTopSection
+        , E.row []
+            [ Ei.text []
+                { onChange = InviteeBox
+                , text = model.inviteeBox
+                , placeholder = Just <| Ei.placeholder [] <|
+                    E.text "Type ID of person to invite."
+                , label = Ei.labelAbove [] E.none
+                }
+            , Ei.button []
+                { onPress = Just SendInvite
+                , label = E.text "Send invite"
+                }
+            ]
         ]
 
 

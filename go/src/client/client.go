@@ -624,6 +624,8 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 		return processSendApp(n, s)
 	case "searchapps":
 		return processSearchApps(n, s)
+	case "invite":
+		return processInvite(n, s)
 	}
 	return *s, readHttpIn(s)
 }
@@ -1261,6 +1263,119 @@ func (s serveDocT) send() inputT {
 	return noInputT{}
 }
 
+func processInvite(
+	n normalApiInputT,
+	s *stateT) (stateT, outputT) {
+
+	sendErr := func(err error) sendHttpErrorT {
+		return sendHttpErrorT{
+			n.w,
+			err.Error(),
+			400,
+			n.doneCh,
+		}
+	}
+	if !strEq(n.securityCode, s.homeCode) {
+		err := errors.New("Bad security code.")
+		return *s, sendErr(err)
+	}
+	invitee, err := base64.URLEncoding.DecodeString(n.subRoute)
+	if err != nil {
+		return *s, sendErr(err)
+	}
+	return *s, getTimeForInviteT{n.w, n.doneCh, common.SliceToHash(invitee)}
+}
+
+type getTimeForInviteT struct {
+	w http.ResponseWriter
+	doneCh chan endRequest
+	invitee [32]byte
+}
+
+func (g getTimeForInviteT) send() inputT {
+	return makeInviteT{g.invitee, time.Now().Unix(), g.w, g.doneCh}
+}
+
+type makeInviteT struct {
+	invitee [32]byte
+	posixTime int64
+	w http.ResponseWriter
+	doneCh chan endRequest
+}
+
+var inviteContext = [16]byte{49, 46, 232, 88, 87, 218, 38, 83, 52, 64, 244, 143, 33, 23, 18, 19}
+
+
+func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
+	concat := make([]byte, 56)
+	i := 0
+	for ; i < 32; i++ {
+		concat[i] = invitee[i]
+	}
+	encodedTime := encodeInt64(posixTime)
+	for ; i < 40; i++ {
+		concat[i] = encodedTime[i-32]
+	}
+	for ; i < 56; i++ {
+		concat[i] = inviteContext[i-40]
+	}
+	return blake2b.Sum256(concat)
+}
+
+func copyInvites(invites map[inviteT]dontCareT) map[inviteT]dontCareT {
+	newInvites := make(map[inviteT]dontCareT)
+	for invite, _ := range invites {
+		newInvites[invite] = dontCareT{}
+	}
+	return newInvites
+}
+
+func (m makeInviteT) update(s *stateT) (stateT, outputT) {
+	invite := inviteT{
+		PosixTime: m.posixTime,
+		Invitee: m.invitee,
+		Author: s.publicSign,
+		Signature: sliceToSig(sign.Sign(
+			make([]byte, 0),
+			common.HashToSlice(inviteHash(
+				m.posixTime, m.invitee)),
+			&s.secretSign)),
+	}
+	newInvites := copyInvites(s.invites)
+	newInvites[invite] = dontCareT{}
+	encodedInvites, err := json.Marshal(newInvites)
+	if err != nil {
+		return *s, sendHttpErrorT{
+			m.w,
+			err.Error(),
+			500,
+			m.doneCh,
+		}
+	}
+	return *s, writeUpdatedInvitesT{
+		invitesFile(s.dataDir),
+		encodedInvites,
+		m.w,
+		m.doneCh,
+	}
+}
+
+type writeUpdatedInvitesT struct {
+	filepath string
+	toWrite []byte
+	w http.ResponseWriter
+	doneCh chan endRequest
+}
+
+func (w writeUpdatedInvitesT) send() inputT {
+	err := ioutil.WriteFile(w.filepath, w.toWrite, 0600)
+	if err != nil {
+		http.Error(w.w, err.Error(), 500)
+	}
+	w.doneCh <- endRequest{}
+	return noInputT{}
+}
+
 func processMakeAppRoute(
 	n normalApiInputT,
 	s *stateT) (stateT, outputT) {
@@ -1524,6 +1639,14 @@ func createKeys(dataDir string) error {
 	return err
 }
 
+func invitesFile(dataDir string) string {
+	return dataDir + "/invites.txt"
+}
+
+func uninvitesFile(dataDir string) string {
+	return dataDir + "/uninvites.txt"
+}
+
 func keysFile(dataDir string) string {
 	return dataDir + "/TOP_SECRET_DONT_SHARE.txt"
 }
@@ -1556,11 +1679,11 @@ func initState(dataDir string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	invites, err := readInvites(dataDir + "/invites.txt")
+	invites, err := readInvites(invitesFile(dataDir))
 	if err != nil {
 		return s, err
 	}
-	uninvites, err := readInvites(dataDir + "/uninvites.txt")
+	uninvites, err := readInvites(uninvitesFile(dataDir))
 	if err != nil {
 		return s, err
 	}
@@ -1808,19 +1931,19 @@ func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
 	newS.chunksLoading = newChunksLoading
 	tmpFileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
-	return newS, writeToFileT{
+	return newS, writeAppToFileT{
 		chunk.appHash,
 		s.dataDir + "/tmp/" + tmpFileName,
 		chunk.chunk}
 }
 
-type writeToFileT struct {
+type writeAppToFileT struct {
 	appHash  [32]byte
 	filePath string
 	chunk    []byte
 }
 
-func (w writeToFileT) send() inputT {
+func (w writeAppToFileT) send() inputT {
 	err := ioutil.WriteFile(w.filePath, w.chunk, 0600)
 	if err != nil {
 		return chunksFinishedT{w.appHash}
@@ -1977,6 +2100,9 @@ func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux.HandleFunc(
 		pat.Get("/makeapproute/:securityCode/:subRoute"),
 		handler("makeapproute", inputChan))
+	mux.HandleFunc(
+		pat.Post("/invite/:securityCode/:subRoute"),
+                handler("invite", inputChan))
 	for _, route := range routes {
 		path := "/" + route + "/:securityCode"
 		mux.HandleFunc(

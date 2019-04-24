@@ -9,13 +9,7 @@ Only accessible from the home session
 + DONE func saveApp() appHash
 + DONE func sendApp(appHash, recipients [][]byte)
 + DONE func searchApps(tags []string, searchString string) metadata
-+ func viewApp(hash string) (200 OK)
-	"""
-	1. generate a security code
-	2. make a directory in 'tmp' with a randomly generated name
-	3. untar the app into the temporary directory
-	4. put the mapping from security code to temporary directory name in the state
-	5. when a request comes in to viewapp/securityCode/filename, then serve it up
++ func invite(invitee string)
 
 
 Accessible from all sessions
