@@ -21,6 +21,7 @@ import Task
 import Time
 import Url
 import Url.Parser as Up exposing ((</>))
+import String.Extra as Se
 
 
 main =
@@ -76,6 +77,7 @@ initModel page securityCode key =
     , checkedBoxes = Set.empty
     , selectAll = False
     , sendDrawOpen = Nothing
+    , publicId = "Loading..."
     }
 
 
@@ -90,7 +92,10 @@ init _ url key =
 
                 Just code ->
                     Cmd.batch
-                        [ postMsg "" [] code, Task.perform Zone Time.here ]
+                        [ postMsg "" [] code
+                        , Task.perform Zone Time.here
+                        , Http.get { url = "/getmyid/" ++ code, expect = Http.expectString MyPublicId }
+                        ]
             )
 
 
@@ -121,6 +126,7 @@ type Msg
     | SendInvite
     | InviteeBox String
     | InviteSent (Result Http.Error ())
+    | MyPublicId (Result Http.Error String)
 
 
 type Page
@@ -175,6 +181,7 @@ type alias Model =
     , zone : Time.Zone
     , checkedBoxes : Set.Set String
     , selectAll : Bool
+    , publicId : String
     }
 
 type alias SendDrawer =
@@ -214,6 +221,9 @@ postMsg searchString tags securityCode =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        MyPublicId (Err _) -> (model, Cmd.none)
+        MyPublicId (Ok id) ->
+            ( { model | publicId = id }, Cmd.none )
         InviteeBox str -> ({ model | inviteeBox = str }, Cmd.none)
         InviteSent _ ->
             (model, Cmd.none)
@@ -481,15 +491,16 @@ idPadding =
     }
 
 
-idtxt =
-    [ "8XKTUnNufTH"
-    , "mkEqNv0zxI7"
-    , "z/+npv+RPpD"
-    , "vm7HyN7zc0="
-    ]
+-- idtxt =
+--     [ "8XKTUnNufTH"
+--     , "mkEqNv0zxI7"
+--     , "z/+npv+RPpD"
+--     , "vm7HyN7zc0="
+--     ]
 
+idtxt id = Se.break 11 id
 
-myId =
+myId id =
     E.column
         (idStyle
             ++ [ E.alignRight
@@ -498,7 +509,7 @@ myId =
         )
     <|
         (E.el [ Font.bold ] <| E.text "Public ID:")
-            :: L.map E.text idtxt
+            :: L.map E.text (idtxt id)
 
 
 searchBoxStyle =
@@ -576,10 +587,10 @@ topButtonsAndSearch page txt =
         ]
 
 
-homeTopSection txt =
+homeTopSection txt id =
     E.row [ E.width E.fill, E.spacing 20 ]
         [ topButtonsAndSearch Home txt
-        , myId
+        , myId id
         ]
 
 
@@ -599,13 +610,13 @@ greyNewDocButtonStyle =
            ]
 
 
-newDocTopSection tagText fileUpload =
+newDocTopSection tagText fileUpload id =
     E.column [ E.width E.fill ]
         [ E.row [ E.width E.fill, E.spacing 20 ]
             [ E.column
                 [ E.alignTop, E.height E.fill ]
                 [ topButtons NewDoc ]
-            , myId
+            , myId id
             ]
         , E.row [ E.spacing 20 ]
             [ E.el [] <|
@@ -648,10 +659,10 @@ newDocTopSection tagText fileUpload =
         ]
 
 
-membersTopSection =
+membersTopSection id =
     E.row [ E.width E.fill, E.spacing 20 ]
         [ topButtons Members
-        , myId
+        , myId id
         ]
 
 
@@ -680,7 +691,7 @@ memberPage model =
         [ E.width E.fill
         , E.padding 20
         ]
-        [ membersTopSection
+        [ membersTopSection model.publicId
         , E.row []
             [ Ei.text []
                 { onChange = InviteeBox
@@ -1030,7 +1041,7 @@ homePage model =
         , E.padding 20
         , E.spacing 20
         ]
-        [ homeTopSection model.searchStr
+        [ homeTopSection model.searchStr model.publicId
         , homeShowTags UnchooseTag (Set.toList model.selectedTags) blue (E.padding 0)
         , homeShowTags
             ChooseTag
@@ -1051,5 +1062,5 @@ newDocPage model =
         [ E.width E.fill
         , E.padding 20
         ]
-        [ newDocTopSection model.newTagsBox model.fileUpload
+        [ newDocTopSection model.newTagsBox model.fileUpload model.publicId
         ]

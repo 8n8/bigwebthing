@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"net"
 	"time"
+	"errors"
 )
 
 type stateT struct {
@@ -20,6 +21,24 @@ type stateT struct {
 	connectedUsers map[[32]byte]tcpOutChansT
 	isMember       chan isMemberT
 	members        map[[32]byte]dontCare
+}
+
+func initState() (stateT, error) {
+	members, err := readMembers()
+	if err != nil {
+		return *new(stateT), err
+	}
+	if len(members) < 1 {
+		return *new(stateT), errors.New("No members.")
+	}
+	return stateT{
+		newConnChan: make(chan tcpConnectionT),
+		errInChan: make(chan errMsgT),
+		msgInChan: make(chan common.ClientToClient),
+		connectedUsers: make(map[[32]byte]tcpOutChansT),
+		isMember: make(chan isMemberT),
+		members: members,
+	}, nil
 }
 
 type errMsgT struct {
@@ -136,17 +155,11 @@ func readMembers() (map[[32]byte]dontCare, error) {
 }
 
 func main() {
-	var state stateT
-	members, err := readMembers()
+	state, err := initState()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	if len(members) < 1 {
-		fmt.Println("No members.")
-		return
-	}
-	state.members = members
 	go tcpServer(
 		state.newConnChan,
 		state.isMember,
@@ -223,9 +236,10 @@ func handleConn(
 		conn.Close()
 		return
 	}
-	var memberOkCh chan bool
+	memberOkCh := make(chan bool)
 	isMemberChan <- isMemberT{authSig.Author, memberOkCh}
-	if !<-memberOkCh {
+	isMember := <-memberOkCh
+	if !isMember {
 		conn.Close()
 		return
 	}

@@ -647,7 +647,7 @@ func processGetMyId(
 	}
 
 	return *s, httpOkResponseT{
-		common.HashToSlice(s.publicSign),
+		[]byte(base64.URLEncoding.EncodeToString(common.HashToSlice(s.publicSign))),
 		n.w,
 		n.doneCh,
 	}
@@ -2112,7 +2112,7 @@ func decodeMsg(
 	return *new(msgT), *new([32]byte), err
 }
 
-var routes = []string{"sendapp", "saveapp", "searchapps", "getmyid"}
+var routes = []string{"sendapp", "saveapp", "searchapps"}
 
 func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256
@@ -2129,6 +2129,9 @@ func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux.HandleFunc(
 		pat.Post("/invite/:securityCode/:subRoute"),
                 handler("invite", inputChan))
+	mux.HandleFunc(
+		pat.Get("/getmyid/:securityCode"),
+                handler("getmyid", inputChan))
 	for _, route := range routes {
 		path := "/" + route + "/:securityCode"
 		mux.HandleFunc(
