@@ -64,6 +64,7 @@ type stateT struct {
 	isMemberCh     chan isMemberT
 	chunksLoading  map[[32]byte][]fileChunkPtrT
 	dataDir string
+	port string
 }
 
 type isMemberT struct {
@@ -626,8 +627,30 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 		return processSearchApps(n, s)
 	case "invite":
 		return processInvite(n, s)
+	case "getmyid":
+		return processGetMyId(n, s)
 	}
 	return *s, readHttpIn(s)
+}
+
+func processGetMyId(
+	n normalApiInputT,
+	s *stateT) (stateT, outputT) {
+
+	if !strEq(n.securityCode, s.homeCode) {
+		return *s, sendHttpErrorT{
+			n.w,
+			"Bad security code.",
+			400,
+			n.doneCh,
+		}
+	}
+
+	return *s, httpOkResponseT{
+		common.HashToSlice(s.publicSign),
+		n.w,
+		n.doneCh,
+	}
 }
 
 type makeAppRouteT struct {
@@ -659,6 +682,7 @@ type unpackAppT struct {
 	doneCh   chan endRequest
 	appPath  string
 	tmpPath  string
+	port string
 }
 
 func (g unpackAppT) send() inputT {
@@ -675,7 +699,7 @@ func (g unpackAppT) send() inputT {
 			return noInputT{}
 		}
 		err = browser.OpenURL(
-			"http://localhost:3000/getapp/" + appCode + "/index.html")
+			"http://localhost:" + g.port + "/getapp/" + appCode + "/index.html")
 		if err != nil {
 			sendErr(err)
 			return noInputT{}
@@ -723,7 +747,7 @@ func (g unpackAppT) send() inputT {
 		sendErr(err)
 		return noInputT{}
 	}
-	err = browser.OpenURL("http://localhost:3000/getapp/" + newCode + "/index.html")
+	err = browser.OpenURL("http://localhost:" + g.port + "/getapp/" + newCode + "/index.html")
 	if err != nil {
 		sendErr(err)
 		return noInputT{}
@@ -1405,6 +1429,7 @@ func processMakeAppRoute(
 		n.doneCh,
 		s.dataDir + "/apps/" + hashStr,
 		s.dataDir + "/tmp/" + hashStr,
+		s.port,
 	}
 }
 
@@ -1651,7 +1676,7 @@ func keysFile(dataDir string) string {
 	return dataDir + "/TOP_SECRET_DONT_SHARE.txt"
 }
 
-func initState(dataDir string) (stateT, error) {
+func initState(dataDir string, port string) (stateT, error) {
 	homeCode, err := genCode()
 	var s stateT
 	if err != nil {
@@ -1712,6 +1737,7 @@ func initState(dataDir string) (stateT, error) {
 		members:       memberList,
 		isMember:      mem,
 		apps:          apps,
+		port: port,
 	}, nil
 }
 
@@ -1733,7 +1759,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	state, err := initState(dataDir)
+	state, err := initState(dataDir, port)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -2086,7 +2112,7 @@ func decodeMsg(
 	return *new(msgT), *new([32]byte), err
 }
 
-var routes = []string{"sendapp", "saveapp", "searchapps"}
+var routes = []string{"sendapp", "saveapp", "searchapps", "getmyid"}
 
 func twoBytesToInt(bs []byte) int {
 	return (int)(bs[0]) + (int)(bs[1])*256

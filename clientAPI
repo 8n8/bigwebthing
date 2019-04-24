@@ -9,7 +9,8 @@ Only accessible from the home session
 + DONE func saveApp() appHash
 + DONE func sendApp(appHash, recipients [][]byte)
 + DONE func searchApps(tags []string, searchString string) metadata
-+ func invite(invitee string)
++ DONE func invite(invitee string)
++ func getMyId() id string
 
 
 Accessible from all sessions
