@@ -111,11 +111,18 @@ type dontCareT struct{}
 
 func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 	rawInvites, err := ioutil.ReadFile(filePath)
-	var invites map[inviteT]dontCareT
+	invites := make(map[inviteT]dontCareT)
 	if err != nil {
 		return invites, nil
 	}
-	err = json.Unmarshal(rawInvites, &invites)
+	var invitesSlice []inviteT
+	err = json.Unmarshal(rawInvites, &invitesSlice)
+	if err != nil {
+		return invites, nil
+	}
+	for _, invite := range invitesSlice {
+		invites[invite] = dontCareT{}
+	}
 	return invites, err
 }
 
@@ -348,7 +355,7 @@ func (r readHttpInputT) send() inputT {
 		req := h.r
 		securityCode := pat.Param(h.r, "securityCode")
 		subRoute := ""
-		if h.route == "getapp" || h.route == "makeapproute" {
+		if h.route == "getapp" || h.route == "makeapproute" || h.route == "invite" {
 			subRoute = pat.Param(h.r, "subRoute")
 		}
 		if h.route == "saveapp" {
@@ -1291,6 +1298,7 @@ func processInvite(
 	n normalApiInputT,
 	s *stateT) (stateT, outputT) {
 
+	fmt.Println("Top of processInvite.")
 	sendErr := func(err error) sendHttpErrorT {
 		return sendHttpErrorT{
 			n.w,
@@ -1303,10 +1311,14 @@ func processInvite(
 		err := errors.New("Bad security code.")
 		return *s, sendErr(err)
 	}
+	fmt.Println("+++++++")
+	fmt.Println(n.subRoute)
+	fmt.Println("*******")
 	invitee, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
 		return *s, sendErr(err)
 	}
+	fmt.Println("Bottom of processInvite.")
 	return *s, getTimeForInviteT{n.w, n.doneCh, common.SliceToHash(invitee)}
 }
 
@@ -1317,6 +1329,7 @@ type getTimeForInviteT struct {
 }
 
 func (g getTimeForInviteT) send() inputT {
+	fmt.Println("Top of getTimeForInviteT send() function.")
 	return makeInviteT{g.invitee, time.Now().Unix(), g.w, g.doneCh}
 }
 
@@ -1346,7 +1359,9 @@ func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
 	return blake2b.Sum256(concat)
 }
 
-func copyInvites(invites map[inviteT]dontCareT) map[inviteT]dontCareT {
+func copyInvites(
+	invites map[inviteT]dontCareT) map[inviteT]dontCareT {
+
 	newInvites := make(map[inviteT]dontCareT)
 	for invite, _ := range invites {
 		newInvites[invite] = dontCareT{}
@@ -1354,7 +1369,20 @@ func copyInvites(invites map[inviteT]dontCareT) map[inviteT]dontCareT {
 	return newInvites
 }
 
+func invitesToSlice(invites map[inviteT]dontCareT) []inviteT {
+	invitesSlice := make([]inviteT, len(invites))
+	i := 0
+	for invite, _ := range invites {
+		invitesSlice[i] = invite
+		i++
+	}
+	return invitesSlice
+}
+
 func (m makeInviteT) update(s *stateT) (stateT, outputT) {
+	fmt.Println("Top of makeInviteT update function.")
+	fmt.Println(m.invitee)
+	fmt.Println(">>>>>>")
 	invite := inviteT{
 		PosixTime: m.posixTime,
 		Invitee: m.invitee,
@@ -1367,7 +1395,7 @@ func (m makeInviteT) update(s *stateT) (stateT, outputT) {
 	}
 	newInvites := copyInvites(s.invites)
 	newInvites[invite] = dontCareT{}
-	encodedInvites, err := json.Marshal(newInvites)
+	encodedInvites, err := json.Marshal(invitesToSlice(newInvites))
 	if err != nil {
 		return *s, sendHttpErrorT{
 			m.w,
@@ -1376,6 +1404,7 @@ func (m makeInviteT) update(s *stateT) (stateT, outputT) {
 			m.doneCh,
 		}
 	}
+	fmt.Println("Bottom of makeInviteT update function.")
 	return *s, writeUpdatedInvitesT{
 		invitesFile(s.dataDir),
 		encodedInvites,
