@@ -12,6 +12,7 @@ import (
 	"net"
 	"time"
 	"errors"
+	// "github.com/pkg/profile"
 )
 
 type stateT struct {
@@ -155,6 +156,7 @@ func readMembers() (map[[32]byte]dontCare, error) {
 }
 
 func main() {
+	// defer profile.Start().Stop()
 	state, err := initState()
 	if err != nil {
 		fmt.Println(err)
@@ -209,6 +211,7 @@ func handleConn(
 	errInChan chan errMsgT,
 	msgInChan chan common.ClientToClient) {
 
+	fmt.Println("Top of handleConn.")
 	conn.SetDeadline(time.Now().Add(time.Second * 30))
 	authCode, err := genAuthCode()
 	if err != nil {
@@ -253,15 +256,21 @@ func handleConn(
 	go func() {
 		for {
 			var clientToClient common.ClientToClient
+			fmt.Println("C")
 			err = dec.Decode(&clientToClient)
+			fmt.Println("B")
 			if err != nil {
+				fmt.Println("A")
+				fmt.Println(err)
 				errInChan <- errMsgT{authSig.Author, err}
 				chs.outErr <- err
 				fmt.Print(err)
 				conn.Close()
 				return
 			}
+			fmt.Println("X")
 			msgInChan <- clientToClient
+			fmt.Println("Y")
 		}
 	}()
 	for {
@@ -278,7 +287,6 @@ func handleConn(
 		case <-chs.outErr:
 			conn.Close()
 			return
-		default:
 		}
 	}
 }

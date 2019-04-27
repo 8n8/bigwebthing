@@ -82,6 +82,10 @@ func makeMemberList(
 	for addedMember {
 		addedMember = false
 		for invite, _ := range invites {
+			_, alreadyMember := members[invite.Invitee]
+			if alreadyMember {
+				continue
+			}
 			_, ok := members[invite.Author]
 			if !ok {
 				continue
@@ -93,6 +97,9 @@ func makeMemberList(
 			}
 			members[invite.Invitee] = dontCareT{}
 			addedMember = true
+		}
+		if !addedMember {
+			break
 		}
 	}
 	return members
@@ -349,13 +356,19 @@ func (w writeNewAppsT) send() inputT {
 	return noInputT{}
 }
 
+var subRouteApps = map[string]dontCareT{
+	"getapp": dontCareT{},
+	"makeapproute": dontCareT{},
+	"invite": dontCareT{},
+}
+
 func (r readHttpInputT) send() inputT {
 	select {
 	case h := <-r.httpChan:
 		req := h.r
 		securityCode := pat.Param(h.r, "securityCode")
 		subRoute := ""
-		if h.route == "getapp" || h.route == "makeapproute" || h.route == "invite" {
+		if _, ok := subRouteApps[h.route]; ok {
 			subRoute = pat.Param(h.r, "subRoute")
 		}
 		if h.route == "saveapp" {
@@ -504,7 +517,7 @@ func tcpListen(
 		msgLenB := make([]byte, 2)
 		n, err := conn.Read(msgLenB)
 		if n != 2 {
-			continue
+			return
 		}
 		if err != nil {
 			return
@@ -557,13 +570,14 @@ func tcpServer(
 
 	var conn net.Conn
 	connErr := errors.New("Not connected yet.")
-	var stopListenChan chan stopListenT
+	stopListenChan := make(chan stopListenT)
 	for {
 		if connErr != nil {
 			conn, connErr := makeConn(
 				publicSign,
 				secretSign)
 			if connErr != nil {
+				time.Sleep(time.Second)
 				continue
 			}
 			go tcpListen(
@@ -579,6 +593,7 @@ func tcpServer(
 		if err != nil {
 			panic(err.Error())
 		}
+		fmt.Println(toSend)
 		encoded, err := encodeMsg(
 			toSend,
 			publicSign,
@@ -588,6 +603,7 @@ func tcpServer(
 			fmt.Println(err)
 			continue
 		}
+		fmt.Println(encoded)
 		n, connErr := conn.Write(encoded)
 		if connErr != nil {
 			stopListenChan <- stopListenT{}
@@ -602,10 +618,7 @@ func tcpServer(
 }
 
 const (
-	//appsDir     = "clientData/apps"
-	//keysFile    = "clientData/TOP_SECRET_DONT_SHARE.txt"
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
-	//sentMsgPath = "clientData/sentMsgs.txt"
 	homeDir     = "home"
 )
 
@@ -808,8 +821,8 @@ func hashToStr(h [32]byte) string {
 }
 
 type sendAppJsonT struct {
-	AppHash    [32]byte
-	Recipients [][32]byte
+	AppHash    []byte
+	Recipients [][]byte
 }
 
 type logSendErrT struct {
@@ -1018,17 +1031,23 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	if err != nil {
 		return *s, sendErr("Could not decode Json.")
 	}
-	if len(sendAppJson.Recipients) == 0 {
+	appHash := common.SliceToHash(sendAppJson.AppHash)
+	lenRecip := len(sendAppJson.Recipients)
+	if lenRecip == 0 {
 		return *s, sendErr("No recipients.")
+	}
+	recipients := make([][32]byte, lenRecip)
+	for i, recipient := range sendAppJson.Recipients {
+		recipients[i] = common.SliceToHash(recipient)
 	}
 	var app appMsgT
 	for _, thisApp := range s.apps {
-		if equalHashes(thisApp.AppHash, sendAppJson.AppHash) {
+		if equalHashes(thisApp.AppHash, appHash) {
 			app = thisApp
 			break
 		}
 	}
-	filepath := s.dataDir + "/apps/" + hashToStr(sendAppJson.AppHash)
+	filepath := s.dataDir + "/apps/" + hashToStr(appHash)
 	return *s, sendAppT{
 		app,
 		s.tcpInChan,
@@ -1036,8 +1055,8 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 		filepath,
 		n.w,
 		n.doneCh,
-		sendAppJson.Recipients,
-		sendAppJson.AppHash,
+		recipients,
+		appHash,
 		s.secretSign,
 		s.secretEncrypt,
 		s.dataDir,
@@ -1298,7 +1317,6 @@ func processInvite(
 	n normalApiInputT,
 	s *stateT) (stateT, outputT) {
 
-	fmt.Println("Top of processInvite.")
 	sendErr := func(err error) sendHttpErrorT {
 		return sendHttpErrorT{
 			n.w,
@@ -1311,14 +1329,10 @@ func processInvite(
 		err := errors.New("Bad security code.")
 		return *s, sendErr(err)
 	}
-	fmt.Println("+++++++")
-	fmt.Println(n.subRoute)
-	fmt.Println("*******")
 	invitee, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
 		return *s, sendErr(err)
 	}
-	fmt.Println("Bottom of processInvite.")
 	return *s, getTimeForInviteT{n.w, n.doneCh, common.SliceToHash(invitee)}
 }
 
@@ -1329,7 +1343,6 @@ type getTimeForInviteT struct {
 }
 
 func (g getTimeForInviteT) send() inputT {
-	fmt.Println("Top of getTimeForInviteT send() function.")
 	return makeInviteT{g.invitee, time.Now().Unix(), g.w, g.doneCh}
 }
 
@@ -1380,9 +1393,6 @@ func invitesToSlice(invites map[inviteT]dontCareT) []inviteT {
 }
 
 func (m makeInviteT) update(s *stateT) (stateT, outputT) {
-	fmt.Println("Top of makeInviteT update function.")
-	fmt.Println(m.invitee)
-	fmt.Println(">>>>>>")
 	invite := inviteT{
 		PosixTime: m.posixTime,
 		Invitee: m.invitee,
@@ -1404,7 +1414,6 @@ func (m makeInviteT) update(s *stateT) (stateT, outputT) {
 			m.doneCh,
 		}
 	}
-	fmt.Println("Bottom of makeInviteT update function.")
 	return *s, writeUpdatedInvitesT{
 		invitesFile(s.dataDir),
 		encodedInvites,
