@@ -255,10 +255,11 @@ func handleConn(
 	conn.SetDeadline(time.Now().Add(time.Minute * 30))
 	go func() {
 		for {
-			var clientToClient common.ClientToClient
+			//var clientToClient common.ClientToClient
 			fmt.Println("C")
-			err = dec.Decode(&clientToClient)
+			//err = dec.Decode(&clientToClient)
 			fmt.Println("B")
+			clientToClient, err := common.ReadClientToClient(conn)
 			if err != nil {
 				fmt.Println("A")
 				fmt.Println(err)
