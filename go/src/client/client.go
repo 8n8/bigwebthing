@@ -514,27 +514,7 @@ func tcpListen(
 	stopListenChan chan stopListenT) {
 
 	for {
-		msgLenB := make([]byte, 2)
-		n, err := conn.Read(msgLenB)
-		if n != 2 {
-			return
-		}
-		if err != nil {
-			return
-		}
-		mLen := twoBytesToInt(msgLenB)
-		if mLen > 16000 {
-			return
-		}
-		msg := make([]byte, mLen)
-		n, err = conn.Read(msg)
-		if n != mLen {
-			continue
-		}
-		if err != nil {
-			return
-		}
-		cToC, err := decodeClientToClient(msg)
+		cToC, err := common.ReadClientToClient(conn)
 		if err != nil {
 			continue
 		}
@@ -2048,24 +2028,6 @@ func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 	return newS, readHttpIn(s)
 }
 
-func decodeClientToClient(msg []byte) (common.ClientToClient, error) {
-	var buf bytes.Buffer
-	n, err := buf.Write(msg)
-	var cToC common.ClientToClient
-	if err != nil {
-		return cToC, err
-	}
-	if n != len(msg) {
-		return cToC, errors.New(
-			"Could not write message to buffer.")
-	}
-	err = gob.NewDecoder(&buf).Decode(&cToC)
-	if err != nil {
-		return cToC, err
-	}
-	return cToC, nil
-}
-
 type receiptT struct {
 	hashSig [common.SigSize]byte
 	author  [32]byte
@@ -2151,10 +2113,6 @@ func decodeMsg(
 }
 
 var routes = []string{"sendapp", "saveapp", "searchapps"}
-
-func twoBytesToInt(bs []byte) int {
-	return (int)(bs[0]) + (int)(bs[1])*256
-}
 
 func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux := goji.NewMux()

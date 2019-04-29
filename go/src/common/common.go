@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/sign"
+	"errors"
+	"net"
+	"encoding/gob"
 )
 
 
@@ -184,4 +187,53 @@ func inviteSigOk(i InviteT) bool {
 		SigToSlice(i.Signature),
 		&i.Author)
 	return bytes.Equal(untrusted, InviteHash(i)) && sigOk
+}
+
+func ReadClientToClient(conn net.Conn) (ClientToClient, error) {
+	msgLenB := make([]byte, 2)
+	n, err := conn.Read(msgLenB)
+	if err != nil {
+		return *new(ClientToClient), err
+	}
+	if n != 2 {
+		return *new(ClientToClient), errors.New(
+			"Message length bytes wrong length.")
+	}
+	mLen := twoBytesToInt(msgLenB)
+	if mLen > 16000 {
+		return *new(ClientToClient), errors.New(
+			"Message more than 16kB.")
+	}
+	msg := make([]byte, mLen)
+	n, err = conn.Read(msg)
+	if err != nil {
+		return *new(ClientToClient), err
+	}
+	if n != mLen {
+		return *new(ClientToClient), errors.New(
+			"Message wrong length.")
+	}
+	return decodeClientToClient(msg)
+}
+
+func twoBytesToInt(bs []byte) int {
+	return (int)(bs[0]) + (int)(bs[1])*256
+}
+
+func decodeClientToClient(msg []byte) (ClientToClient, error) {
+	var buf bytes.Buffer
+	n, err := buf.Write(msg)
+	var cToC ClientToClient
+	if err != nil {
+		return cToC, err
+	}
+	if n != len(msg) {
+		return cToC, errors.New(
+			"Could not write message to buffer.")
+	}
+	err = gob.NewDecoder(&buf).Decode(&cToC)
+	if err != nil {
+		return cToC, err
+	}
+	return cToC, nil
 }
