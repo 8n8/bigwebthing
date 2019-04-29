@@ -72,8 +72,8 @@ type readChansT struct {
 	errInChan chan errMsgT
 	msgInChan chan common.ClientToClient
 	newConnChan    chan tcpConnectionT
+	members map[[32]byte]dontCare
 	connectedUsers map[[32]byte]tcpOutChansT
-	members        map[[32]byte]dontCare
 }
 
 type endConnT struct {
@@ -128,9 +128,11 @@ type noInputT struct{}
 func readChans(s *stateT) readChansT {
 	return readChansT{
 		isMember:       s.isMember,
+		errInChan: s.errInChan,
+		msgInChan: s.msgInChan,
 		newConnChan:    s.newConnChan,
+		members: s.members,
 		connectedUsers: s.connectedUsers,
-		members:        s.members,
 	}
 }
 
@@ -269,7 +271,9 @@ func handleConn(
 				conn.Close()
 				return
 			}
-			fmt.Println("X")
+			fmt.Println("XX")
+			fmt.Println(msgInChan)
+			fmt.Println("xx")
 			msgInChan <- clientToClient
 			fmt.Println("Y")
 		}

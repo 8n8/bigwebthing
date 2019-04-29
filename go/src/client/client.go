@@ -553,7 +553,7 @@ func tcpServer(
 	stopListenChan := make(chan stopListenT)
 	for {
 		if connErr != nil {
-			conn, connErr := makeConn(
+			conn, connErr = makeConn(
 				publicSign,
 				secretSign)
 			if connErr != nil {
