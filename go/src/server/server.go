@@ -114,11 +114,14 @@ func (r readChansT) send() inputT {
 		fmt.Println(errIn)
 		return endConnT{errIn.id}
 	case msgIn := <-r.msgInChan:
+		fmt.Println("New message reached main thread.")
 		recipCh, ok := r.connectedUsers[msgIn.Recipient]
 		if !ok {
 			return noInputT{}
 		}
+		fmt.Println("Found recipient.")
 		recipCh.msg <- msgIn
+		fmt.Println("Msg sent to recipient goroutine.")
 	}
 	return noInputT{}
 }
@@ -171,6 +174,7 @@ func main() {
 		state.msgInChan)
 	var output outputT = readChans(&state)
 	for {
+		fmt.Println(state.connectedUsers)
 		input := output.send()
 		state, output = input.update(&state)
 	}
@@ -282,13 +286,39 @@ func handleConn(
 		conn.SetDeadline(time.Now().Add(time.Minute * 30))
 		select {
 		case newMsg := <-chs.out:
-			err = enc.Encode(newMsg)
+			fmt.Println("New message out.")
+			encoded, err := common.EncodeClientToClient(
+				newMsg)
 			if err != nil {
-				errInChan <- errMsgT{authSig.Author, err}
+				errInChan <- errMsgT{
+					authSig.Author,
+					err,
+					}
 				fmt.Print(err)
 				conn.Close()
 				return
 			}
+			fmt.Println("Correctly encoded.")
+			n, err := conn.Write(encoded)
+			if err != nil {
+				errInChan <- errMsgT{
+					authSig.Author,
+					err,
+				}
+				fmt.Println(err)
+				conn.Close()
+				return
+			}
+			if n != len(encoded) {
+				errInChan <- errMsgT{authSig.Author, errors.New("Didn't sent whole message.")}
+				fmt.Println("Did not send whole message.")
+				conn.Close()
+				return
+			}
+			fmt.Println("Message sent without errors.")
+			fmt.Println("Recipient: ")
+			fmt.Println(authSig.Author)
+			fmt.Println(">>>>>>>>")
 		case <-chs.outErr:
 			conn.Close()
 			return

@@ -121,6 +121,46 @@ func Int64ToBytes(i int64) [8]byte {
 
 var inviteMeaning = []byte{0x1d, 0x4f, 0xc1, 0x13, 0x0e, 0xd7, 0x94, 0xae, 0x2a, 0x74, 0x9e, 0x49, 0xd0, 0xd2, 0x1b, 0x68}
 
+func EncodeData(a interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(a)
+	if err != nil {
+		return make([]byte, 0), err
+	}
+	return buf.Bytes(), nil
+}
+
+func intToTwoBytes(i int) ([]byte, error) {
+	if i < 0 {
+		return *new([]byte), errors.New("Int less than zero.")
+	}
+	if i > 256*256 {
+		return *new([]byte), errors.New(
+			"Int greater than 256*256.")
+	}
+	u := uint(i)
+	return []byte{
+		(byte)(u & 0xff),
+		(byte)((u & 0xff00) >> 8)}, nil
+}
+
+func EncodeClientToClient(cToC ClientToClient) ([]byte, error) {
+	outerMsg, err := EncodeData(cToC)
+	if err != nil {
+		return *new([]byte), err
+	}
+	lenOuterMsg := len(outerMsg)
+	if lenOuterMsg > 16000 {
+		return *new([]byte), errors.New("Message too long.")
+	}
+	lenInBytes, err := intToTwoBytes(lenOuterMsg)
+	if err != nil {
+		return *new([]byte), err
+	}
+	return append(lenInBytes, outerMsg...), nil
+}
+
 func InviteHash(invite InviteT) []byte {
 	// 0-8 is ExpiryPosix
 	// 8-40 is Invitee

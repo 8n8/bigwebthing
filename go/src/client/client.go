@@ -404,6 +404,7 @@ func (r readHttpInputT) send() inputT {
 			h.doneCh,
 		}
 	case tcpIn := <-r.tcpInChan:
+		fmt.Println("tcp input")
 		return tcpIn
 	case request := <-r.invitesCh:
 		_, ok := r.memberList[request.candidate]
@@ -419,27 +420,13 @@ type msgT interface {
 	code() byte
 }
 
-func intToTwoBytes(i int) ([]byte, error) {
-	if i < 0 {
-		return *new([]byte), errors.New("Int less than zero.")
-	}
-	if i > 256*256 {
-		return *new([]byte), errors.New(
-			"Int greater than 256*256.")
-	}
-	u := uint(i)
-	return []byte{
-		(byte)(u & 0xff),
-		(byte)((u & 0xff00) >> 8)}, nil
-}
-
 func encodeMsg(
 	envelope envelopeT,
 	publicSign [32]byte,
 	secretEncrypt [32]byte,
 	nonce [24]byte) ([]byte, error) {
 
-	rawEncoded, err := encodeData(envelope.msg)
+	rawEncoded, err := common.EncodeData(envelope.msg)
 	if err != nil {
 		return *new([]byte), err
 	}
@@ -452,24 +439,12 @@ func encodeMsg(
 		&nonce,
 		&envelope.correspondent,
 		&secretEncrypt)
-	outerMsg, err := encodeData(common.ClientToClient{
+	return common.EncodeClientToClient(common.ClientToClient{
 		encryptedMsg,
 		envelope.correspondent,
 		nonce,
 		publicSign,
 	})
-	if err != nil {
-		return *new([]byte), err
-	}
-	lenOuterMsg := len(outerMsg)
-	if lenOuterMsg > 16000 {
-		return *new([]byte), errors.New("Message too long.")
-	}
-	lenInBytes, err := intToTwoBytes(lenOuterMsg)
-	if err != nil {
-		return *new([]byte), err
-	}
-	return append(lenInBytes, outerMsg...), nil
 }
 
 type envelopeT struct {
@@ -514,24 +489,33 @@ func tcpListen(
 	stopListenChan chan stopListenT) {
 
 	for {
+		fmt.Println("top of listen loop")
 		cToC, err := common.ReadClientToClient(conn)
 		if err != nil {
+			fmt.Println("error reading CToC")
+			fmt.Println(err)
 			continue
 		}
-		var okCh chan bool
+		fmt.Println("read cToC OK")
+		okCh := make(chan bool)
 		isMemberCh <- isMemberT{
 			okCh, cToC.Author}
 		if !<-okCh {
+			fmt.Println("not a member")
 			continue
 		}
 		decoded, author, err := decodeMsg(cToC, secretEncrypt)
 		if err != nil {
+			fmt.Println("Could not decode msg.")
+			fmt.Println(err)
 			continue
 		}
+		fmt.Println("decoded message ok")
 		inChan <- envelopeT{
 			msg:           decoded,
 			correspondent: author,
 		}
+		fmt.Println("put new message into inchan")
 		select {
 		case <-stopListenChan:
 			return
@@ -573,7 +557,6 @@ func tcpServer(
 		if err != nil {
 			panic(err.Error())
 		}
-		fmt.Println(toSend)
 		encoded, err := encodeMsg(
 			toSend,
 			publicSign,
@@ -806,10 +789,10 @@ type sendAppJsonT struct {
 }
 
 type logSendErrT struct {
-	posixTime int64
-	appHash   [32]byte
-	recipient [32]byte
-	err       error
+	PosixTime int64
+	AppHash   [32]byte
+	Recipient [32]byte
+	Err       error
 }
 
 func sendErrFile(dataDir string) string {
@@ -987,16 +970,6 @@ func appSigHash(appHash [32]byte) []byte {
 	return common.HashToSlice(blake2b.Sum256(append(
 		common.HashToSlice(appHash),
 		appSigMeaning...)))
-}
-
-func encodeData(a interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(a)
-	if err != nil {
-		return make([]byte, 0), err
-	}
-	return buf.Bytes(), nil
 }
 
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -1737,10 +1710,11 @@ func initState(dataDir string, port string) (stateT, error) {
 	memberList := makeMemberList(invites, uninvites)
 	_, mem := memberList[keys.publicsign]
 	return stateT{
-		dataDir: dataDir,
+		apps:          apps,
 		httpChan:      make(chan httpInputT),
 		tcpInChan:     make(chan envelopeT),
 		tcpOutChan:    make(chan envelopeT),
+		getInvitesChan: make(chan chan map[inviteT]dontCareT),
 		homeCode:      homeCode,
 		appCodes:      make(map[string][32]byte),
 		publicSign:    keys.publicsign,
@@ -1754,7 +1728,9 @@ func initState(dataDir string, port string) (stateT, error) {
 		uninvites:     uninvites,
 		members:       memberList,
 		isMember:      mem,
-		apps:          apps,
+		isMemberCh: make(chan isMemberT),
+		chunksLoading: make(map[[32]byte][]fileChunkPtrT),
+		dataDir: dataDir,
 		port: port,
 	}, nil
 }
