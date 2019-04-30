@@ -43,11 +43,11 @@ type outputT interface {
 }
 
 type stateT struct {
-	apps           []common.AppMsgT
+	apps           []appMsgT
 	httpChan       chan httpInputT
-	tcpInChan      chan common.EnvelopeT
-	tcpOutChan     chan common.EnvelopeT
-	getInvitesChan chan chan map[inviteT]struct{}
+	tcpInChan      chan envelopeT
+	tcpOutChan     chan envelopeT
+	getInvitesChan chan chan map[inviteT]dontCareT
 	homeCode       string
 	appCodes       map[string][32]byte
 	publicSign     [32]byte
@@ -57,9 +57,9 @@ type stateT struct {
 	conn           net.Conn
 	online         bool
 	cantGetOnline  error
-	invites        map[inviteT]struct{}
-	uninvites      map[inviteT]struct{}
-	members        map[[32]byte]struct{}
+	invites        map[inviteT]dontCareT
+	uninvites      map[inviteT]dontCareT
+	members        map[[32]byte]dontCareT
 	isMember       bool
 	isMemberCh     chan isMemberT
 	chunksLoading  map[[32]byte][]fileChunkPtrT
@@ -73,11 +73,11 @@ type isMemberT struct {
 }
 
 func makeMemberList(
-	invites map[inviteT]struct{},
-	uninvites map[inviteT]struct{}) map[[32]byte]struct{} {
+	invites map[inviteT]dontCareT,
+	uninvites map[inviteT]dontCareT) map[[32]byte]dontCareT {
 
-	members := make(map[[32]byte]struct{})
-	members[common.TruesPubSign] = struct{}{}
+	members := make(map[[32]byte]dontCareT)
+	members[common.TruesPubSign] = dontCareT{}
 	addedMember := true
 	for addedMember {
 		addedMember = false
@@ -95,7 +95,7 @@ func makeMemberList(
 					continue
 				}
 			}
-			members[invite.Invitee] = struct{}{}
+			members[invite.Invitee] = dontCareT{}
 			addedMember = true
 		}
 		if !addedMember {
@@ -106,17 +106,19 @@ func makeMemberList(
 }
 
 func isMember(
-	invites map[inviteT]struct{},
-	uninvites map[inviteT]struct{},
+	invites map[inviteT]dontCareT,
+	uninvites map[inviteT]dontCareT,
 	candidate [32]byte) bool {
 
 	_, ok := makeMemberList(invites, uninvites)[candidate]
 	return ok
 }
 
-func readInvites(filePath string) (map[inviteT]struct{}, error) {
+type dontCareT struct{}
+
+func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 	rawInvites, err := ioutil.ReadFile(filePath)
-	invites := make(map[inviteT]struct{})
+	invites := make(map[inviteT]dontCareT)
 	if err != nil {
 		return invites, nil
 	}
@@ -126,14 +128,14 @@ func readInvites(filePath string) (map[inviteT]struct{}, error) {
 		return invites, nil
 	}
 	for _, invite := range invitesSlice {
-		invites[invite] = struct{}{}
+		invites[invite] = dontCareT{}
 	}
 	return invites, err
 }
 
-func readApps(dataDir string) ([]common.AppMsgT, error) {
+func readApps(dataDir string) ([]appMsgT, error) {
 	rawApps, err := ioutil.ReadFile(dataDir + "/apps.txt")
-	var apps []common.AppMsgT
+	var apps []appMsgT
 	if err != nil {
 		return apps, nil
 	}
@@ -143,10 +145,10 @@ func readApps(dataDir string) ([]common.AppMsgT, error) {
 
 type readHttpInputT struct {
 	httpChan   chan httpInputT
-	tcpInChan  chan common.EnvelopeT
+	tcpInChan  chan envelopeT
 	homeCode   string
 	invitesCh  chan isMemberT
-	memberList map[[32]byte]struct{}
+	memberList map[[32]byte]dontCareT
 	dataDir string
 }
 
@@ -203,48 +205,48 @@ func getTagsPart(bodyFileReader *multipart.Reader) ([]byte, error) {
 
 func writeAppToFile(
 	r *http.Request,
-	dataDir string) (string, map[string]struct{}, error) {
+	dataDir string) (string, map[string]dontCareT, error) {
 
 	bodyFileReader, err := r.MultipartReader()
 	filepart, err := getFilePart(bodyFileReader)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	tmpFileName, err := genCode()
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	tmpPath := dataDir + "/tmp/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	tee := io.TeeReader(filepart, hasher)
 	_, err = io.Copy(fileHandle, tee)
 	_, err = io.Copy(fileHandle, filepart)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 	err = os.Rename(tmpPath, dataDir + "/apps/" + hash)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	tagBytes, err := getTagsPart(bodyFileReader)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	tags, err := parseTags(tagBytes)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", *new(map[string]dontCareT), err
 	}
 	return hash, tags, nil
 }
@@ -256,24 +258,24 @@ func tagOk(tag string) error {
 	return nil
 }
 
-func parseTags(bs []byte) (map[string]struct{}, error) {
+func parseTags(bs []byte) (map[string]dontCareT, error) {
 	f := func(c rune) bool {
 		return c == ','
 	}
 	tagslice := strings.FieldsFunc(string(bs), f)
-	tagmap := make(map[string]struct{})
+	tagmap := make(map[string]dontCareT)
 	for _, tag := range tagslice {
 		err := tagOk(tag)
 		if err != nil {
 			return tagmap, err
 		}
-		tagmap[tag] = struct{}{}
+		tagmap[tag] = dontCareT{}
 	}
 	return tagmap, nil
 }
 
 type newAppT struct {
-	tags      map[string]struct{}
+	tags      map[string]dontCareT
 	hash      string
 	w         http.ResponseWriter
 	doneCh    chan endRequest
@@ -306,7 +308,7 @@ func (n newAppT) update(s *stateT) (stateT, outputT) {
 			n.doneCh,
 		}
 	}
-	app := common.AppMsgT{
+	app := appMsgT{
 		s.publicSign,
 		n.tags,
 		appHash,
@@ -317,7 +319,7 @@ func (n newAppT) update(s *stateT) (stateT, outputT) {
 				n.tags, appHash, n.posixTime)),
 			&s.secretSign)),
 	}
-	newApps := make([]common.AppMsgT, len(s.apps))
+	newApps := make([]appMsgT, len(s.apps))
 	for i, thisApp := range s.apps {
 		newApps[i] = thisApp
 	}
@@ -354,10 +356,10 @@ func (w writeNewAppsT) send() inputT {
 	return noInputT{}
 }
 
-var subRouteApps = map[string]struct{}{
-	"getapp": struct{}{},
-	"makeapproute": struct{}{},
-	"invite": struct{}{},
+var subRouteApps = map[string]dontCareT{
+	"getapp": dontCareT{},
+	"makeapproute": dontCareT{},
+	"invite": dontCareT{},
 }
 
 func (r readHttpInputT) send() inputT {
@@ -402,7 +404,7 @@ func (r readHttpInputT) send() inputT {
 			h.doneCh,
 		}
 	case tcpIn := <-r.tcpInChan:
-		return myenvelope(tcpIn)
+		return tcpIn
 	case request := <-r.invitesCh:
 		_, ok := r.memberList[request.candidate]
 		request.returnCh <- ok
@@ -412,6 +414,68 @@ func (r readHttpInputT) send() inputT {
 }
 
 type stopListenT struct{}
+
+type msgT interface {
+	code() byte
+}
+
+func intToTwoBytes(i int) ([]byte, error) {
+	if i < 0 {
+		return *new([]byte), errors.New("Int less than zero.")
+	}
+	if i > 256*256 {
+		return *new([]byte), errors.New(
+			"Int greater than 256*256.")
+	}
+	u := uint(i)
+	return []byte{
+		(byte)(u & 0xff),
+		(byte)((u & 0xff00) >> 8)}, nil
+}
+
+func encodeMsg(
+	envelope envelopeT,
+	publicSign [32]byte,
+	secretEncrypt [32]byte,
+	nonce [24]byte) ([]byte, error) {
+
+	rawEncoded, err := encodeData(envelope.msg)
+	if err != nil {
+		return *new([]byte), err
+	}
+	encodedMsg := append(
+		[]byte{envelope.msg.code()},
+		rawEncoded...)
+	encryptedMsg := box.Seal(
+		make([]byte, 0),
+		encodedMsg,
+		&nonce,
+		&envelope.correspondent,
+		&secretEncrypt)
+	outerMsg, err := encodeData(common.ClientToClient{
+		encryptedMsg,
+		envelope.correspondent,
+		nonce,
+		publicSign,
+	})
+	if err != nil {
+		return *new([]byte), err
+	}
+	lenOuterMsg := len(outerMsg)
+	if lenOuterMsg > 16000 {
+		return *new([]byte), errors.New("Message too long.")
+	}
+	lenInBytes, err := intToTwoBytes(lenOuterMsg)
+	if err != nil {
+		return *new([]byte), err
+	}
+	return append(lenInBytes, outerMsg...), nil
+}
+
+type envelopeT struct {
+	msg           msgT
+	correspondent [32]byte
+}
 
 func makeConn(
 	publicSign [32]byte,
@@ -446,7 +510,7 @@ func tcpListen(
 	conn net.Conn,
 	isMemberCh chan isMemberT,
 	secretEncrypt [32]byte,
-	inChan chan common.EnvelopeT,
+	inChan chan envelopeT,
 	stopListenChan chan stopListenT) {
 
 	for {
@@ -464,9 +528,9 @@ func tcpListen(
 		if err != nil {
 			continue
 		}
-		inChan <- common.EnvelopeT{
-			Msg:           decoded,
-			Correspondent: author,
+		inChan <- envelopeT{
+			msg:           decoded,
+			correspondent: author,
 		}
 		select {
 		case <-stopListenChan:
@@ -477,8 +541,8 @@ func tcpListen(
 }
 
 func tcpServer(
-	inChan chan common.EnvelopeT,
-	outChan chan common.EnvelopeT,
+	inChan chan envelopeT,
+	outChan chan envelopeT,
 	isMemberCh chan isMemberT,
 	secretSign [64]byte,
 	secretEncrypt [32]byte,
@@ -510,7 +574,7 @@ func tcpServer(
 			panic(err.Error())
 		}
 		fmt.Println(toSend)
-		encoded, err := common.EncodeMsg(
+		encoded, err := encodeMsg(
 			toSend,
 			publicSign,
 			secretEncrypt,
@@ -804,25 +868,25 @@ func logSentSuccess(appHash [32]byte, recipient [32]byte, dataDir string) {
 }
 
 func sendMsg(
-	envelope common.EnvelopeT,
-	tcpInChan chan common.EnvelopeT,
-	tcpOutChan chan common.EnvelopeT) error {
+	envelope envelopeT,
+	tcpInChan chan envelopeT,
+	tcpOutChan chan envelopeT) error {
 
 	tcpOutChan <- envelope
 	select {
 	case response := <-tcpInChan:
-		receipt, ok := (response.Msg).(common.ReceiptT)
+		receipt, ok := (response.msg).(receiptT)
 		if !ok {
 			return errors.New("Bad receipt.")
 		}
-		expectedHash, err := hash(envelope.Msg)
+		expectedHash, err := hash(envelope.msg)
 		if err != nil {
 			return err
 		}
 		givenReceiptHash, ok := sign.Open(
 			make([]byte, 0),
-			common.SigToSlice(receipt.HashSig),
-			&receipt.Author)
+			common.SigToSlice(receipt.hashSig),
+			&receipt.author)
 		if !ok {
 			return errors.New("Bad receipt.")
 		}
@@ -862,7 +926,7 @@ var appSigMeaning = []byte{
 	0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6,
 	0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
 
-func concatTags(t map[string]struct{}) []byte {
+func concatTags(t map[string]dontCareT) []byte {
 	tagSlice := make([]string, len(t))
 	i := 0
 	for tag, _ := range t {
@@ -882,7 +946,7 @@ func encodeInt64(i int64) []byte {
 	return b
 }
 
-func hashApp(tags map[string]struct{}, appHash [32]byte, posixTime int64) [32]byte {
+func hashApp(tags map[string]dontCareT, appHash [32]byte, posixTime int64) [32]byte {
 	tagBytes := concatTags(tags)
 	lenTags := len(tagBytes)
 	concat := make([]byte, lenTags+32+8)
@@ -900,6 +964,14 @@ func hashApp(tags map[string]struct{}, appHash [32]byte, posixTime int64) [32]by
 	return blake2b.Sum256(concat)
 }
 
+type appMsgT struct {
+	Author    [32]byte
+	Tags      map[string]dontCareT
+	AppHash   [32]byte
+	PosixTime int64
+	Sig       [common.SigSize]byte
+}
+
 type searchResultT struct {
 	Author    string
 	Tags      []string
@@ -907,10 +979,24 @@ type searchResultT struct {
 	Posixtime int64
 }
 
+func (a appMsgT) code() byte {
+	return appMsgB
+}
+
 func appSigHash(appHash [32]byte) []byte {
 	return common.HashToSlice(blake2b.Sum256(append(
 		common.HashToSlice(appHash),
 		appSigMeaning...)))
+}
+
+func encodeData(a interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(a)
+	if err != nil {
+		return make([]byte, 0), err
+	}
+	return buf.Bytes(), nil
 }
 
 func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
@@ -934,7 +1020,7 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	for i, recipient := range sendAppJson.Recipients {
 		recipients[i] = common.SliceToHash(recipient)
 	}
-	var app common.AppMsgT
+	var app appMsgT
 	for _, thisApp := range s.apps {
 		if equalHashes(thisApp.AppHash, appHash) {
 			app = thisApp
@@ -971,14 +1057,21 @@ type fileChunkPtrT struct {
 	lastChunk bool
 }
 
+type fileChunk struct {
+	appHash   [32]byte
+	chunk     []byte
+	counter   int
+	lastChunk bool
+}
+
 func sendFileToOne(
 	s sendAppT,
 	recipient [32]byte,
 	fileHandle *os.File) error {
 
-	sender := func(msg common.MsgT) error {
+	sender := func(msg msgT) error {
 		return sendMsg(
-			common.EnvelopeT{msg, recipient},
+			envelopeT{msg, recipient},
 			s.tcpInChan,
 			s.tcpOutChan)
 	}
@@ -996,7 +1089,7 @@ func sendFileToOne(
 			return err
 		}
 		lastChunk := n < common.ChunkSize
-		err = sender(common.FileChunk{
+		err = sender(fileChunk{
 			s.appHash,
 			chunk,
 			counter,
@@ -1041,15 +1134,15 @@ type searchQueryT struct {
 	SearchString string
 }
 
-func sliceToSet(slice []string) map[string]struct{} {
-	var set map[string]struct{}
+func sliceToSet(slice []string) map[string]dontCareT {
+	var set map[string]dontCareT
 	for _, s := range slice {
-		set[s] = struct{}{}
+		set[s] = dontCareT{}
 	}
 	return set
 }
 
-func isSubset(sub []string, super map[string]struct{}) bool {
+func isSubset(sub []string, super map[string]dontCareT) bool {
 	for _, s := range sub {
 		_, ok := super[s]
 		if !ok {
@@ -1059,7 +1152,7 @@ func isSubset(sub []string, super map[string]struct{}) bool {
 	return true
 }
 
-func matchesSearch(searchString string, tags map[string]struct{}) bool {
+func matchesSearch(searchString string, tags map[string]dontCareT) bool {
 	for tag, _ := range tags {
 		if strings.Contains(tag, searchString) {
 			return true
@@ -1068,13 +1161,13 @@ func matchesSearch(searchString string, tags map[string]struct{}) bool {
 	return false
 }
 
-func matchingApp(app common.AppMsgT, q searchQueryT) bool {
+func matchingApp(app appMsgT, q searchQueryT) bool {
 	return isSubset(q.Tags, app.Tags) &&
 		matchesSearch(q.SearchString, app.Tags)
 }
 
-func filterApps(all []common.AppMsgT, q searchQueryT) []common.AppMsgT {
-	var filtered []common.AppMsgT
+func filterApps(all []appMsgT, q searchQueryT) []appMsgT {
+	var filtered []appMsgT
 	for _, app := range all {
 		if matchingApp(app, q) {
 			filtered = append(filtered, app)
@@ -1083,7 +1176,7 @@ func filterApps(all []common.AppMsgT, q searchQueryT) []common.AppMsgT {
 	return filtered
 }
 
-func setToSlice(set map[string]struct{}) []string {
+func setToSlice(set map[string]dontCareT) []string {
 	result := make([]string, len(set))
 	i := 0
 	for s, _ := range set {
@@ -1093,7 +1186,7 @@ func setToSlice(set map[string]struct{}) []string {
 	return result
 }
 
-func appToSearchResult(app common.AppMsgT) searchResultT {
+func appToSearchResult(app appMsgT) searchResultT {
 	author := base64.URLEncoding.EncodeToString(common.HashToSlice(app.Author))
 	appHash := base64.URLEncoding.EncodeToString(common.HashToSlice(app.AppHash))
 	return searchResultT{
@@ -1104,15 +1197,15 @@ func appToSearchResult(app common.AppMsgT) searchResultT {
 	}
 }
 
-func search(apps []common.AppMsgT, q searchQueryT) (searchResultsT, error) {
+func search(apps []appMsgT, q searchQueryT) (searchResultsT, error) {
 	filtered := filterApps(apps, q)
 	matchingApps := make([]searchResultT, len(filtered))
-	matchingTags := make(map[string]struct{})
+	matchingTags := make(map[string]dontCareT)
 	for i, app := range filtered {
 		matchingApps[i] = appToSearchResult(app)
 		for tag, _ := range app.Tags {
 			if strings.Contains(tag, q.SearchString) {
-				matchingTags[tag] = struct{}{}
+				matchingTags[tag] = dontCareT{}
 			}
 		}
 	}
@@ -1260,16 +1353,16 @@ func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
 }
 
 func copyInvites(
-	invites map[inviteT]struct{}) map[inviteT]struct{} {
+	invites map[inviteT]dontCareT) map[inviteT]dontCareT {
 
-	newInvites := make(map[inviteT]struct{})
+	newInvites := make(map[inviteT]dontCareT)
 	for invite, _ := range invites {
-		newInvites[invite] = struct{}{}
+		newInvites[invite] = dontCareT{}
 	}
 	return newInvites
 }
 
-func invitesToSlice(invites map[inviteT]struct{}) []inviteT {
+func invitesToSlice(invites map[inviteT]dontCareT) []inviteT {
 	invitesSlice := make([]inviteT, len(invites))
 	i := 0
 	for invite, _ := range invites {
@@ -1291,7 +1384,7 @@ func (m makeInviteT) update(s *stateT) (stateT, outputT) {
 			&s.secretSign)),
 	}
 	newInvites := copyInvites(s.invites)
-	newInvites[invite] = struct{}{}
+	newInvites[invite] = dontCareT{}
 	encodedInvites, err := json.Marshal(invitesToSlice(newInvites))
 	if err != nil {
 		return *s, sendHttpErrorT{
@@ -1446,9 +1539,9 @@ func genCode() (string, error) {
 }
 
 type sendAppT struct {
-	appMsg        common.AppMsgT
-	tcpInChan     chan common.EnvelopeT
-	tcpOutChan    chan common.EnvelopeT
+	appMsg        appMsgT
+	tcpInChan     chan envelopeT
+	tcpOutChan    chan envelopeT
 	filepath      string
 	w             http.ResponseWriter
 	doneCh        chan endRequest
@@ -1646,8 +1739,8 @@ func initState(dataDir string, port string) (stateT, error) {
 	return stateT{
 		dataDir: dataDir,
 		httpChan:      make(chan httpInputT),
-		tcpInChan:     make(chan common.EnvelopeT),
-		tcpOutChan:    make(chan common.EnvelopeT),
+		tcpInChan:     make(chan envelopeT),
+		tcpOutChan:    make(chan envelopeT),
 		homeCode:      homeCode,
 		appCodes:      make(map[string][32]byte),
 		publicSign:    keys.publicsign,
@@ -1723,23 +1816,20 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 	}
 }
 
-type myenvelope common.EnvelopeT
-
-func (mye myenvelope) update(s *stateT) (stateT, outputT) {
-	e := (common.EnvelopeT)(mye)
-	switch e.Msg.Code() {
-	case common.ReceiptMsgB:
+func (e envelopeT) update(s *stateT) (stateT, outputT) {
+	switch e.msg.code() {
+	case receiptMsgB:
 		return *s, readHttpIn(s)
-	case common.FileChunkMsgB:
+	case fileChunkMsgB:
 		return processNewFileChunk(e, s)
-	case common.AppMsgB:
+	case appMsgB:
 		return processAppSigMsg(e, s)
 	}
 	return *s, readHttpIn(s)
 }
 
-func processAppSigMsg(e common.EnvelopeT, s *stateT) (stateT, outputT) {
-	appSig, ok := (e.Msg).(common.AppMsgT)
+func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
+	appSig, ok := (e.msg).(appMsgT)
 	var newChunksLoading map[[32]byte][]fileChunkPtrT
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
@@ -1753,7 +1843,7 @@ func processAppSigMsg(e common.EnvelopeT, s *stateT) (stateT, outputT) {
 	signedHash, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appSig.Sig),
-		&e.Correspondent)
+		&e.correspondent)
 	hashOk := bytes.Equal(
 		appSigHash(appSig.AppHash),
 		signedHash)
@@ -1781,7 +1871,7 @@ func processAppSigMsg(e common.EnvelopeT, s *stateT) (stateT, outputT) {
 		appHash:    appSig.AppHash,
 		tmpPath:    tmpPath,
 		finalPath:  finalPath,
-		appAuthor:  e.Correspondent,
+		appAuthor:  e.correspondent,
 		tcpInChan:  s.tcpInChan,
 		tcpOutChan: s.tcpOutChan,
 		secretSign: s.secretSign,
@@ -1800,8 +1890,8 @@ type assembleApp struct {
 	tmpPath    string
 	finalPath  string
 	appAuthor  [32]byte
-	tcpInChan  chan common.EnvelopeT
-	tcpOutChan chan common.EnvelopeT
+	tcpInChan  chan envelopeT
+	tcpOutChan chan envelopeT
 	secretSign [64]byte
 }
 
@@ -1829,24 +1919,24 @@ func (a assembleApp) send() inputT {
 		return chunksFinishedT{a.appHash}
 	}
 	_ = os.Rename(a.tmpPath, a.finalPath)
-	receipt := common.AppReceiptT{sliceToSig(sign.Sign(
+	receipt := appReceiptT{sliceToSig(sign.Sign(
 		make([]byte, 0),
 		receiptHash(a.appHash, appReceiptCode),
 		&a.secretSign))}
 	_ = sendMsg(
-		common.EnvelopeT{receipt, a.appAuthor},
+		envelopeT{receipt, a.appAuthor},
 		a.tcpInChan,
 		a.tcpOutChan)
 	return chunksFinishedT{a.appHash}
 
 }
 
-func processNewFileChunk(e common.EnvelopeT, s *stateT) (stateT, outputT) {
-	chunk, ok := (e.Msg).(common.FileChunk)
+func processNewFileChunk(e envelopeT, s *stateT) (stateT, outputT) {
+	chunk, ok := (e.msg).(fileChunk)
 	if !ok {
 		return *s, readHttpIn(s)
 	}
-	previousChunks, ok := s.chunksLoading[e.Correspondent]
+	previousChunks, ok := s.chunksLoading[e.correspondent]
 	lastChunk := previousChunks[len(previousChunks)-1]
 	if lastChunk.lastChunk {
 		return *s, readHttpIn(s)
@@ -1855,30 +1945,30 @@ func processNewFileChunk(e common.EnvelopeT, s *stateT) (stateT, outputT) {
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
 	}
-	chunkHash, err := hash(e.Msg)
+	chunkHash, err := hash(e.msg)
 	if err != nil {
 		return *s, readHttpIn(s)
 	}
-	if !ok && chunk.Counter != 0 {
+	if !ok && chunk.counter != 0 {
 		return *s, readHttpIn(s)
 	}
 	if !ok {
-		newChunksLoading[chunk.AppHash] = []fileChunkPtrT{
+		newChunksLoading[chunk.appHash] = []fileChunkPtrT{
 			fileChunkPtrT{
 				chunkHash: chunkHash,
-				counter:   chunk.Counter,
-				lastChunk: chunk.LastChunk,
+				counter:   chunk.counter,
+				lastChunk: chunk.lastChunk,
 			}}
 	} else {
-		if lastChunk.counter != chunk.Counter-1 {
+		if lastChunk.counter != chunk.counter-1 {
 			return *s, readHttpIn(s)
 		}
-		newChunksLoading[chunk.AppHash] = append(
-			newChunksLoading[chunk.AppHash],
+		newChunksLoading[chunk.appHash] = append(
+			newChunksLoading[chunk.appHash],
 			fileChunkPtrT{
 				chunkHash: chunkHash,
-				counter:   chunk.Counter,
-				lastChunk: chunk.LastChunk,
+				counter:   chunk.counter,
+				lastChunk: chunk.lastChunk,
 			})
 	}
 	newS := *s
@@ -1886,9 +1976,9 @@ func processNewFileChunk(e common.EnvelopeT, s *stateT) (stateT, outputT) {
 	tmpFileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
 	return newS, writeAppToFileT{
-		chunk.AppHash,
+		chunk.appHash,
 		s.dataDir + "/tmp/" + tmpFileName,
-		chunk.Chunk}
+		chunk.chunk}
 }
 
 type writeAppToFileT struct {
@@ -1938,6 +2028,15 @@ func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 	return newS, readHttpIn(s)
 }
 
+type receiptT struct {
+	hashSig [common.SigSize]byte
+	author  [32]byte
+}
+
+type appReceiptT struct {
+	hashSig [common.SigSize]byte
+}
+
 func hash(i interface{}) ([32]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -1948,10 +2047,29 @@ func hash(i interface{}) ([32]byte, error) {
 	return blake2b.Sum256(buf.Bytes()), nil
 }
 
-func decodeLow(bs []byte, result common.MsgT) (common.MsgT, error) {
+func (r receiptT) code() byte {
+	return receiptMsgB
+}
+
+func (f fileChunk) code() byte {
+	return fileChunkMsgB
+}
+
+func (a appReceiptT) code() byte {
+	return appReceiptMsgB
+}
+
+const (
+	receiptMsgB    = 0x00
+	appMsgB        = 0x01
+	fileChunkMsgB  = 0x02
+	appReceiptMsgB = 0x03
+)
+
+func decodeLow(bs []byte, result msgT) (msgT, error) {
 	var buf bytes.Buffer
 	n, err := buf.Write(bs)
-	var msg common.MsgT
+	var msg msgT
 	if n != len(bs) {
 		return msg, errors.New("Could not read whole message.")
 	}
@@ -1968,7 +2086,7 @@ func decodeLow(bs []byte, result common.MsgT) (common.MsgT, error) {
 
 func decodeMsg(
 	cToC common.ClientToClient,
-	secretEncrypt [32]byte) (common.MsgT, [32]byte, error) {
+	secretEncrypt [32]byte) (msgT, [32]byte, error) {
 
 	decrypted, ok := box.Open(
 		make([]byte, 0),
@@ -1978,20 +2096,20 @@ func decodeMsg(
 		&secretEncrypt)
 	if !ok {
 		err := errors.New("Could not decrypt message.")
-		return *new(common.MsgT), *new([32]byte), err
+		return *new(msgT), *new([32]byte), err
 	}
 	typeByte := decrypted[0]
 	msg := decrypted[1:]
 	switch typeByte {
-	case common.ReceiptMsgB:
-		decoded, err := decodeLow(msg, *new(common.ReceiptT))
+	case receiptMsgB:
+		decoded, err := decodeLow(msg, *new(receiptT))
 		return decoded, cToC.Author, err
-	case common.AppMsgB:
-		decoded, err := decodeLow(msg, *new(common.AppMsgT))
+	case appMsgB:
+		decoded, err := decodeLow(msg, *new(appMsgT))
 		return decoded, cToC.Author, err
 	}
 	err := errors.New("Message type byte unknown.")
-	return *new(common.MsgT), *new([32]byte), err
+	return *new(msgT), *new([32]byte), err
 }
 
 var routes = []string{"sendapp", "saveapp", "searchapps"}
