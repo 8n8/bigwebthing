@@ -65,7 +65,6 @@ type stateT struct {
 	chunksLoading  map[[32]byte][]fileChunkPtrT
 	dataDir string
 	port string
-	encryptKeys map[[32]byte][32]byte
 }
 
 type isMemberT struct {
@@ -134,16 +133,6 @@ func readInvites(filePath string) (map[inviteT]dontCareT, error) {
 	return invites, err
 }
 
-func readEncryptKeys(dataDir string) (map[[32]byte][32]byte, error) {
-	rawKeys, err := ioutil.ReadFile(dataDir + "/encryptkeys.txt")
-	encryptKeys := make(map[[32]byte][32]byte)
-	if err != nil {
-		return encryptKeys, nil
-	}
-	err = json.Unmarshal(rawkeys, &encryptKeys)
-	return encryptKeys, err
-}
-
 func readApps(dataDir string) ([]appMsgT, error) {
 	rawApps, err := ioutil.ReadFile(dataDir + "/apps.txt")
 	var apps []appMsgT
@@ -184,8 +173,7 @@ func uninviteCancels(u inviteT, i inviteT) bool {
 
 type inviteT struct {
 	PosixTime int64
-	InviteeSign   [32]byte
-	InviteeEncrypt [32]byte
+	Invitee   [32]byte
 	Author    [32]byte
 	Signature [common.SigSize]byte
 }
@@ -1304,8 +1292,7 @@ func processInvite(
 type getTimeForInviteT struct {
 	w http.ResponseWriter
 	doneCh chan endRequest
-	inviteeSign [32]byte
-	inviteeEncrypt [32]byte
+	invitee [32]byte
 }
 
 func (g getTimeForInviteT) send() inputT {
@@ -1313,8 +1300,7 @@ func (g getTimeForInviteT) send() inputT {
 }
 
 type makeInviteT struct {
-	inviteeSign [32]byte
-	inviteeEncrypt [32]byte
+	invitee [32]byte
 	posixTime int64
 	w http.ResponseWriter
 	doneCh chan endRequest
@@ -1323,21 +1309,18 @@ type makeInviteT struct {
 var inviteContext = [16]byte{49, 46, 232, 88, 87, 218, 38, 83, 52, 64, 244, 143, 33, 23, 18, 19}
 
 
-func inviteHash(posixTime int64, inviteeSign [32]byte, inviteeEncrypt [32]byte) [32]byte {
-	concat := make([]byte, 88)
+func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
+	concat := make([]byte, 56)
 	i := 0
 	for ; i < 32; i++ {
-		concat[i] = inviteeSign[i]
-	}
-	for ; i < 64; i++ {
-		concat[i] = inviteeEncrypt[i-32]
+		concat[i] = invitee[i]
 	}
 	encodedTime := encodeInt64(posixTime)
-	for ; i < 72; i++ {
-		concat[i] = encodedTime[i-32-8]
+	for ; i < 40; i++ {
+		concat[i] = encodedTime[i-32]
 	}
-	for ; i < 88; i++ {
-		concat[i] = inviteContext[i-16-32-8]
+	for ; i < 56; i++ {
+		concat[i] = inviteContext[i-40]
 	}
 	return blake2b.Sum256(concat)
 }
@@ -1365,15 +1348,12 @@ func invitesToSlice(invites map[inviteT]dontCareT) []inviteT {
 func (m makeInviteT) update(s *stateT) (stateT, outputT) {
 	invite := inviteT{
 		PosixTime: m.posixTime,
-		InviteeSign: m.inviteeSign,
-		InviteeEncrypt: m.inviteeEncrypt,
+		Invitee: m.invitee,
 		Author: s.publicSign,
 		Signature: sliceToSig(sign.Sign(
 			make([]byte, 0),
 			common.HashToSlice(inviteHash(
-				m.posixTime,
-				m.inviteeSign,
-				m.inviteeEncrypt)),
+				m.posixTime, m.invitee)),
 			&s.secretSign)),
 	}
 	newInvites := copyInvites(s.invites)
@@ -1715,10 +1695,6 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	encryptKeys, err := readEncryptKeys(dataDir)
-	if err != nil {
-		return s, err
-	}
 	invites, err := readInvites(invitesFile(dataDir))
 	if err != nil {
 		return s, err
@@ -1756,7 +1732,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		chunksLoading: make(map[[32]byte][]fileChunkPtrT),
 		dataDir: dataDir,
 		port: port,
-		encryptKeys: encryptKeys,
 	}, nil
 }
 
