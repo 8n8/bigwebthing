@@ -2,13 +2,13 @@ package common
 
 import (
 	"bytes"
-	"golang.org/x/crypto/blake2b"
-	"golang.org/x/crypto/nacl/sign"
+	"encoding/gob"
 	"errors"
 	"net"
-	"encoding/gob"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/sign"
+	"golang.org/x/crypto/nacl/secretbox"
 )
-
 
 var ReceiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
 	0x46, 0x5e, 0x02, 0x49, 0xb9, 0x4b, 0x69, 0xd0, 0x93, 0x4d}
@@ -47,10 +47,10 @@ const (
 	SigSize        = sign.Overhead + blake2b.Size256
 	AuthSigSize    = sign.Overhead + AuthCodeLength
 	AuthCodeLength = 24
-	ChunkSize = 16000
+	ChunkSize      = 16000
 )
 
-var TruesPubSign = [32]byte{34,148,5,96,91,208,18,233,215,66,198,30,191,49,109,202,113,163,219,102,111,179,146,74,188,147,152,18,53,120,234,249}
+var TruesPubSign = [32]byte{34, 148, 5, 96, 91, 208, 18, 233, 215, 66, 198, 30, 191, 49, 109, 202, 113, 163, 219, 102, 111, 179, 146, 74, 188, 147, 152, 18, 53, 120, 234, 249}
 
 func AuthSigToSlice(sig [AuthSigSize]byte) []byte {
 	result := make([]byte, AuthSigSize)
@@ -87,16 +87,45 @@ func SliceToHash(sl []byte) [32]byte {
 	return newHash
 }
 
-type Msg interface {
-	Encode() ([]byte, error)
-	Decode() (Msg, error)
+type MsgT interface {
+	msgTplaceholderFunc()
 }
 
-type ClientToClient struct {
-	Msg       []byte
-	Recipient [32]byte
+type Encrypted struct {
+	Msg   []byte
 	Nonce [24]byte
-	Author [32]byte
+}
+
+type GiveMeASymmetricKey struct{
+	MyPublicEncrypt [32]byte
+}
+
+const EncryptedKeyLen = secretbox.Overhead + 32
+
+type HereIsAnEncryptionKey struct {
+	YourPublicEncrypt [32]byte
+	MyPublicEncrypt [32]byte
+	EncryptedSymmetricKey [EncryptedKeyLen]byte
+	Nonce [24]byte
+	Sig [SigSize]byte
+}
+
+//func (r ReceiptT) msgTplaceholderFunc() {return}
+
+//func (a AppReceiptT) msgTplaceholderFunc() {return}
+
+func (e Encrypted) msgTplaceholderFunc() { return }
+
+//func (f FileChunk) msgTplaceholderFunc() {return}
+
+func (w GiveMeASymmetricKey) msgTplaceholderFunc() { return }
+
+func (h HereIsAnEncryptionKey) msgTplaceholderFunc() { return }
+
+type ClientToClient struct {
+	Msg       MsgT
+	Recipient [32]byte
+	Author    [32]byte
 }
 
 const (
@@ -190,8 +219,8 @@ type InviteT struct {
 }
 
 type AuthSigT struct {
-	Author  [32]byte
-	Sig     [AuthSigSize]byte
+	Author [32]byte
+	Sig    [AuthSigSize]byte
 }
 
 func IsMember(
