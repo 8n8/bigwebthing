@@ -1646,6 +1646,28 @@ func makeSalt() ([32]byte, error) {
 	return nonce, nil
 }
 
+type MakeRandomBytesIO struct {
+	msg func([]byte, int, error) inputT
+	length int
+}
+
+func (m MakeRandomBytesIO) send() inputT {
+	result := make([]byte, m.length)
+	n, err := rand.Read(result)
+	return m.msg(result, n, err)
+}
+
+type PutCToCInChanIO struct {
+	ch chan common.ClientToClient
+	msg common.ClientToClient
+	context func() inputT
+}
+
+func (p PutCToCInChanIO) send() inputT {
+	p.ch <- p.msg
+	return p.context()
+}
+
 func makeSymmetricKey() ([32]byte, error) {
 	nonceSlice := make([]byte, 32)
 	var nonce [32]byte
@@ -1935,7 +1957,8 @@ func initState(dataDir string, port string) (stateT, error) {
 func main() {
 	args := os.Args
 	if len(args) != 3 {
-		fmt.Println("There must be two command-line arguments.")
+		fmt.Println(
+			"There must be two command-line arguments.")
 		return
 	}
 	port := args[1]
@@ -1964,7 +1987,8 @@ func main() {
 	go httpServer(state.httpChan, state.homeCode, port)
 	fmt.Print(state.homeCode)
 	err = browser.OpenURL(
-		"http://localhost:" + port + "/getapp/" + state.homeCode + "/index.html")
+		"http://localhost:" + port + "/getapp/" +
+		state.homeCode + "/index.html")
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -2084,20 +2108,62 @@ func processGiveMeKey(
 	author [32]byte,
 	s *stateT) (stateT, outputT) {
 
-	return *s, makeSymmetricKeyT{
-		s.publicSign,
-		keyRequest.MyPublicEncrypt,
-		author,
-		s.tcpOutChan,
+	return *s, GenerateKeyPairIO(
+		func(pub, priv [32]byte, err error) newKeyPairT {
+			return newKeyPairT{
+				keyRequest.MyPublicEncrypt,
+				author,
+				pub,
+				priv,
+				err,
+			}
+		})
+}
+
+type newKeyPairT struct {
+	recipientPublicEncrypt [32]byte
+	recipient [32]byte
+	newPublicEncrypt [32]byte
+	newPrivateEncrypt [32]byte
+	keyGenErr error
+}
+
+func (nkp newKeyPairT) update(s *stateT) (stateT, outputT) {
+	if nkp.keyGenErr != nil {
+		return *s, defaultIO(s)
+	}
+	return *s, MakeRandomBytesIO{
+		func(bytes []byte, n int, err error) newSymKeyT {
+			return newSymKeyT{
+				bytes,
+				n,
+				err,
+				nkp.recipientPublicEncrypt,
+				nkp.recipient,
+				nkp.newPublicEncrypt,
+				nkp.newPrivateEncrypt,
+			}
+		},
+		56,
 	}
 }
 
-type makeSymmetricKeyT struct {
-	myPubSign              [32]byte
+type newSymKeyT struct {
+	newBytes []byte
+	n int
+	err error
 	recipientPublicEncrypt [32]byte
-	recipient              [32]byte
-	tcpOutChan             chan common.ClientToClient
+	recipient [32]byte
+	newPublicEncrypt [32]byte
+	newPrivateEncrypt [32]byte
 }
+
+// type makeSymmetricKeyT struct {
+// 	myPubSign              [32]byte
+// 	recipientPublicEncrypt [32]byte
+// 	recipient              [32]byte
+// 	tcpOutChan             chan common.ClientToClient
+// }
 
 func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
 	var result [common.EncryptedKeyLen]byte
@@ -2107,39 +2173,46 @@ func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
 	return result
 }
 
-func (m makeSymmetricKeyT) send() inputT {
+type GenerateKeyPairIO func([32]byte, [32]byte, error) inputT
+
+func (g GenerateKeyPairIO) send() inputT {
 	pub, priv, err := box.GenerateKey(rand.Reader)
-	if err != nil {
-		return noInputT{}
-	}
-	symmetricKey, err := makeSymmetricKey()
-	if err != nil {
-		return noInputT{}
-	}
-	nonce, err := makeNonce()
-	if err != nil {
-		return noInputT{}
-	}
-	encryptedKey := box.Seal(
-		make([]byte, 0),
-		common.HashToSlice(symmetricKey),
-		&nonce,
-		&m.recipientPublicEncrypt,
-		priv)
-	hereIs := common.HereIsAnEncryptionKey{
-		m.recipientPublicEncrypt,
-		*pub,
-		encryptedKeyToArr(encryptedKey),
-		nonce,
-		*new([common.SigSize]byte),
-	}
-	m.tcpOutChan <- common.ClientToClient{
-		hereIs,
-		m.recipient,
-		m.myPubSign,
-	}
-	return noInputT{}
+	return g(*pub, *priv, err)
 }
+
+// func (m makeSymmetricKeyT) send() inputT {
+// 	pub, priv, err := box.GenerateKey(rand.Reader)
+// 	if err != nil {
+// 		return noInputT{}
+// 	}
+// 	symmetricKey, err := makeSymmetricKey()
+// 	if err != nil {
+// 		return noInputT{}
+// 	}
+// 	nonce, err := makeNonce()
+// 	if err != nil {
+// 		return noInputT{}
+// 	}
+// 	encryptedKey := box.Seal(
+// 		make([]byte, 0),
+// 		common.HashToSlice(symmetricKey),
+// 		&nonce,
+// 		&m.recipientPublicEncrypt,
+// 		priv)
+// 	hereIs := common.HereIsAnEncryptionKey{
+// 		m.recipientPublicEncrypt,
+// 		*pub,
+// 		encryptedKeyToArr(encryptedKey),
+// 		nonce,
+// 		*new([common.SigSize]byte),
+// 	}
+// 	m.tcpOutChan <- common.ClientToClient{
+// 		hereIs,
+// 		m.recipient,
+// 		m.myPubSign,
+// 	}
+// 	return noInputT{}
+// }
 
 func makeChunkFilePath(chunkHash [32]byte, dataDir string) string {
 	filename := base64.URLEncoding.EncodeToString(
