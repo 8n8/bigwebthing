@@ -574,7 +574,7 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 	case "getmyid":
 		return processGetMyId(n, s)
 	}
-	return *s, readHttpIn(s)
+	return *s, defaultIO(s)
 }
 
 func processGetMyId(
@@ -879,15 +879,15 @@ func (appSig appMsgT) process(author [32]byte, s *stateT) (stateT, outputT) {
 		appSigHash(appSig.AppHash),
 		signedHash)
 	if !(ok && hashOk) {
-		return newS, readHttpIn(s)
+		return newS, defaultIO(s)
 	}
 	chunkPtrs, ok := s.chunksLoading[appSig.AppHash]
 	if !ok {
-		return newS, readHttpIn(s)
+		return newS, defaultIO(s)
 	}
 	finalChunkPtr := chunkPtrs[len(chunkPtrs)-1]
 	if !finalChunkPtr.lastChunk {
-		return newS, readHttpIn(s)
+		return newS, defaultIO(s)
 	}
 	filePaths := make([]string, len(chunkPtrs))
 	for i, chunkPtr := range chunkPtrs {
@@ -899,7 +899,7 @@ func (appSig appMsgT) process(author [32]byte, s *stateT) (stateT, outputT) {
 	finalPath := s.dataDir + "/apps/" + finalName
 	symmetricKey, ok := s.symmetricKeys[author]
 	if !ok {
-		return newS, readHttpIn(s)
+		return newS, defaultIO(s)
 	}
 	return newS, assembleApp{
 		myPublicSign: s.publicSign,
@@ -1045,7 +1045,7 @@ func (a awaitingSymmetricKeyT) update(s *stateT) (stateT, outputT) {
 	}
 	newKeyPairs[a.publicKey] = a.privateKey
 	newS.keyPairs = newKeyPairs
-	return newS, readHttpIn(s)
+	return newS, defaultIO(s)
 }
 
 type getEncryptionKeyForAppT sendChunkT
@@ -1139,7 +1139,7 @@ func (c chunkAwaitingReceiptT) update(s *stateT) (stateT, outputT) {
 	}
 	chunksAwaiting[c.appMsg.AppHash] = c
 	newState := *s
-	return newState, readHttpIn(s)
+	return newState, defaultIO(s)
 }
 
 type Decrypted interface {
@@ -1516,7 +1516,7 @@ type httpInputT struct {
 type noInputT struct{}
 
 func (n noInputT) update(s *stateT) (stateT, outputT) {
-	return *s, readHttpIn(s)
+	return *s, defaultIO(s)
 }
 
 func decodeMsgT(bs []byte) (Decrypted, error) {
@@ -1538,7 +1538,7 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte, s *stateT) (s
 	decryptionKey, ok := s.symmetricKeys[author]
 	if !ok {
 		fmt.Println("Could not find decryption key.")
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	decryptionKeyAs32Byte := [32]byte(decryptionKey)
 	decrypted, ok := secretbox.Open(
@@ -1548,12 +1548,12 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte, s *stateT) (s
 		&decryptionKeyAs32Byte)
 	if !ok {
 		fmt.Println("Could not decrypt message.")
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	decoded, err := decodeMsgT(decrypted)
 	if err != nil {
 		fmt.Println(err)
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	return decoded.process(author, s)
 }
@@ -1567,17 +1567,17 @@ func (appReceipt AppReceiptT) process(
 		common.SigToSlice(appReceipt.Sig),
 		&author)
 	if !ok {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	if !bytes.Equal(signed, common.HashToSlice(appReceipt.AppHash)) {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	appAuthor, ok := s.appsAwaitingReceipt[appReceipt.AppHash]
 	if !ok {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	if appAuthor != author {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	newAppsAwaiting := make(map[blake2bHash]publicSignT)
 	for k, v := range s.appsAwaitingReceipt {
@@ -1604,7 +1604,7 @@ func (receipt ReceiptT) process(author [32]byte, s *stateT) (stateT, outputT) {
 	chunkAwaiting, ok := s.chunksAwaitingReceipt[receipt.ChunkHash]
 	if !ok {
 		fmt.Println("Received unexpected receipt.")
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	return *s, sendChunkT{
 		s.publicSign,
@@ -1709,7 +1709,7 @@ func (a appAwaitingReceiptT) update(s *stateT) (stateT, outputT) {
 	newAppsAwaiting[a.appHash] = a.recipient
 	newS := *s
 	newS.appsAwaitingReceipt = newAppsAwaiting
-	return newS, readHttpIn(s)
+	return newS, defaultIO(s)
 }
 
 type sendChunkT struct {
@@ -1969,7 +1969,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	var output outputT = readHttpIn(&state)
+	var output outputT = defaultIO(&state)
 	for {
 		input := output.send()
 		state, output = input.update(&state)
@@ -2004,7 +2004,7 @@ func (c newMsgT) update(s *stateT) (stateT, outputT) {
 			c.Author,
 			s)
 	}
-	return *s, readHttpIn(s)
+	return *s, defaultIO(s)
 }
 
 func encKeyToSlice(key [common.EncryptedKeyLen]byte) []byte {
@@ -2033,7 +2033,7 @@ func processHereIsAnEncryptionKey(
 
 	awaitingKey, ok := s.awaitingSymmetricKey[author]
 	if !ok {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	keyHash := hashHereIsKey(newKey)
 	signed, ok := sign.Open(
@@ -2041,16 +2041,16 @@ func processHereIsAnEncryptionKey(
 		common.SigToSlice(newKey.Sig),
 		&author)
 	if !ok {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	if !bytes.Equal(signed, common.HashToSlice([32]byte(keyHash))) {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 
 	secretKey, ok := s.keyPairs[newKey.YourPublicEncrypt]
 	secretKeyBytes := [32]byte(secretKey)
 	if !ok {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 
 	keySlice, ok := box.Open(
@@ -2060,7 +2060,7 @@ func processHereIsAnEncryptionKey(
 		&newKey.MyPublicEncrypt,
 		&secretKeyBytes)
 	if !ok {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	newS := *s
 	newAwaitingKeys := make(map[publicSignT]sendChunkT)
@@ -2215,7 +2215,7 @@ func (chunk FileChunk) process(author [32]byte, s *stateT) (stateT, outputT) {
 	previousChunks, ok := s.chunksLoading[author]
 	lastChunk := previousChunks[len(previousChunks)-1]
 	if lastChunk.lastChunk {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	var newChunksLoading map[[32]byte][]fileChunkPtrT
 	for appHash, chunkPtr := range s.chunksLoading {
@@ -2223,10 +2223,10 @@ func (chunk FileChunk) process(author [32]byte, s *stateT) (stateT, outputT) {
 	}
 	chunkHash, err := hash(chunk)
 	if err != nil {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	if !ok && chunk.Counter != 0 {
-		return *s, readHttpIn(s)
+		return *s, defaultIO(s)
 	}
 	if !ok {
 		newChunksLoading[chunk.AppHash] = []fileChunkPtrT{
@@ -2237,7 +2237,7 @@ func (chunk FileChunk) process(author [32]byte, s *stateT) (stateT, outputT) {
 			}}
 	} else {
 		if lastChunk.counter != chunk.Counter-1 {
-			return *s, readHttpIn(s)
+			return *s, defaultIO(s)
 		}
 		newChunksLoading[chunk.AppHash] = append(
 			newChunksLoading[chunk.AppHash],
@@ -2283,7 +2283,7 @@ type chunksFinishedT struct {
 	appHash [32]byte
 }
 
-func readHttpIn(s *stateT) readHttpInputT {
+func defaultIO(s *stateT) readHttpInputT {
 	return readHttpInputT{
 		s.httpChan,
 		s.tcpInChan,
@@ -2301,7 +2301,7 @@ func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 	}
 	delete(newChunksLoading, t.appHash)
 	newS.chunksLoading = newChunksLoading
-	return newS, readHttpIn(s)
+	return newS, defaultIO(s)
 }
 
 type receiptT struct {
