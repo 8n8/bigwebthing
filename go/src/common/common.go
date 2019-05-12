@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
-	"net"
 	"golang.org/x/crypto/blake2b"
-	"golang.org/x/crypto/nacl/sign"
 	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/nacl/sign"
+	"net"
 )
 
 var ReceiptCode = [16]byte{0xfb, 0x68, 0x66, 0xe0, 0xa3, 0x35,
@@ -96,18 +96,18 @@ type Encrypted struct {
 	Nonce [24]byte
 }
 
-type GiveMeASymmetricKey struct{
+type GiveMeASymmetricKey struct {
 	MyPublicEncrypt [32]byte
 }
 
 const EncryptedKeyLen = secretbox.Overhead + 32
 
 type HereIsAnEncryptionKey struct {
-	YourPublicEncrypt [32]byte
-	MyPublicEncrypt [32]byte
+	YourPublicEncrypt     [32]byte
+	MyPublicEncrypt       [32]byte
 	EncryptedSymmetricKey [EncryptedKeyLen]byte
-	Nonce [24]byte
-	Sig [SigSize]byte
+	Nonce                 [24]byte
+	Sig                   [SigSize]byte
 }
 
 //func (r ReceiptT) msgTplaceholderFunc() {return}

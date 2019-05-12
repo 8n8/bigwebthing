@@ -13,6 +13,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pkg/browser"
+	"goji.io"
+	"goji.io/pat"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/nacl/sign"
+	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -23,15 +32,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"github.com/pkg/browser"
-	"goji.io"
-	"goji.io/pat"
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/blake2b"
-	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/crypto/nacl/secretbox"
-	"golang.org/x/crypto/nacl/sign"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 type inputT interface {
@@ -65,8 +65,8 @@ type stateT struct {
 	port                  string
 	chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
 	appsAwaitingReceipt   map[blake2bHash]publicSignT
-	symmetricKeys map[publicSignT]symmetricEncrypt
-	keyPairs map[publicEncryptT]secretEncryptT
+	symmetricKeys         map[publicSignT]symmetricEncrypt
+	keyPairs              map[publicEncryptT]secretEncryptT
 	awaitingSymmetricKey  map[publicSignT]sendChunkT
 }
 
@@ -429,33 +429,6 @@ type msgT interface {
 	msgTplaceholderFunc()
 }
 
-// func encodeMsg(
-// 	envelope envelopeT,
-// 	publicSign [32]byte,
-// 	secretEncrypt [32]byte,
-// 	nonce [24]byte) ([]byte, error) {
-// 
-// 	rawEncoded, err := common.EncodeData(envelope.msg)
-// 	if err != nil {
-// 		return *new([]byte), err
-// 	}
-// 	encodedMsg := append(
-// 		[]byte{envelope.msg.code()},
-// 		rawEncoded...)
-// 	encryptedMsg := box.Seal(
-// 		make([]byte, 0),
-// 		encodedMsg,
-// 		&nonce,
-// 		&envelope.correspondent,
-// 		&secretEncrypt)
-// 	return common.EncodeClientToClient(common.ClientToClient{
-// 		encryptedMsg,
-// 		envelope.correspondent,
-// 		nonce,
-// 		publicSign,
-// 	})
-// }
-
 type envelopeT struct {
 	msg           msgT
 	correspondent [32]byte
@@ -512,24 +485,7 @@ func tcpListen(
 			fmt.Println("not a member")
 			continue
 		}
-		// switch cToC.Msg.(type) {
-		// var decodedMsg common.MsgT
-		// switch cToC.Msg.(type) {
-		// case common.Encrypted:
-		//
-		// }
-		// decoded, author, err := decodeMsg(cToC, secretEncrypt)
-		// if err != nil {
-		// 	fmt.Println("Could not decode msg.")
-		// 	fmt.Println(err)
-		// 	continue
-		// }
-		// fmt.Println("decoded message ok")
 		inChan <- cToC
-		// inChan <- envelopeT{
-		// 	msg:           decoded,
-		// 	correspondent: author,
-		// }
 		fmt.Println("put new message into inchan")
 		select {
 		case <-stopListenChan:
@@ -566,15 +522,6 @@ func tcpServer(
 		}
 
 		toSend := <-outChan
-		// nonce, err := makeNonce()
-		// if err != nil {
-		// 	panic(err.Error())
-		// }
-		// encoded, err := encodeMsg(
-		// 	toSend,
-		// 	publicSign,
-		// 	secretEncrypt,
-		// 	nonce)
 		encoded, err := common.EncodeClientToClient(toSend)
 		if err != nil {
 			fmt.Println(err)
@@ -864,41 +811,6 @@ func logSentSuccess(appHash [32]byte, recipient [32]byte, dataDir string) {
 	}
 }
 
-// func sendMsg(
-// 	msg common.ClientToClient,
-// 	tcpInChan chan common.ClientToClient,
-// 	tcpOutChan chan common.ClientToClient) error {
-//
-// 	tcpOutChan <- msg
-// 	select {
-// 	case response := <-tcpInChan:
-// 		receipt, ok := (response.msg).(receiptT)
-// 		if !ok {
-// 			return errors.New("Bad receipt.")
-// 		}
-// 		expectedHash, err := hash(envelope.msg)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		givenReceiptHash, ok := sign.Open(
-// 			make([]byte, 0),
-// 			common.SigToSlice(receipt.hashSig),
-// 			&receipt.author)
-// 		if !ok {
-// 			return errors.New("Bad receipt.")
-// 		}
-// 		if !bytes.Equal(
-// 			givenReceiptHash,
-// 			receiptHash(expectedHash, receiptCode)) {
-//
-// 			return errors.New("Bad receipt.")
-// 		}
-// 	case <-time.After(5 * time.Second):
-// 		return errors.New("No receipt.")
-// 	}
-// 	return nil
-// }
-
 var receiptCode = [16]byte{
 	0xdc, 0x61, 0x9b, 0xd6, 0xec, 0xb3, 0xe8, 0x24, 0x23, 0xcc,
 	0x4b, 0xef, 0xbe, 0xae, 0xb4, 0xeb}
@@ -992,13 +904,13 @@ func (appSig appMsgT) process(author [32]byte, s *stateT) (stateT, outputT) {
 	return newS, assembleApp{
 		myPublicSign: s.publicSign,
 		symmetricKey: symmetricKey,
-		filePaths:  filePaths,
-		appHash:    appSig.AppHash,
-		tmpPath:    tmpPath,
-		finalPath:  finalPath,
-		appSender:  author,
-		tcpOutChan: s.tcpOutChan,
-		secretSign: s.secretSign,
+		filePaths:    filePaths,
+		appHash:      appSig.AppHash,
+		tmpPath:      tmpPath,
+		finalPath:    finalPath,
+		appSender:    author,
+		tcpOutChan:   s.tcpOutChan,
+		secretSign:   s.secretSign,
 	}
 }
 
@@ -1098,25 +1010,24 @@ func (g getEncryptionKeyForAppT) send() inputT {
 	return awaitingSymmetricKeyT{sendChunkT(g), publicEncryptT(*pub), secretEncryptT(*priv)}
 }
 
-
 func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
-	result := make([]byte, 32 + common.EncryptedKeyLen + 24)
+	result := make([]byte, 32+common.EncryptedKeyLen+24)
 	i := 0
 	for ; i < 32; i++ {
 		result[i] = h.MyPublicEncrypt[i]
 	}
-	for ; i < 32 + common.EncryptedKeyLen; i++ {
+	for ; i < 32+common.EncryptedKeyLen; i++ {
 		result[i] = h.EncryptedSymmetricKey[i-32]
 	}
-	for ; i < 32 + common.EncryptedKeyLen + 24; i++ {
-		result[i] = h.Nonce[i - 32 - common.EncryptedKeyLen]
+	for ; i < 32+common.EncryptedKeyLen+24; i++ {
+		result[i] = h.Nonce[i-32-common.EncryptedKeyLen]
 	}
 	return blake2b.Sum256(result)
 }
 
 type awaitingSymmetricKeyT struct {
-	chunkInfo sendChunkT
-	publicKey publicEncryptT
+	chunkInfo  sendChunkT
+	publicKey  publicEncryptT
 	privateKey secretEncryptT
 }
 
@@ -1139,21 +1050,6 @@ func (a awaitingSymmetricKeyT) update(s *stateT) (stateT, outputT) {
 
 type getEncryptionKeyForAppT sendChunkT
 
-//  sendNextChunkT{
-// 		app,
-// 		s.tcpInChan,
-// 		s.tcpOutChan,
-// 		filepath,
-// 		n.w,
-// 		n.doneCh,
-// 		recipients,
-// 		appHash,
-// 		s.secretSign,
-// 		s.secretEncrypt,
-// 		s.dataDir,
-// 	}
-// }
-
 func sliceToSig(bs []byte) [common.SigSize]byte {
 	var result [common.SigSize]byte
 	for i, b := range bs {
@@ -1167,79 +1063,6 @@ type fileChunkPtrT struct {
 	counter   int
 	lastChunk bool
 }
-
-// type fileChunk struct {
-// 	appHash   [32]byte
-// 	chunk     []byte
-// 	counter   int
-// 	lastChunk bool
-// }
-
-// func sendFileToOne(
-// 	s sendAppT,
-// 	recipient [32]byte,
-// 	fileHandle *os.File) error {
-//
-// 	sender := func(msg common.MsgT) {
-// 		s.tcpOutChan <- msg
-// 		return sendMsg(
-// 			envelopeT{msg, recipient},
-// 			s.tcpInChan,
-// 			s.tcpOutChan)
-// 	}
-//
-// 	err := sender(s.appMsg)
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	counter := 0
-// 	for {
-// 		chunk := make([]byte, common.ChunkSize)
-// 		n, err := fileHandle.Read(chunk)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		lastChunk := n < common.ChunkSize
-// 		err = sender(fileChunk{
-// 			s.appHash,
-// 			chunk,
-// 			counter,
-// 			lastChunk,
-// 		})
-// 		if err != nil {
-// 			return err
-// 		}
-// 		if lastChunk {
-// 			break
-// 		}
-// 		counter++
-// 	}
-// 	logSentSuccess(s.appHash, recipient, s.dataDir)
-// 	return nil
-// }
-
-// func (s sendAppT) send() inputT {
-// 	fileHandle, err := os.Open(s.filepath)
-// 	errOut := func(err error) {
-// 		logSendErr(err, s.appHash, s.recipients[0], s.dataDir)
-// 		http.Error(s.w, err.Error(), 500)
-// 		s.doneCh <- endRequest{}
-// 	}
-// 	if err != nil {
-// 		errOut(err)
-// 		return noInputT{}
-// 	}
-// 	for _, recipient := range s.recipients {
-// 		err := sendFileToOne(s, recipient, fileHandle)
-// 		if err != nil {
-// 			errOut(err)
-// 			return noInputT{}
-// 		}
-// 	}
-// 	s.doneCh <- endRequest{}
-// 	return noInputT{}
-// }
 
 func (s sendChunkT) send() inputT {
 	fileHandle, err := os.Open(s.filepath)
@@ -1733,15 +1556,6 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte, s *stateT) (s
 		return *s, readHttpIn(s)
 	}
 	return decoded.process(author, s)
-	// switch decoded.(type) {
-	// case ReceiptT:
-	// 	return processReceiptT(decoded.(ReceiptT), author, s)
-	// case AppReceiptT:
-	// 	return processAppReceiptT(decoded.(AppReceiptT), author, s)
-	// case FileChunk:
-	// 	return processFileChunk(decoded.(FileChunk), author, s)
-	// }
-	// return *s, readHttpIn(s)
 }
 
 func (appReceipt AppReceiptT) process(
@@ -1776,9 +1590,9 @@ func (appReceipt AppReceiptT) process(
 }
 
 type appReceiptOkT struct {
-	appHash [32]byte
+	appHash   [32]byte
 	recipient [32]byte
-	dataDir string
+	dataDir   string
 }
 
 func (a appReceiptOkT) send() inputT {
@@ -1848,7 +1662,6 @@ func makeSymmetricKey() ([32]byte, error) {
 	return nonce, nil
 }
 
-
 func makeNonce() ([24]byte, error) {
 	nonceSlice := make([]byte, 24)
 	var nonce [24]byte
@@ -1910,19 +1723,6 @@ type sendChunkT struct {
 	symmetricEncryptKey [32]byte
 	counter             int
 }
-
-// type sendFirstChunkT struct {
-// 	appMsg        appMsgT
-// 	tcpOutChan    chan common.ClientToClient
-// 	filepath      string
-// 	w             http.ResponseWriter
-// 	doneCh        chan endRequest
-// 	recipients    [][32]byte
-// 	appHash       [32]byte
-// 	secretSign    [64]byte
-// 	secretEncrypt [32]byte
-// 	dataDir string
-// }
 
 func pruneInvites(
 	invites [][]common.InviteT,
@@ -2204,13 +2004,6 @@ func (c newMsgT) update(s *stateT) (stateT, outputT) {
 			c.Author,
 			s)
 	}
-	// case receiptMsgB:
-	// 	return *s, readHttpIn(s)
-	// case common.FileChunk:
-	// 	return processNewFileChunk(c.Msg, c.Author, s)
-	// case appMsgB:
-	// 	return processAppSigMsg(e, s)
-	// }
 	return *s, readHttpIn(s)
 }
 
@@ -2300,10 +2093,10 @@ func processGiveMeKey(
 }
 
 type makeSymmetricKeyT struct {
-	myPubSign [32]byte
+	myPubSign              [32]byte
 	recipientPublicEncrypt [32]byte
-	recipient [32]byte
-	tcpOutChan chan common.ClientToClient
+	recipient              [32]byte
+	tcpOutChan             chan common.ClientToClient
 }
 
 func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
@@ -2348,57 +2141,6 @@ func (m makeSymmetricKeyT) send() inputT {
 	return noInputT{}
 }
 
-
-// func processAppSigMsg(e envelopeT, s *stateT) (stateT, outputT) {
-// 	appSig, ok := (e.msg).(appMsgT)
-// 	var newChunksLoading map[[32]byte][]fileChunkPtrT
-// 	for appHash, chunkPtr := range s.chunksLoading {
-// 		newChunksLoading[appHash] = chunkPtr
-// 	}
-// 	newS := *s
-// 	delete(newChunksLoading, appSig.AppHash)
-// 	newS.chunksLoading = newChunksLoading
-// 	if !ok {
-// 		return newS, readHttpIn(s)
-// 	}
-// 	signedHash, ok := sign.Open(
-// 		make([]byte, 0),
-// 		common.SigToSlice(appSig.Sig),
-// 		&e.correspondent)
-// 	hashOk := bytes.Equal(
-// 		appSigHash(appSig.AppHash),
-// 		signedHash)
-// 	if !(ok && hashOk) {
-// 		return newS, readHttpIn(s)
-// 	}
-// 	chunkPtrs, ok := s.chunksLoading[appSig.AppHash]
-// 	if !ok {
-// 		return newS, readHttpIn(s)
-// 	}
-// 	finalChunkPtr := chunkPtrs[len(chunkPtrs)-1]
-// 	if !finalChunkPtr.lastChunk {
-// 		return newS, readHttpIn(s)
-// 	}
-// 	filePaths := make([]string, len(chunkPtrs))
-// 	for i, chunkPtr := range chunkPtrs {
-// 		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash, s.dataDir)
-// 	}
-// 	tmpPath := makeChunkFilePath(appSig.AppHash, s.dataDir)
-// 	finalName := base64.URLEncoding.EncodeToString(
-// 		common.HashToSlice(appSig.AppHash))
-// 	finalPath := s.dataDir + "/apps/" + finalName
-// 	return newS, assembleApp{
-// 		filePaths:  filePaths,
-// 		appHash:    appSig.AppHash,
-// 		tmpPath:    tmpPath,
-// 		finalPath:  finalPath,
-// 		appAuthor:  e.correspondent,
-// 		tcpInChan:  s.tcpInChan,
-// 		tcpOutChan: s.tcpOutChan,
-// 		secretSign: s.secretSign,
-// 	}
-// }
-
 func makeChunkFilePath(chunkHash [32]byte, dataDir string) string {
 	filename := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
@@ -2407,13 +2149,13 @@ func makeChunkFilePath(chunkHash [32]byte, dataDir string) string {
 
 type assembleApp struct {
 	symmetricKey [32]byte
-	filePaths  []string
-	appHash    [32]byte
-	tmpPath    string
-	finalPath  string
-	appSender  [32]byte
-	tcpOutChan chan common.ClientToClient
-	secretSign [64]byte
+	filePaths    []string
+	appHash      [32]byte
+	tmpPath      string
+	finalPath    string
+	appSender    [32]byte
+	tcpOutChan   chan common.ClientToClient
+	secretSign   [64]byte
 	myPublicSign [32]byte
 }
 
@@ -2461,9 +2203,9 @@ func (a assembleApp) send() inputT {
 		&nonce,
 		&a.symmetricKey)
 	a.tcpOutChan <- common.ClientToClient{
-		Msg: common.Encrypted{encrypted, nonce},
+		Msg:       common.Encrypted{encrypted, nonce},
 		Recipient: a.appSender,
-		Author: a.myPublicSign,
+		Author:    a.myPublicSign,
 	}
 	return chunksFinishedT{a.appHash}
 
@@ -2581,18 +2323,6 @@ func hash(i interface{}) ([32]byte, error) {
 	return blake2b.Sum256(buf.Bytes()), nil
 }
 
-// func (r receiptT) code() byte {
-// 	return receiptMsgB
-// }
-//
-// func (f fileChunk) code() byte {
-// 	return fileChunkMsgB
-// }
-//
-// func (a appReceiptT) code() byte {
-// 	return appReceiptMsgB
-// }
-
 const (
 	receiptMsgB    = 0x00
 	appMsgB        = 0x01
@@ -2617,42 +2347,6 @@ func decodeLow(bs []byte, result msgT) (msgT, error) {
 	}
 	return result, nil
 }
-
-// func decodeMsg(
-// 	cToC common.ClientToClient,
-// 	secretEncrypt [32]byte) (common.MsgT, [32]byte, error) {
-//
-// 	switch cToC.Msg.(type) {
-// 	case common.Encrypted:
-// 		decrypted, ok := box.Open(
-// 			make([]byte, 0),
-// 			cToC.Msg.Msg,
-// 			&cToC.Msg.Nonce,
-// 			&cToC.Author)
-// 	}
-// 	decrypted, ok := box.Open(
-// 		make([]byte, 0),
-// 		cToC.Msg,
-// 		&cToC.Nonce,
-// 		&cToC.Author,
-// 		&secretEncrypt)
-// 	if !ok {
-// 		err := errors.New("Could not decrypt message.")
-// 		return *new(msgT), *new([32]byte), err
-// 	}
-// 	typeByte := decrypted[0]
-// 	msg := decrypted[1:]
-// 	switch typeByte {
-// 	case receiptMsgB:
-// 		decoded, err := decodeLow(msg, *new(receiptT))
-// 		return decoded, cToC.Author, err
-// 	case appMsgB:
-// 		decoded, err := decodeLow(msg, *new(appMsgT))
-// 		return decoded, cToC.Author, err
-// 	}
-// 	err := errors.New("Message type byte unknown.")
-// 	return *new(msgT), *new([32]byte), err
-// }
 
 var routes = []string{"sendapp", "saveapp", "searchapps"}
 
