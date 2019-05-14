@@ -1,0 +1,24 @@
+Only accessible from the home session
+-------------------------------------
+
++ DONE func makeAppRoute(appHash) securityCode
+    So the input should be {apphash: <base64 encoded 32-byte hash>}
+    And the response is a unicode-encoded random string.
++ DONE func getApp()
+    Request to localhost:3000/getapp/securityCode
++ DONE func saveApp() appHash
++ DONE func sendApp(appHash, recipients [][]byte)
++ DONE func searchApps(tags []string, searchString string) metadata
++ DONE func invite(invitee string)
++ func getMyId() id string
+
+
+Accessible from all sessions
+----------------------------
+
++ func sendMsg(msg []byte)
++ func writeFile(fileName string, contents []byte) error
++ func readFile(fileName string) ([]byte, error)
++ func quota() (spaceused int, spacefree int)
++ func amionline() error
++ func isMember() bool

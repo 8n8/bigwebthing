@@ -1624,8 +1624,10 @@ const pwlen = 5
 func makePassword() ([]byte, error) {
 	pw := make([]byte, pwlen)
 	n, err := rand.Read(pw)
+	if err != nil {
+		return make([]byte), err
 	if n != pwlen {
-		return pw, errors.New("Wrong number of bytes.")
+		return make([]byte), errors.New("Wrong number of bytes.")
 	}
 	return pw, err
 }
