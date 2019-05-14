@@ -1625,9 +1625,10 @@ func makePassword() ([]byte, error) {
 	pw := make([]byte, pwlen)
 	n, err := rand.Read(pw)
 	if err != nil {
-		return make([]byte), err
+		return make([]byte, 0), err
+	}
 	if n != pwlen {
-		return make([]byte), errors.New("Wrong number of bytes.")
+		return make([]byte, 0), errors.New("Wrong number of bytes.")
 	}
 	return pw, err
 }
@@ -2350,27 +2351,18 @@ func decodeLow(bs []byte, result msgT) (msgT, error) {
 	return result, nil
 }
 
-var routes = []string{"sendapp", "saveapp", "searchapps"}
+var postRoutes = []string{"sendapp", "saveapp", "searchapps"}
+var getRoutes = []string{"getapp", "makeapproute", "invite", "getmyid"}
 
 func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux := goji.NewMux()
-	mux.HandleFunc(
-		pat.Get("/getapp/:securityCode/:subRoute"),
-		handler("getapp", inputChan))
-	mux.HandleFunc(
-		pat.Get("/makeapproute/:securityCode/:subRoute"),
-		handler("makeapproute", inputChan))
-	mux.HandleFunc(
-		pat.Post("/invite/:securityCode/:subRoute"),
-		handler("invite", inputChan))
-	mux.HandleFunc(
-		pat.Get("/getmyid/:securityCode"),
-		handler("getmyid", inputChan))
-	for _, route := range routes {
+	for _, route := range getRoutes {
 		path := "/" + route + "/:securityCode"
-		mux.HandleFunc(
-			pat.Post(path),
-			handler(route, inputChan))
+		mux.HandleFunc(pat.Get(path), handler(route, inputChan))
+	}
+	for _, route := range postRoutes {
+		path := "/" + route + "/:securityCode"
+		mux.HandleFunc(pat.Post(path), handler(route, inputChan))
 	}
 	http.ListenAndServe(":"+port, mux)
 }
