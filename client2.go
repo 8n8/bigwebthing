@@ -1,1 +1,0 @@
-go/src/client2/client2.go
