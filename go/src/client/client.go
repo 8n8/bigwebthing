@@ -413,9 +413,7 @@ func (r readHttpInputT) send() inputT {
 			h.doneCh,
 		}
 	case tcpIn := <-r.tcpInChan:
-		fmt.Println(">>>>>>")
-		fmt.Println(tcpIn)
-		fmt.Println("<<<<<<")
+		fmt.Println("%% new message reached main select %%")
 		return newMsgT(tcpIn)
 	case request := <-r.invitesCh:
 		_, ok := r.memberList[request.candidate]
@@ -478,6 +476,7 @@ func tcpListen(
 		}
 		fmt.Println("++++++")
 		fmt.Println(fmt.Sprintf("%T", cToC))
+		fmt.Println(fmt.Sprintf("%T", cToC.Msg))
 		fmt.Println(cToC)
 		fmt.Println("======")
 		inChan <- cToC
@@ -524,21 +523,31 @@ func tcpSend(
 		fmt.Println(toSend)
 		fmt.Println("<<<<<<")
 		encoded, err := common.EncodeClientToClient(toSend)
+		fmt.Println("Message encoded:")
 		if err != nil {
+			fmt.Println(err)
 			connErrChan <- struct{}{}
 			return
 		}
+		fmt.Println(encoded)
+		fmt.Println("Just above conn.Write in tcpSend loop.")
 		n, connErr := conn.Write(encoded)
+		fmt.Println("Just below conn.Write in tcpSend loop.")
 		if connErr != nil {
+			fmt.Println(connErr)
 			connErrChan <- struct{}{}
 			return
 		}
+		fmt.Println("And there was no error.")
 		if n != len(encoded) {
+			fmt.Println("But n was wrong.")
 			connErrChan <- struct{}{}
 			return
 		}
+		fmt.Println("Just above the select in tcpSend loop.")
 		select {
 		case <-connErrChan:
+			fmt.Println("There was a connError")
 			return
 		default:
 		}
@@ -1676,7 +1685,7 @@ func makeSymmetricKey() ([32]byte, error) {
 	if err != nil {
 		return nonce, err
 	}
-	if n != 24 {
+	if n != 32 {
 		return nonce, errors.New("Faulty random bytes reader.")
 	}
 	for i, b := range nonceSlice {
@@ -1956,6 +1965,7 @@ func initState(dataDir string, port string) (stateT, error) {
 }
 
 func main() {
+	gob.Register(*new(common.Encrypted))
     gob.Register(*new(common.GiveMeASymmetricKey))
 	gob.Register(*new(common.HereIsAnEncryptionKey))
 	args := os.Args
@@ -2019,11 +2029,13 @@ func (c newMsgT) update(s *stateT) (stateT, outputT) {
 			c.Author,
 			s)
 	case common.GiveMeASymmetricKey:
+		fmt.Println("In top case of common.GiveMeASymmetricKey.")
 		return processGiveMeKey(
 			(c.Msg).(common.GiveMeASymmetricKey),
 			c.Author,
 			s)
 	case common.HereIsAnEncryptionKey:
+		fmt.Println("In top case of common.HereIsAnEncryptionKey.")
 		return processHereIsAnEncryptionKey(
 			(c.Msg).(common.HereIsAnEncryptionKey),
 			c.Author,
@@ -2056,25 +2068,35 @@ func processHereIsAnEncryptionKey(
 	author [32]byte,
 	s *stateT) (stateT, outputT) {
 
+	fmt.Println("At top of processHereIsAnEncryptionKey.")
+
 	awaitingKey, ok := s.awaitingSymmetricKey[author]
 	if !ok {
+		fmt.Println("!ok at awaitingKey")
 		return *s, defaultIO(s)
 	}
 	keyHash := hashHereIsKey(newKey)
+	fmt.Println("Sig:")
+	fmt.Println(newKey.Sig)
+	fmt.Println("author:")
+	fmt.Println(author)
 	signed, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(newKey.Sig),
 		&author)
 	if !ok {
+		fmt.Println("!ok at checking signature.")
 		return *s, defaultIO(s)
 	}
 	if !bytes.Equal(signed, common.HashToSlice([32]byte(keyHash))) {
+		fmt.Println("!bytes.Equal in processHereIsAnEncryptionKey")
 		return *s, defaultIO(s)
 	}
 
 	secretKey, ok := s.keyPairs[newKey.YourPublicEncrypt]
 	secretKeyBytes := [32]byte(secretKey)
 	if !ok {
+		fmt.Println("!ok at getting out the private key.")
 		return *s, defaultIO(s)
 	}
 
@@ -2085,6 +2107,7 @@ func processHereIsAnEncryptionKey(
 		&newKey.MyPublicEncrypt,
 		&secretKeyBytes)
 	if !ok {
+		fmt.Println("!ok at decrypting key")
 		return *s, defaultIO(s)
 	}
 	newS := *s
@@ -2109,8 +2132,10 @@ func processGiveMeKey(
 	author [32]byte,
 	s *stateT) (stateT, outputT) {
 
+	fmt.Println("Reached processGiveMeKey.")
 	return *s, makeSymmetricKeyT{
 		s.publicSign,
+		s.secretSign,
 		keyRequest.MyPublicEncrypt,
 		author,
 		s.tcpOutChan,
@@ -2119,6 +2144,7 @@ func processGiveMeKey(
 
 type makeSymmetricKeyT struct {
 	myPubSign              [32]byte
+	mySecretSign [64]byte
 	recipientPublicEncrypt [32]byte
 	recipient              [32]byte
 	tcpOutChan             chan common.ClientToClient
@@ -2133,16 +2159,23 @@ func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
 }
 
 func (m makeSymmetricKeyT) send() inputT {
+	fmt.Println("Top of makeSymmetricKeyT send function.")
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
+		fmt.Println("Error in generating keys:")
+		fmt.Println(err)
 		return noInputT{}
 	}
 	symmetricKey, err := makeSymmetricKey()
 	if err != nil {
+		fmt.Println("Error in generating symmetric key:")
+		fmt.Println(err)
 		return noInputT{}
 	}
 	nonce, err := makeNonce()
 	if err != nil {
+		fmt.Println("Error in making nonce for sending symmetricKey:")
+		fmt.Println(err)
 		return noInputT{}
 	}
 	encryptedKey := box.Seal(
@@ -2151,6 +2184,7 @@ func (m makeSymmetricKeyT) send() inputT {
 		&nonce,
 		&m.recipientPublicEncrypt,
 		priv)
+	fmt.Println("Encrypted the symmetric key OK.")
 	hereIs := common.HereIsAnEncryptionKey{
 		m.recipientPublicEncrypt,
 		*pub,
@@ -2158,11 +2192,18 @@ func (m makeSymmetricKeyT) send() inputT {
 		nonce,
 		*new([common.SigSize]byte),
 	}
+	signature := sliceToSig(sign.Sign(
+		make([]byte, 0),
+		common.HashToSlice(hashHereIsKey(hereIs)),
+		&m.mySecretSign))
+	hereIs.Sig = signature
+	fmt.Println("Just before sending the key.")
 	m.tcpOutChan <- common.ClientToClient{
 		hereIs,
 		m.recipient,
 		m.myPubSign,
 	}
+	fmt.Println("Key is sent!")
 	return noInputT{}
 }
 

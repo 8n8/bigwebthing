@@ -2,6 +2,8 @@ package common
 
 import (
 	"bytes"
+	"fmt"
+	"bufio"
 	"encoding/gob"
 	"errors"
 	"golang.org/x/crypto/blake2b"
@@ -180,7 +182,7 @@ func EncodeClientToClient(cToC ClientToClient) ([]byte, error) {
 		return *new([]byte), err
 	}
 	lenOuterMsg := len(outerMsg)
-	if lenOuterMsg > 16000 {
+	if lenOuterMsg > 17000 {
 		return *new([]byte), errors.New("Message too long.")
 	}
 	lenInBytes, err := intToTwoBytes(lenOuterMsg)
@@ -260,10 +262,20 @@ func inviteSigOk(i InviteT) bool {
 
 func ReadClientToClient(conn net.Conn) (ClientToClient, error) {
 	msgLenB := make([]byte, 2)
-	n, err := conn.Read(msgLenB)
+	fmt.Println("Above conn.Read in ReadClientToClient.")
+	// tmpResult, err := ioutil.ReadAll(conn)
+	// fmt.Println("::::::::::::")
+	// fmt.Println(tmpResult)
+	// fmt.Println(err)
+	// fmt.Println("************")
+	bufferedConn := bufio.NewReaderSize(conn, 17000)
+	n, err := bufferedConn.Read(msgLenB)
 	if err != nil {
+		fmt.Println("It all went wrong.")
+		fmt.Println(err)
 		return *new(ClientToClient), err
 	}
+	fmt.Println("Below conn.Read error check.")
 	if n != 2 {
 		return *new(ClientToClient), errors.New(
 			"Message length bytes wrong length.")
@@ -273,15 +285,18 @@ func ReadClientToClient(conn net.Conn) (ClientToClient, error) {
 		return *new(ClientToClient), errors.New(
 			"Message more than 16kB.")
 	}
+	fmt.Println("below message length check")
 	msg := make([]byte, mLen)
-	n, err = conn.Read(msg)
+	n, err = bufferedConn.Read(msg)
 	if err != nil {
 		return *new(ClientToClient), err
 	}
+	fmt.Println("Below message read.")
 	if n != mLen {
 		return *new(ClientToClient), errors.New(
 			"Message wrong length.")
 	}
+	fmt.Println("Just above decodeClientToClient call.")
 	return decodeClientToClient(msg)
 }
 

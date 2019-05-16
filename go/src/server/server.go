@@ -115,8 +115,10 @@ func (r readChansT) send() inputT {
 		return endConnT{errIn.id}
 	case msgIn := <-r.msgInChan:
 		fmt.Println("New message reached main thread.")
+		fmt.Println(msgIn)
 		recipCh, ok := r.connectedUsers[msgIn.Recipient]
 		if !ok {
+			fmt.Println("recipient not connected")
 			return noInputT{}
 		}
 		fmt.Println("Found recipient.")
@@ -162,6 +164,8 @@ func readMembers() (map[[32]byte]dontCare, error) {
 
 func main() {
 	// defer profile.Start().Stop()
+    gob.Register(*new(common.GiveMeASymmetricKey))
+	gob.Register(*new(common.HereIsAnEncryptionKey))
 	state, err := initState()
 	if err != nil {
 		fmt.Println(err)
@@ -266,6 +270,7 @@ func handleConn(
 			//err = dec.Decode(&clientToClient)
 			fmt.Println("B")
 			clientToClient, err := common.ReadClientToClient(conn)
+			fmt.Println("Just below reading in message from client.")
 			if err != nil {
 				fmt.Println("A")
 				fmt.Println(err)
