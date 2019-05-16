@@ -198,7 +198,7 @@ encodeSearchQuery tags searchString =
 encodeSendApp sendDrawer =
     Je.object
         [ ( "AppHash", Je.string sendDrawer.appHash )
-        , ( "Recipients", Je.list Je.string [sendDrawer.recipient] )
+        , ( "Recipient", Je.string sendDrawer.recipient )
         ]
 
 postSendApp sendDrawer securityCode =

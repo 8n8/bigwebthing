@@ -413,7 +413,9 @@ func (r readHttpInputT) send() inputT {
 			h.doneCh,
 		}
 	case tcpIn := <-r.tcpInChan:
-		fmt.Println("tcp input")
+		fmt.Println(">>>>>>")
+		fmt.Println(tcpIn)
+		fmt.Println("<<<<<<")
 		return newMsgT(tcpIn)
 	case request := <-r.invitesCh:
 		_, ok := r.memberList[request.candidate]
@@ -465,30 +467,22 @@ func makeConn(
 
 func tcpListen(
 	conn net.Conn,
-	isMemberCh chan isMemberT,
 	inChan chan common.ClientToClient,
-	stopListenChan chan struct{}) {
+	connErrChan chan struct{}) {
 
 	for {
-		fmt.Println("top of listen loop")
 		cToC, err := common.ReadClientToClient(conn)
 		if err != nil {
-			fmt.Println("error reading CToC")
-			fmt.Println(err)
-			continue
+			connErrChan <- struct{}{}
+			return
 		}
-		fmt.Println("read cToC OK")
-		okCh := make(chan bool)
-		isMemberCh <- isMemberT{
-			okCh, cToC.Author}
-		if !<-okCh {
-			fmt.Println("not a member")
-			continue
-		}
+		fmt.Println("++++++")
+		fmt.Println(fmt.Sprintf("%T", cToC))
+		fmt.Println(cToC)
+		fmt.Println("======")
 		inChan <- cToC
-		fmt.Println("put new message into inchan")
 		select {
-		case <-stopListenChan:
+		case <-connErrChan:
 			return
 		default:
 		}
@@ -504,39 +498,49 @@ func tcpServer(
 
 	var conn net.Conn
 	connErr := errors.New("Not connected yet.")
-	stopListenChan := make(chan struct{})
+	connErrCh := make(chan struct{})
 	for {
+		conn, connErr = makeConn(publicSign, secretSign)
 		if connErr != nil {
-			conn, connErr = makeConn(
-				publicSign,
-				secretSign)
-			if connErr != nil {
-				time.Sleep(time.Second)
-				continue
-			}
-			go tcpListen(
-				conn,
-				isMemberCh,
-				inChan,
-				stopListenChan)
+			time.Sleep(time.Second)
+			continue
 		}
+		go tcpListen(conn, inChan, connErrCh)
+		go tcpSend(conn, outChan, connErrCh)
+		<-connErrCh
+	}
+}
 
+func tcpSend(
+	conn net.Conn,
+	outChan chan common.ClientToClient,
+	connErrChan chan struct{}) {
+
+	for {
 		toSend := <-outChan
+		fmt.Println("\n>>>>>>")
+		fmt.Println(fmt.Sprintf("%T", toSend))
+		fmt.Println(fmt.Sprintf("%T", toSend.Msg))
+		fmt.Println(toSend)
+		fmt.Println("<<<<<<")
 		encoded, err := common.EncodeClientToClient(toSend)
 		if err != nil {
-			fmt.Println(err)
-			continue
+			connErrChan <- struct{}{}
+			return
 		}
-		fmt.Println(encoded)
 		n, connErr := conn.Write(encoded)
 		if connErr != nil {
-			stopListenChan <- struct{}{}
-			continue
+			connErrChan <- struct{}{}
+			return
 		}
 		if n != len(encoded) {
-			connErr = errors.New(
-				"Didn't send whole message.")
-			stopListenChan <- struct{}{}
+			connErrChan <- struct{}{}
+			return
+		}
+		select {
+		case <-connErrChan:
+			return
+		default:
 		}
 	}
 }
@@ -745,8 +749,8 @@ func hashToStr(h [32]byte) string {
 }
 
 type sendAppJsonT struct {
-	AppHash   []byte
-	Recipient []byte
+	AppHash string
+	Recipient string
 }
 
 type logSendErrT struct {
@@ -965,12 +969,27 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 		return *s, sendErr("Bad security code.")
 	}
 	var sendAppJson sendAppJsonT
+	fmt.Println("......")
+	fmt.Println(string(n.body))
+	fmt.Println("&&&&&&")
 	err := json.Unmarshal(n.body, &sendAppJson)
 	if err != nil {
-		return *s, sendErr("Could not decode Json.")
+		return *s, sendErr(err.Error())
 	}
-	appHash := common.SliceToHash(sendAppJson.AppHash)
-	recipient := common.SliceToHash(sendAppJson.Recipient)
+	fmt.Println(sendAppJson.Recipient)
+	appHashSlice, err := base64.URLEncoding.DecodeString(
+		sendAppJson.AppHash)
+	if err != nil {
+		return *s, sendErr(err.Error())
+	}
+	appHash := common.SliceToHash(appHashSlice)
+	recipientSlice, err := base64.URLEncoding.DecodeString(
+		sendAppJson.Recipient)
+	if err != nil {
+		return *s, sendErr(err.Error())
+	}
+	recipient := common.SliceToHash(recipientSlice)
+	fmt.Println(";;;;;;")
 	var app appMsgT
 	for _, thisApp := range s.apps {
 		if equalHashes(thisApp.AppHash, appHash) {
@@ -980,10 +999,7 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	}
 	filepath := s.dataDir + "/apps/" + hashToStr(appHash)
 	symmetricEncryptKey, ok := s.symmetricKeys[recipient]
-	if !ok {
-		return *s, sendErr("No encryption key.")
-	}
-	return *s, getEncryptionKeyForAppT(sendChunkT{
+	sendChunk := sendChunkT{
 		s.publicSign,
 		s.dataDir,
 		app,
@@ -993,7 +1009,11 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 		recipient,
 		symmetricEncryptKey,
 		0,
-	})
+	}
+	if !ok {
+		return *s, getEncryptionKeyForAppT(sendChunk)
+	}
+	return *s, sendChunk
 }
 
 func (g getEncryptionKeyForAppT) send() inputT {
@@ -1936,6 +1956,8 @@ func initState(dataDir string, port string) (stateT, error) {
 }
 
 func main() {
+    gob.Register(*new(common.GiveMeASymmetricKey))
+	gob.Register(*new(common.HereIsAnEncryptionKey))
 	args := os.Args
 	if len(args) != 3 {
 		fmt.Println("There must be two command-line arguments.")
@@ -2352,17 +2374,26 @@ func decodeLow(bs []byte, result msgT) (msgT, error) {
 }
 
 var postRoutes = []string{"sendapp", "saveapp", "searchapps"}
-var getRoutes = []string{"getapp", "makeapproute", "invite", "getmyid"}
 
 func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux := goji.NewMux()
-	for _, route := range getRoutes {
-		path := "/" + route + "/:securityCode"
-		mux.HandleFunc(pat.Get(path), handler(route, inputChan))
-	}
+	mux.HandleFunc(
+		pat.Get("/getapp/:securityCode/:subRoute"),
+		handler("getapp", inputChan))
+	mux.HandleFunc(
+		pat.Get("/makeapproute/:securityCode/:subRoute"),
+		handler("makeapproute", inputChan))
+	mux.HandleFunc(
+		pat.Post("/invite/:securityCode/:subRoute"),
+		handler("invite", inputChan))
+	mux.HandleFunc(
+		pat.Get("/getmyid/:securityCode"),
+		handler("getmyid", inputChan))
 	for _, route := range postRoutes {
 		path := "/" + route + "/:securityCode"
-		mux.HandleFunc(pat.Post(path), handler(route, inputChan))
+		mux.HandleFunc(
+			pat.Post(path),
+			handler(route, inputChan))
 	}
 	http.ListenAndServe(":"+port, mux)
 }
