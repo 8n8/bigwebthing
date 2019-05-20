@@ -164,6 +164,7 @@ func readMembers() (map[[32]byte]dontCare, error) {
 
 func main() {
 	// defer profile.Start().Stop()
+	gob.Register(*new(common.Encrypted))
     gob.Register(*new(common.GiveMeASymmetricKey))
 	gob.Register(*new(common.HereIsAnEncryptionKey))
 	state, err := initState()

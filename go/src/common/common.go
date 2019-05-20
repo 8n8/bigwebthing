@@ -50,6 +50,7 @@ const (
 	AuthSigSize    = sign.Overhead + AuthCodeLength
 	AuthCodeLength = 24
 	ChunkSize      = 16000
+	ChunkContentSize = 15000
 )
 
 var TruesPubSign = [32]byte{203,110,35,30,25,232,75,93,6,122,45,161,239,56,4,150,110,153,254,157,151,179,125,35,121,47,194,145,70,242,129,163}
@@ -182,7 +183,7 @@ func EncodeClientToClient(cToC ClientToClient) ([]byte, error) {
 		return *new([]byte), err
 	}
 	lenOuterMsg := len(outerMsg)
-	if lenOuterMsg > 17000 {
+	if lenOuterMsg > ChunkSize {
 		return *new([]byte), errors.New("Message too long.")
 	}
 	lenInBytes, err := intToTwoBytes(lenOuterMsg)
@@ -268,7 +269,7 @@ func ReadClientToClient(conn net.Conn) (ClientToClient, error) {
 	// fmt.Println(tmpResult)
 	// fmt.Println(err)
 	// fmt.Println("************")
-	bufferedConn := bufio.NewReaderSize(conn, 17000)
+	bufferedConn := bufio.NewReaderSize(conn, ChunkSize)
 	n, err := bufferedConn.Read(msgLenB)
 	if err != nil {
 		fmt.Println("It all went wrong.")
@@ -281,9 +282,9 @@ func ReadClientToClient(conn net.Conn) (ClientToClient, error) {
 			"Message length bytes wrong length.")
 	}
 	mLen := twoBytesToInt(msgLenB)
-	if mLen > 16000 {
+	if mLen > ChunkSize {
 		return *new(ClientToClient), errors.New(
-			"Message more than 16kB.")
+			"Message too big.")
 	}
 	fmt.Println("below message length check")
 	msg := make([]byte, mLen)
