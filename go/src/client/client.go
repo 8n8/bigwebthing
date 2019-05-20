@@ -471,6 +471,8 @@ func tcpListen(
 	for {
 		cToC, err := common.ReadClientToClient(conn)
 		if err != nil {
+			fmt.Println("Error in CToC reception:")
+			fmt.Println(err)
 			connErrChan <- struct{}{}
 			return
 		}
@@ -527,7 +529,6 @@ func tcpSend(
 			connErrChan <- struct{}{}
 			return
 		}
-		fmt.Println(encoded)
 		fmt.Println("Just above conn.Write in tcpSend loop.")
 		n, connErr := conn.Write(encoded)
 		fmt.Println("Just below conn.Write in tcpSend loop.")
@@ -874,7 +875,7 @@ type appMsgT struct {
 	Sig       [common.SigSize]byte
 }
 
-func processAppSig(appSig appMsgT, author [32]byte, s *stateT) (stateT, outputT) {
+func (appSig appMsgT) process(author [32]byte, s *stateT) (stateT, outputT) {
 	var newChunksLoading map[[32]byte][]fileChunkPtrT
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
@@ -1096,8 +1097,11 @@ type fileChunkPtrT struct {
 }
 
 func (s sendChunkT) send() inputT {
+	fmt.Println("Top of sendChunkT sender function.")
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
+		fmt.Println("Error in sendChunkT sender func:")
+		fmt.Println(err)
 		logSendErr(err, s.appMsg.AppHash, s.recipient, s.dataDir)
 	}
 	if err != nil {
@@ -1120,12 +1124,14 @@ func (s sendChunkT) send() inputT {
 		return noInputT{}
 	}
 	lastChunk := numBytesRead < common.ChunkContentSize
-	encodedMsg, err := common.EncodeData(FileChunk{
+	var beforeEncoding Decrypted
+	beforeEncoding = FileChunk{
 		AppHash:   s.appMsg.AppHash,
 		Chunk:     chunk,
 		Counter:   s.counter,
 		LastChunk: lastChunk,
-	})
+	}
+	encodedMsg, err := common.EncodeData(&beforeEncoding)
 	if err != nil {
 		errOut(err)
 		return noInputT{}
@@ -1552,10 +1558,10 @@ func (n noInputT) update(s *stateT) (stateT, outputT) {
 	return *s, defaultIO(s)
 }
 
-func decodeMsg(bs []byte) (interface{}, error) {
+func decodeMsg(bs []byte) (Decrypted, error) {
 	var buf bytes.Buffer
 	n, err := buf.Write(bs)
-	var msg interface{}
+	var msg Decrypted
 	if n != len(bs) {
 		return msg, errors.New("Could not read whole messag.")
 	}
@@ -1592,64 +1598,15 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte, s *stateT) (s
 		fmt.Println("Could not decrypt message.")
 		return *s, defaultIO(s)
 	}
-	// decoded, err := decodeMsg(decrypted)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// 	return *s, defaultIO(s)
-	// }
-	var buf bytes.Buffer
-	n, err := buf.Write(decrypted)
+	decoded, err := decodeMsg(decrypted)
 	if err != nil {
+		fmt.Println(err)
 		return *s, defaultIO(s)
 	}
-	if n != len(decrypted) {
-		return *s, defaultIO(s)
-	}
-	dec := gob.NewDecoder(&buf)
-	var appReceipt AppReceiptT
-	if dec.Decode(&appReceipt) != nil {
-		fmt.Println("Not AppReceiptT.")
-		var receipt ReceiptT
-		if dec.Decode(&receipt) != nil {
-			fmt.Println("Not receipt.")
-			var filechunk FileChunk
-			if dec.Decode(&filechunk) != nil {
-				fmt.Println("Not filechunk.")
-				var appMsg appMsgT
-				if err := dec.Decode(&appMsg); err != nil {
-					fmt.Println("Not appMsg.")
-					fmt.Println(err)
-					return *s, defaultIO(s)
-				}
-				fmt.Println("Is an appSig.")
-				return processAppSig(appMsg, author, s)
-			}
-			fmt.Println("Is a filechunk.")
-			return processFileChunk(filechunk, author, s)
-		}
-		fmt.Println("Is a receipt.")
-		return processReceipt(receipt, author, s)
-	}
-	fmt.Println("Is an appReceipt.")
-	fmt.Println(appReceipt)
-	fmt.Println("End of appReceipt.")
-	return processAppReceipt(appReceipt, author, s)
-
-	// switch msg := decoded.(type) {
-	// case AppReceiptT:
-	// 	return processAppReceipt(msg, author, s)
-	// case ReceiptT:
-	// 	return processReceipt(msg, author, s)
-	// case FileChunk:
-	// 	return processFileChunk(msg, author, s)
-	// case appMsgT:
-	// 	return processAppSig(msg, author, s)
-	// }
-	// return *s, defaultIO(s)
+	return decoded.process(author, s)
 }
 
-func processAppReceipt(
-	appReceipt AppReceiptT,
+func (appReceipt AppReceiptT) process(
 	author [32]byte,
 	s *stateT) (stateT, outputT) {
 
@@ -1691,7 +1648,7 @@ func (a appReceiptOkT) send() inputT {
 	return noInputT{}
 }
 
-func processReceipt(receipt ReceiptT, author [32]byte, s *stateT) (stateT, outputT) {
+func (receipt ReceiptT) process(author [32]byte, s *stateT) (stateT, outputT) {
 	chunkAwaiting, ok := s.chunksAwaitingReceipt[receipt.ChunkHash]
 	if !ok {
 		fmt.Println("Received unexpected receipt.")
@@ -2027,9 +1984,14 @@ func initState(dataDir string, port string) (stateT, error) {
 }
 
 func main() {
+	gob.Register(*new(common.ClientToClient))
 	gob.Register(*new(common.Encrypted))
     gob.Register(*new(common.GiveMeASymmetricKey))
 	gob.Register(*new(common.HereIsAnEncryptionKey))
+	gob.Register(*new(AppReceiptT))
+	gob.Register(*new(ReceiptT))
+	gob.Register(*new(FileChunk))
+	gob.Register(*new(appMsgT))
 	args := os.Args
 	if len(args) != 3 {
 		fmt.Println("There must be two command-line arguments.")
@@ -2338,13 +2300,15 @@ func (a assembleApp) send() inputT {
 		return chunksFinishedT{a.appHash}
 	}
 	_ = os.Rename(a.tmpPath, a.finalPath)
-	receipt := appReceiptT{
-		a.appHash,
+	var receipt Decrypted
+	receipt = AppReceiptT{
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
 			receiptHash(a.appHash, appReceiptCode),
-			&a.secretSign))}
-	encoded, err := common.EncodeData(receipt)
+			&a.secretSign)),
+		a.appHash,
+	}
+	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
 		return chunksFinishedT{a.appHash}
 	}
@@ -2366,26 +2330,21 @@ func (a assembleApp) send() inputT {
 
 }
 
-func processFileChunk(chunk FileChunk, author [32]byte, s *stateT) (stateT, outputT) {
-	fmt.Println("top of processFileChunk")
+func (chunk FileChunk) process(author [32]byte, s *stateT) (stateT, outputT) {
+	fmt.Println("Top of FileChunk process function.")
 	previousChunks, ok := s.chunksLoading[author]
-	lastChunk := previousChunks[len(previousChunks)-1]
-	if lastChunk.lastChunk {
-		fmt.Println("last chunk")
-		return *s, defaultIO(s)
-	}
-	var newChunksLoading map[[32]byte][]fileChunkPtrT
+	newChunksLoading := make(map[[32]byte][]fileChunkPtrT)
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
 	}
 	chunkHash, err := hash(chunk)
 	if err != nil {
-		fmt.Println("chunkHash error")
+		fmt.Println("Bad chunk hash in process FileChunk func:")
 		fmt.Println(err)
 		return *s, defaultIO(s)
 	}
 	if !ok && chunk.Counter != 0 {
-		fmt.Println("!ok && chunk.Counter != 0")
+		fmt.Println("!ok && chunk.Counter")
 		return *s, defaultIO(s)
 	}
 	if !ok {
@@ -2397,7 +2356,8 @@ func processFileChunk(chunk FileChunk, author [32]byte, s *stateT) (stateT, outp
 				lastChunk: chunk.LastChunk,
 			}}
 	} else {
-		fmt.Println("Else here is some stuff.")
+		fmt.Println("else")
+		lastChunk := previousChunks[len(previousChunks)-1]
 		if lastChunk.counter != chunk.Counter-1 {
 			fmt.Println("lastChunk.counter != chunk.Counter-1")
 			return *s, defaultIO(s)
@@ -2414,7 +2374,7 @@ func processFileChunk(chunk FileChunk, author [32]byte, s *stateT) (stateT, outp
 	newS.chunksLoading = newChunksLoading
 	tmpFileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
-	fmt.Println("Got to the bottom of processFileChunk.")
+	fmt.Println("Reached bottom of FileChunk process function.")
 	return newS, writeAppToFileT{
 		chunk.AppHash,
 		s.dataDir + "/tmp/" + tmpFileName,
@@ -2428,8 +2388,12 @@ type writeAppToFileT struct {
 }
 
 func (w writeAppToFileT) send() inputT {
+	fmt.Println("Top of writeAppToFileT send function.")
+	fmt.Println(w.filePath)
 	err := ioutil.WriteFile(w.filePath, w.chunk, 0600)
 	if err != nil {
+		fmt.Println("Error writing app to file:")
+		fmt.Println(err)
 		return chunksFinishedT{w.appHash}
 	}
 	return noInputT{}
@@ -2469,11 +2433,6 @@ func (t chunksFinishedT) update(s *stateT) (stateT, outputT) {
 }
 
 type receiptT struct {
-	hashSig [common.SigSize]byte
-}
-
-type appReceiptT struct {
-	appHash [32]byte
 	hashSig [common.SigSize]byte
 }
 
