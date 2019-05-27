@@ -501,16 +501,23 @@ idPadding =
 idtxt id = Se.break 11 id
 
 myId id =
-    E.column
-        (idStyle
-            ++ [ E.alignRight
-               , E.alignTop
-               ]
-        )
+    E.row
+        (E.spacing 20 :: idStyle)
     <|
-        (E.el [ Font.bold ] <| E.text "Public ID:")
-            :: L.map E.text (idtxt id)
-
+        [ E.el [ Font.bold ] <| E.text "Public ID:"
+        , E.text id
+        ]
+-- E.text <| "Public ID: " ++ id
+--     E.column
+--         (idStyle
+--             ++ [ E.alignRight
+--                , E.alignTop
+--                ]
+--         )
+--     <|
+--         (E.el [ Font.bold ] <| E.text "Public ID:")
+--             :: L.map E.text (idtxt id)
+-- 
 
 searchBoxStyle =
     [ Font.family [ Font.typeface "Courier", Font.monospace ]
@@ -522,7 +529,7 @@ searchBoxStyle =
 topButtonStyle =
     [ E.alignLeft
     , E.alignTop
-    , Font.size 33
+    , Font.size 28
     , Font.family [ Font.typeface "Georgia", Font.serif ]
     ]
 
@@ -711,7 +718,7 @@ memberPage model =
 tagStyle color =
     [ Bg.color color
     , E.alignLeft
-    , Font.size 24
+    , Font.size 28
     , Font.family [ Font.typeface "Courier", Font.monospace ]
     , E.paddingXY 0 5
     ]
@@ -765,13 +772,13 @@ choosableTags searchResults =
 
 idStyle =
     [ Font.family [ Font.typeface "Courier", Font.monospace ]
-    , Font.size 20
+    , Font.size 28
     ]
 
 
 normalText =
     [ Font.family [ Font.typeface "Georgia", Font.serif ]
-    , Font.size 20
+    , Font.size 28
     ]
 
 
@@ -1041,7 +1048,9 @@ homePage model =
         , E.padding 20
         , E.spacing 20
         ]
-        [ homeTopSection model.searchStr model.publicId
+        --[ homeTopSection model.searchStr model.publicId
+        [ myId model.publicId
+        , topButtonsAndSearch Home model.searchStr
         , homeShowTags UnchooseTag (Set.toList model.selectedTags) blue (E.padding 0)
         , homeShowTags
             ChooseTag

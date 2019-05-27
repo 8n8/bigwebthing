@@ -393,7 +393,8 @@ func (r readHttpInputT) send() inputT {
 				hash,
 				h.w,
 				h.doneCh,
-				time.Now().Unix()}
+				time.Now().Unix(),
+			}
 		}
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
