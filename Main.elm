@@ -618,13 +618,15 @@ greyNewDocButtonStyle =
 
 
 newDocTopSection tagText fileUpload id =
-    E.column [ E.width E.fill ]
-        [ E.row [ E.width E.fill, E.spacing 20 ]
-            [ E.column
-                [ E.alignTop, E.height E.fill ]
-                [ topButtons NewDoc ]
-            , myId id
-            ]
+    E.column []
+        -- [ E.row [ E.width E.fill, E.spacing 20 ]
+        --     [ E.column
+        --         [ E.alignTop, E.height E.fill ]
+        --         [ topButtons NewDoc ]
+        --     , myId id
+        --     ]
+        [ myId id
+        , topButtons NewDoc
         , E.row [ E.spacing 20 ]
             [ E.el [] <|
                 Ei.text
@@ -697,8 +699,11 @@ memberPage model =
     E.column
         [ E.width E.fill
         , E.padding 20
+        , E.spacing 20
         ]
-        [ membersTopSection model.publicId
+        -- [ membersTopSection model.publicId
+        [ myId model.publicId
+        , topButtons Members
         , E.row []
             [ Ei.text []
                 { onChange = InviteeBox
@@ -1070,6 +1075,48 @@ newDocPage model =
     E.column
         [ E.width E.fill
         , E.padding 20
+        , E.spacing 20
         ]
-        [ newDocTopSection model.newTagsBox model.fileUpload model.publicId
+        [ myId model.publicId
+        , topButtons NewDoc
+        , E.row [ E.spacing 20 ]
+            [ E.el [] <|
+                Ei.text
+                    [ E.width <| E.px 600, E.height <| E.px 50 ]
+                    { onChange = TagBox
+                    , text = model.newTagsBox
+                    , placeholder =
+                        Just <|
+                            Ei.placeholder [] <|
+                                E.text "Type tags separated by commas"
+                    , label = Ei.labelAbove [] E.none
+                    }
+            , Ei.button newDocButtonStyle
+                { onPress = Just ChooseDoc
+                , label =
+                    E.el [ E.padding 3 ] <|
+                        E.text "Choose local file"
+                }
+            , Ei.button
+                (case model.fileUpload of
+                    Nothing ->
+                        greyNewDocButtonStyle
+
+                    Just _ ->
+                        newDocButtonStyle
+                )
+                { onPress =
+                    case model.fileUpload of
+                        Nothing ->
+                            Nothing
+
+                        Just _ ->
+                            Just UploadDoc
+                , label =
+                    E.el [ E.padding 3 ] <|
+                        E.text "Upload file"
+                }
+            ]
         ]
+        -- [ newDocTopSection model.newTagsBox model.fileUpload model.publicId
+        -- ]

@@ -580,6 +580,8 @@ func (n normalApiInputT) update(s *stateT) (stateT, outputT) {
 		return processInvite(n, s)
 	case "getmyid":
 		return processGetMyId(n, s)
+	case "getmembers":
+		return processGetMembers(n, s)
 	}
 	return *s, defaultIO(s)
 }
@@ -599,6 +601,40 @@ func processGetMyId(
 
 	return *s, httpOkResponseT{
 		[]byte(base64.URLEncoding.EncodeToString(common.HashToSlice(s.publicSign))),
+		n.w,
+		n.doneCh,
+	}
+}
+
+func processGetMembers(
+	n normalApiInputT,
+	s *stateT) (stateT, outputT) {
+
+	if !strEq(n.securityCode, s.homeCode) {
+		return *s, sendHttpErrorT{
+			n.w,
+			"Bad securityCode",
+			400,
+			n.doneCh,
+		}
+	}
+	memberList := make([]publicSignT, len(s.members))
+	i := 0
+	for k, _ := range s.members {
+		memberList[i] = k
+		i++
+	}
+	encoded, err := json.Marshal(memberList)
+	if err != nil {
+		return *s, sendHttpErrorT{
+			n.w,
+			"Error encoding member list",
+			500,
+			n.doneCh,
+		}
+	}
+	return *s, httpOkResponseT{
+		encoded,
 		n.w,
 		n.doneCh,
 	}
@@ -2616,6 +2652,9 @@ func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux.HandleFunc(
 		pat.Get("/getmyid/:securityCode"),
 		handler("getmyid", inputChan))
+	mux.HandleFunc(
+		pat.Get("/getmembers/:securityCode"),
+		handler("getmembers", inputChan))
 	for _, route := range postRoutes {
 		path := "/" + route + "/:securityCode"
 		mux.HandleFunc(

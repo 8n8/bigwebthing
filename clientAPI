@@ -10,7 +10,9 @@ Only accessible from the home session
 + DONE func sendApp(appHash, recipients [][]byte)
 + DONE func searchApps(tags []string, searchString string) metadata
 + DONE func invite(invitee string)
-+ func getMyId() id string
++ DONE func getMyId() id string
++ func getMembers
+    Request to localhost:3000/getmembers/securityCode
 
 
 Accessible from all sessions
