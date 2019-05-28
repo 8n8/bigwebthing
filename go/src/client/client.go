@@ -401,13 +401,6 @@ type normalApiInputT struct {
 	doneCh       chan struct{}
 }
 
-type sendHttpErrorT struct {
-	w      http.ResponseWriter
-	msg    string
-	code   int
-	doneCh chan struct{}
-}
-
 func strEq(s1, s2 string) bool {
 	eq := subtle.ConstantTimeCompare([]byte(s1), []byte(s2))
 	return eq == 1
