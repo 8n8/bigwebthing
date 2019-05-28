@@ -266,8 +266,6 @@ var subRouteApps = map[string]struct{}{
 	"invite":       struct{}{},
 }
 
-type newMsgT common.ClientToClient
-
 type msgT interface {
 	msgTplaceholderFunc()
 }
