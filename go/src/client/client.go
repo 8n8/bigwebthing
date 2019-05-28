@@ -96,15 +96,6 @@ func makeMemberList(
 	return members
 }
 
-func isMember(
-	invites map[inviteT]struct{},
-	uninvites map[inviteT]struct{},
-	candidate [32]byte) bool {
-
-	_, ok := makeMemberList(invites, uninvites)[candidate]
-	return ok
-}
-
 func readInvites(filePath string) (map[inviteT]struct{}, error) {
 	rawInvites, err := ioutil.ReadFile(filePath)
 	invites := make(map[inviteT]struct{})
