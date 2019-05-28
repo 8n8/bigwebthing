@@ -497,9 +497,8 @@ var appReceiptCode = [16]byte{
 	0xaf, 0xa1, 0x4b, 0xde, 0x8c, 0x62, 0x94, 0x65, 0xe6, 0x1b,
 	0x8f, 0xee, 0x21, 0x1b, 0x22, 0x82}
 
-var appSigMeaning = []byte{
-	0x58, 0x46, 0x8d, 0x82, 0xa7, 0xfb, 0xe3, 0xe1, 0x33, 0xd6,
-	0xbc, 0x25, 0x2e, 0x4c, 0x2c, 0xd5}
+var appMsgCode = [16]byte{159, 43, 151, 217, 160, 129, 184, 128,
+	213, 154, 17, 231, 181, 214, 127, 163}
 
 func concatTags(t map[string]struct{}) []byte {
 	tagSlice := make([]string, len(t))
@@ -537,47 +536,43 @@ type sendAppMsgT struct {
 	recipient publicSignT
 }
 
-func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
-	fmt.Println("Top of appMsgT process function.")
+func cleanChunksLoading(
+	oldChunksLoading map[blake2bHash][]fileChunkPtrT,
+	appHash blake2bHash) map[blake2bHash][]fileChunkPtrT {
+
 	newChunksLoading := make(map[blake2bHash][]fileChunkPtrT)
-	for appHash, chunkPtr := range s.chunksLoading {
+	for appHash, chunkPtr := range oldChunksLoading {
 		newChunksLoading[appHash] = chunkPtr
 	}
+	delete(newChunksLoading, appHash)
+	return newChunksLoading
+}
+
+func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	newS := s
-	delete(newChunksLoading, appSig.AppHash)
-	newS.chunksLoading = newChunksLoading
+	newS.chunksLoading = cleanChunksLoading(
+		s.chunksLoading, appSig.AppHash)
 	signedHash, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appSig.Sig),
 		&appSig.Author)
 	appHash := common.HashToSlice(hashApp(
 		appSig.Tags, appSig.AppHash, appSig.PosixTime))
-	hashOk := bytes.Equal(appHash, signedHash)
-	if !(ok && hashOk) {
-		fmt.Println("ok:")
-		fmt.Println(ok)
-		fmt.Println("hashOk:")
-		fmt.Println(hashOk)
-		fmt.Println("!(ok && hashOk)")
-		fmt.Println("appHash:")
-		fmt.Println(appHash)
-		fmt.Println("signedHash:")
-		fmt.Println(signedHash)
+	if !(ok && bytes.Equal(appHash, signedHash)) {
 		return newS
 	}
 	chunkPtrs, ok := s.chunksLoading[appSig.AppHash]
 	if !ok {
-		fmt.Println("!ok")
 		return newS
 	}
 	finalChunkPtr := chunkPtrs[len(chunkPtrs)-1]
 	if !finalChunkPtr.lastChunk {
-		fmt.Println("!finalChunkPtr.lastChunk")
 		return newS
 	}
 	filePaths := make([]string, len(chunkPtrs))
 	for i, chunkPtr := range chunkPtrs {
-		filePaths[i] = makeChunkFilePath(chunkPtr.chunkHash, s.dataDir)
+		filePaths[i] = makeChunkFilePath(
+			chunkPtr.chunkHash, s.dataDir)
 	}
 	tmpPath := makeChunkFilePath(appSig.AppHash, s.dataDir)
 	finalName := base64.URLEncoding.EncodeToString(
@@ -585,10 +580,8 @@ func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	finalPath := s.dataDir + "/apps/" + finalName
 	symmetricKey, ok := s.symmetricKeys[author]
 	if !ok {
-		fmt.Println("!ok x 2")
 		return newS
 	}
-	fmt.Println("Bottom of appMsgT process function.")
 	return assembleAppNew(assembleApp{
 		myPublicSign: s.publicSign,
 		symmetricKey: symmetricKey,
@@ -603,10 +596,14 @@ func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	}, newS)
 }
 
-func hashApp(tags map[string]struct{}, appHash [32]byte, posixTime int64) [32]byte {
+func hashApp(
+	tags map[string]struct{},
+	appHash blake2bHash,
+	posixTime int64) blake2bHash {
+
 	tagBytes := concatTags(tags)
 	lenTags := len(tagBytes)
-	concat := make([]byte, lenTags+32+8)
+	concat := make([]byte, lenTags+32+8+32)
 	i := 0
 	for ; i < lenTags; i++ {
 		concat[i] = tagBytes[i]
@@ -617,6 +614,9 @@ func hashApp(tags map[string]struct{}, appHash [32]byte, posixTime int64) [32]by
 	timeBytes := encodeInt64(posixTime)
 	for ; i < lenTags+32+8; i++ {
 		concat[i] = timeBytes[i-lenTags-32]
+	}
+	for ; i < lenTags+32+8+32; i++ {
+		concat[i] = appMsgCode[i-lenTags-32-8]
 	}
 	return blake2b.Sum256(concat)
 }
@@ -690,6 +690,7 @@ type fileChunkPtrT struct {
 	chunkHash [32]byte
 	counter   int
 	lastChunk bool
+	appHash blake2bHash
 }
 
 func sendChunkNew(state stateT, s sendChunkT) stateT {
@@ -1463,6 +1464,7 @@ func (chunk FileChunk) process(author publicSignT, s stateT) stateT {
 				chunkHash: chunkHash,
 				counter:   chunk.Counter,
 				lastChunk: chunk.LastChunk,
+				appHash: chunk.AppHash,
 			}}
 	} else {
 		lastChunk := previousChunks[len(previousChunks)-1]
