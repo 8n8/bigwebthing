@@ -568,7 +568,7 @@ type sendAppMsgT struct {
 	recipient publicSignT
 }
 
-func (appSig appMsgT) processNew(author [32]byte, s *stateT) stateT {
+func (appSig appMsgT) process(author [32]byte, s *stateT) stateT {
 	fmt.Println("Top of appMsgT process function.")
 	newChunksLoading := make(map[[32]byte][]fileChunkPtrT)
 	for appHash, chunkPtr := range s.chunksLoading {
@@ -816,7 +816,7 @@ func sendChunkNew(state *stateT, s sendChunkT) stateT {
 }
 
 type DecryptedNew interface {
-	processNew([32]byte, *stateT) stateT
+	process([32]byte, *stateT) stateT
 }
 
 type ReceiptT struct {
@@ -1030,7 +1030,7 @@ func decodeMsgNew(bs []byte) (DecryptedNew, error) {
 	return msg, err
 }
 
-func (appReceipt AppReceiptT) processNew(
+func (appReceipt AppReceiptT) process(
 	author [32]byte,
 	s *stateT) stateT {
 
@@ -1068,7 +1068,7 @@ type appReceiptOkT struct {
 	dataDir   string
 }
 
-func (receipt ReceiptT) processNew(author [32]byte, s *stateT) stateT {
+func (receipt ReceiptT) process(author [32]byte, s *stateT) stateT {
 	fmt.Println("The receipt is:")
 	fmt.Println(receipt)
 	chunkAwaiting, ok := s.chunksAwaitingReceipt[receipt.ChunkHash]
@@ -1518,7 +1518,7 @@ func processTcpInput(s stateT, c common.ClientToClient) stateT {
 	return s
 }
 
-func (chunk FileChunk) processNew(author [32]byte, s *stateT) stateT {
+func (chunk FileChunk) process(author [32]byte, s *stateT) stateT {
 	fmt.Println("chunk.Counter:")
 	fmt.Println(chunk.Counter)
 	previousChunks, ok := s.chunksLoading[chunk.AppHash]
@@ -1678,7 +1678,7 @@ func processEncryptedNew(encrypted common.Encrypted, author [32]byte, s *stateT)
 		fmt.Println(err)
 		return *s
 	}
-	return decoded.processNew(author, s)
+	return decoded.process(author, s)
 }
 
 func processHttpInput(s stateT, h httpInputT) stateT {
