@@ -401,10 +401,6 @@ type normalApiInputT struct {
 	doneCh       chan struct{}
 }
 
-type makeAppRouteT struct {
-	Apphash []byte
-}
-
 type sendHttpErrorT struct {
 	w      http.ResponseWriter
 	msg    string
