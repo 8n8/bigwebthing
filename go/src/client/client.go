@@ -46,7 +46,6 @@ type stateT struct {
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
-	isMemberCh            chan isMemberT
 	chunksLoading         map[[32]byte][]fileChunkPtrT
 	dataDir               string
 	port                  string
@@ -143,7 +142,6 @@ type readHttpInputT struct {
 	httpChan   chan httpInputT
 	tcpInChan  chan common.ClientToClient
 	homeCode   string
-	invitesCh  chan isMemberT
 	memberList map[publicSignT]struct{}
 	dataDir    string
 }
@@ -368,7 +366,6 @@ func tcpListen(
 func tcpServer(
 	inChan chan common.ClientToClient,
 	outChan chan common.ClientToClient,
-	isMemberCh chan isMemberT,
 	secretSign [64]byte,
 	publicSign [32]byte) {
 
@@ -1485,7 +1482,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
-		isMemberCh:     make(chan isMemberT),
 		chunksLoading:  make(map[[32]byte][]fileChunkPtrT),
 		dataDir:        dataDir,
 		port:           port,
@@ -1526,7 +1522,6 @@ func main() {
 	go tcpServer(
 		state.tcpInChan,
 		state.tcpOutChan,
-		state.isMemberCh,
 		state.secretSign,
 		state.publicSign)
 	go httpServer(state.httpChan, state.homeCode, port)
@@ -2428,7 +2423,6 @@ func defaultIO(s *stateT) readHttpInputT {
 		s.httpChan,
 		s.tcpInChan,
 		s.homeCode,
-		s.isMemberCh,
 		s.members,
 		s.dataDir}
 }
