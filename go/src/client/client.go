@@ -630,31 +630,43 @@ type searchResultT struct {
 	Posixtime int64
 }
 
-func requestEncryptionKey(g sendChunkT, s stateT) stateT {
+func requestEncryptionKey(sendChunk sendChunkT, s stateT) stateT {
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
-		fmt.Println(err)
 		return s
 	}
-	g.tcpOutChan <- common.ClientToClient{
+	sendChunk.tcpOutChan <- common.ClientToClient{
 		Msg:       common.GiveMeASymmetricKey{*pub},
-		Recipient: g.recipient,
-		Author:    g.myPublicSign,
+		Recipient: sendChunk.recipient,
+		Author:    sendChunk.myPublicSign,
 	}
-	a := awaitingSymmetricKeyT{
-		sendChunkT(g), publicEncryptT(*pub), secretEncryptT(*priv)}
+	return addChunkToState(addKeysToState(s, *pub, *priv), sendChunk)
+	}
 
-	newAwaitingSK := make(map[publicSignT]sendChunkT)
-	for k, v := range s.awaitingSymmetricKey {
-		newAwaitingSK[k] = v
-	}
-	newAwaitingSK[a.chunkInfo.recipient] = a.chunkInfo
+func addChunkToState(s stateT, sendChunk sendChunkT) stateT {
+	newAwaitingSK := copyAwaitingKeys(s.awaitingSymmetricKey)
+	newAwaitingSK[sendChunk.recipient] = sendChunk
 	newS := s
 	newS.awaitingSymmetricKey = newAwaitingSK
+	return newS
+}
+
+func addKeysToState(s stateT, pub [32]byte, priv [32]byte) stateT {
 	newKeyPairs := copyKeyPairs(s.keyPairs)
-	newKeyPairs[a.publicKey] = a.privateKey
+	newKeyPairs[publicEncryptT(pub)] = secretEncryptT(priv)
+	newS := s
 	newS.keyPairs = newKeyPairs
 	return newS
+}
+
+type awaitingKeysT map[publicSignT]sendChunkT
+
+func copyAwaitingKeys(old awaitingKeysT) awaitingKeysT {
+	newAKs := make(awaitingKeysT)
+	for k, v := range old {
+		newAKs[k] = v
+	}
+	return newAKs
 }
 
 type keyPairsT map[publicEncryptT]secretEncryptT
