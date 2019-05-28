@@ -244,14 +244,6 @@ func parseTags(bs []byte) (map[string]struct{}, error) {
 	return tagmap, nil
 }
 
-type newAppT struct {
-	tags      map[string]struct{}
-	hash      string
-	w         http.ResponseWriter
-	doneCh    chan struct{}
-	posixTime int64
-}
-
 func hashFromString(s string) ([32]byte, error) {
 	hashSlice, err := base64.URLEncoding.DecodeString(s)
 	if err != nil {
