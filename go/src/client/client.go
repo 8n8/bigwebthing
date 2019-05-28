@@ -1078,6 +1078,35 @@ func processSendApp(n normalApiInputT, s *stateT) (stateT, outputT) {
 	return *s, sendChunk
 }
 
+func getEncryptionKey(g sendChunkT, s *stateT) stateT {
+	pub, priv, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		fmt.Println(err)
+		return *s
+	}
+	g.tcpOutChan <- common.ClientToClient{
+		Msg:       common.GiveMeASymmetricKey{*pub},
+		Recipient: g.recipient,
+		Author:    g.myPublicSign,
+	}
+	a := awaitingSymmetricKeyT{sendChunkT(g), publicEncryptT(*pub), secretEncryptT(*priv)}
+
+	newAwaitingSK := make(map[publicSignT]sendChunkT)
+	for k, v := range s.awaitingSymmetricKey {
+		newAwaitingSK[k] = v
+	}
+	newAwaitingSK[a.chunkInfo.recipient] = a.chunkInfo
+	newS := *s
+	newS.awaitingSymmetricKey = newAwaitingSK
+	newKeyPairs := make(map[publicEncryptT]secretEncryptT)
+	for k, v := range s.keyPairs {
+		newKeyPairs[k] = v
+	}
+	newKeyPairs[a.publicKey] = a.privateKey
+	newS.keyPairs = newKeyPairs
+	return newS
+}
+
 func (g getEncryptionKeyForAppT) send() inputT {
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
@@ -1144,6 +1173,85 @@ type fileChunkPtrT struct {
 	chunkHash [32]byte
 	counter   int
 	lastChunk bool
+}
+
+func sendChunkNew(state *stateT, s sendChunkT) stateT {
+	fileHandle, err := os.Open(s.filepath)
+	errOut := func(err error) stateT {
+		fmt.Println("Error in sendChunkT sender func:")
+		fmt.Println(err)
+		logSendErr(err, s.appMsg.AppHash, s.recipient, s.dataDir)
+		return *state
+	}
+	if err != nil {
+		return errOut(err)
+	}
+	newOffset, err := fileHandle.Seek(s.offset, 0)
+	if newOffset != s.offset {
+		return errOut(errors.New("New offset is wrong."))
+	}
+	if err != nil {
+		return errOut(err)
+	}
+	chunkBuffer := make([]byte, common.ChunkContentSize)
+	numBytesRead, err := fileHandle.Read(chunkBuffer)
+	if err != nil {
+		return errOut(err)
+	}
+	chunk := chunkBuffer[:numBytesRead]
+	lastChunk := numBytesRead < common.ChunkContentSize
+	var beforeEncoding Decrypted
+	beforeEncoding = FileChunk{
+		AppHash:   s.appMsg.AppHash,
+		Chunk:     chunk,
+		Counter:   s.counter,
+		LastChunk: lastChunk,
+	}
+	encodedMsg, err := common.EncodeData(&beforeEncoding)
+	if err != nil {
+		return errOut(err)
+	}
+	nonce, err := makeNonce()
+	if err != nil {
+		return errOut(err)
+	}
+	s.tcpOutChan <- common.ClientToClient{
+		Msg: common.Encrypted{
+			Msg: secretbox.Seal(
+				make([]byte, 0),
+				encodedMsg,
+				&nonce,
+				&s.symmetricEncryptKey),
+			Nonce: nonce,
+		},
+		Recipient: s.recipient,
+		Author:    s.myPublicSign,
+	}
+	c := chunkAwaitingReceiptT{
+		s.appMsg,
+		s.filepath,
+		s.offset,
+		s.recipient,
+		s.symmetricEncryptKey,
+		blake2bHash(blake2b.Sum256(chunk)),
+		s.counter,
+		lastChunk,
+	}
+	// if lastChunk {
+	// 	return appAwaitingReceiptT{
+	// 		s.appMsg.AppHash,
+	// 		s.recipient,
+	// 		chunkAwaiting,
+	// 	}
+	// }
+	chunksAwaiting := make(map[blake2bHash]chunkAwaitingReceiptT)
+	for k, v := range state.chunksAwaitingReceipt {
+		chunksAwaiting[k] = v
+	}
+	chunksAwaiting[c.chunkHash] = c
+	newState := *state
+	newState.chunksAwaitingReceipt = chunksAwaiting
+	return newState
 }
 
 func (s sendChunkT) send() inputT {
@@ -2194,6 +2302,103 @@ func processNormalApiInput(n normalApiInputT, s *stateT) stateT {
 		return processGetMembersNew(n, s)
 	}
 	return *s
+}
+
+func processGetAppNew(n normalApiInputT, s *stateT) stateT {
+	if strEq(n.securityCode, s.homeCode) {
+		serveDocNew(serveDocT{
+			n.w,
+			n.doneCh,
+			homeDir + "/" + n.subRoute,
+		})
+		return *s
+	}
+	docHash, err := getDocHash(n.securityCode, s.appCodes)
+	if err != nil {
+		http.Error(n.w, "Bad security code.", 400)
+		n.doneCh <- struct{}{}
+		return *s
+	}
+	serveDocNew(serveDocT{
+		n.w,
+		n.doneCh,
+		s.dataDir + "/tmp/" + hashToStr(docHash) + "/" + n.subRoute,
+	})
+	return *s
+	// return *s, serveDocT{
+	// 	n.w,
+	// 	n.doneCh,
+	// 	s.dataDir + "/tmp/" + hashToStr(docHash) + "/" + n.subRoute,
+	// }
+}
+
+func serveDocNew(s serveDocT) {
+	fileHandle, err := os.Open(s.filePath)
+	if err != nil {
+		http.Error(s.w, err.Error(), 500)
+		s.doneCh <- struct{}{}
+	}
+	_, err = io.Copy(s.w, fileHandle)
+	if err != nil {
+		http.Error(s.w, err.Error(), 500)
+		s.doneCh <- struct{}{}
+	}
+	s.doneCh <- struct{}{}
+}
+
+func processSendAppNew(n normalApiInputT, s *stateT) stateT {
+	// sendErr := func(msg string) sendHttpErrorT {
+	// 	return sendHttpErrorT{n.w, msg, 400, n.doneCh}
+	// }
+	sendErr := func(msg string) stateT {
+		http.Error(n.w, msg, 400)
+		n.doneCh <- struct{}{}
+		return *s
+	}
+	if !strEq(n.securityCode, s.homeCode) {
+		return sendErr("Bad security code.")
+	}
+	var sendAppJson sendAppJsonT
+	err := json.Unmarshal(n.body, &sendAppJson)
+	if err != nil {
+		return sendErr(err.Error())
+	}
+	appHashSlice, err := base64.URLEncoding.DecodeString(
+		sendAppJson.AppHash)
+	if err != nil {
+		return sendErr(err.Error())
+	}
+	appHash := common.SliceToHash(appHashSlice)
+	recipientSlice, err := base64.URLEncoding.DecodeString(
+		sendAppJson.Recipient)
+	if err != nil {
+		return sendErr(err.Error())
+	}
+	recipient := common.SliceToHash(recipientSlice)
+	var app appMsgT
+	for _, thisApp := range s.apps {
+		if equalHashes(thisApp.AppHash, appHash) {
+			app = thisApp
+			break
+		}
+	}
+	filepath := s.dataDir + "/apps/" + hashToStr(appHash)
+	symmetricEncryptKey, ok := s.symmetricKeys[recipient]
+	sendChunk := sendChunkT{
+		s.publicSign,
+		s.dataDir,
+		app,
+		s.tcpOutChan,
+		filepath,
+		0,
+		recipient,
+		symmetricEncryptKey,
+		0,
+	}
+	if !ok {
+		return getEncryptionKey(sendChunk, s)
+	}
+	return sendChunkNew(s, sendChunk)
 }
 
 func processMakeAppRouteNew(
