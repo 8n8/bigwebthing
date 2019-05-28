@@ -2304,6 +2304,26 @@ func processNormalApiInput(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
+func processGetMyIdNew(n normalApiInputT, s *stateT) stateT {
+	if !strEq(n.securityCode, s.homeCode) {
+		http.Error(n.w, "Bad security code", 400)
+		n.doneCh <- struct{}{}
+		return *s
+
+		// return *s, sendHttpErrorT{
+		// 	n.w,
+		// 	"Bad security code.",
+		// 	400,
+		// 	n.doneCh,
+		// }
+	}
+	response := []byte(base64.URLEncoding.EncodeToString(
+		common.HashToSlice(s.publicSign)))
+	n.w.Write(response)
+	n.doneCh <- struct{}{}
+	return *s
+}
+
 func processInviteNew(n normalApiInputT, s *stateT) stateT {
 	sendErr := func(err error, code int) stateT {
 		http.Error(n.w, err.Error(), code)
