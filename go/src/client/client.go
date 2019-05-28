@@ -548,6 +548,20 @@ func cleanChunksLoading(
 	return newChunksLoading
 }
 
+func makeChunkFilePaths(ptrs []fileChunkPtrT, dataDir string) []string {
+	filePaths := make([]string, len(ptrs))
+	for i, ptr := range ptrs {
+		filePaths[i] = makeChunkFilePath(ptr.chunkHash, dataDir)
+	}
+	return filePaths
+}
+
+func makeAppPath(dataDir string, appHash blake2bHash) string {
+	fileName := base64.URLEncoding.EncodeToString(
+		common.HashToSlice(appHash))
+	return dataDir + "/apps/" + fileName
+}
+
 func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	newS := s
 	newS.chunksLoading = cleanChunksLoading(
@@ -569,15 +583,6 @@ func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	if !finalChunkPtr.lastChunk {
 		return newS
 	}
-	filePaths := make([]string, len(chunkPtrs))
-	for i, chunkPtr := range chunkPtrs {
-		filePaths[i] = makeChunkFilePath(
-			chunkPtr.chunkHash, s.dataDir)
-	}
-	tmpPath := makeChunkFilePath(appSig.AppHash, s.dataDir)
-	finalName := base64.URLEncoding.EncodeToString(
-		common.HashToSlice(appSig.AppHash))
-	finalPath := s.dataDir + "/apps/" + finalName
 	symmetricKey, ok := s.symmetricKeys[author]
 	if !ok {
 		return newS
@@ -585,10 +590,10 @@ func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	return assembleAppNew(assembleApp{
 		myPublicSign: s.publicSign,
 		symmetricKey: symmetricKey,
-		filePaths:    filePaths,
+		filePaths:    makeChunkFilePaths(chunkPtrs, s.dataDir),
 		appHash:      appSig.AppHash,
-		tmpPath:      tmpPath,
-		finalPath:    finalPath,
+		tmpPath:      makeChunkFilePath(appSig.AppHash, s.dataDir),
+		finalPath:    makeAppPath(s.dataDir, appSig.AppHash),
 		appSender:    author,
 		tcpOutChan:   s.tcpOutChan,
 		secretSign:   s.secretSign,
