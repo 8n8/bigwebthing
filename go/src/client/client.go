@@ -306,21 +306,9 @@ func tcpListen(
 	for {
 		cToC, err := common.ReadClientToClient(conn)
 		if err != nil {
-			fmt.Println("Error in CToC reception:")
-			fmt.Println(err)
 			connErrChan <- struct{}{}
-			return
 		}
-		fmt.Println("++++++")
-		fmt.Println(fmt.Sprintf("%T", cToC))
-		fmt.Println(fmt.Sprintf("%T", cToC.Msg))
-		fmt.Println("======")
 		inChan <- cToC
-		select {
-		case <-connErrChan:
-			return
-		default:
-		}
 	}
 }
 
@@ -339,9 +327,11 @@ func tcpServer(
 			time.Sleep(time.Second)
 			continue
 		}
-		go tcpListen(conn, inChan, connErrCh)
-		go tcpSend(conn, outChan, connErrCh)
-		<-connErrCh
+		func() {
+			go tcpListen(conn, inChan, connErrCh)
+			go tcpSend(conn, outChan, connErrCh)
+			<-connErrCh
+		}()
 	}
 }
 
@@ -352,32 +342,16 @@ func tcpSend(
 
 	for {
 		toSend := <-outChan
-		fmt.Println("\n>>>>>>")
-		fmt.Println(fmt.Sprintf("%T", toSend))
-		fmt.Println(fmt.Sprintf("%T", toSend.Msg))
-		fmt.Println("<<<<<<")
 		encoded, err := common.EncodeClientToClient(toSend)
 		if err != nil {
-			fmt.Println(err)
 			connErrChan <- struct{}{}
-			return
 		}
-		n, connErr := conn.Write(encoded)
-		if connErr != nil {
-			fmt.Println(connErr)
+		n, err := conn.Write(encoded)
+		if err != nil {
 			connErrChan <- struct{}{}
-			return
 		}
 		if n != len(encoded) {
-			fmt.Println("But n was wrong.")
 			connErrChan <- struct{}{}
-			return
-		}
-		select {
-		case <-connErrChan:
-			fmt.Println("There was a connError")
-			return
-		default:
 		}
 	}
 }
