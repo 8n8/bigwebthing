@@ -46,7 +46,7 @@ type stateT struct {
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
-	chunksLoading         map[[32]byte][]fileChunkPtrT
+	chunksLoading         map[blake2bHash][]fileChunkPtrT
 	dataDir               string
 	port                  string
 	chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
@@ -570,7 +570,7 @@ type sendAppMsgT struct {
 
 func (appSig appMsgT) process(author [32]byte, s *stateT) stateT {
 	fmt.Println("Top of appMsgT process function.")
-	newChunksLoading := make(map[[32]byte][]fileChunkPtrT)
+	newChunksLoading := make(map[blake2bHash][]fileChunkPtrT)
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
 	}
@@ -1370,7 +1370,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
-		chunksLoading:  make(map[[32]byte][]fileChunkPtrT),
+		chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
 		dataDir:        dataDir,
 		port:           port,
 	}, nil
@@ -1461,7 +1461,7 @@ func (chunk FileChunk) process(author [32]byte, s *stateT) stateT {
 	previousChunks, ok := s.chunksLoading[chunk.AppHash]
 	fmt.Println("previousChunks:")
 	fmt.Println(previousChunks)
-	newChunksLoading := make(map[[32]byte][]fileChunkPtrT)
+	newChunksLoading := make(map[blake2bHash][]fileChunkPtrT)
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
 	}
@@ -2282,9 +2282,9 @@ func writeAppToFileNew(w writeAppToFileAndSendReceiptT, s *stateT) stateT {
 	return *s
 }
 
-func newChunksFinished(t [32]byte, s *stateT) stateT {
+func newChunksFinished(t blake2bHash, s *stateT) stateT {
 	newS := *s
-	newChunksLoading := make(map[[32]byte][]fileChunkPtrT)
+	newChunksLoading := make(map[blake2bHash][]fileChunkPtrT)
 	for k, v := range s.chunksLoading {
 		newChunksLoading[k] = v
 	}
