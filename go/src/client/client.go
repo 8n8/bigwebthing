@@ -44,7 +44,6 @@ type stateT struct {
 	publicSign            [32]byte
 	secretSign            [64]byte
 	conn                  net.Conn
-	cantGetOnline         error
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
@@ -1487,7 +1486,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		publicSign:     keys.publicsign,
 		secretSign:     keys.secretsign,
 		conn:           *new(net.Conn),
-		cantGetOnline:  nil,
 		invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
