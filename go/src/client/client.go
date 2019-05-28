@@ -184,44 +184,44 @@ func writeAppToFile(
 	dataDir string) (string, map[string]struct{}, error) {
 
 	bodyFileReader, err := r.MultipartReader()
+	if err != nil {
+		return "", make(map[string]struct{}), err
+	}
 	filepart, err := getFilePart(bodyFileReader)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
-	}
-	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	tmpFileName, err := genCode()
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	tmpPath := dataDir + "/tmp/" + tmpFileName
 	fileHandle, err := os.Create(tmpPath)
 	defer fileHandle.Close()
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	tee := io.TeeReader(filepart, hasher)
 	_, err = io.Copy(fileHandle, tee)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 	err = os.Rename(tmpPath, dataDir+"/apps/"+hash)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	tagBytes, err := getTagsPart(bodyFileReader)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	tags, err := parseTags(tagBytes)
 	if err != nil {
-		return "", *new(map[string]struct{}), err
+		return "", make(map[string]struct{}), err
 	}
 	return hash, tags, nil
 }
@@ -269,10 +269,6 @@ var subRouteApps = map[string]struct{}{
 	"getapp":       struct{}{},
 	"makeapproute": struct{}{},
 	"invite":       struct{}{},
-}
-
-type msgT interface {
-	msgTplaceholderFunc()
 }
 
 func makeConn(
