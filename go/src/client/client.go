@@ -43,7 +43,6 @@ type stateT struct {
 	appCodes              map[string][32]byte
 	publicSign            [32]byte
 	secretSign            [64]byte
-	conn                  net.Conn
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
@@ -1485,7 +1484,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		appCodes:       make(map[string][32]byte),
 		publicSign:     keys.publicsign,
 		secretSign:     keys.secretsign,
-		conn:           *new(net.Conn),
 		invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
