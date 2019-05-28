@@ -652,14 +652,6 @@ func hashApp(tags map[string]struct{}, appHash [32]byte, posixTime int64) [32]by
 	return blake2b.Sum256(concat)
 }
 
-type AppMsgT struct {
-	Author    [32]byte
-	Tags      map[string]struct{}
-	AppHash   [32]byte
-	PosixTime int64
-	Sig       [common.SigSize]byte
-}
-
 type searchResultT struct {
 	Author    string
 	Tags      []string
