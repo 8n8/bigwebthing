@@ -40,8 +40,8 @@ type stateT struct {
 	tcpInChan             chan common.ClientToClient
 	tcpOutChan            chan common.ClientToClient
 	homeCode              string
-	appCodes              map[string][32]byte
-	publicSign            [32]byte
+	appCodes              map[string]blake2bHash
+	publicSign            publicSignT
 	secretSign            [64]byte
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
@@ -407,7 +407,7 @@ func strEq(s1, s2 string) bool {
 }
 
 type unpackAppT struct {
-	appCodes map[string][32]byte
+	appCodes map[string]blake2bHash
 	w        http.ResponseWriter
 	appHash  [32]byte
 	doneCh   chan struct{}
@@ -425,14 +425,14 @@ type newAppCodeT struct {
 
 func getDocHash(
 	securityCode string,
-	appCodes map[string][32]byte) ([32]byte, error) {
+	appCodes map[string]blake2bHash) (blake2bHash, error) {
 
 	for sc, hash := range appCodes {
 		if strEq(sc, securityCode) {
 			return hash, nil
 		}
 	}
-	var empty [32]byte
+	var empty blake2bHash
 	return empty, errors.New("Could not find document hash.")
 }
 
@@ -957,7 +957,7 @@ type writeUpdatedInvitesT struct {
 	doneCh   chan struct{}
 }
 
-func getHashSecurityCode(appCodes map[string][32]byte, hash [32]byte) (string, error) {
+func getHashSecurityCode(appCodes map[string]blake2bHash, hash blake2bHash) (string, error) {
 	for c, h := range appCodes {
 		if equalHashes(h, hash) {
 			return c, nil
@@ -1364,7 +1364,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		tcpInChan:      make(chan common.ClientToClient),
 		tcpOutChan:     make(chan common.ClientToClient),
 		homeCode:       homeCode,
-		appCodes:       make(map[string][32]byte),
+		appCodes:       make(map[string]blake2bHash),
 		publicSign:     keys.publicsign,
 		secretSign:     keys.secretsign,
 		invites:        invites,
@@ -1982,7 +1982,7 @@ func unpackAppNew(g unpackAppT, s *stateT) stateT {
 
 func newAppCodeNew(n newAppCodeT, s *stateT) stateT {
 	newState := *s
-	newAppCodes := make(map[string][32]byte)
+	newAppCodes := make(map[string]blake2bHash)
 	for code, hash := range s.appCodes {
 		newAppCodes[code] = hash
 	}
