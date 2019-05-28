@@ -361,10 +361,6 @@ const (
 	homeDir     = "home"
 )
 
-func sentMsgPath(dataDir string) string {
-	return dataDir + "/sentMsgPath"
-}
-
 type normalApiInputT struct {
 	w            http.ResponseWriter
 	securityCode string
@@ -462,14 +458,19 @@ type logSentSuccessT struct {
 	recipient [32]byte
 }
 
-func logSentSuccess(appHash [32]byte, recipient [32]byte, dataDir string) {
+func logSentSuccess(
+	appHash [32]byte,
+	recipient [32]byte,
+	dataDir string) {
+
 	msg := logSentSuccessT{appHash, recipient}
 	encoded, jsonErr := json.Marshal(msg)
 	if jsonErr != nil {
 		logSendErr(jsonErr, appHash, recipient, dataDir)
 		return
 	}
-	f, openErr := os.OpenFile(sentMsgPath(dataDir), appendFlags, 0600)
+	f, openErr := os.OpenFile(
+		dataDir + "/sentMsgPath", appendFlags, 0600)
 	if openErr != nil {
 		logSendErr(openErr, appHash, recipient, dataDir)
 		return
@@ -1636,24 +1637,24 @@ func processHttpInput(s stateT, h httpInputT) stateT {
 func processNormalApiInput(n normalApiInputT, s *stateT) stateT {
 	switch n.route {
 	case "makeapproute":
-		return processMakeAppRouteNew(n, s)
+		return processMakeAppRoute(n, s)
 	case "getapp":
-		return processGetAppNew(n, s)
+		return processGetApp(n, s)
 	case "sendapp":
-		return processSendAppNew(n, s)
+		return processSendApp(n, s)
 	case "searchapps":
-		return processSearchAppsNew(n, s)
+		return processSearchApps(n, s)
 	case "invite":
-		return processInviteNew(n, s)
+		return processInvite(n, s)
 	case "getmyid":
-		return processGetMyIdNew(n, s)
+		return processGetMyId(n, s)
 	case "getmembers":
-		return processGetMembersNew(n, s)
+		return processGetMembers(n, s)
 	}
 	return *s
 }
 
-func processGetMembersNew(n normalApiInputT, s *stateT) stateT {
+func processGetMembers(n normalApiInputT, s *stateT) stateT {
 	if !strEq(n.securityCode, s.homeCode) {
 		http.Error(n.w, "Bad security code", 400)
 		n.doneCh <- struct{}{}
@@ -1676,7 +1677,7 @@ func processGetMembersNew(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
-func processGetMyIdNew(n normalApiInputT, s *stateT) stateT {
+func processGetMyId(n normalApiInputT, s *stateT) stateT {
 	if !strEq(n.securityCode, s.homeCode) {
 		http.Error(n.w, "Bad security code", 400)
 		n.doneCh <- struct{}{}
@@ -1689,7 +1690,7 @@ func processGetMyIdNew(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
-func processInviteNew(n normalApiInputT, s *stateT) stateT {
+func processInvite(n normalApiInputT, s *stateT) stateT {
 	sendErr := func(err error, code int) stateT {
 		http.Error(n.w, err.Error(), code)
 		n.doneCh <- struct{}{}
@@ -1737,7 +1738,7 @@ func processInviteNew(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
-func processSearchAppsNew(n normalApiInputT, s *stateT) stateT {
+func processSearchApps(n normalApiInputT, s *stateT) stateT {
 	sendErr := func(msg string) stateT {
 		http.Error(n.w, msg, 400)
 		n.doneCh <- struct{}{}
@@ -1764,12 +1765,12 @@ func processSearchAppsNew(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
-func processGetAppNew(n normalApiInputT, s *stateT) stateT {
+func processGetApp(n normalApiInputT, s *stateT) stateT {
 	if strEq(n.securityCode, s.homeCode) {
 		serveDocNew(serveDocT{
 			n.w,
 			n.doneCh,
-			homeDir + "/" + n.subRoute,
+			"home/" + n.subRoute,
 		})
 		return *s
 	}
@@ -1801,7 +1802,7 @@ func serveDocNew(s serveDocT) {
 	s.doneCh <- struct{}{}
 }
 
-func processSendAppNew(n normalApiInputT, s *stateT) stateT {
+func processSendApp(n normalApiInputT, s *stateT) stateT {
 	sendErr := func(msg string) stateT {
 		http.Error(n.w, msg, 400)
 		n.doneCh <- struct{}{}
@@ -1853,7 +1854,7 @@ func processSendAppNew(n normalApiInputT, s *stateT) stateT {
 	return sendChunkNew(s, sendChunk)
 }
 
-func processMakeAppRouteNew(
+func processMakeAppRoute(
 	n normalApiInputT,
 	s *stateT) stateT {
 
