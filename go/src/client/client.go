@@ -115,14 +115,17 @@ func processInvites(rawInvites []byte, err error) (map[inviteT]struct{}, error) 
 	return invites, err
 }
 
-func readApps(dataDir string) ([]appMsgT, error) {
-	rawApps, err := ioutil.ReadFile(dataDir + "/apps.txt")
+func processApps(rawApps []byte, err error) ([]appMsgT, error) {
 	var apps []appMsgT
 	if err != nil {
-		return apps, nil
+		return apps, err
 	}
 	err = json.Unmarshal(rawApps, &apps)
 	return apps, err
+}
+
+func appsFile(dataDir string) string {
+	return dataDir + "/apps.txt"
 }
 
 func equalHashes(as [32]byte, bs [32]byte) bool {
@@ -1360,7 +1363,7 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	apps, err := readApps(dataDir)
+	apps, err := processApps(ioutil.ReadFile(appsFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
