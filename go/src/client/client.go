@@ -2304,6 +2304,54 @@ func processNormalApiInput(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
+func processInviteNew(n normalApiInputT, s *stateT) stateT {
+	sendErr := func(err error, code int) stateT {
+		http.Error(n.w, err.Error(), code)
+		n.doneCh <- struct{}{}
+		return *s
+	}
+	if !strEq(n.securityCode, s.homeCode) {
+		err := errors.New("Bad security code.")
+		return sendErr(err, 400)
+	}
+	invitee, err := base64.URLEncoding.DecodeString(n.subRoute)
+	if err != nil {
+		return sendErr(err, 400)
+	}
+	m := makeInviteT{common.SliceToHash(invitee), time.Now().Unix(), n.w, n.doneCh}
+
+	invite := inviteT{
+		PosixTime: m.posixTime,
+		Invitee:   m.invitee,
+		Author:    s.publicSign,
+		Signature: sliceToSig(sign.Sign(
+			make([]byte, 0),
+			common.HashToSlice(inviteHash(
+				m.posixTime, m.invitee)),
+			&s.secretSign)),
+	}
+	newInvites := copyInvites(s.invites)
+	newInvites[invite] = struct{}{}
+	encodedInvites, err := json.Marshal(invitesToSlice(newInvites))
+	if err != nil {
+		return sendErr(err, 500)
+	}
+
+	w := writeUpdatedInvitesT{
+		invitesFile(s.dataDir),
+		encodedInvites,
+		m.w,
+		m.doneCh,
+	}
+
+	err = ioutil.WriteFile(w.filepath, w.toWrite, 0600)
+	if err != nil {
+		http.Error(w.w, err.Error(), 500)
+	}
+	w.doneCh <- struct{}{}
+	return *s
+}
+
 func processSearchAppsNew(n normalApiInputT, s *stateT) stateT {
 	sendErr := func(msg string) stateT {
 		http.Error(n.w, msg, 400)
