@@ -709,7 +709,7 @@ type fileChunkPtrT struct {
 	appHash blake2bHash
 }
 
-func sendChunkNew(state stateT, s sendChunkT) stateT {
+func sendChunk(state stateT, s sendChunkT) stateT {
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) stateT {
 		fmt.Println("Error in sendChunkT sender func:")
@@ -1041,7 +1041,7 @@ func (receipt ReceiptT) process(author publicSignT, s stateT) stateT {
 			author,
 		}, newS)
 	}
-	return sendChunkNew(s, sendChunkT{
+	return sendChunk(s, sendChunkT{
 		s.publicSign,
 		s.dataDir,
 		chunkAwaiting.appMsg,
@@ -1853,7 +1853,7 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 	}
 	filepath := s.dataDir + "/apps/" + hashToStr(appHash)
 	symmetricEncryptKey, ok := s.symmetricKeys[recipient]
-	sendChunk := sendChunkT{
+	chunk := sendChunkT{
 		s.publicSign,
 		s.dataDir,
 		app,
@@ -1865,9 +1865,9 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 		0,
 	}
 	if !ok {
-		return requestEncryptionKey(sendChunk, s)
+		return requestEncryptionKey(chunk, s)
 	}
-	return sendChunkNew(s, sendChunk)
+	return sendChunk(s, chunk)
 }
 
 func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
@@ -2107,7 +2107,7 @@ func processHereIsAnEncryptionKey(
 	newSymmetricKeys[author] = symmetricKey
 	newS.symmetricKeys = newSymmetricKeys
 	awaitingKey.symmetricEncryptKey = symmetricKey
-	return sendChunkNew(newS, sendChunkT(awaitingKey))
+	return sendChunk(newS, sendChunkT(awaitingKey))
 }
 
 type makeSymmetricKeyT struct {
