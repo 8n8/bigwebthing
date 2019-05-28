@@ -405,8 +405,7 @@ func getDocHash(
 			return hash, nil
 		}
 	}
-	var empty blake2bHash
-	return empty, errors.New("Could not find document hash.")
+	return *new(blake2bHash), errors.New("No document hash found.")
 }
 
 func hashToStr(h [32]byte) string {
