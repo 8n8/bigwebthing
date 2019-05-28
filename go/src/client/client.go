@@ -641,7 +641,7 @@ func requestEncryptionKey(sendChunk sendChunkT, s stateT) stateT {
 		Author:    sendChunk.myPublicSign,
 	}
 	return addChunkToState(addKeysToState(s, *pub, *priv), sendChunk)
-	}
+}
 
 func addChunkToState(s stateT, sendChunk sendChunkT) stateT {
 	newAwaitingSK := copyAwaitingKeys(s.awaitingSymmetricKey)
@@ -692,12 +692,6 @@ func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
 		result[i] = h.Nonce[i-32-common.EncryptedKeyLen]
 	}
 	return blake2b.Sum256(result)
-}
-
-type awaitingSymmetricKeyT struct {
-	chunkInfo  sendChunkT
-	publicKey  publicEncryptT
-	privateKey secretEncryptT
 }
 
 func sliceToSig(bs []byte) [common.SigSize]byte {
