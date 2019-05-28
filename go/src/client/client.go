@@ -56,18 +56,12 @@ type stateT struct {
 	awaitingSymmetricKey  map[publicSignT]sendChunkT
 }
 
-type gotKeyForSendingApp sendChunkT
 type publicSignT [32]byte
 type publicEncryptT [32]byte
 type secretEncryptT [32]byte
 type blake2bHash [32]byte
 type symmetricEncrypt [32]byte
 type secretSignT [64]byte
-
-type isMemberT struct {
-	returnCh  chan bool
-	candidate [32]byte
-}
 
 func makeMemberList(
 	invites map[inviteT]struct{},
@@ -1543,6 +1537,10 @@ func main() {
 }
 
 func processTcpInput(s stateT, c common.ClientToClient) stateT {
+	_, isMember := makeMemberList(s.invites, s.uninvites)[c.Author]
+	if !isMember {
+		return s
+	}
 	switch c.Msg.(type) {
 	case common.Encrypted:
 		return processEncryptedNew(
