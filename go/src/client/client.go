@@ -272,21 +272,19 @@ var subRouteApps = map[string]struct{}{
 }
 
 func makeConn(
-	publicSign [32]byte,
+	publicSign publicSignT,
 	secretSign [64]byte) (net.Conn, error) {
 
-	conn, connErr := net.Dial(
-		"tcp",
-		"localhost:4000")
-	if connErr != nil {
-		return conn, connErr
+	conn, err := net.Dial("tcp", "localhost:4000")
+	if err != nil {
+		return conn, err
 	}
 	enc := gob.NewEncoder(conn)
 	dec := gob.NewDecoder(conn)
 	var authCode [common.AuthCodeLength]byte
-	connErr = dec.Decode(&authCode)
-	if connErr != nil {
-		return conn, connErr
+	err = dec.Decode(&authCode)
+	if err != nil {
+		return conn, err
 	}
 	authSig := common.AuthSigT{
 		publicSign,
@@ -296,8 +294,8 @@ func makeConn(
 				authCode),
 			&secretSign)),
 	}
-	connErr = enc.Encode(authSig)
-	return conn, connErr
+	err = enc.Encode(authSig)
+	return conn, err
 }
 
 func tcpListen(
