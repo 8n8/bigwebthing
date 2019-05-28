@@ -356,11 +356,6 @@ func tcpSend(
 	}
 }
 
-const (
-	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
-	homeDir     = "home"
-)
-
 type normalApiInputT struct {
 	w            http.ResponseWriter
 	securityCode string
@@ -1069,7 +1064,10 @@ func sendAppMsg(s sendAppMsgT, state stateT) stateT {
 	return state
 }
 
-const pwlen = 5
+const (
+	pwlen = 5
+	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
+)
 
 func makePassword() ([]byte, error) {
 	pw := make([]byte, pwlen)
@@ -1854,10 +1852,7 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 	return sendChunkNew(s, sendChunk)
 }
 
-func processMakeAppRoute(
-	n normalApiInputT,
-	s stateT) stateT {
-
+func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
 	if !strEq(n.securityCode, s.homeCode) {
 		http.Error(n.w, "Bad security code", 400)
 		n.doneCh <- struct{}{}
