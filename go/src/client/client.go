@@ -651,6 +651,11 @@ type sendHttpErrorT struct {
 	doneCh chan struct{}
 }
 
+// func sendHttpErrorT(w http.ResponseWriter, msg string, code int, doneCh chan struct{}) {
+// 	http.Error(w, msg, code)
+// 	doneCh <- struct{}{}
+// }
+
 func (s sendHttpErrorT) send() inputT {
 	http.Error(s.w, s.msg, s.code)
 	s.doneCh <- struct{}{}
@@ -2123,9 +2128,265 @@ func main() {
 	}
 	var output outputT = defaultIO(&state)
 	for {
-		input := output.send()
-		state, output = input.update(&state)
+		select {
+		case h := <-state.httpChan:
+			state = processHttpInput(state, h)
+		case tcpIn := <-state.tcpInChan:
+			state = processTcpInput(state)
+		}
+		// input := output.send()
+		// state, output = input.update(&state)
 	}
+}
+
+func processHttpInput(s stateT, h httpInputT) stateT {
+	securityCode := pat.Param(h.r, "securityCode")
+	subRoute := ""
+	if _, ok := subRouteApps[h.route]; ok {
+		subRoute = pat.Param(h.r, "subRoute")
+	}
+	if h.route == "saveapp" {
+		hash, tags, err := writeAppToFile(h.r, s.dataDir)
+		if err != nil {
+			fmt.Println(err)
+			http.Error(h.w, err.Error(), 500)
+			h.doneCh <- struct{}{}
+			return s
+		}
+		return processNewApp(s, h, hash, tags)
+	}
+	body, err := ioutil.ReadAll(h.r.Body)
+	if err != nil {
+		http.Error(
+			h.w,
+			err.Error(),
+			http.StatusInternalServerError)
+		h.doneCh <- struct{}{}
+		return s
+	}
+	return processNormalApiInput(
+		normalApiInputT{
+			h.w,
+			securityCode,
+			body,
+			h.route,
+			subRoute,
+			h.doneCh,
+		},
+		&s)
+}
+
+func processNormalApiInput(n normalApiInputT, s *stateT) stateT {
+	switch n.route {
+	case "makeapproute":
+		return processMakeAppRouteNew(n, s)
+	case "getapp":
+		return processGetAppNew(n, s)
+	case "sendapp":
+		return processSendAppNew(n, s)
+	case "searchapps":
+		return processSearchAppsNew(n, s)
+	case "invite":
+		return processInviteNew(n, s)
+	case "getmyid":
+		return processGetMyIdNew(n, s)
+	case "getmembers":
+		return processGetMembersNew(n, s)
+	}
+	return *s
+}
+
+func processMakeAppRouteNew(
+	n normalApiInputT,
+	s *stateT) stateT {
+
+	// sendErr := func(err error) sendHttpErrorT {
+	// 	return sendHttpErrorT{
+	// 		n.w,
+	// 		err.Error(),
+	// 		400,
+	// 		n.doneCh,
+	// 	}
+	// }
+	if !strEq(n.securityCode, s.homeCode) {
+		// err := errors.New("Bad security code.")
+		// return *s, sendErr(err)
+		http.Error(n.w, "Bad security code", 400)
+		n.doneCh <- struct{}{}
+		return *s
+	}
+	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
+	if err != nil {
+		http.Error(n.w, err.Error(), 400)
+		n.doneCh <- struct{}{}
+		return *s
+	}
+	hash := common.SliceToHash(hashSlice)
+	hashStr := hashToStr(hash)
+	return unpackAppNew(
+		unpackAppT{
+			s.appCodes,
+			n.w,
+			hash,
+			n.doneCh,
+			s.dataDir + "/apps/" + hashStr,
+			s.dataDir + "/tmp/" + hashStr,
+			s.port,
+		}, s)
+	// return *s, unpackAppT{
+	// 	s.appCodes,
+	// 	n.w,
+	// 	hash,
+	// 	n.doneCh,
+	// 	s.dataDir + "/apps/" + hashStr,
+	// 	s.dataDir + "/tmp/" + hashStr,
+	// 	s.port,
+	// }
+}
+
+//func (g unpackAppT) send() inputT {
+func unpackAppNew(g unpackAppT, s *stateT) stateT {
+	sendErr := func(err error) {
+		fmt.Println(err)
+		http.Error(g.w, err.Error(), 500)
+		g.doneCh <- struct{}{}
+	}
+	_, err := os.Stat(g.tmpPath)
+	if err == nil {
+		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
+		if err != nil {
+			sendErr(err)
+			return *s
+		}
+		err = browser.OpenURL(
+			"http://localhost:" + g.port + "/getapp/" + appCode + "/index.html")
+		if err != nil {
+			sendErr(err)
+			return *s
+		}
+		g.doneCh <- struct{}{}
+		return *s
+	}
+	fileHandle, err := os.Open(g.appPath)
+	if err != nil {
+		fmt.Println("no file handle")
+		sendErr(err)
+		return *s
+	}
+	err = os.Mkdir(g.tmpPath, 0755)
+	if err != nil {
+		fmt.Println("mkdir failed")
+		sendErr(err)
+		return *s
+	}
+	tr := tar.NewReader(fileHandle)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("not a tar archive")
+			sendErr(err)
+			return *s
+		}
+		sourcePath := g.tmpPath + "/" + hdr.Name
+		sourceHandle, err := os.Create(sourcePath)
+		if err != nil {
+			sendErr(err)
+			return *s
+		}
+		_, err = io.Copy(sourceHandle, tr)
+		if err != nil {
+			sendErr(err)
+			return *s
+		}
+	}
+	newCode, err := genCode()
+	if err != nil {
+		sendErr(err)
+		return *s
+	}
+	err = browser.OpenURL("http://localhost:" + g.port + "/getapp/" + newCode + "/index.html")
+	if err != nil {
+		sendErr(err)
+		return *s
+	}
+	return newAppCodeNew(
+		newAppCodeT{
+			g.w,
+			g.appHash,
+			g.doneCh,
+			newCode,
+		}, s)
+	// return newAppCodeT{
+	// 	g.w,
+	// 	g.appHash,
+	// 	g.doneCh,
+	// 	newCode,
+	// }
+
+}
+
+func newAppCodeNew(n newAppCodeT, s *stateT) stateT {
+	newState := *s
+	newAppCodes := make(map[string][32]byte)
+	for code, hash := range s.appCodes {
+		newAppCodes[code] = hash
+	}
+	newAppCodes[n.newCode] = n.appHash
+	newState.appCodes = newAppCodes
+	n.doneCh <- struct{}{}
+	return newState
+}
+
+func processNewApp(
+	s stateT,
+	h httpInputT,
+	hash string,
+	tags map[string]struct{}) stateT {
+
+	appHash, err := hashFromString(hash)
+	if err != nil {
+		http.Error(h.w, err.Error(), 400)
+		h.doneCh <- struct{}{}
+		return s
+	}
+	posixTime := time.Now().Unix()
+	app := appMsgT{
+		s.publicSign,
+		tags,
+		appHash,
+		posixTime,
+		sliceToSig(sign.Sign(
+			make([]byte, 0),
+			common.HashToSlice(hashApp(
+				tags, appHash, posixTime)),
+			&s.secretSign)),
+	}
+	newApps := make([]appMsgT, len(s.apps))
+	for i, thisApp := range s.apps {
+		newApps[i] = thisApp
+	}
+	newApps = append(newApps, app)
+	newS := s
+	newS.apps = newApps
+	encodedApps, err := json.Marshal(newApps)
+	if err != nil {
+		http.Error(h.w, err.Error(), 500)
+		h.doneCh <- struct{}{}
+		return s
+	}
+
+	err = ioutil.WriteFile(s.dataDir + "/apps.txt", encodedApps, 0600)
+	if err != nil {
+		http.Error(h.w, err.Error(), 500)
+		h.doneCh <- struct{}{}
+		return s
+	}
+	h.w.Write(common.HashToSlice(appHash))
+	h.doneCh <- struct{}{}
+	return newS
 }
 
 type handlerT func(http.ResponseWriter, *http.Request)
