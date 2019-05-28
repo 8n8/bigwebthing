@@ -123,14 +123,6 @@ func readApps(dataDir string) ([]appMsgT, error) {
 	return apps, err
 }
 
-type readHttpInputT struct {
-	httpChan   chan httpInputT
-	tcpInChan  chan common.ClientToClient
-	homeCode   string
-	memberList map[publicSignT]struct{}
-	dataDir    string
-}
-
 func equalHashes(as [32]byte, bs [32]byte) bool {
 	for i, b := range bs {
 		if as[i] != b {
@@ -2405,15 +2397,6 @@ type writeNewAppsT struct {
 
 type chunksFinishedT struct {
 	appHash [32]byte
-}
-
-func defaultIO(s *stateT) readHttpInputT {
-	return readHttpInputT{
-		s.httpChan,
-		s.tcpInChan,
-		s.homeCode,
-		s.members,
-		s.dataDir}
 }
 
 func newChunksFinished(t [32]byte, s *stateT) stateT {
