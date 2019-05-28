@@ -2421,7 +2421,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	var output outputT = defaultIO(&state)
+	// var output outputT = defaultIO(&state)
 	for {
 		select {
 		case h := <-state.httpChan:
@@ -2453,6 +2453,80 @@ func processTcpInput(s stateT, c common.ClientToClient) stateT {
 			&s)
 	}
 	return s
+}
+
+func (chunk FileChunk) processNew(author [32]byte, s *stateT) stateT {
+	fmt.Println("chunk.Counter:")
+	fmt.Println(chunk.Counter)
+	previousChunks, ok := s.chunksLoading[chunk.AppHash]
+	fmt.Println("previousChunks:")
+	fmt.Println(previousChunks)
+	newChunksLoading := make(map[[32]byte][]fileChunkPtrT)
+	for appHash, chunkPtr := range s.chunksLoading {
+		newChunksLoading[appHash] = chunkPtr
+	}
+	chunkHash, err := hash(chunk)
+	if err != nil {
+		fmt.Println("Bad chunk hash in process FileChunk func:")
+		fmt.Println(err)
+		return *s
+	}
+	if !ok && chunk.Counter != 0 {
+		fmt.Println("ok:")
+		fmt.Println(ok)
+		fmt.Println("chunk.Counter:")
+		fmt.Println(chunk.Counter)
+		fmt.Println("!ok && chunk.Counter")
+		return *s
+	}
+	if !ok {
+		fmt.Println("!ok")
+		newChunksLoading[chunk.AppHash] = []fileChunkPtrT{
+			fileChunkPtrT{
+				chunkHash: chunkHash,
+				counter:   chunk.Counter,
+				lastChunk: chunk.LastChunk,
+			}}
+	} else {
+		lastChunk := previousChunks[len(previousChunks)-1]
+		if lastChunk.counter != chunk.Counter-1 {
+			fmt.Println("lastChunk.counter:")
+			fmt.Println(lastChunk.counter)
+			fmt.Println("chunk.Counter:")
+			fmt.Println(chunk.Counter)
+			fmt.Println("lastChunk.counter != chunk.Counter-1")
+			return *s
+		}
+		newChunksLoading[chunk.AppHash] = append(
+			newChunksLoading[chunk.AppHash],
+			fileChunkPtrT{
+				chunkHash: chunkHash,
+				counter:   chunk.Counter,
+				lastChunk: chunk.LastChunk,
+			})
+		fmt.Println("newChunksLoading:")
+		fmt.Println(newChunksLoading)
+	}
+	newS := *s
+	newS.chunksLoading = newChunksLoading
+	tmpFileName := base64.URLEncoding.EncodeToString(
+		common.HashToSlice(chunkHash))
+	symmetricKey, ok := s.symmetricKeys[author]
+	if !ok {
+		fmt.Println("Could not find symmetric key for author:")
+		fmt.Println(author)
+		return *s
+	}
+	return writeAppToFileNew(writeAppToFileAndSendReceiptT{
+		chunk.AppHash,
+		s.dataDir + "/tmp/" + tmpFileName,
+		chunk.Chunk,
+		s.secretSign,
+		symmetricKey,
+		s.tcpOutChan,
+		author,
+		s.publicSign,
+		}, &newS)
 }
 
 func processGiveMeKeyNew(keyRequest common.GiveMeASymmetricKey, author [32]byte, s *stateT) stateT {
@@ -3073,6 +3147,65 @@ func sliceToEncKey(slice []byte) ([common.EncryptedKeyLen]byte, error) {
 	return result, nil
 }
 
+func processHereIsAnEncryptionKeyNew(
+	newKey common.HereIsAnEncryptionKey,
+	author [32]byte,
+	s *stateT) stateT {
+
+	awaitingKey, ok := s.awaitingSymmetricKey[author]
+	if !ok {
+		fmt.Println("!ok at awaitingKey")
+		return *s
+	}
+	keyHash := hashHereIsKey(newKey)
+	signed, ok := sign.Open(
+		make([]byte, 0),
+		common.SigToSlice(newKey.Sig),
+		&author)
+	if !ok {
+		fmt.Println("!ok at checking signature.")
+		return *s
+	}
+	if !bytes.Equal(signed, common.HashToSlice([32]byte(keyHash))) {
+		fmt.Println("!bytes.Equal in processHereIsAnEncryptionKey")
+		return *s
+	}
+
+	secretKey, ok := s.keyPairs[newKey.YourPublicEncrypt]
+	secretKeyBytes := [32]byte(secretKey)
+	if !ok {
+		fmt.Println("!ok at getting out the private key.")
+		return *s
+	}
+
+	keySlice, ok := box.Open(
+		make([]byte, 0),
+		encKeyToSlice(newKey.EncryptedSymmetricKey),
+		&newKey.Nonce,
+		&newKey.MyPublicEncrypt,
+		&secretKeyBytes)
+	if !ok {
+		fmt.Println("!ok at decrypting key")
+		return *s
+	}
+	newS := *s
+	newAwaitingKeys := make(map[publicSignT]sendChunkT)
+	for k, v := range s.awaitingSymmetricKey {
+		newAwaitingKeys[k] = v
+	}
+	delete(newAwaitingKeys, author)
+	newS.awaitingSymmetricKey = newAwaitingKeys
+	newSymmetricKeys := make(map[publicSignT]symmetricEncrypt)
+	for k, v := range s.symmetricKeys {
+		newSymmetricKeys[k] = v
+	}
+	symmetricKey := common.SliceToHash(keySlice)
+	newSymmetricKeys[author] = symmetricKey
+	newS.symmetricKeys = newSymmetricKeys
+	awaitingKey.symmetricEncryptKey = symmetricKey
+	return sendChunkNew(s, sendChunkT(awaitingKey))
+}
+
 func processHereIsAnEncryptionKey(
 	newKey common.HereIsAnEncryptionKey,
 	author [32]byte,
@@ -3479,6 +3612,47 @@ type writeAppToFileAndSendReceiptT struct {
 	tcpOutChan chan common.ClientToClient
 	sender publicSignT
 	myPublicSign publicSignT
+}
+
+func writeAppToFileNew(w writeAppToFileAndSendReceiptT, s *stateT) stateT {
+	fmt.Println("Top of writeAppToFileT send function.")
+	fmt.Println(w.filePath)
+	err := ioutil.WriteFile(w.filePath, w.chunk, 0600)
+	if err != nil {
+		fmt.Println("Error writing app to file:")
+		fmt.Println(err)
+		return newChunksFinished(w.appHash, s)
+	}
+	var receipt Decrypted
+	chunkHash := blake2b.Sum256(w.chunk)
+	secretSignAsBytes := [64]byte(w.secretSign)
+	receipt = ReceiptT{
+		sliceToSig(sign.Sign(
+			make([]byte, 0),
+			receiptHash(chunkHash, receiptCode),
+			&secretSignAsBytes)),
+		chunkHash}
+	encoded, err := common.EncodeData(&receipt)
+	if err != nil {
+		fmt.Println(err)
+		return newChunksFinished(w.appHash, s)
+	}
+	nonce, err := makeNonce()
+	if err != nil {
+		return newChunksFinished(w.appHash, s)
+	}
+	keyAsBytes := [32]byte(w.symmetricKey)
+	encrypted := secretbox.Seal(
+		make([]byte, 0),
+		encoded,
+		&nonce,
+		&keyAsBytes)
+	w.tcpOutChan <- common.ClientToClient{
+		Msg: common.Encrypted{encrypted, nonce},
+		Recipient: w.sender,
+		Author: w.myPublicSign,
+	}
+	return *s
 }
 
 func (w writeAppToFileAndSendReceiptT) send() inputT {
