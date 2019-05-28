@@ -96,9 +96,11 @@ func makeMemberList(
 	return members
 }
 
-func readInvites(filePath string) (map[inviteT]struct{}, error) {
-	rawInvites, err := ioutil.ReadFile(filePath)
+func processInvites(rawInvites []byte, err error) (map[inviteT]struct{}, error) {
 	invites := make(map[inviteT]struct{})
+	if err != nil {
+		return invites, err
+	}
 	if err != nil {
 		return invites, nil
 	}
@@ -988,15 +990,19 @@ func decodeMsg(bs []byte) (Decrypted, error) {
 	return msg, err
 }
 
+func authBytes(author publicSignT) *[32]byte {
+	asBytes := [32]byte(author)
+	return &asBytes
+}
+
 func (appReceipt AppReceiptT) process(
 	author publicSignT,
 	s *stateT) stateT {
 
-	bytesAuthor := [32]byte(author)
 	signed, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appReceipt.Sig),
-		&bytesAuthor)
+		authBytes(author))
 	if !ok {
 		return *s
 	}
@@ -1346,11 +1352,11 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	invites, err := readInvites(invitesFile(dataDir))
+	invites, err := processInvites(ioutil.ReadFile(invitesFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
-	uninvites, err := readInvites(uninvitesFile(dataDir))
+	uninvites, err := processInvites(ioutil.ReadFile(uninvitesFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
