@@ -588,15 +588,12 @@ func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 		return newS
 	}
 	return assembleAppNew(assembleApp{
-		myPublicSign: s.publicSign,
 		symmetricKey: symmetricKey,
 		filePaths:    makeChunkFilePaths(chunkPtrs, s.dataDir),
 		appHash:      appSig.AppHash,
 		tmpPath:      makeChunkFilePath(appSig.AppHash, s.dataDir),
 		finalPath:    makeAppPath(s.dataDir, appSig.AppHash),
 		appSender:    author,
-		tcpOutChan:   s.tcpOutChan,
-		secretSign:   s.secretSign,
 		appMsg: appSig,
 	}, newS)
 }
@@ -644,7 +641,8 @@ func getEncryptionKey(g sendChunkT, s stateT) stateT {
 		Recipient: g.recipient,
 		Author:    g.myPublicSign,
 	}
-	a := awaitingSymmetricKeyT{sendChunkT(g), publicEncryptT(*pub), secretEncryptT(*priv)}
+	a := awaitingSymmetricKeyT{
+		sendChunkT(g), publicEncryptT(*pub), secretEncryptT(*priv)}
 
 	newAwaitingSK := make(map[publicSignT]sendChunkT)
 	for k, v := range s.awaitingSymmetricKey {
@@ -2128,39 +2126,29 @@ type assembleApp struct {
 	tmpPath      string
 	finalPath    string
 	appSender    [32]byte
-	tcpOutChan   chan common.ClientToClient
-	secretSign   [64]byte
-	myPublicSign [32]byte
 	appMsg appMsgT
 }
 
 func assembleAppNew(a assembleApp, s stateT) stateT {
-	fmt.Println("Top of assembleApp send() function")
 	tmpDestF, err := os.OpenFile(a.tmpPath, appendFlags, 0600)
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		fmt.Println("error making blake2b hasher")
 		return newChunksFinished(a.appHash, s)
 	}
 	for _, filePath := range a.filePaths {
 		chunk, err := ioutil.ReadFile(filePath)
 		if err != nil {
-			fmt.Println("error reading temporary file:")
-			fmt.Println(err)
 			return newChunksFinished(a.appHash, s)
 		}
 		nFile, err := tmpDestF.Write(chunk)
 		if err != nil {
-			fmt.Println(err)
 			return newChunksFinished(a.appHash, s)
 		}
 		nHash, err := hasher.Write(chunk)
 		if err != nil {
-			fmt.Println(err)
 			return newChunksFinished(a.appHash, s)
 		}
 		if nFile != len(chunk) || nFile != nHash {
-			fmt.Println("nFile != len(chunk) || nFile != nHash")
 			return newChunksFinished(a.appHash, s)
 		}
 	}
@@ -2168,11 +2156,6 @@ func assembleAppNew(a assembleApp, s stateT) stateT {
 	if !bytes.Equal(
 		finalHash,
 		common.HashToSlice(a.appHash)) {
-		fmt.Println("hashes not equal")
-		fmt.Println("finalHash:")
-		fmt.Println(base64.URLEncoding.EncodeToString(finalHash))
-		fmt.Println("common.HashToSlice(a.appHash)")
-		fmt.Println(base64.URLEncoding.EncodeToString(common.HashToSlice(a.appHash)))
 		return newChunksFinished(a.appHash, s)
 	}
 	_ = os.Rename(a.tmpPath, a.finalPath)
@@ -2181,19 +2164,15 @@ func assembleAppNew(a assembleApp, s stateT) stateT {
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
 			receiptHash(a.appHash, appReceiptCode),
-			&a.secretSign)),
+			&s.secretSign)),
 		a.appHash,
 	}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
-		fmt.Println("error encoding receipt:")
-		fmt.Println(err)
 		return newChunksFinished(a.appHash, s)
 	}
 	nonce, err := makeNonce()
 	if err != nil {
-		fmt.Println("error making nonce:")
-		fmt.Println(err)
 		return newChunksFinished(a.appHash, s)
 	}
 	encrypted := secretbox.Seal(
@@ -2201,14 +2180,12 @@ func assembleAppNew(a assembleApp, s stateT) stateT {
 		encoded,
 		&nonce,
 		&a.symmetricKey)
-	a.tcpOutChan <- common.ClientToClient{
+	s.tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
 		Recipient: a.appSender,
-		Author:    a.myPublicSign,
+		Author:    s.publicSign,
 	}
-	fmt.Println("Bottom of assembleApp send() function")
 	return addNewAppNew(a.appMsg, s)
-
 }
 
 type writeAppToFileAndSendReceiptT struct {
