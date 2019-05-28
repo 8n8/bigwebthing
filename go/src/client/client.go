@@ -630,7 +630,7 @@ type searchResultT struct {
 	Posixtime int64
 }
 
-func getEncryptionKey(g sendChunkT, s stateT) stateT {
+func requestEncryptionKey(g sendChunkT, s stateT) stateT {
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		fmt.Println(err)
@@ -651,13 +651,20 @@ func getEncryptionKey(g sendChunkT, s stateT) stateT {
 	newAwaitingSK[a.chunkInfo.recipient] = a.chunkInfo
 	newS := s
 	newS.awaitingSymmetricKey = newAwaitingSK
-	newKeyPairs := make(map[publicEncryptT]secretEncryptT)
-	for k, v := range s.keyPairs {
-		newKeyPairs[k] = v
-	}
+	newKeyPairs := copyKeyPairs(s.keyPairs)
 	newKeyPairs[a.publicKey] = a.privateKey
 	newS.keyPairs = newKeyPairs
 	return newS
+}
+
+type keyPairsT map[publicEncryptT]secretEncryptT
+
+func copyKeyPairs(old keyPairsT) keyPairsT {
+	newKPs := make(keyPairsT)
+	for k, v := range old {
+		newKPs[k] = v
+	}
+	return newKPs
 }
 
 func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
@@ -1852,7 +1859,7 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 		0,
 	}
 	if !ok {
-		return getEncryptionKey(sendChunk, s)
+		return requestEncryptionKey(sendChunk, s)
 	}
 	return sendChunkNew(s, sendChunk)
 }
