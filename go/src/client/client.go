@@ -270,11 +270,6 @@ type msgT interface {
 	msgTplaceholderFunc()
 }
 
-type envelopeT struct {
-	msg           msgT
-	correspondent [32]byte
-}
-
 func makeConn(
 	publicSign [32]byte,
 	secretSign [64]byte) (net.Conn, error) {
