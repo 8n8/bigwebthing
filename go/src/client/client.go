@@ -46,7 +46,6 @@ type stateT struct {
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
-	isMember              bool
 	isMemberCh            chan isMemberT
 	chunksLoading         map[[32]byte][]fileChunkPtrT
 	dataDir               string
@@ -1474,7 +1473,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		return s, err
 	}
 	memberList := makeMemberList(invites, uninvites)
-	_, mem := memberList[keys.publicsign]
 	return stateT{
 		apps:           apps,
 		httpChan:       make(chan httpInputT),
@@ -1487,7 +1485,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
-		isMember:       mem,
 		isMemberCh:     make(chan isMemberT),
 		chunksLoading:  make(map[[32]byte][]fileChunkPtrT),
 		dataDir:        dataDir,
