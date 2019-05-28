@@ -39,7 +39,6 @@ type stateT struct {
 	httpChan              chan httpInputT
 	tcpInChan             chan common.ClientToClient
 	tcpOutChan            chan common.ClientToClient
-	getInvitesChan        chan chan map[inviteT]struct{}
 	homeCode              string
 	appCodes              map[string][32]byte
 	publicSign            [32]byte
@@ -1484,7 +1483,6 @@ func initState(dataDir string, port string) (stateT, error) {
 		httpChan:       make(chan httpInputT),
 		tcpInChan:      make(chan common.ClientToClient),
 		tcpOutChan:     make(chan common.ClientToClient),
-		getInvitesChan: make(chan chan map[inviteT]struct{}),
 		homeCode:       homeCode,
 		appCodes:       make(map[string][32]byte),
 		publicSign:     keys.publicsign,
