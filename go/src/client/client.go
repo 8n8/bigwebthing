@@ -425,11 +425,12 @@ type logSendErrT struct {
 	Err       error
 }
 
-func sendErrFile(dataDir string) string {
-	return dataDir + "sendErrors.txt"
-}
+func logSendErr(
+	err error,
+	appHash [32]byte,
+	recipient [32]byte,
+	dataDir string) {
 
-func logSendErr(err error, appHash [32]byte, recipient [32]byte, dataDir string) {
 	msg := logSendErrT{
 		time.Now().Unix(),
 		appHash,
@@ -442,14 +443,14 @@ func logSendErr(err error, appHash [32]byte, recipient [32]byte, dataDir string)
 		return
 	}
 	f, openErr := os.OpenFile(
-		sendErrFile(dataDir),
+		dataDir + "/sendErrors.txt",
 		appendFlags,
 		0600)
+	defer f.Close()
 	if openErr != nil {
 		fmt.Print(openErr)
 		return
 	}
-	defer f.Close()
 	_, writeErr := f.Write(append([]byte("\n"), encoded...))
 	if writeErr != nil {
 		fmt.Print(writeErr)
