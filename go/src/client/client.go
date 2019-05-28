@@ -2304,6 +2304,33 @@ func processNormalApiInput(n normalApiInputT, s *stateT) stateT {
 	return *s
 }
 
+func processSearchAppsNew(n normalApiInputT, s *stateT) stateT {
+	sendErr := func(msg string) stateT {
+		http.Error(n.w, msg, 400)
+		n.doneCh <- struct{}{}
+		return *s
+	}
+	if !strEq(n.securityCode, s.homeCode) {
+		return sendErr("Bad security code.")
+	}
+	var searchQuery searchQueryT
+	err := json.Unmarshal(n.body, &searchQuery)
+	if err != nil {
+		return sendErr("Could not decode Json.")
+	}
+	matchingApps, err := search(s.apps, searchQuery)
+	if err != nil {
+		return sendErr(err.Error())
+	}
+	encoded, err := json.Marshal(matchingApps)
+	if err != nil {
+		return sendErr("Couldn't encode search results.")
+	}
+	n.w.Write(encoded)
+	n.doneCh <- struct{}{}
+	return *s
+}
+
 func processGetAppNew(n normalApiInputT, s *stateT) stateT {
 	if strEq(n.securityCode, s.homeCode) {
 		serveDocNew(serveDocT{
