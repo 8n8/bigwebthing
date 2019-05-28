@@ -454,8 +454,8 @@ type logSentSuccessT struct {
 }
 
 func logSentSuccess(
-	appHash [32]byte,
-	recipient [32]byte,
+	appHash blake2bHash,
+	recipient publicSignT,
 	dataDir string) {
 
 	msg := logSentSuccessT{appHash, recipient}
