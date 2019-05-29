@@ -1898,23 +1898,24 @@ func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
 }
 
 func unpackAppNew(g unpackAppT, s stateT) stateT {
-	sendErr := func(err error) {
+	sendErr := func(err error) stateT {
 		fmt.Println(err)
 		http.Error(g.w, err.Error(), 500)
 		g.doneCh <- struct{}{}
+		return s
 	}
 	_, err := os.Stat(g.tmpPath)
 	if err == nil {
 		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
 		if err != nil {
-			sendErr(err)
-			return s
+			return sendErr(err)
 		}
-		err = browser.OpenURL(
-			"http://localhost:" + g.port + "/getapp/" + appCode + "/index.html")
+		err = browser.OpenURL(fmt.Sprintf(
+			"http://localhost:%s/getapp/%s/index.html",
+			g.port,
+			appCode))
 		if err != nil {
-			sendErr(err)
-			return s
+			return sendErr(err)
 		}
 		g.doneCh <- struct{}{}
 		return s
@@ -1922,14 +1923,12 @@ func unpackAppNew(g unpackAppT, s stateT) stateT {
 	fileHandle, err := os.Open(g.appPath)
 	if err != nil {
 		fmt.Println("no file handle")
-		sendErr(err)
-		return s
+		return sendErr(err)
 	}
 	err = os.Mkdir(g.tmpPath, 0755)
 	if err != nil {
 		fmt.Println("mkdir failed")
-		sendErr(err)
-		return s
+		return sendErr(err)
 	}
 	tr := tar.NewReader(fileHandle)
 	for {
@@ -1939,30 +1938,25 @@ func unpackAppNew(g unpackAppT, s stateT) stateT {
 		}
 		if err != nil {
 			fmt.Println("not a tar archive")
-			sendErr(err)
-			return s
+			return sendErr(err)
 		}
 		sourcePath := g.tmpPath + "/" + hdr.Name
 		sourceHandle, err := os.Create(sourcePath)
 		if err != nil {
-			sendErr(err)
-			return s
+			return sendErr(err)
 		}
 		_, err = io.Copy(sourceHandle, tr)
 		if err != nil {
-			sendErr(err)
-			return s
+			return sendErr(err)
 		}
 	}
 	newCode, err := genCode()
 	if err != nil {
-		sendErr(err)
-		return s
+		return sendErr(err)
 	}
 	err = browser.OpenURL("http://localhost:" + g.port + "/getapp/" + newCode + "/index.html")
 	if err != nil {
-		sendErr(err)
-		return s
+		return sendErr(err)
 	}
 	return newAppCodeNew(
 		newAppCodeT{
