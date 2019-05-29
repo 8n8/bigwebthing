@@ -1988,17 +1988,28 @@ func unpackTarArchive(source string, dest string) error {
 	return nil
 }
 
+func copyApps(old []appMsgT) []appMsgT {
+	newApps := make([]appMsgT, len(old))
+	for i, app := range old {
+		newApps[i] = app
+	}
+	return newApps
+}
+
 func processNewApp(
 	s stateT,
 	h httpInputT,
 	hash string,
 	tags map[string]struct{}) stateT {
 
-	appHash, err := hashFromString(hash)
-	if err != nil {
-		http.Error(h.w, err.Error(), 400)
+	sendErr := func(msg string, code int) stateT {
+		http.Error(h.w, msg, code)
 		h.doneCh <- struct{}{}
 		return s
+	}
+	appHash, err := hashFromString(hash)
+	if err != nil {
+		return sendErr(err.Error(), 400)
 	}
 	posixTime := time.Now().Unix()
 	app := appMsgT{
@@ -2012,25 +2023,16 @@ func processNewApp(
 				tags, appHash, posixTime)),
 			&s.secretSign)),
 	}
-	newApps := make([]appMsgT, len(s.apps))
-	for i, thisApp := range s.apps {
-		newApps[i] = thisApp
-	}
-	newApps = append(newApps, app)
 	newS := s
-	newS.apps = newApps
-	encodedApps, err := json.Marshal(newApps)
+	newS.apps = append(copyApps(s.apps), app)
+	encodedApps, err := json.Marshal(newS.apps)
 	if err != nil {
-		http.Error(h.w, err.Error(), 500)
-		h.doneCh <- struct{}{}
-		return s
+		return sendErr(err.Error(), 500)
 	}
 
-	err = ioutil.WriteFile(s.dataDir + "/apps.txt", encodedApps, 0600)
+	err = ioutil.WriteFile(appsFile(s.dataDir), encodedApps, 0600)
 	if err != nil {
-		http.Error(h.w, err.Error(), 500)
-		h.doneCh <- struct{}{}
-		return s
+		return sendErr(err.Error(), 500)
 	}
 	h.w.Write(common.HashToSlice(appHash))
 	h.doneCh <- struct{}{}
