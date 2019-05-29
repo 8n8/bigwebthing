@@ -1673,7 +1673,7 @@ func processNormalApiInput(n normalApiInputT, s stateT) stateT {
 	case "searchapps":
 		return processSearchApps(n, s)
 	case "invite":
-		return processInvite(n, s)
+		return homeGuard(processInvite)
 	case "getmyid":
 		return homeGuard(processGetMyId)
 	case "getmembers":
@@ -1723,24 +1723,19 @@ func processInvite(n normalApiInputT, s stateT) stateT {
 		n.doneCh <- struct{}{}
 		return s
 	}
-	if !strEq(n.securityCode, s.homeCode) {
-		err := errors.New("Bad security code")
-		return sendErr(err, 400)
-	}
-	invitee, err := base64.URLEncoding.DecodeString(n.subRoute)
+	inviteeBytes, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
 		return sendErr(err, 400)
 	}
-	m := makeInviteT{common.SliceToHash(invitee), time.Now().Unix(), n.w, n.doneCh}
-
+	invitee := common.SliceToHash(inviteeBytes)
+	theTime := time.Now().Unix()
 	invite := inviteT{
-		PosixTime: m.posixTime,
-		Invitee:   m.invitee,
+		PosixTime: theTime,
+		Invitee:   invitee,
 		Author:    s.publicSign,
 		Signature: sliceToSig(sign.Sign(
 			make([]byte, 0),
-			common.HashToSlice(inviteHash(
-				m.posixTime, m.invitee)),
+			common.HashToSlice(inviteHash(theTime, invitee)),
 			&s.secretSign)),
 	}
 	newInvites := copyInvites(s.invites)
@@ -1749,20 +1744,15 @@ func processInvite(n normalApiInputT, s stateT) stateT {
 	if err != nil {
 		return sendErr(err, 500)
 	}
-
-	w := writeUpdatedInvitesT{
-		invitesFile(s.dataDir),
-		encodedInvites,
-		m.w,
-		m.doneCh,
-	}
-
-	err = ioutil.WriteFile(w.filepath, w.toWrite, 0600)
+	err = ioutil.WriteFile(
+		invitesFile(s.dataDir), encodedInvites, 0600)
 	if err != nil {
-		http.Error(w.w, err.Error(), 500)
+		return sendErr(err, 500)
 	}
-	w.doneCh <- struct{}{}
-	return s
+	n.doneCh <- struct{}{}
+	newS := s
+	newS.invites = newInvites
+	return newS
 }
 
 func processSearchApps(n normalApiInputT, s stateT) stateT {
