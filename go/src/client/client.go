@@ -1652,6 +1652,17 @@ func processHttpInput(s stateT, h httpInputT) stateT {
 }
 
 func processNormalApiInput(n normalApiInputT, s stateT) stateT {
+	homeGuard := func(
+		processor func(normalApiInputT, stateT) stateT) stateT {
+
+		if !strEq(n.securityCode, s.homeCode) {
+			http.Error(n.w, "Bad security code", 400)
+			n.doneCh <- struct{}{}
+			return s
+		}
+		return processor(n, s)
+	}
+
 	switch n.route {
 	case "makeapproute":
 		return processMakeAppRoute(n, s)
@@ -1664,26 +1675,27 @@ func processNormalApiInput(n normalApiInputT, s stateT) stateT {
 	case "invite":
 		return processInvite(n, s)
 	case "getmyid":
-		return processGetMyId(n, s)
+		return homeGuard(processGetMyId)
 	case "getmembers":
-		return processGetMembers(n, s)
+		return homeGuard(processGetMembers)
 	}
 	return s
 }
 
-func processGetMembers(n normalApiInputT, s stateT) stateT {
-	if !strEq(n.securityCode, s.homeCode) {
-		http.Error(n.w, "Bad security code", 400)
-		n.doneCh <- struct{}{}
-		return s
-	}
-	memberList := make([]publicSignT, len(s.members))
+func memberMapToList(
+	members map[publicSignT]struct{}) []publicSignT {
+
+	memberList := make([]publicSignT, len(members))
 	i := 0
-	for k, _ := range s.members {
+	for k, _ := range members {
 		memberList[i] = k
 		i++
 	}
-	encoded, err := json.Marshal(memberList)
+	return memberList
+}
+
+func processGetMembers(n normalApiInputT, s stateT) stateT {
+	encoded, err := json.Marshal(memberMapToList(s.members))
 	if err != nil {
 		http.Error(n.w, "Error encoding member list", 400)
 		n.doneCh <- struct{}{}
@@ -1694,15 +1706,13 @@ func processGetMembers(n normalApiInputT, s stateT) stateT {
 	return s
 }
 
+func encodePubId(pubId publicSignT) []byte {
+	return []byte(base64.URLEncoding.EncodeToString(
+		common.HashToSlice(pubId)))
+}
+
 func processGetMyId(n normalApiInputT, s stateT) stateT {
-	if !strEq(n.securityCode, s.homeCode) {
-		http.Error(n.w, "Bad security code", 400)
-		n.doneCh <- struct{}{}
-		return s
-	}
-	response := []byte(base64.URLEncoding.EncodeToString(
-		common.HashToSlice(s.publicSign)))
-	n.w.Write(response)
+	n.w.Write(encodePubId(s.publicSign))
 	n.doneCh <- struct{}{}
 	return s
 }
