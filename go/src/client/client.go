@@ -1885,7 +1885,7 @@ func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
 	}
 	hash := common.SliceToHash(hashSlice)
 	hashStr := hashToStr(hash)
-	return unpackAppNew(
+	return unpackAndLaunchApp(
 		unpackAppT{
 			s.appCodes,
 			n.w,
@@ -1897,7 +1897,7 @@ func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
 		}, s)
 }
 
-func unpackAppNew(g unpackAppT, s stateT) stateT {
+func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
 	sendErr := func(err error) stateT {
 		fmt.Println(err)
 		http.Error(g.w, err.Error(), 500)
@@ -1922,12 +1922,10 @@ func unpackAppNew(g unpackAppT, s stateT) stateT {
 	}
 	fileHandle, err := os.Open(g.appPath)
 	if err != nil {
-		fmt.Println("no file handle")
 		return sendErr(err)
 	}
 	err = os.Mkdir(g.tmpPath, 0755)
 	if err != nil {
-		fmt.Println("mkdir failed")
 		return sendErr(err)
 	}
 	tr := tar.NewReader(fileHandle)
@@ -1937,7 +1935,6 @@ func unpackAppNew(g unpackAppT, s stateT) stateT {
 			break
 		}
 		if err != nil {
-			fmt.Println("not a tar archive")
 			return sendErr(err)
 		}
 		sourcePath := g.tmpPath + "/" + hdr.Name
@@ -1954,7 +1951,11 @@ func unpackAppNew(g unpackAppT, s stateT) stateT {
 	if err != nil {
 		return sendErr(err)
 	}
-	err = browser.OpenURL("http://localhost:" + g.port + "/getapp/" + newCode + "/index.html")
+	err = browser.OpenURL(fmt.Sprintf(
+		"http://localhost:%s/getapp/%s/index.html",
+		g.port,
+		newCode,
+		"/index.html"))
 	if err != nil {
 		return sendErr(err)
 	}
