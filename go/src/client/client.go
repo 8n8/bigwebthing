@@ -1669,7 +1669,7 @@ func processNormalApiInput(n normalApiInputT, s stateT) stateT {
 	case "getapp":
 		return processGetApp(n, s)
 	case "sendapp":
-		return processSendApp(n, s)
+		return homeGuard(processSendApp)
 	case "searchapps":
 		return homeGuard(processSearchApps)
 	case "invite":
@@ -1821,14 +1821,20 @@ func serveDoc(w http.ResponseWriter, filePath string) error {
 	return err
 }
 
+func findApp(apps []appMsgT, appHash publicSignT) (appMsgT, error) {
+	for _, thisApp := range apps {
+		if equalHashes(thisApp.AppHash, appHash) {
+			return thisApp, nil
+		}
+	}
+	return *new(appMsgT), errors.New("Could not find app.")
+}
+
 func processSendApp(n normalApiInputT, s stateT) stateT {
 	sendErr := func(msg string) stateT {
 		http.Error(n.w, msg, 400)
 		n.doneCh <- struct{}{}
 		return s
-	}
-	if !strEq(n.securityCode, s.homeCode) {
-		return sendErr("Bad security code")
 	}
 	var sendAppJson sendAppJsonT
 	err := json.Unmarshal(n.body, &sendAppJson)
@@ -1847,12 +1853,9 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 		return sendErr(err.Error())
 	}
 	recipient := common.SliceToHash(recipientSlice)
-	var app appMsgT
-	for _, thisApp := range s.apps {
-		if equalHashes(thisApp.AppHash, appHash) {
-			app = thisApp
-			break
-		}
+	app, err := findApp(s.apps, appHash)
+	if err != nil {
+		return sendErr(err.Error())
 	}
 	filepath := s.dataDir + "/apps/" + hashToStr(appHash)
 	symmetricEncryptKey, ok := s.symmetricKeys[recipient]
