@@ -1671,7 +1671,7 @@ func processNormalApiInput(n normalApiInputT, s stateT) stateT {
 	case "sendapp":
 		return processSendApp(n, s)
 	case "searchapps":
-		return processSearchApps(n, s)
+		return homeGuard(processSearchApps)
 	case "invite":
 		return homeGuard(processInvite)
 	case "getmyid":
@@ -1755,29 +1755,29 @@ func processInvite(n normalApiInputT, s stateT) stateT {
 	return newS
 }
 
-func processSearchApps(n normalApiInputT, s stateT) stateT {
-	sendErr := func(msg string) stateT {
-		http.Error(n.w, msg, 400)
-		n.doneCh <- struct{}{}
-		return s
-	}
-	if !strEq(n.securityCode, s.homeCode) {
-		return sendErr("Bad security code")
-	}
+func processSearch(
+	rawRequest []byte,
+	apps []appMsgT) ([]byte, error) {
+
 	var searchQuery searchQueryT
-	err := json.Unmarshal(n.body, &searchQuery)
+	err := json.Unmarshal(rawRequest, &searchQuery)
 	if err != nil {
-		return sendErr("Could not decode Json.")
+		return *new([]byte), err
 	}
-	matchingApps, err := search(s.apps, searchQuery)
+	matchingApps, err := search(apps, searchQuery)
 	if err != nil {
-		return sendErr(err.Error())
+		return *new([]byte), err
 	}
-	encoded, err := json.Marshal(matchingApps)
+	return json.Marshal(matchingApps)
+}
+
+func processSearchApps(n normalApiInputT, s stateT) stateT {
+	encoded, err := processSearch(n.body, s.apps)
 	if err != nil {
-		return sendErr("Couldn't encode search results.")
+		http.Error(n.w, err.Error(), 400)
+	} else {
+		n.w.Write(encoded)
 	}
-	n.w.Write(encoded)
 	n.doneCh <- struct{}{}
 	return s
 }
