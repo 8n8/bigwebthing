@@ -1783,40 +1783,42 @@ func processSearchApps(n normalApiInputT, s stateT) stateT {
 }
 
 func processGetApp(n normalApiInputT, s stateT) stateT {
+	sendErr := func(msg string, code int) stateT {
+		http.Error(n.w, msg, code)
+		n.doneCh <- struct{}{}
+		return s
+	}
 	if strEq(n.securityCode, s.homeCode) {
-		serveDocNew(serveDocT{
-			n.w,
-			n.doneCh,
-			"home/" + n.subRoute,
-		})
+		err := serveDoc(n.w, "home/" + n.subRoute)
+		if err != nil {
+			return sendErr(err.Error(), 500)
+		}
 		return s
 	}
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
 	if err != nil {
-		http.Error(n.w, "Bad security code", 400)
-		n.doneCh <- struct{}{}
-		return s
+		return sendErr("Bad security code", 400)
 	}
-	serveDocNew(serveDocT{
-		n.w,
-		n.doneCh,
-		s.dataDir + "/tmp/" + hashToStr(docHash) + "/" + n.subRoute,
-	})
+	filePath := fmt.Sprintf(
+		"%s/tmp/%s/%s",
+		s.dataDir,
+		hashToStr(docHash),
+		n.subRoute)
+	err = serveDoc(n.w, filePath)
+	if err != nil {
+		return sendErr(err.Error(), 500)
+	}
+	n.doneCh <- struct{}{}
 	return s
 }
 
-func serveDocNew(s serveDocT) {
-	fileHandle, err := os.Open(s.filePath)
+func serveDoc(w http.ResponseWriter, filePath string) error {
+	fileHandle, err := os.Open(filePath)
 	if err != nil {
-		http.Error(s.w, err.Error(), 500)
-		s.doneCh <- struct{}{}
+		return err
 	}
-	_, err = io.Copy(s.w, fileHandle)
-	if err != nil {
-		http.Error(s.w, err.Error(), 500)
-		s.doneCh <- struct{}{}
-	}
-	s.doneCh <- struct{}{}
+	_, err = io.Copy(w, fileHandle)
+	return err
 }
 
 func processSendApp(n normalApiInputT, s stateT) stateT {
