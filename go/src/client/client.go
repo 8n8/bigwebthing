@@ -1665,7 +1665,7 @@ func processNormalApiInput(n normalApiInputT, s stateT) stateT {
 
 	switch n.route {
 	case "makeapproute":
-		return processMakeAppRoute(n, s)
+		return homeGuard(processMakeAppRoute)
 	case "getapp":
 		return processGetApp(n, s)
 	case "sendapp":
@@ -1877,11 +1877,6 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 }
 
 func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
-	if !strEq(n.securityCode, s.homeCode) {
-		http.Error(n.w, "Bad security code", 400)
-		n.doneCh <- struct{}{}
-		return s
-	}
 	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
 		http.Error(n.w, err.Error(), 400)
