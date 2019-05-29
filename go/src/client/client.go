@@ -589,7 +589,7 @@ func (appSig appMsgT) process(author publicSignT, s stateT) stateT {
 	if !ok {
 		return newS
 	}
-	return assembleAppNew(assembleApp{
+	return assembleAppAndSendReceipt(assembleApp{
 		symmetricKey: symmetricKey,
 		filePaths:    makeChunkFilePaths(chunkPtrs, s.dataDir),
 		appHash:      appSig.AppHash,
@@ -2049,6 +2049,16 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 	}
 }
 
+type symmetricKeysT map[publicSignT]symmetricEncrypt
+
+func copySymmetricKeys(old symmetricKeysT) symmetricKeysT {
+	newSymmetricKeys := make(map[publicSignT]symmetricEncrypt)
+	for k, v := range old {
+		newSymmetricKeys[k] = v
+	}
+	return newSymmetricKeys
+}
+
 func encKeyToSlice(key [common.EncryptedKeyLen]byte) []byte {
 	result := make([]byte, common.EncryptedKeyLen)
 	for i, b := range key {
@@ -2064,7 +2074,6 @@ func processHereIsAnEncryptionKey(
 
 	awaitingKey, ok := s.awaitingSymmetricKey[author]
 	if !ok {
-		fmt.Println("!ok at awaitingKey")
 		return s
 	}
 	keyHash := hashHereIsKey(newKey)
@@ -2073,21 +2082,16 @@ func processHereIsAnEncryptionKey(
 		common.SigToSlice(newKey.Sig),
 		&author)
 	if !ok {
-		fmt.Println("!ok at checking signature.")
 		return s
 	}
 	if !bytes.Equal(signed, common.HashToSlice([32]byte(keyHash))) {
-		fmt.Println("!bytes.Equal in processHereIsAnEncryptionKey")
 		return s
 	}
-
 	secretKey, ok := s.keyPairs[newKey.YourPublicEncrypt]
 	secretKeyBytes := [32]byte(secretKey)
 	if !ok {
-		fmt.Println("!ok at getting out the private key.")
 		return s
 	}
-
 	keySlice, ok := box.Open(
 		make([]byte, 0),
 		encKeyToSlice(newKey.EncryptedSymmetricKey),
@@ -2095,23 +2099,15 @@ func processHereIsAnEncryptionKey(
 		&newKey.MyPublicEncrypt,
 		&secretKeyBytes)
 	if !ok {
-		fmt.Println("!ok at decrypting key")
 		return s
 	}
+	symmetricKey := common.SliceToHash(keySlice)
 	newS := s
-	newAwaitingKeys := make(map[publicSignT]sendChunkT)
-	for k, v := range s.awaitingSymmetricKey {
-		newAwaitingKeys[k] = v
-	}
+	newAwaitingKeys := copyAwaitingKeys(s.awaitingSymmetricKey)
 	delete(newAwaitingKeys, author)
 	newS.awaitingSymmetricKey = newAwaitingKeys
-	newSymmetricKeys := make(map[publicSignT]symmetricEncrypt)
-	for k, v := range s.symmetricKeys {
-		newSymmetricKeys[k] = v
-	}
-	symmetricKey := common.SliceToHash(keySlice)
-	newSymmetricKeys[author] = symmetricKey
-	newS.symmetricKeys = newSymmetricKeys
+	newS.symmetricKeys = copySymmetricKeys(s.symmetricKeys)
+	newS.symmetricKeys[author] = symmetricKey
 	awaitingKey.symmetricEncryptKey = symmetricKey
 	return sendChunk(newS, sendChunkT(awaitingKey))
 }
@@ -2148,36 +2144,69 @@ type assembleApp struct {
 	appMsg appMsgT
 }
 
-func assembleAppNew(a assembleApp, s stateT) stateT {
-	tmpDestF, err := os.OpenFile(a.tmpPath, appendFlags, 0600)
+func writeChunksToTmpFile(
+	filePaths []string,
+	tmpPath string,
+	appHash [32]byte) error {
+
+	tmpDestF, err := os.OpenFile(tmpPath, appendFlags, 0600)
+	if err != nil {
+		return err
+	}
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
-		return newChunksFinished(a.appHash, s)
+		return err
 	}
-	for _, filePath := range a.filePaths {
-		chunk, err := ioutil.ReadFile(filePath)
+	for _, filePath := range filePaths {
+		err := addChunkToFile(filePath, hasher, tmpDestF)
 		if err != nil {
-			return newChunksFinished(a.appHash, s)
-		}
-		nFile, err := tmpDestF.Write(chunk)
-		if err != nil {
-			return newChunksFinished(a.appHash, s)
-		}
-		nHash, err := hasher.Write(chunk)
-		if err != nil {
-			return newChunksFinished(a.appHash, s)
-		}
-		if nFile != len(chunk) || nFile != nHash {
-			return newChunksFinished(a.appHash, s)
+			return err
 		}
 	}
 	finalHash := hasher.Sum(make([]byte, 0))
 	if !bytes.Equal(
 		finalHash,
-		common.HashToSlice(a.appHash)) {
+		common.HashToSlice(appHash)) {
+
+		return errors.New("Hash of assembled app is wrong.")
+	}
+	return nil
+}
+
+func addChunkToFile(
+	filePath string,
+	hasher io.Writer,
+	destHandle io.Writer) error {
+
+	chunk, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	nFile, err := destHandle.Write(chunk)
+	if err != nil {
+		return err
+	}
+	nHash, err := hasher.Write(chunk)
+	if err != nil {
+		return err
+	}
+	if nFile != len(chunk) {
+		return errors.New("Could not write whole chunk to file.")
+	}
+    if nFile != nHash {
+		return errors.New("Could not write whole chunk to hasher.")
+	}
+	return nil
+}
+
+func assembleAppAndSendReceipt(a assembleApp, s stateT) stateT {
+	err := writeChunksToTmpFile(a.filePaths, a.tmpPath, a.appHash)
+	if err != nil {
 		return newChunksFinished(a.appHash, s)
 	}
 	_ = os.Rename(a.tmpPath, a.finalPath)
+
+	// Send receipt for app.
 	var receipt Decrypted
 	receipt = AppReceiptT{
 		sliceToSig(sign.Sign(
@@ -2204,6 +2233,7 @@ func assembleAppNew(a assembleApp, s stateT) stateT {
 		Recipient: a.appSender,
 		Author:    s.publicSign,
 	}
+
 	return addNewAppNew(a.appMsg, s)
 }
 
