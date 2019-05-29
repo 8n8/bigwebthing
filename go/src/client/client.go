@@ -99,7 +99,7 @@ func makeMemberList(
 func processInvites(rawInvites []byte, err error) (map[inviteT]struct{}, error) {
 	invites := make(map[inviteT]struct{})
 	if err != nil {
-		return invites, err
+		return invites, nil
 	}
 	if err != nil {
 		return invites, nil
@@ -154,7 +154,9 @@ type inviteT struct {
 	Signature [common.SigSize]byte
 }
 
-func getFilePart(bodyFileReader *multipart.Reader) (*multipart.Part, error) {
+func getFilePart(
+	bodyFileReader *multipart.Reader) (*multipart.Part, error) {
+
 	filepart, err := bodyFileReader.NextPart()
 	if err != nil {
 		return filepart, err
@@ -1408,8 +1410,10 @@ func main() {
 		state.publicSign)
 	go httpServer(state.httpChan, state.homeCode, port)
 	fmt.Print(state.homeCode)
-	err = browser.OpenURL(
-		"http://localhost:" + port + "/getapp/" + state.homeCode + "/index.html")
+	err = browser.OpenURL(fmt.Sprintf(
+		"http://localhost:%s/getapp/%s/index.html",
+		port,
+		state.homeCode))
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1631,10 +1635,7 @@ func processHttpInput(s stateT, h httpInputT) stateT {
 	}
 	body, err := ioutil.ReadAll(h.r.Body)
 	if err != nil {
-		http.Error(
-			h.w,
-			err.Error(),
-			http.StatusInternalServerError)
+		http.Error(h.w, err.Error(), http.StatusInternalServerError)
 		h.doneCh <- struct{}{}
 		return s
 	}
@@ -1713,7 +1714,7 @@ func processInvite(n normalApiInputT, s stateT) stateT {
 		return s
 	}
 	if !strEq(n.securityCode, s.homeCode) {
-		err := errors.New("Bad security code.")
+		err := errors.New("Bad security code")
 		return sendErr(err, 400)
 	}
 	invitee, err := base64.URLEncoding.DecodeString(n.subRoute)
@@ -1761,7 +1762,7 @@ func processSearchApps(n normalApiInputT, s stateT) stateT {
 		return s
 	}
 	if !strEq(n.securityCode, s.homeCode) {
-		return sendErr("Bad security code.")
+		return sendErr("Bad security code")
 	}
 	var searchQuery searchQueryT
 	err := json.Unmarshal(n.body, &searchQuery)
@@ -1792,7 +1793,7 @@ func processGetApp(n normalApiInputT, s stateT) stateT {
 	}
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
 	if err != nil {
-		http.Error(n.w, "Bad security code.", 400)
+		http.Error(n.w, "Bad security code", 400)
 		n.doneCh <- struct{}{}
 		return s
 	}
@@ -1825,7 +1826,7 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 		return s
 	}
 	if !strEq(n.securityCode, s.homeCode) {
-		return sendErr("Bad security code.")
+		return sendErr("Bad security code")
 	}
 	var sendAppJson sendAppJsonT
 	err := json.Unmarshal(n.body, &sendAppJson)
@@ -2286,9 +2287,11 @@ func addNewAppNew(a appMsgT, s stateT) stateT {
 	return newS
 }
 
-var postRoutes = []string{"sendapp", "saveapp", "searchapps"}
+func httpServer(
+	inputChan chan httpInputT,
+	homeCode string,
+	port string) {
 
-func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:subRoute"),
@@ -2305,11 +2308,14 @@ func httpServer(inputChan chan httpInputT, homeCode string, port string) {
 	mux.HandleFunc(
 		pat.Get("/getmembers/:securityCode"),
 		handler("getmembers", inputChan))
-	for _, route := range postRoutes {
-		path := "/" + route + "/:securityCode"
-		mux.HandleFunc(
-			pat.Post(path),
-			handler(route, inputChan))
-	}
+	mux.HandleFunc(
+		pat.Post("/sendapp/:securityCode"),
+		handler("sendapp", inputChan))
+	mux.HandleFunc(
+		pat.Post("/saveapp/:securityCode"),
+		handler("saveapp", inputChan))
+	mux.HandleFunc(
+		pat.Post("/searchapps/:securityCode"),
+		handler("searchapps", inputChan))
 	http.ListenAndServe(":"+port, mux)
 }
