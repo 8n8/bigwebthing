@@ -1897,6 +1897,13 @@ func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
 		}, s)
 }
 
+func appUrl(port string, appCode string) string {
+	return fmt.Sprintf(
+		"http://localhost/%s/getapp/%s/index.html",
+		port,
+		appCode)
+}
+
 func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
 	sendErr := func(err error) stateT {
 		fmt.Println(err)
@@ -1904,80 +1911,81 @@ func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
 		g.doneCh <- struct{}{}
 		return s
 	}
+
 	_, err := os.Stat(g.tmpPath)
 	if err == nil {
 		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
 		if err != nil {
 			return sendErr(err)
 		}
-		err = browser.OpenURL(fmt.Sprintf(
-			"http://localhost:%s/getapp/%s/index.html",
-			g.port,
-			appCode))
+		err = browser.OpenURL(appUrl(g.port, appCode))
 		if err != nil {
 			return sendErr(err)
 		}
 		g.doneCh <- struct{}{}
 		return s
 	}
-	fileHandle, err := os.Open(g.appPath)
+
+	err = unpackTarArchive(g.appPath, g.tmpPath)
 	if err != nil {
 		return sendErr(err)
 	}
-	err = os.Mkdir(g.tmpPath, 0755)
-	if err != nil {
-		return sendErr(err)
-	}
-	tr := tar.NewReader(fileHandle)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return sendErr(err)
-		}
-		sourcePath := g.tmpPath + "/" + hdr.Name
-		sourceHandle, err := os.Create(sourcePath)
-		if err != nil {
-			return sendErr(err)
-		}
-		_, err = io.Copy(sourceHandle, tr)
-		if err != nil {
-			return sendErr(err)
-		}
-	}
+
 	newCode, err := genCode()
 	if err != nil {
 		return sendErr(err)
 	}
-	err = browser.OpenURL(fmt.Sprintf(
-		"http://localhost:%s/getapp/%s/index.html",
-		g.port,
-		newCode,
-		"/index.html"))
+	err = browser.OpenURL(appUrl(g.port, newCode))
 	if err != nil {
 		return sendErr(err)
 	}
-	return newAppCodeNew(
-		newAppCodeT{
-			g.w,
-			g.appHash,
-			g.doneCh,
-			newCode,
-		}, s)
+
+	newS := s
+	newS.appCodes = copyAppCodes(s.appCodes)
+	newS.appCodes[newCode] = g.appHash
+
+	return newS
 }
 
-func newAppCodeNew(n newAppCodeT, s stateT) stateT {
-	newState := s
+func copyAppCodes(old map[string]blake2bHash) map[string]blake2bHash {
 	newAppCodes := make(map[string]blake2bHash)
-	for code, hash := range s.appCodes {
+	for code, hash := range old {
 		newAppCodes[code] = hash
 	}
-	newAppCodes[n.newCode] = n.appHash
-	newState.appCodes = newAppCodes
-	n.doneCh <- struct{}{}
-	return newState
+	return newAppCodes
+}
+
+func unpackTarArchive(source string, dest string) error {
+	fileHandle, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+
+	err = os.Mkdir(dest, 0755)
+	if err != nil {
+		return err
+	}
+
+	tarReader := tar.NewReader(fileHandle)
+	for {
+		tarHeader, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		sourcePath := dest + "/" + tarHeader.Name
+		sourceHandle, err := os.Create(sourcePath)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(sourceHandle, tarReader)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func processNewApp(
