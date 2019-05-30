@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/big"
 	"archive/tar"
 	"bytes"
 	"common"
@@ -9,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/gob"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,7 +96,10 @@ func makeMemberList(
 	return members
 }
 
-func processInvites(rawInvites []byte, err error) (map[inviteT]struct{}, error) {
+func processInvites(
+	rawInvites []byte,
+	err error) (map[inviteT]struct{}, error) {
+
 	invites := make(map[inviteT]struct{})
 	if err != nil {
 		return invites, nil
@@ -714,7 +717,6 @@ type fileChunkPtrT struct {
 func sendChunk(state stateT, s sendChunkT) stateT {
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) stateT {
-		fmt.Println("Error in sendChunkT sender func:")
 		fmt.Println(err)
 		logSendErr(err, s.appMsg.AppHash, s.recipient, s.dataDir)
 		return state
@@ -1014,12 +1016,8 @@ func (appReceipt AppReceiptT) process(
 }
 
 func (receipt ReceiptT) process(author publicSignT, s stateT) stateT {
-	fmt.Println("The receipt is:")
-	fmt.Println(receipt)
 	chunkAwaiting, ok := s.chunksAwaitingReceipt[receipt.ChunkHash]
-	fmt.Println(len(s.chunksAwaitingReceipt))
 	if !ok {
-		fmt.Println("Received unexpected receipt.")
 		return s
 	}
 	if chunkAwaiting.lastChunk {
@@ -1031,8 +1029,6 @@ func (receipt ReceiptT) process(author publicSignT, s stateT) stateT {
 		newS.appsAwaitingReceipt = newAppsAwaiting
 		symmetricKey, ok := s.symmetricKeys[author]
 		if !ok {
-			fmt.Println("Could not find symmetric key for:")
-			fmt.Println(author)
 			return s
 		}
 		return sendAppMsg(sendAppMsgT{
@@ -1084,117 +1080,52 @@ func sendAppMsg(s sendAppMsgT, state stateT) stateT {
 }
 
 const (
-	pwlen = 5
+	// pwlen = 5
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 )
 
-func bytesToInt(bs [6]byte) int {
-}
+var passwordChars = []rune("abcdefghjkmnpqrstuvwxyz23456789")
 
-func base256ToBase31(x [6]byte) [10]byte {
-	var asInt int = 0
-	for i := 0; i < 6; i++ {
-		asInt += x[i] * math.Pow(256, i)
+func makePassword() (string, error) {
+	password := make([]rune, 10)
+	numChars := big.NewInt(int64(len(passwordChars)))
+	for i := range password {
+		bigI, err := rand.Int(rand.Reader, numChars)
+		if err != nil {
+			return "", err
+		}
+		password[i] = passwordChars[int(bigI.Int64())]
 	}
-	// asInt = (
-	// 	x[0] * math.Pow(256, 5) +
-	// 	x[1] * math.Pow(256, 4) +
-	// 	x[2] * math.Pow(256, 3) +
-	// 	x[3] * math.Pow(256, 2) +
-	// 	x[4] * math.Pow(256, 1) +
-	// 	x[5] * math.Pow(256, 0))
-	asInt/math.Pow(31, 9)
-	var result [10]byte
-	remainder := 0
-	for i := 0; i < 10; i++ {
-		result[0] = 
+	return string(password), nil
+}
+
+func sliceToSecretKey(secret []byte) [64]byte {
+	var result [64]byte
+	for i, b := range secret {
+		result[i] = b
 	}
-	remainder := 0
-	result[0] = asInt / math.Pow(31, 9) - remainder
-	remainder = asInt - result[0] * math.Pow(31, 9)
-	result[1] = asInt / math.Pow(31, 8)
-	result[2] = asInt / math.Pow(31, 7)
-	result[3] = asInt / math.Pow(31, 6)
-	result[4] = asInt / math.Pow(31, 5)
-	result[5] = asInt / math.Pow(31, 4)
-	result[6] = asInt / math.Pow(31, 3)
-	result[7] = asInt / math.Pow(31, 2)
-	result[8] = asInt / math.Pow(31, 1)
-	result[9] = asInt / math.Pow(31, 0)
-}
-
-func base31Decode(str string) ([6]byte, error) {
-}
-
-func bytesToInt(bs [6]byte) int {
-	var asInt int = 0
-	for i := 0; i < 6; i++ {
-		asInt += bs[i] * math.Pow(256, i)
-	}
-	return asInt
-}
-
-var charMap = map[rune]rune{
-	'0': 'a',
-	'1': 'b',
-	'2': 'c',
-	'3': 'd',
-	'4': 'e',
-	'5': 'f',
-	'6': 'g',
-	'7': 'h',
-	'8': 'j',
-	'9': 'k',
-	'a': 'm',
-	'b': 'n',
-	'c': 'p',
-	'd': 'q',
-	'e': 'r',
-	'f': 's',
-	'g': 't',
-	'h': 'u',
-	'i': 'v',
-	'j': 'w',
-	'k': 'x',
-	'l': 'y',
-	'm': 'z',
-	'n': '2',
-	'o': '3',
-	'p': '4',
-	'q': '5',
-	'r': '6',
-	's': '7',
-	't': '8',
-	'u': '9'}
-
-func convertChar(r rune) rune {
-	e, _ := charMap[r]
-	return e
-}
-
-func intToBytes(i int) [6]byte {
-	result := make([]byte, 6)
-	binary.LittleEndian.PutUint64(result, uint64(i))
 	return result
 }
 
-func base31Encode(raw [6]byte) string {
-	asInt := bytesToInt(raw)
-	asStr := strconv.FormatInt(int64(asInt), 31)
-	return strings.Map(convertChar, asStr)
+func secretKeyToSlice(secret [64]byte) []byte {
+	result := make([]byte, 64)
+	for i, b := range secret {
+		result[i] = b
+	}
+	return result
 }
 
-func makePassword() ([]byte, error) {
-	pw := make([]byte, pwlen)
-	n, err := rand.Read(pw)
-	if err != nil {
-		return make([]byte, 0), err
-	}
-	if n != pwlen {
-		return make([]byte, 0), errors.New("Wrong number of bytes.")
-	}
-	return pw, err
-}
+// func makePassword() ([]byte, error) {
+// 	pw := make([]byte, pwlen)
+// 	n, err := rand.Read(pw)
+// 	if err != nil {
+// 		return make([]byte, 0), err
+// 	}
+// 	if n != pwlen {
+// 		return make([]byte, 0), errors.New("Wrong number of bytes.")
+// 	}
+// 	return pw, err
+// }
 
 func makeSalt() ([32]byte, error) {
 	nonceSlice := make([]byte, 32)
@@ -1292,29 +1223,21 @@ func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
 
 type secretsFileT struct {
 	Publicsign    [32]byte
-	Publicencrypt [32]byte
 	Nonce         [24]byte
 	Salt          [32]byte
-	Secretkeys    []byte
-}
-
-type secretKeysT struct {
-	Secretsign    [64]byte
-	Secretencrypt [32]byte
+	EncryptedSecretSign    []byte
 }
 
 type keysT struct {
 	publicsign    [32]byte
-	publicencrypt [32]byte
 	secretsign    [64]byte
-	secretencrypt [32]byte
 }
 
 func slowHash(pw []byte, salt [32]byte) [32]byte {
 	return common.SliceToHash(argon2.IDKey(
 		pw,
 		common.HashToSlice(salt),
-		300,
+		10,
 		64*1024,
 		4,
 		32))
@@ -1328,31 +1251,20 @@ func extractKeys(password []byte, secretsFile []byte) (keysT, error) {
 		return keys, err
 	}
 	symmetricKey := slowHash(password, decoded.Salt)
-	decryptedKeys, ok := secretbox.Open(
+	secretSignBytes, ok := secretbox.Open(
 		make([]byte, 0),
-		decoded.Secretkeys,
+		decoded.EncryptedSecretSign,
 		&decoded.Nonce,
 		&symmetricKey)
 	if !ok {
 		return keys, errors.New("Could not decrypt keys.")
 	}
-	var decodedKeys secretKeysT
-	err = json.Unmarshal(decryptedKeys, &decodedKeys)
-	if err != nil {
-		return keys, err
-	}
 	return keysT{
 		decoded.Publicsign,
-		decoded.Publicencrypt,
-		decodedKeys.Secretsign,
-		decodedKeys.Secretencrypt}, nil
+		sliceToSecretKey(secretSignBytes)}, nil
 }
 
 func createKeys(dataDir string) error {
-	// pubEnc, secretEnc, err := box.GenerateKey(rand.Reader)
-	// if err != nil {
-	// 	return err
-	// }
 	pubSign, secretSign, err := sign.GenerateKey(rand.Reader)
 	if err != nil {
 		return err
@@ -1365,28 +1277,22 @@ func createKeys(dataDir string) error {
 	if err != nil {
 		return err
 	}
-	//secretKeys := secretKeysT{*secretSign, *secretEnc}
-	// encodedSecrets, err := json.Marshal(secretKeys)
-	// if err != nil {
-	// 	return err
-	// }
 	password, err := makePassword()
 	if err != nil {
 		return err
 	}
-	fmt.Println(hex.EncodeToString(password))
-	secretKey := slowHash(password, salt)
+	fmt.Println(password)
+	secretKey := slowHash([]byte(password), salt)
 	encryptedSecrets := secretbox.Seal(
 		make([]byte, 0),
-		encodedSecrets,
+		secretKeyToSlice(*secretSign),
 		&nonce,
 		&secretKey)
 	secretsFile := secretsFileT{
 		Publicsign:    *pubSign,
-		Publicencrypt: *pubEnc,
 		Nonce:         nonce,
 		Salt:          salt,
-		Secretkeys:    encryptedSecrets,
+		EncryptedSecretSign:    encryptedSecrets,
 	}
 	encodedFile, err := json.Marshal(secretsFile)
 	if err != nil {
@@ -1427,12 +1333,12 @@ func initState(dataDir string, port string) (stateT, error) {
 		}
 	}
 	fmt.Println("Please enter your password:")
-	passwordtxt, err := terminal.ReadPassword(int(syscall.Stdin))
-	password := make([]byte, hex.DecodedLen(len(passwordtxt)))
-	_, err = hex.Decode(password, passwordtxt)
-	if err != nil {
-		return s, err
-	}
+	password, err := terminal.ReadPassword(int(syscall.Stdin))
+	// password := make([]byte, hex.DecodedLen(len(passwordtxt)))
+	// _, err = hex.Decode(password, passwordtxt)
+	// if err != nil {
+	// 	return s, err
+	// }
 	keys, err := extractKeys(password, rawSecrets)
 	if err != nil {
 		return s, err
@@ -1550,31 +1456,19 @@ func processTcpInput(s stateT, c common.ClientToClient) stateT {
 }
 
 func (chunk FileChunk) process(author publicSignT, s stateT) stateT {
-	fmt.Println("chunk.Counter:")
-	fmt.Println(chunk.Counter)
 	previousChunks, ok := s.chunksLoading[chunk.AppHash]
-	fmt.Println("previousChunks:")
-	fmt.Println(previousChunks)
 	newChunksLoading := make(map[blake2bHash][]fileChunkPtrT)
 	for appHash, chunkPtr := range s.chunksLoading {
 		newChunksLoading[appHash] = chunkPtr
 	}
 	chunkHash, err := hash(chunk)
 	if err != nil {
-		fmt.Println("Bad chunk hash in process FileChunk func:")
-		fmt.Println(err)
 		return s
 	}
 	if !ok && chunk.Counter != 0 {
-		fmt.Println("ok:")
-		fmt.Println(ok)
-		fmt.Println("chunk.Counter:")
-		fmt.Println(chunk.Counter)
-		fmt.Println("!ok && chunk.Counter")
 		return s
 	}
 	if !ok {
-		fmt.Println("!ok")
 		newChunksLoading[chunk.AppHash] = []fileChunkPtrT{
 			fileChunkPtrT{
 				chunkHash: chunkHash,
@@ -1585,11 +1479,6 @@ func (chunk FileChunk) process(author publicSignT, s stateT) stateT {
 	} else {
 		lastChunk := previousChunks[len(previousChunks)-1]
 		if lastChunk.counter != chunk.Counter-1 {
-			fmt.Println("lastChunk.counter:")
-			fmt.Println(lastChunk.counter)
-			fmt.Println("chunk.Counter:")
-			fmt.Println(chunk.Counter)
-			fmt.Println("lastChunk.counter != chunk.Counter-1")
 			return s
 		}
 		newChunksLoading[chunk.AppHash] = append(
@@ -1599,8 +1488,6 @@ func (chunk FileChunk) process(author publicSignT, s stateT) stateT {
 				counter:   chunk.Counter,
 				lastChunk: chunk.LastChunk,
 			})
-		fmt.Println("newChunksLoading:")
-		fmt.Println(newChunksLoading)
 	}
 	newS := s
 	newS.chunksLoading = newChunksLoading
@@ -1689,10 +1576,6 @@ func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte, s 
 func processEncrypted(encrypted common.Encrypted, author [32]byte, s stateT) stateT {
 	decryptionKey, ok := s.symmetricKeys[author]
 	if !ok {
-		fmt.Println("Top of !ok.")
-		fmt.Println(author)
-		fmt.Println(s.symmetricKeys)
-		fmt.Println("Could not find decryption key.")
 		return s
 	}
 	decryptionKeyAs32Byte := [32]byte(decryptionKey)
@@ -1702,18 +1585,17 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte, s stateT) sta
 		&encrypted.Nonce,
 		&decryptionKeyAs32Byte)
 	if !ok {
-		fmt.Println("Could not decrypt message.")
 		return s
 	}
 	decoded, err := decodeMsg(decrypted)
 	if err != nil {
-		fmt.Println(err)
 		return s
 	}
 	return decoded.process(author, s)
 }
 
 func processHttpInput(s stateT, h httpInputT) stateT {
+	fmt.Println("Top of processHttpInput.")
 	securityCode := pat.Param(h.r, "securityCode")
 	subRoute := ""
 	if _, ok := subRouteApps[h.route]; ok {
@@ -1722,7 +1604,6 @@ func processHttpInput(s stateT, h httpInputT) stateT {
 	if h.route == "saveapp" {
 		hash, tags, err := writeAppToFile(h.r, s.dataDir)
 		if err != nil {
-			fmt.Println(err)
 			http.Error(h.w, err.Error(), 500)
 			h.doneCh <- struct{}{}
 			return s
@@ -1748,6 +1629,7 @@ func processHttpInput(s stateT, h httpInputT) stateT {
 }
 
 func processNormalApiInput(n normalApiInputT, s stateT) stateT {
+	fmt.Println("Top of processNormalApiInput.")
 	homeGuard := func(
 		processor func(normalApiInputT, stateT) stateT) stateT {
 
@@ -1756,9 +1638,10 @@ func processNormalApiInput(n normalApiInputT, s stateT) stateT {
 			n.doneCh <- struct{}{}
 			return s
 		}
+		fmt.Println("Just above 'processor(n, s)' in homeGuard.")
 		return processor(n, s)
 	}
-
+	fmt.Println(n)
 	switch n.route {
 	case "makeapproute":
 		return homeGuard(processMakeAppRoute)
@@ -1879,16 +1762,20 @@ func processSearchApps(n normalApiInputT, s stateT) stateT {
 }
 
 func processGetApp(n normalApiInputT, s stateT) stateT {
+	fmt.Println("Top of processGetApp.")
 	sendErr := func(msg string, code int) stateT {
+		fmt.Println(msg)
 		http.Error(n.w, msg, code)
 		n.doneCh <- struct{}{}
 		return s
 	}
 	if strEq(n.securityCode, s.homeCode) {
+		fmt.Println("Home code")
 		err := serveDoc(n.w, "home/" + n.subRoute)
 		if err != nil {
 			return sendErr(err.Error(), 500)
 		}
+		n.doneCh <- struct{}{}
 		return s
 	}
 	docHash, err := getDocHash(n.securityCode, s.appCodes)
@@ -1900,15 +1787,18 @@ func processGetApp(n normalApiInputT, s stateT) stateT {
 		s.dataDir,
 		hashToStr(docHash),
 		n.subRoute)
+	fmt.Println("Just above call to serveDoc in processGetApp.")
 	err = serveDoc(n.w, filePath)
 	if err != nil {
 		return sendErr(err.Error(), 500)
 	}
 	n.doneCh <- struct{}{}
+	fmt.Println("Bottom of processGetApp.")
 	return s
 }
 
 func serveDoc(w http.ResponseWriter, filePath string) error {
+	fmt.Println("Top of serveDoc.")
 	fileHandle, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -1973,8 +1863,11 @@ func processSendApp(n normalApiInputT, s stateT) stateT {
 }
 
 func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
+	fmt.Println("Top of processMakeAppRoute.")
 	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
+		fmt.Println("Error in processMakeAppRoute:")
+		fmt.Println(err)
 		http.Error(n.w, err.Error(), 400)
 		n.doneCh <- struct{}{}
 		return s
@@ -1995,13 +1888,15 @@ func processMakeAppRoute(n normalApiInputT, s stateT) stateT {
 
 func appUrl(port string, appCode string) string {
 	return fmt.Sprintf(
-		"http://localhost/%s/getapp/%s/index.html",
+		"http://localhost:%s/getapp/%s/index.html",
 		port,
 		appCode)
 }
 
 func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
+	fmt.Println("Top of unpackAndLaunchApp")
 	sendErr := func(err error) stateT {
+		fmt.Println("Error in unpackAndLaunchApp.")
 		fmt.Println(err)
 		http.Error(g.w, err.Error(), 500)
 		g.doneCh <- struct{}{}
@@ -2010,6 +1905,7 @@ func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
 
 	_, err := os.Stat(g.tmpPath)
 	if err == nil {
+		fmt.Println("Already unpacked.")
 		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
 		if err != nil {
 			return sendErr(err)
@@ -2019,10 +1915,14 @@ func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
 			return sendErr(err)
 		}
 		g.doneCh <- struct{}{}
+		fmt.Println("Bottom of already unpacked block.")
 		return s
 	}
 
+	fmt.Println("Just above unpackTarArchive.")
+
 	err = unpackTarArchive(g.appPath, g.tmpPath)
+	fmt.Println("Tar archive unpacked.")
 	if err != nil {
 		return sendErr(err)
 	}
@@ -2039,6 +1939,8 @@ func unpackAndLaunchApp(g unpackAppT, s stateT) stateT {
 	newS := s
 	newS.appCodes = copyAppCodes(s.appCodes)
 	newS.appCodes[newCode] = g.appHash
+	g.doneCh <- struct{}{}
+	fmt.Println("Bottom of unpackAndLaunchApp.")
 
 	return newS
 }
@@ -2345,12 +2247,9 @@ type writeAppToFileAndSendReceiptT struct {
 }
 
 func writeAppToFileNew(w writeAppToFileAndSendReceiptT, s stateT) stateT {
-	fmt.Println("Top of writeAppToFileT send function.")
 	fmt.Println(w.filePath)
 	err := ioutil.WriteFile(w.filePath, w.chunk, 0600)
 	if err != nil {
-		fmt.Println("Error writing app to file:")
-		fmt.Println(err)
 		return newChunksFinished(w.appHash, s)
 	}
 	var receipt Decrypted
@@ -2364,7 +2263,6 @@ func writeAppToFileNew(w writeAppToFileAndSendReceiptT, s stateT) stateT {
 		chunkHash}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
-		fmt.Println(err)
 		return newChunksFinished(w.appHash, s)
 	}
 	nonce, err := makeNonce()
