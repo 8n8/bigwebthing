@@ -1088,6 +1088,102 @@ const (
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 )
 
+func bytesToInt(bs [6]byte) int {
+}
+
+func base256ToBase31(x [6]byte) [10]byte {
+	var asInt int = 0
+	for i := 0; i < 6; i++ {
+		asInt += x[i] * math.Pow(256, i)
+	}
+	// asInt = (
+	// 	x[0] * math.Pow(256, 5) +
+	// 	x[1] * math.Pow(256, 4) +
+	// 	x[2] * math.Pow(256, 3) +
+	// 	x[3] * math.Pow(256, 2) +
+	// 	x[4] * math.Pow(256, 1) +
+	// 	x[5] * math.Pow(256, 0))
+	asInt/math.Pow(31, 9)
+	var result [10]byte
+	remainder := 0
+	for i := 0; i < 10; i++ {
+		result[0] = 
+	}
+	remainder := 0
+	result[0] = asInt / math.Pow(31, 9) - remainder
+	remainder = asInt - result[0] * math.Pow(31, 9)
+	result[1] = asInt / math.Pow(31, 8)
+	result[2] = asInt / math.Pow(31, 7)
+	result[3] = asInt / math.Pow(31, 6)
+	result[4] = asInt / math.Pow(31, 5)
+	result[5] = asInt / math.Pow(31, 4)
+	result[6] = asInt / math.Pow(31, 3)
+	result[7] = asInt / math.Pow(31, 2)
+	result[8] = asInt / math.Pow(31, 1)
+	result[9] = asInt / math.Pow(31, 0)
+}
+
+func base31Decode(str string) ([6]byte, error) {
+}
+
+func bytesToInt(bs [6]byte) int {
+	var asInt int = 0
+	for i := 0; i < 6; i++ {
+		asInt += bs[i] * math.Pow(256, i)
+	}
+	return asInt
+}
+
+var charMap = map[rune]rune{
+	'0': 'a',
+	'1': 'b',
+	'2': 'c',
+	'3': 'd',
+	'4': 'e',
+	'5': 'f',
+	'6': 'g',
+	'7': 'h',
+	'8': 'j',
+	'9': 'k',
+	'a': 'm',
+	'b': 'n',
+	'c': 'p',
+	'd': 'q',
+	'e': 'r',
+	'f': 's',
+	'g': 't',
+	'h': 'u',
+	'i': 'v',
+	'j': 'w',
+	'k': 'x',
+	'l': 'y',
+	'm': 'z',
+	'n': '2',
+	'o': '3',
+	'p': '4',
+	'q': '5',
+	'r': '6',
+	's': '7',
+	't': '8',
+	'u': '9'}
+
+func convertChar(r rune) rune {
+	e, _ := charMap[r]
+	return e
+}
+
+func intToBytes(i int) [6]byte {
+	result := make([]byte, 6)
+	binary.LittleEndian.PutUint64(result, uint64(i))
+	return result
+}
+
+func base31Encode(raw [6]byte) string {
+	asInt := bytesToInt(raw)
+	asStr := strconv.FormatInt(int64(asInt), 31)
+	return strings.Map(convertChar, asStr)
+}
+
 func makePassword() ([]byte, error) {
 	pw := make([]byte, pwlen)
 	n, err := rand.Read(pw)
@@ -1253,10 +1349,10 @@ func extractKeys(password []byte, secretsFile []byte) (keysT, error) {
 }
 
 func createKeys(dataDir string) error {
-	pubEnc, secretEnc, err := box.GenerateKey(rand.Reader)
-	if err != nil {
-		return err
-	}
+	// pubEnc, secretEnc, err := box.GenerateKey(rand.Reader)
+	// if err != nil {
+	// 	return err
+	// }
 	pubSign, secretSign, err := sign.GenerateKey(rand.Reader)
 	if err != nil {
 		return err
@@ -1269,11 +1365,11 @@ func createKeys(dataDir string) error {
 	if err != nil {
 		return err
 	}
-	secretKeys := secretKeysT{*secretSign, *secretEnc}
-	encodedSecrets, err := json.Marshal(secretKeys)
-	if err != nil {
-		return err
-	}
+	//secretKeys := secretKeysT{*secretSign, *secretEnc}
+	// encodedSecrets, err := json.Marshal(secretKeys)
+	// if err != nil {
+	// 	return err
+	// }
 	password, err := makePassword()
 	if err != nil {
 		return err
@@ -1393,7 +1489,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	err = os.Mkdir(dataDir+"/tmp", 0755)
+	err = os.Mkdir(dataDir + "/tmp", 0755)
 	if err != nil {
 		fmt.Println(err)
 		return
