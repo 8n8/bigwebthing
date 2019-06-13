@@ -385,13 +385,6 @@ type unpackAppT struct {
 	port     string
 }
 
-type newAppCodeT struct {
-	w       http.ResponseWriter
-	appHash [32]byte
-	doneCh  chan struct{}
-	newCode string
-}
-
 func getDocHash(
 	securityCode string,
 	appCodes map[string]blake2bHash) (blake2bHash, error) {
@@ -889,19 +882,6 @@ type searchResultsT struct {
 	Tags []string
 }
 
-type serveDocT struct {
-	w        http.ResponseWriter
-	doneCh   chan struct{}
-	filePath string
-}
-
-type makeInviteT struct {
-	invitee   [32]byte
-	posixTime int64
-	w         http.ResponseWriter
-	doneCh    chan struct{}
-}
-
 var inviteContext = [16]byte{49, 46, 232, 88, 87, 218, 38, 83, 52, 64, 244, 143, 33, 23, 18, 19}
 
 func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
@@ -938,13 +918,6 @@ func invitesToSlice(invites map[inviteT]struct{}) []inviteT {
 		i++
 	}
 	return invitesSlice
-}
-
-type writeUpdatedInvitesT struct {
-	filepath string
-	toWrite  []byte
-	w        http.ResponseWriter
-	doneCh   chan struct{}
 }
 
 func getHashSecurityCode(appCodes map[string]blake2bHash, hash blake2bHash) (string, error) {
@@ -1195,12 +1168,6 @@ type chunkAwaitingReceiptT struct {
 	lastChunk bool
 }
 
-type appAwaitingReceiptT struct {
-	appHash   [32]byte
-	recipient [32]byte
-	lastChunkAwaiting chunkAwaitingReceiptT
-}
-
 type sendChunkT struct {
 	myPublicSign        [32]byte
 	dataDir             string
@@ -1412,10 +1379,7 @@ func main() {
 		state.publicSign)
 	go httpServer(state.httpChan, state.homeCode, port)
 	fmt.Print(state.homeCode)
-	err = browser.OpenURL(fmt.Sprintf(
-		"http://localhost:%s/getapp/%s/index.html",
-		port,
-		state.homeCode))
+	err = browser.OpenURL(appUrl(port, state.homeCode))
 	if err != nil {
 		fmt.Println(err)
 		return
