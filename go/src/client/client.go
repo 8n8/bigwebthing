@@ -318,24 +318,44 @@ func tcpListen(
 }
 
 func tcpServer(
-	inChan chan common.ClientToClient,
-	outChan chan common.ClientToClient,
+	in chan common.ClientToClient,
+	out chan common.ClientToClient,
 	secretSign [64]byte,
 	publicSign [32]byte) {
 
-	var conn net.Conn
-	connErr := errors.New("Not connected yet.")
-	connErrCh := make(chan struct{})
+	stop := make(chan struct{})
 	for {
-		conn, connErr = makeConn(publicSign, secretSign)
-		if connErr != nil {
+		conn, err := makeConn(publicSign, secretSign)
+		if err != nil {
 			time.Sleep(time.Second)
 			continue
 		}
 		func() {
-			go tcpListen(conn, inChan, connErrCh)
-			go tcpSend(conn, outChan, connErrCh)
-			<-connErrCh
+			go func() {
+				for {
+					msg, err := common.ReadClientToClient(conn)
+					if err != nil {
+						stop <- struct{}{}
+					}
+					in <- msg
+				}
+			}()
+			go func() {
+				for {
+					msg, err := common.EncodeClientToClient(<-out)
+					if err != nil {
+						continue
+					}
+					n, err := conn.Write(msg)
+					if err != nil {
+						stop <- struct{}{}
+					}
+					if n != len(msg) {
+						stop <- struct{}{}
+					}
+				}
+			}()
+			<-stop
 		}()
 	}
 }
@@ -1559,7 +1579,6 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte, s stateT) sta
 }
 
 func processHttpInput(s stateT, h httpInputT) stateT {
-	fmt.Println("Top of processHttpInput.")
 	securityCode := pat.Param(h.r, "securityCode")
 	subRoute := ""
 	if _, ok := subRouteApps[h.route]; ok {
