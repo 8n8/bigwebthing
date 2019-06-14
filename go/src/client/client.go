@@ -2240,7 +2240,6 @@ func httpServer() {
 	mux.HandleFunc(
 		pat.Post("/saveapp/:securityCode"), httpSaveApp)
 	mux.HandleFunc(
-		pat.Post("/searchapps/:securityCode"),
-		handler("searchapps"))
-	http.ListenAndServe(":"+port, mux)
+		pat.Post("/searchapps/:securityCode"), httpSearchApps)
+	http.ListenAndServe(":" + port, mux)
 }
