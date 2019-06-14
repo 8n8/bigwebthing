@@ -52,10 +52,11 @@ var keyPairs = map[publicEncryptT]secretEncryptT{}
 var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
 var tcpInChan = make(chan common.ClientToClient)
 var tcpOutChan = make(chan common.ClientToClient)
+var httpChan = make(chan httpInputT)
 
 type stateT struct {
 	//apps                  []appMsgT
-	httpChan              chan httpInputT
+	//httpChan              chan httpInputT
 	//tcpInChan             chan common.ClientToClient
 	//tcpOutChan            chan common.ClientToClient
 	//homeCode              string
@@ -1226,7 +1227,7 @@ func initState() (stateT, error) {
 	members = makeMemberList()
 	return stateT{
 		//apps:           apps,
-		httpChan:       make(chan httpInputT),
+		//httpChan:       make(chan httpInputT),
 		//tcpInChan:      make(chan common.ClientToClient),
 		//tcpOutChan:     make(chan common.ClientToClient),
 		//homeCode:       homeCode,
@@ -1274,7 +1275,7 @@ func main() {
 		return
 	}
 	go tcpServer()
-	go httpServer(state.httpChan)
+	go httpServer()
 	fmt.Print(homeCode)
 	err = browser.OpenURL(appUrl(homeCode))
 	if err != nil {
@@ -1283,7 +1284,7 @@ func main() {
 	}
 	for {
 		select {
-		case h := <-state.httpChan:
+		case h := <-httpChan:
 			processHttpInput(&state, h)
 		case tcpIn := <-tcpInChan:
 			processTcpInput(&state, tcpIn)
@@ -1803,10 +1804,10 @@ func processNewApp(
 
 type handlerT func(http.ResponseWriter, *http.Request)
 
-func handler(route string, inputChan chan httpInputT) handlerT {
+func handler(route string) handlerT {
 	return func(w http.ResponseWriter, r *http.Request) {
 		doneCh := make(chan struct{})
-		inputChan <- httpInputT{w, r, route, doneCh}
+		httpChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
 	}
 }
@@ -2044,31 +2045,31 @@ func hash(i interface{}) ([32]byte, error) {
 	return blake2b.Sum256(buf.Bytes()), nil
 }
 
-func httpServer(inputChan chan httpInputT) {
+func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:subRoute"),
-		handler("getapp", inputChan))
+		handler("getapp"))
 	mux.HandleFunc(
 		pat.Get("/makeapproute/:securityCode/:subRoute"),
-		handler("makeapproute", inputChan))
+		handler("makeapproute"))
 	mux.HandleFunc(
 		pat.Post("/invite/:securityCode/:subRoute"),
-		handler("invite", inputChan))
+		handler("invite"))
 	mux.HandleFunc(
 		pat.Get("/getmyid/:securityCode"),
-		handler("getmyid", inputChan))
+		handler("getmyid"))
 	mux.HandleFunc(
 		pat.Get("/getmembers/:securityCode"),
-		handler("getmembers", inputChan))
+		handler("getmembers"))
 	mux.HandleFunc(
 		pat.Post("/sendapp/:securityCode"),
-		handler("sendapp", inputChan))
+		handler("sendapp"))
 	mux.HandleFunc(
 		pat.Post("/saveapp/:securityCode"),
-		handler("saveapp", inputChan))
+		handler("saveapp"))
 	mux.HandleFunc(
 		pat.Post("/searchapps/:securityCode"),
-		handler("searchapps", inputChan))
+		handler("searchapps"))
 	http.ListenAndServe(":"+port, mux)
 }
