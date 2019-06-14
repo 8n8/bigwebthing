@@ -67,7 +67,7 @@ type stateT struct {
 	//members               map[publicSignT]struct{}
 	//chunksLoading         map[blake2bHash][]fileChunkPtrT
 	//dataDir               string
-	port                  string
+	//port                  string
 	chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
 	appsAwaitingReceipt   map[blake2bHash]publicSignT
 	symmetricKeys         map[publicSignT]symmetricEncrypt
@@ -1182,7 +1182,7 @@ func keysFile(dataDir string) string {
 	return dataDir + "/TOP_SECRET_DONT_SHARE.txt"
 }
 
-func initState(dataDir string, port string) (stateT, error) {
+func initState() (stateT, error) {
 	var err error
 	homeCode, err = genCode()
 	var s stateT
@@ -1241,7 +1241,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//members:        memberList,
 		//chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
 		//dataDir:        dataDir,
-		port:           port,
+		//port:           port,
 	}, nil
 }
 
@@ -1271,7 +1271,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	state, err := initState(dataDir, port)
+	state, err := initState()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1279,9 +1279,9 @@ func main() {
 	go tcpServer(
 		state.tcpInChan,
 		state.tcpOutChan)
-	go httpServer(state.httpChan, port)
+	go httpServer(state.httpChan)
 	fmt.Print(homeCode)
-	err = browser.OpenURL(appUrl(port, homeCode))
+	err = browser.OpenURL(appUrl(homeCode))
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1698,7 +1698,7 @@ func processMakeAppRoute(n normalApiInputT, s *stateT) {
 			sendErr(err)
 			return
 		}
-		err = browser.OpenURL(appUrl(s.port, appCode))
+		err = browser.OpenURL(appUrl(appCode))
 		if err != nil {
 			sendErr(err)
 			return
@@ -1717,7 +1717,7 @@ func processMakeAppRoute(n normalApiInputT, s *stateT) {
 		sendErr(err)
 		return
 	}
-	err = browser.OpenURL(appUrl(s.port, newCode))
+	err = browser.OpenURL(appUrl(newCode))
 	if err != nil {
 		sendErr(err)
 		return
@@ -1726,7 +1726,7 @@ func processMakeAppRoute(n normalApiInputT, s *stateT) {
 	n.doneCh <- struct{}{}
 }
 
-func appUrl(port string, appCode string) string {
+func appUrl(appCode string) string {
 	return fmt.Sprintf(
 		"http://localhost:%s/getapp/%s/index.html",
 		port,
@@ -2049,7 +2049,7 @@ func hash(i interface{}) ([32]byte, error) {
 	return blake2b.Sum256(buf.Bytes()), nil
 }
 
-func httpServer(inputChan chan httpInputT, port string) {
+func httpServer(inputChan chan httpInputT) {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:subRoute"),
