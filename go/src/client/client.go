@@ -32,9 +32,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"sync"
 )
 
 var apps []appMsgT
+var appsMux sync.Mutex
 var homeCode string
 var appCodes = map[string]blake2bHash{}
 var publicSign publicSignT
@@ -307,7 +309,8 @@ func tcpServer() {
 			}()
 			go func() {
 				for {
-					msg, err := common.EncodeClientToClient(<-tcpOutChan)
+					msg, err := common.EncodeClientToClient(
+						<-tcpOutChan)
 					if err != nil {
 						continue
 					}
@@ -715,6 +718,8 @@ func matchingApp(app appMsgT, q searchQueryT) bool {
 
 func filterApps(q searchQueryT) []appMsgT {
 	var filtered []appMsgT
+	appsMux.Lock()
+	defer appsMux.Unlock()
 	for _, app := range apps {
 		if matchingApp(app, q) {
 			filtered = append(filtered, app)
@@ -1276,7 +1281,9 @@ func (chunk FileChunk) process(author publicSignT) {
 	})
 }
 
-func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte) {
+func processGiveMeKey(
+	keyRequest common.GiveMeASymmetricKey,
+	author [32]byte) {
 
 	m := makeSymmetricKeyT{
 		publicSign,
@@ -1285,7 +1292,6 @@ func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte) {
 		author,
 		tcpOutChan,
 	}
-
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		return
@@ -1386,6 +1392,8 @@ func serveDoc(w http.ResponseWriter, filePath string) error {
 }
 
 func findApp(appHash publicSignT) (appMsgT, error) {
+	appsMux.Lock()
+	defer appsMux.Unlock()
 	for _, thisApp := range apps {
 		if equalHashes(thisApp.AppHash, appHash) {
 			return thisApp, nil
@@ -1602,7 +1610,8 @@ func assembleAppAndSendReceipt(a assembleApp) {
 		Recipient: a.appSender,
 		Author:    publicSign,
 	}
-
+	appsMux.Lock()
+	defer appsMux.Unlock()
 	apps = append(apps, a.appMsg)
 }
 
@@ -1856,6 +1865,8 @@ func httpSaveApp(w http.ResponseWriter, r *http.Request) {
 			common.HashToSlice(hashApp(tags, appHash, posixTime)),
 			&secretSign)),
 	}
+	appsMux.Lock()
+	defer appsMux.Unlock()
 	apps = append(apps, app)
 	encodedApps, err := json.Marshal(apps)
 	if err != nil {
