@@ -61,7 +61,7 @@ type stateT struct {
 	//homeCode              string
 	//appCodes              map[string]blake2bHash
 	//publicSign            publicSignT
-	secretSign            [64]byte
+	//secretSign            [64]byte
 	invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
@@ -323,7 +323,6 @@ func makeConn(
 func tcpServer(
 	in chan common.ClientToClient,
 	out chan common.ClientToClient,
-	secretSign [64]byte,
 	publicSign [32]byte) {
 
 	stop := make(chan struct{})
@@ -1228,6 +1227,7 @@ func initState(dataDir string, port string) (stateT, error) {
 	// 	return s, err
 	// }
 	keys, err := extractKeys(password, rawSecrets)
+	secretSign = keys.secretsign
 	if err != nil {
 		return s, err
 	}
@@ -1254,7 +1254,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//homeCode:       homeCode,
 		//appCodes:       make(map[string]blake2bHash),
 		//publicSign:     keys.publicsign,
-		secretSign:     keys.secretsign,
+		//secretSign:     keys.secretsign,
 		invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
@@ -1298,7 +1298,6 @@ func main() {
 	go tcpServer(
 		state.tcpInChan,
 		state.tcpOutChan,
-		state.secretSign,
 		publicSign)
 	go httpServer(state.httpChan, port)
 	fmt.Print(homeCode)
@@ -1383,7 +1382,7 @@ func (chunk FileChunk) process(author publicSignT, s *stateT) {
 		chunk.AppHash,
 		s.dataDir + "/tmp/" + tmpFileName,
 		chunk.Chunk,
-		s.secretSign,
+		secretSign,
 		symmetricKey,
 		s.tcpOutChan,
 		author,
@@ -1395,7 +1394,7 @@ func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte, s 
 
 	m := makeSymmetricKeyT{
 		publicSign,
-		s.secretSign,
+		secretSign,
 		keyRequest.MyPublicEncrypt,
 		author,
 		s.tcpOutChan,
@@ -1568,7 +1567,7 @@ func processInvite(n normalApiInputT, s *stateT) {
 		Signature: sliceToSig(sign.Sign(
 			make([]byte, 0),
 			common.HashToSlice(inviteHash(theTime, invitee)),
-			&s.secretSign)),
+			&secretSign)),
 	}
 	s.invites[invite] = struct{}{}
 	encodedInvites, err := json.Marshal(invitesToSlice(s.invites))
@@ -1812,7 +1811,7 @@ func processNewApp(
 			make([]byte, 0),
 			common.HashToSlice(hashApp(
 				tags, appHash, posixTime)),
-			&s.secretSign)),
+			&secretSign)),
 	}
 	apps = append(apps, app)
 	encodedApps, err := json.Marshal(apps)
@@ -1986,7 +1985,7 @@ func assembleAppAndSendReceipt(a assembleApp, s *stateT) {
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
 			receiptHash(a.appHash, appReceiptCode),
-			&s.secretSign)),
+			&secretSign)),
 		a.appHash,
 	}
 	encoded, err := common.EncodeData(&receipt)
