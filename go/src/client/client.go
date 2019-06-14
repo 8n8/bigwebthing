@@ -63,7 +63,7 @@ type stateT struct {
 	//publicSign            publicSignT
 	//secretSign            [64]byte
 	//invites               map[inviteT]struct{}
-	uninvites             map[inviteT]struct{}
+	//uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
 	chunksLoading         map[blake2bHash][]fileChunkPtrT
 	dataDir               string
@@ -82,9 +82,7 @@ type blake2bHash [32]byte
 type symmetricEncrypt [32]byte
 type secretSignT [64]byte
 
-func makeMemberList(
-	invites map[inviteT]struct{},
-	uninvites map[inviteT]struct{}) map[publicSignT]struct{} {
+func makeMemberList() map[publicSignT]struct{} {
 
 	members := make(map[publicSignT]struct{})
 	members[common.TruesPubSign] = struct{}{}
@@ -1230,12 +1228,12 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	invites, err := processInvites(
+	invites, err = processInvites(
 		ioutil.ReadFile(invitesFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
-	uninvites, err := processInvites(
+	uninvites, err = processInvites(
 		ioutil.ReadFile(uninvitesFile(dataDir)))
 	if err != nil {
 		return s, err
@@ -1244,7 +1242,7 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	memberList := makeMemberList(invites, uninvites)
+	memberList := makeMemberList()
 	return stateT{
 		//apps:           apps,
 		httpChan:       make(chan httpInputT),
@@ -1255,7 +1253,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//publicSign:     keys.publicsign,
 		//secretSign:     keys.secretsign,
 		//invites:        invites,
-		uninvites:      uninvites,
+		//uninvites:      uninvites,
 		members:        memberList,
 		chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
 		dataDir:        dataDir,
@@ -1315,7 +1313,7 @@ func main() {
 }
 
 func processTcpInput(s *stateT, c common.ClientToClient) {
-	_, isMember := makeMemberList(invites, s.uninvites)[c.Author]
+	_, isMember := makeMemberList()[c.Author]
 	if !isMember {
 		return
 	}
