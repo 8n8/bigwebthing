@@ -62,7 +62,7 @@ type stateT struct {
 	//appCodes              map[string]blake2bHash
 	//publicSign            publicSignT
 	//secretSign            [64]byte
-	invites               map[inviteT]struct{}
+	//invites               map[inviteT]struct{}
 	uninvites             map[inviteT]struct{}
 	members               map[publicSignT]struct{}
 	chunksLoading         map[blake2bHash][]fileChunkPtrT
@@ -322,8 +322,7 @@ func makeConn(
 
 func tcpServer(
 	in chan common.ClientToClient,
-	out chan common.ClientToClient,
-	publicSign [32]byte) {
+	out chan common.ClientToClient) {
 
 	stop := make(chan struct{})
 	for {
@@ -1255,7 +1254,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//appCodes:       make(map[string]blake2bHash),
 		//publicSign:     keys.publicsign,
 		//secretSign:     keys.secretsign,
-		invites:        invites,
+		//invites:        invites,
 		uninvites:      uninvites,
 		members:        memberList,
 		chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
@@ -1297,8 +1296,7 @@ func main() {
 	}
 	go tcpServer(
 		state.tcpInChan,
-		state.tcpOutChan,
-		publicSign)
+		state.tcpOutChan)
 	go httpServer(state.httpChan, port)
 	fmt.Print(homeCode)
 	err = browser.OpenURL(appUrl(port, homeCode))
@@ -1317,7 +1315,7 @@ func main() {
 }
 
 func processTcpInput(s *stateT, c common.ClientToClient) {
-	_, isMember := makeMemberList(s.invites, s.uninvites)[c.Author]
+	_, isMember := makeMemberList(invites, s.uninvites)[c.Author]
 	if !isMember {
 		return
 	}
@@ -1569,8 +1567,8 @@ func processInvite(n normalApiInputT, s *stateT) {
 			common.HashToSlice(inviteHash(theTime, invitee)),
 			&secretSign)),
 	}
-	s.invites[invite] = struct{}{}
-	encodedInvites, err := json.Marshal(invitesToSlice(s.invites))
+	invites[invite] = struct{}{}
+	encodedInvites, err := json.Marshal(invitesToSlice(invites))
 	if err != nil {
 		sendErr(err, 500)
 	}
