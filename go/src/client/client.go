@@ -2091,6 +2091,60 @@ func sig(msg []byte, privateKey *[64]byte) []byte {
 	return sign.Sign(make([]byte, 0), msg, privateKey)
 }
 
+func httpSendApp(w http.ResponseWriter, r *http.Request) {
+	if !strEq(pat.Param(r, "securityCode"), homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	var sendAppJson sendAppJsonT
+	err = json.Unmarshal(body, &sendAppJson)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	appHashSlice, err := base64.URLEncoding.DecodeString(
+		sendAppJson.AppHash)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	appHash := common.SliceToHash(appHashSlice)
+	recipientSlice, err := base64.URLEncoding.DecodeString(
+		sendAppJson.Recipient)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	recipient := common.SliceToHash(recipientSlice)
+	app, err := findApp(appHash)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	filepath := dataDir + "/apps/" + hashToStr(appHash)
+	symmetricEncryptKey, ok := symmetricKeys[recipient]
+	chunk := sendChunkT{
+		publicSign,
+		dataDir,
+		app,
+		tcpOutChan,
+		filepath,
+		0,
+		recipient,
+		symmetricEncryptKey,
+		0,
+	}
+	if !ok {
+		requestEncryptionKey(chunk)
+	}
+	sendChunk(chunk)
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
@@ -2123,8 +2177,7 @@ func httpServer() {
 			w.Write(encoded)
 		})
 	mux.HandleFunc(
-		pat.Post("/sendapp/:securityCode"),
-		handler("sendapp"))
+		pat.Post("/sendapp/:securityCode"), httpSendApp)
 	mux.HandleFunc(
 		pat.Post("/saveapp/:securityCode"),
 		handler("saveapp"))
