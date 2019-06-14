@@ -49,16 +49,16 @@ var chunksAwaitingReceipt = map[blake2bHash]chunkAwaitingReceiptT{}
 var appsAwaitingReceipt = map[blake2bHash]publicSignT{}
 var symmetricKeys = map[publicSignT]symmetricEncrypt{}
 var keyPairs = map[publicEncryptT]secretEncryptT{}
-var awaitingSymmetricKey = map[publicSignT]sendChunkT
+var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
 var tcpInChan = make(chan common.ClientToClient)
 var tcpOutChan = make(chan common.ClientToClient)
 
 type stateT struct {
-	apps                  []appMsgT
+	//apps                  []appMsgT
 	httpChan              chan httpInputT
 	tcpInChan             chan common.ClientToClient
 	tcpOutChan            chan common.ClientToClient
-	homeCode              string
+	//homeCode              string
 	appCodes              map[string]blake2bHash
 	publicSign            publicSignT
 	secretSign            [64]byte
@@ -137,13 +137,12 @@ func processInvites(
 	return invites, err
 }
 
-func processApps(rawApps []byte, err error) ([]appMsgT, error) {
-	var apps []appMsgT
+func processApps(rawApps []byte, err error) error {
 	if err != nil {
-		return apps, err
+		return err
 	}
 	err = json.Unmarshal(rawApps, &apps)
-	return apps, err
+	return err
 }
 
 func appsFile(dataDir string) string {
@@ -778,9 +777,9 @@ func matchingApp(app appMsgT, q searchQueryT) bool {
 		matchesSearch(q.SearchString, app.Tags)
 }
 
-func filterApps(all []appMsgT, q searchQueryT) []appMsgT {
+func filterApps(q searchQueryT) []appMsgT {
 	var filtered []appMsgT
-	for _, app := range all {
+	for _, app := range apps {
 		if matchingApp(app, q) {
 			filtered = append(filtered, app)
 		}
@@ -809,8 +808,8 @@ func appToSearchResult(app appMsgT) searchResultT {
 	}
 }
 
-func search(apps []appMsgT, q searchQueryT) (searchResultsT, error) {
-	filtered := filterApps(apps, q)
+func search(q searchQueryT) (searchResultsT, error) {
+	filtered := filterApps(q)
 	matchingApps := make([]searchResultT, len(filtered))
 	matchingTags := make(map[string]struct{})
 	for i, app := range filtered {
@@ -1207,7 +1206,8 @@ func keysFile(dataDir string) string {
 }
 
 func initState(dataDir string, port string) (stateT, error) {
-	homeCode, err := genCode()
+	var err error
+	homeCode, err = genCode()
 	var s stateT
 	if err != nil {
 		return s, err
@@ -1244,17 +1244,17 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	apps, err := processApps(ioutil.ReadFile(appsFile(dataDir)))
+	err = processApps(ioutil.ReadFile(appsFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
 	memberList := makeMemberList(invites, uninvites)
 	return stateT{
-		apps:           apps,
+		//apps:           apps,
 		httpChan:       make(chan httpInputT),
 		tcpInChan:      make(chan common.ClientToClient),
 		tcpOutChan:     make(chan common.ClientToClient),
-		homeCode:       homeCode,
+		//homeCode:       homeCode,
 		appCodes:       make(map[string]blake2bHash),
 		publicSign:     keys.publicsign,
 		secretSign:     keys.secretsign,
@@ -1293,7 +1293,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	err = initState(dataDir, port)
+	state, err := initState(dataDir, port)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1304,8 +1304,8 @@ func main() {
 		state.secretSign,
 		state.publicSign)
 	go httpServer(state.httpChan, port)
-	fmt.Print(state.homeCode)
-	err = browser.OpenURL(appUrl(port, state.homeCode))
+	fmt.Print(homeCode)
+	err = browser.OpenURL(appUrl(port, homeCode))
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1497,7 +1497,7 @@ func processHttpInput(s *stateT, h httpInputT) {
 func processNormalApiInput(n normalApiInputT, s *stateT) {
 	homeGuard := func(processor func(normalApiInputT, *stateT)) {
 
-		if !strEq(n.securityCode, s.homeCode) {
+		if !strEq(n.securityCode, homeCode) {
 			http.Error(n.w, "Bad security code", 400)
 			n.doneCh <- struct{}{}
 		}
@@ -1586,16 +1586,14 @@ func processInvite(n normalApiInputT, s *stateT) {
 	n.doneCh <- struct{}{}
 }
 
-func processSearch(
-	rawRequest []byte,
-	apps []appMsgT) ([]byte, error) {
+func processSearch(rawRequest []byte) ([]byte, error) {
 
 	var searchQuery searchQueryT
 	err := json.Unmarshal(rawRequest, &searchQuery)
 	if err != nil {
 		return *new([]byte), err
 	}
-	matchingApps, err := search(apps, searchQuery)
+	matchingApps, err := search(searchQuery)
 	if err != nil {
 		return *new([]byte), err
 	}
@@ -1603,7 +1601,7 @@ func processSearch(
 }
 
 func processSearchApps(n normalApiInputT, s *stateT) {
-	encoded, err := processSearch(n.body, s.apps)
+	encoded, err := processSearch(n.body)
 	if err != nil {
 		http.Error(n.w, err.Error(), 400)
 	} else {
@@ -1617,7 +1615,7 @@ func processGetApp(n normalApiInputT, s *stateT) {
 		http.Error(n.w, msg, code)
 		n.doneCh <- struct{}{}
 	}
-	if strEq(n.securityCode, s.homeCode) {
+	if strEq(n.securityCode, homeCode) {
 		err := serveDoc(n.w, "home/" + n.subRoute)
 		if err != nil {
 			sendErr(err.Error(), 500)
@@ -1650,7 +1648,7 @@ func serveDoc(w http.ResponseWriter, filePath string) error {
 	return err
 }
 
-func findApp(apps []appMsgT, appHash publicSignT) (appMsgT, error) {
+func findApp(appHash publicSignT) (appMsgT, error) {
 	for _, thisApp := range apps {
 		if equalHashes(thisApp.AppHash, appHash) {
 			return thisApp, nil
@@ -1681,7 +1679,7 @@ func processSendApp(n normalApiInputT, s *stateT) {
 		sendErr(err.Error())
 	}
 	recipient := common.SliceToHash(recipientSlice)
-	app, err := findApp(s.apps, appHash)
+	app, err := findApp(appHash)
 	if err != nil {
 		sendErr(err.Error())
 	}
@@ -1819,8 +1817,8 @@ func processNewApp(
 				tags, appHash, posixTime)),
 			&s.secretSign)),
 	}
-	s.apps = append(s.apps, app)
-	encodedApps, err := json.Marshal(s.apps)
+	apps = append(apps, app)
+	encodedApps, err := json.Marshal(apps)
 	if err != nil {
 		sendErr(err.Error(), 500)
 	}
@@ -2013,7 +2011,7 @@ func assembleAppAndSendReceipt(a assembleApp, s *stateT) {
 		Author:    s.publicSign,
 	}
 
-	s.apps = append(s.apps, a.appMsg)
+	apps = append(apps, a.appMsg)
 }
 
 type writeAppToFileAndSendReceiptT struct {
