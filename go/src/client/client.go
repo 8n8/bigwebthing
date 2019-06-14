@@ -56,7 +56,7 @@ var tcpOutChan = make(chan common.ClientToClient)
 type stateT struct {
 	//apps                  []appMsgT
 	httpChan              chan httpInputT
-	tcpInChan             chan common.ClientToClient
+	//tcpInChan             chan common.ClientToClient
 	tcpOutChan            chan common.ClientToClient
 	//homeCode              string
 	//appCodes              map[string]blake2bHash
@@ -317,7 +317,6 @@ func makeConn(
 }
 
 func tcpServer(
-	in chan common.ClientToClient,
 	out chan common.ClientToClient) {
 
 	stop := make(chan struct{})
@@ -334,7 +333,7 @@ func tcpServer(
 					if err != nil {
 						stop <- struct{}{}
 					}
-					in <- msg
+					tcpInChan <- msg
 				}
 			}()
 			go func() {
@@ -1230,7 +1229,7 @@ func initState() (stateT, error) {
 	return stateT{
 		//apps:           apps,
 		httpChan:       make(chan httpInputT),
-		tcpInChan:      make(chan common.ClientToClient),
+		//tcpInChan:      make(chan common.ClientToClient),
 		tcpOutChan:     make(chan common.ClientToClient),
 		//homeCode:       homeCode,
 		//appCodes:       make(map[string]blake2bHash),
@@ -1277,7 +1276,6 @@ func main() {
 		return
 	}
 	go tcpServer(
-		state.tcpInChan,
 		state.tcpOutChan)
 	go httpServer(state.httpChan)
 	fmt.Print(homeCode)
@@ -1290,7 +1288,7 @@ func main() {
 		select {
 		case h := <-state.httpChan:
 			processHttpInput(&state, h)
-		case tcpIn := <-state.tcpInChan:
+		case tcpIn := <-tcpInChan:
 			processTcpInput(&state, tcpIn)
 		}
 	}
