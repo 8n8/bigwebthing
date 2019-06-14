@@ -66,7 +66,7 @@ type stateT struct {
 	//uninvites             map[inviteT]struct{}
 	//members               map[publicSignT]struct{}
 	//chunksLoading         map[blake2bHash][]fileChunkPtrT
-	dataDir               string
+	//dataDir               string
 	port                  string
 	chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
 	appsAwaitingReceipt   map[blake2bHash]publicSignT
@@ -200,9 +200,7 @@ func getTagsPart(bodyFileReader *multipart.Reader) ([]byte, error) {
 	return ioutil.ReadAll(tagsPart)
 }
 
-func writeAppToFile(
-	r *http.Request,
-	dataDir string) (string, map[string]struct{}, error) {
+func writeAppToFile(r *http.Request) (string, map[string]struct{}, error) {
 
 	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
@@ -439,8 +437,7 @@ type logSentSuccessT struct {
 
 func logSentSuccess(
 	appHash blake2bHash,
-	recipient publicSignT,
-	dataDir string) {
+	recipient publicSignT) {
 
 	msg := logSentSuccessT{appHash, recipient}
 	encoded, jsonErr := json.Marshal(msg)
@@ -520,15 +517,15 @@ type sendAppMsgT struct {
 	recipient publicSignT
 }
 
-func makeChunkFilePaths(ptrs []fileChunkPtrT, dataDir string) []string {
+func makeChunkFilePaths(ptrs []fileChunkPtrT) []string {
 	filePaths := make([]string, len(ptrs))
 	for i, ptr := range ptrs {
-		filePaths[i] = makeChunkFilePath(ptr.chunkHash, dataDir)
+		filePaths[i] = makeChunkFilePath(ptr.chunkHash)
 	}
 	return filePaths
 }
 
-func makeAppPath(dataDir string, appHash blake2bHash) string {
+func makeAppPath(appHash blake2bHash) string {
 	fileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(appHash))
 	return dataDir + "/apps/" + fileName
@@ -559,10 +556,10 @@ func (appSig appMsgT) process(author publicSignT, s *stateT) {
 	}
 	assembleAppAndSendReceipt(assembleApp{
 		symmetricKey: symmetricKey,
-		filePaths:    makeChunkFilePaths(chunkPtrs, s.dataDir),
+		filePaths:    makeChunkFilePaths(chunkPtrs),
 		appHash:      appSig.AppHash,
-		tmpPath:      makeChunkFilePath(appSig.AppHash, s.dataDir),
-		finalPath:    makeAppPath(s.dataDir, appSig.AppHash),
+		tmpPath:      makeChunkFilePath(appSig.AppHash),
+		finalPath:    makeAppPath(appSig.AppHash),
 		appSender:    author,
 		appMsg: appSig,
 	}, s)
@@ -897,7 +894,7 @@ func (appReceipt AppReceiptT) process(
 		return
 	}
 	delete(s.appsAwaitingReceipt, appReceipt.AppHash)
-	logSentSuccess(appReceipt.AppHash, author, s.dataDir)
+	logSentSuccess(appReceipt.AppHash, author)
 }
 
 func (receipt ReceiptT) process(author publicSignT, s *stateT) {
@@ -920,7 +917,7 @@ func (receipt ReceiptT) process(author publicSignT, s *stateT) {
 	}
 	sendChunk(s, sendChunkT{
 		publicSign,
-		s.dataDir,
+		dataDir,
 		chunkAwaiting.appMsg,
 		s.tcpOutChan,
 		chunkAwaiting.filepath,
@@ -1173,7 +1170,7 @@ func createKeys(dataDir string) error {
 	return err
 }
 
-func invitesFile(dataDir string) string {
+func invitesFile() string {
 	return dataDir + "/invites.txt"
 }
 
@@ -1216,7 +1213,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		return s, err
 	}
 	invites, err = processInvites(
-		ioutil.ReadFile(invitesFile(dataDir)))
+		ioutil.ReadFile(invitesFile()))
 	if err != nil {
 		return s, err
 	}
@@ -1243,7 +1240,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//uninvites:      uninvites,
 		//members:        memberList,
 		//chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
-		dataDir:        dataDir,
+		//dataDir:        dataDir,
 		port:           port,
 	}, nil
 }
@@ -1363,7 +1360,7 @@ func (chunk FileChunk) process(author publicSignT, s *stateT) {
 	}
 	writeAppToFileNew(writeAppToFileAndSendReceiptT{
 		chunk.AppHash,
-		s.dataDir + "/tmp/" + tmpFileName,
+		dataDir + "/tmp/" + tmpFileName,
 		chunk.Chunk,
 		secretSign,
 		symmetricKey,
@@ -1449,7 +1446,7 @@ func processHttpInput(s *stateT, h httpInputT) {
 		subRoute = pat.Param(h.r, "subRoute")
 	}
 	if h.route == "saveapp" {
-		hash, tags, err := writeAppToFile(h.r, s.dataDir)
+		hash, tags, err := writeAppToFile(h.r)
 		if err != nil {
 			http.Error(h.w, err.Error(), 500)
 			h.doneCh <- struct{}{}
@@ -1557,7 +1554,7 @@ func processInvite(n normalApiInputT, s *stateT) {
 		sendErr(err, 500)
 	}
 	err = ioutil.WriteFile(
-		invitesFile(s.dataDir), encodedInvites, 0600)
+		invitesFile(), encodedInvites, 0600)
 	if err != nil {
 		sendErr(err, 500)
 	}
@@ -1606,7 +1603,7 @@ func processGetApp(n normalApiInputT, s *stateT) {
 	}
 	filePath := fmt.Sprintf(
 		"%s/tmp/%s/%s",
-		s.dataDir,
+		dataDir,
 		hashToStr(docHash),
 		n.subRoute)
 	err = serveDoc(n.w, filePath)
@@ -1661,11 +1658,11 @@ func processSendApp(n normalApiInputT, s *stateT) {
 	if err != nil {
 		sendErr(err.Error())
 	}
-	filepath := s.dataDir + "/apps/" + hashToStr(appHash)
+	filepath := dataDir + "/apps/" + hashToStr(appHash)
 	symmetricEncryptKey, ok := s.symmetricKeys[recipient]
 	chunk := sendChunkT{
 		publicSign,
-		s.dataDir,
+		dataDir,
 		app,
 		s.tcpOutChan,
 		filepath,
@@ -1692,9 +1689,9 @@ func processMakeAppRoute(n normalApiInputT, s *stateT) {
 	}
 	hash := common.SliceToHash(hashSlice)
 	hashStr := hashToStr(hash)
-	tmpPath := s.dataDir + "/tmp/" + hashStr
+	tmpPath := dataDir + "/tmp/" + hashStr
 	_, err = os.Stat(tmpPath)
-	appPath := s.dataDir + "/apps/" + hashStr
+	appPath := dataDir + "/apps/" + hashStr
 	if err == nil {
 		appCode, err := getHashSecurityCode(hash)
 		if err != nil {
@@ -1801,7 +1798,7 @@ func processNewApp(
 		sendErr(err.Error(), 500)
 	}
 
-	err = ioutil.WriteFile(appsFile(s.dataDir), encodedApps, 0600)
+	err = ioutil.WriteFile(appsFile(dataDir), encodedApps, 0600)
 	if err != nil {
 		sendErr(err.Error(), 500)
 	}
@@ -1884,7 +1881,7 @@ func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
 	return result
 }
 
-func makeChunkFilePath(chunkHash [32]byte, dataDir string) string {
+func makeChunkFilePath(chunkHash [32]byte) string {
 	filename := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
 	return dataDir + "/tmp/" + filename
