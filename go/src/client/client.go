@@ -1224,12 +1224,7 @@ func main() {
 		return
 	}
 	for {
-		select {
-		case h := <-httpChan:
-			processHttpInput(h)
-		case tcpIn := <-tcpInChan:
-			processTcpInput(tcpIn)
-		}
+		processTcpInput(<-tcpInChan)
 	}
 }
 
@@ -1738,15 +1733,15 @@ func processNewApp(
 	h.doneCh <- struct{}{}
 }
 
-type handlerT func(http.ResponseWriter, *http.Request)
-
-func handler(route string) handlerT {
-	return func(w http.ResponseWriter, r *http.Request) {
-		doneCh := make(chan struct{})
-		httpChan <- httpInputT{w, r, route, doneCh}
-		<-doneCh
-	}
-}
+//type handlerT func(http.ResponseWriter, *http.Request)
+//
+//func handler(route string) handlerT {
+//	return func(w http.ResponseWriter, r *http.Request) {
+//		doneCh := make(chan struct{})
+//		httpChan <- httpInputT{w, r, route, doneCh}
+//		<-doneCh
+//	}
+//}
 
 func encKeyToSlice(key [common.EncryptedKeyLen]byte) []byte {
 	result := make([]byte, common.EncryptedKeyLen)
