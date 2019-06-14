@@ -2101,7 +2101,13 @@ func httpServer() {
 		pat.Post("/invite/:securityCode/:subRoute"), httpInvite)
 	mux.HandleFunc(
 		pat.Get("/getmyid/:securityCode"),
-		handler("getmyid"))
+		func(w http.ResponseWriter, r *http.Request) {
+			if !strEq(pat.Param(r, "securityCode"), homeCode) {
+				http.Error(w, "Bad security code", 400)
+				return
+			}
+			w.Write(encodePubId(publicSign))
+		})
 	mux.HandleFunc(
 		pat.Get("/getmembers/:securityCode"),
 		handler("getmembers"))
