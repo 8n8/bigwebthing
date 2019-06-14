@@ -62,7 +62,6 @@ type symmetricEncrypt [32]byte
 type secretSignT [64]byte
 
 func makeMemberList() map[publicSignT]struct{} {
-
 	members := make(map[publicSignT]struct{})
 	members[common.TruesPubSign] = struct{}{}
 	addedMember := true
@@ -1163,12 +1162,12 @@ func initState() error {
 	fmt.Println("Please enter your password:")
 	password, err := terminal.ReadPassword(int(syscall.Stdin))
 	keys, err := extractKeys(password, rawSecrets)
-	secretSign = keys.secretsign
 	if err != nil {
 		return err
 	}
-	invites, err = processInvites(
-		ioutil.ReadFile(invitesFile()))
+	secretSign = keys.secretsign
+	publicSign = keys.publicsign
+	invites, err = processInvites(ioutil.ReadFile(invitesFile()))
 	if err != nil {
 		return err
 	}
@@ -1981,11 +1980,36 @@ func hash(i interface{}) ([32]byte, error) {
 	return blake2b.Sum256(buf.Bytes()), nil
 }
 
+func httpGetApp(w http.ResponseWriter, r *http.Request) {
+	securityCode := pat.Param(r, "securityCode")
+	subRoute := pat.Param(r, "subRoute")
+	if strEq(securityCode, homeCode) {
+		err := serveDoc(w, "home/" + subRoute)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	docHash, err := getDocHash(securityCode)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	filePath := fmt.Sprintf(
+		"%s/tmp/%s/%s",
+		dataDir,
+		hashToStr(docHash),
+		subRoute)
+	err = serveDoc(w, filePath)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
-		pat.Get("/getapp/:securityCode/:subRoute"),
-		handler("getapp"))
+		pat.Get("/getapp/:securityCode/:subRoute"), httpGetApp)
 	mux.HandleFunc(
 		pat.Get("/makeapproute/:securityCode/:subRoute"),
 		handler("makeapproute"))
