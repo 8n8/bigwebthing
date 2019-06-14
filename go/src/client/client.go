@@ -39,6 +39,7 @@ var apps []appMsgT
 var appsMux sync.Mutex
 var homeCode string
 var appCodes = map[string]blake2bHash{}
+var appCodesMux sync.Mutex
 var publicSign publicSignT
 var secretSign [64]byte
 var invites = map[inviteT]struct{}{}
@@ -335,6 +336,8 @@ func strEq(s1, s2 string) bool {
 
 func getDocHash(securityCode string) (blake2bHash, error) {
 
+	appCodesMux.Lock()
+	defer appCodesMux.Unlock()
 	for sc, hash := range appCodes {
 		if strEq(sc, securityCode) {
 			return hash, nil
@@ -1718,6 +1721,8 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	tmpPath := dataDir + "/tmp/" + hashStr
 	_, err = os.Stat(tmpPath)
 	appPath := dataDir + "/apps/" + hashStr
+	appCodesMux.Lock()
+	defer appCodesMux.Unlock()
 	if err == nil {
 		appCode, err := getHashSecurityCode(hash)
 		if err != nil {
