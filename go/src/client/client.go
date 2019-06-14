@@ -2145,6 +2145,66 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 	sendChunk(chunk)
 }
 
+func httpSaveApp(w http.ResponseWriter, r *http.Request) {
+	if !strEq(pat.Param(r, "securityCode"), homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	hash, tags, err := writeAppToFile(r)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	appHash, err := hashFromString(hash)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	posixTime := time.Now().Unix()
+	app := appMsgT{
+		publicSign,
+		tags,
+		appHash,
+		posixTime,
+		sliceToSig(sig(
+			common.HashToSlice(hashApp(tags, appHash, posixTime)),
+			&secretSign)),
+	}
+	apps = append(apps, app)
+	encodedApps, err := json.Marshal(apps)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = ioutil.WriteFile(appsFile(dataDir), encodedApps, 0600)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Write(common.HashToSlice(appHash))
+}
+
+func httpGetMyId(w http.ResponseWriter, r *http.Request) {
+	if !strEq(pat.Param(r, "securityCode"), homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	w.Write(encodePubId(publicSign))
+}
+
+func httpGetMembers(w http.ResponseWriter, r *http.Request) {
+	if !strEq(pat.Param(r, "securityCode"), homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	encoded, err := json.Marshal(memberMapToList())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Write(encoded)
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
@@ -2154,33 +2214,13 @@ func httpServer() {
 	mux.HandleFunc(
 		pat.Post("/invite/:securityCode/:subRoute"), httpInvite)
 	mux.HandleFunc(
-		pat.Get("/getmyid/:securityCode"),
-		func(w http.ResponseWriter, r *http.Request) {
-			if !strEq(pat.Param(r, "securityCode"), homeCode) {
-				http.Error(w, "Bad security code", 400)
-				return
-			}
-			w.Write(encodePubId(publicSign))
-		})
+		pat.Get("/getmyid/:securityCode"), httpGetMyId)
 	mux.HandleFunc(
-		pat.Get("/getmembers/:securityCode"),
-		func(w http.ResponseWriter, r *http.Request) {
-			if !strEq(pat.Param(r, "securityCode"), homeCode) {
-				http.Error(w, "Bad security code", 400)
-				return
-			}
-			encoded, err := json.Marshal(memberMapToList())
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			w.Write(encoded)
-		})
+		pat.Get("/getmembers/:securityCode"), httpGetMembers)
 	mux.HandleFunc(
 		pat.Post("/sendapp/:securityCode"), httpSendApp)
 	mux.HandleFunc(
-		pat.Post("/saveapp/:securityCode"),
-		handler("saveapp"))
+		pat.Post("/saveapp/:securityCode"), httpSaveApp)
 	mux.HandleFunc(
 		pat.Post("/searchapps/:securityCode"),
 		handler("searchapps"))
