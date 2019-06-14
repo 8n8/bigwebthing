@@ -69,7 +69,7 @@ type stateT struct {
 	//dataDir               string
 	//port                  string
 	//chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
-	appsAwaitingReceipt   map[blake2bHash]publicSignT
+	//appsAwaitingReceipt   map[blake2bHash]publicSignT
 	symmetricKeys         map[publicSignT]symmetricEncrypt
 	keyPairs              map[publicEncryptT]secretEncryptT
 	awaitingSymmetricKey  map[publicSignT]sendChunkT
@@ -886,14 +886,14 @@ func (appReceipt AppReceiptT) process(
 	if !bytes.Equal(signed, common.HashToSlice(appReceipt.AppHash)) {
 		return
 	}
-	appAuthor, ok := s.appsAwaitingReceipt[appReceipt.AppHash]
+	appAuthor, ok := appsAwaitingReceipt[appReceipt.AppHash]
 	if !ok {
 		return
 	}
 	if appAuthor != author {
 		return
 	}
-	delete(s.appsAwaitingReceipt, appReceipt.AppHash)
+	delete(appsAwaitingReceipt, appReceipt.AppHash)
 	logSentSuccess(appReceipt.AppHash, author)
 }
 
