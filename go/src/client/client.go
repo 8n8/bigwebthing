@@ -68,7 +68,7 @@ type stateT struct {
 	//chunksLoading         map[blake2bHash][]fileChunkPtrT
 	//dataDir               string
 	//port                  string
-	chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
+	//chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
 	appsAwaitingReceipt   map[blake2bHash]publicSignT
 	symmetricKeys         map[publicSignT]symmetricEncrypt
 	keyPairs              map[publicEncryptT]secretEncryptT
@@ -701,7 +701,7 @@ func sendChunk(state *stateT, s sendChunkT) {
 		s.counter,
 		lastChunk,
 	}
-	state.chunksAwaitingReceipt[c.chunkHash] = c
+	chunksAwaitingReceipt[c.chunkHash] = c
 }
 
 type Decrypted interface {
@@ -898,7 +898,7 @@ func (appReceipt AppReceiptT) process(
 }
 
 func (receipt ReceiptT) process(author publicSignT, s *stateT) {
-	chunkAwaiting, ok := s.chunksAwaitingReceipt[receipt.ChunkHash]
+	chunkAwaiting, ok := chunksAwaitingReceipt[receipt.ChunkHash]
 	if !ok {
 		return
 	}
