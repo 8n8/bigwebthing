@@ -34,6 +34,25 @@ import (
 	"time"
 )
 
+var apps []appMsgT
+var homeCode string
+var appCodes = map[string]blake2bHash{}
+var publicSign publicSignT
+var secretSign [64]byte
+var invites = map[inviteT]struct{}{}
+var uninvites = map[inviteT]struct{}{}
+var members = map[publicSignT]struct{}{}
+var chunksLoading = map[blake2bHash][]fileChunkPtrT{}
+var dataDir string
+var port string
+var chunksAwaitingReceipt = map[blake2bHash]chunkAwaitingReceiptT{}
+var appsAwaitingReceipt = map[blake2bHash]publicSignT{}
+var symmetricKeys = map[publicSignT]symmetricEncrypt{}
+var keyPairs = map[publicEncryptT]secretEncryptT{}
+var awaitingSymmetricKey = map[publicSignT]sendChunkT
+var tcpInChan = make(chan common.ClientToClient)
+var tcpOutChan = make(chan common.ClientToClient)
+
 type stateT struct {
 	apps                  []appMsgT
 	httpChan              chan httpInputT
@@ -1262,8 +1281,8 @@ func main() {
 		fmt.Println("There must be two command-line arguments.")
 		return
 	}
-	port := args[1]
-	dataDir := args[2]
+	port = args[1]
+	dataDir = args[2]
 	err := os.RemoveAll(dataDir + "/tmp")
 	if err != nil {
 		fmt.Println(err)
@@ -1274,7 +1293,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	state, err := initState(dataDir, port)
+	err = initState(dataDir, port)
 	if err != nil {
 		fmt.Println(err)
 		return
