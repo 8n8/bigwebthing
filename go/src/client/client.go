@@ -2006,13 +2006,59 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func httpMakeApp(w http.ResponseWriter, r *http.Request) {
+	securityCode := pat.Param(r, "securityCode")
+	subRoute := pat.Param(r, "subRoute")
+	if strEq(securityCode, homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	hashSlice, err := base64.URLEncoding.DecodeString(subRoute)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	hash := common.SliceToHash(hashSlice)
+	hashStr := hashToStr(hash)
+	tmpPath := dataDir + "/tmp/" + hashStr
+	_, err = os.Stat(tmpPath)
+	appPath := dataDir + "/apps/" + hashStr
+	if err == nil {
+		appCode, err := getHashSecurityCode(hash)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		err = browser.OpenURL(appUrl(appCode))
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+		}
+		return
+	}
+	err = unpackTarArchive(appPath, tmpPath)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	newCode, err := genCode()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = browser.OpenURL(appUrl(newCode))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	appCodes[newCode] = hash
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:subRoute"), httpGetApp)
 	mux.HandleFunc(
-		pat.Get("/makeapproute/:securityCode/:subRoute"),
-		handler("makeapproute"))
+		pat.Get("/makeapproute/:securityCode/:subRoute"), httpMakeApp)
 	mux.HandleFunc(
 		pat.Post("/invite/:securityCode/:subRoute"),
 		handler("invite"))
