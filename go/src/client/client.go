@@ -303,20 +303,6 @@ func makeConn(
 	return conn, err
 }
 
-func tcpListen(
-	conn net.Conn,
-	inChan chan common.ClientToClient,
-	connErrChan chan struct{}) {
-
-	for {
-		cToC, err := common.ReadClientToClient(conn)
-		if err != nil {
-			connErrChan <- struct{}{}
-		}
-		inChan <- cToC
-	}
-}
-
 func tcpServer(
 	in chan common.ClientToClient,
 	out chan common.ClientToClient,
@@ -357,27 +343,6 @@ func tcpServer(
 			}()
 			<-stop
 		}()
-	}
-}
-
-func tcpSend(
-	conn net.Conn,
-	outChan chan common.ClientToClient,
-	connErrChan chan struct{}) {
-
-	for {
-		toSend := <-outChan
-		encoded, err := common.EncodeClientToClient(toSend)
-		if err != nil {
-			connErrChan <- struct{}{}
-		}
-		n, err := conn.Write(encoded)
-		if err != nil {
-			connErrChan <- struct{}{}
-		}
-		if n != len(encoded) {
-			connErrChan <- struct{}{}
-		}
 	}
 }
 
@@ -661,26 +626,6 @@ func requestEncryptionKey(sendChunk sendChunkT, s *stateT) {
 	s.keyPairs[publicEncryptT(*pub)] = secretEncryptT(*priv)
 }
 
-type awaitingKeysT map[publicSignT]sendChunkT
-
-func copyAwaitingKeys(old awaitingKeysT) awaitingKeysT {
-	newAKs := make(awaitingKeysT)
-	for k, v := range old {
-		newAKs[k] = v
-	}
-	return newAKs
-}
-
-type keyPairsT map[publicEncryptT]secretEncryptT
-
-func copyKeyPairs(old keyPairsT) keyPairsT {
-	newKPs := make(keyPairsT)
-	for k, v := range old {
-		newKPs[k] = v
-	}
-	return newKPs
-}
-
 func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
 	result := make([]byte, 32+common.EncryptedKeyLen+24)
 	i := 0
@@ -894,16 +839,6 @@ func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
 		concat[i] = inviteContext[i-40]
 	}
 	return blake2b.Sum256(concat)
-}
-
-func copyInvites(
-	invites map[inviteT]struct{}) map[inviteT]struct{} {
-
-	newInvites := make(map[inviteT]struct{})
-	for invite, _ := range invites {
-		newInvites[invite] = struct{}{}
-	}
-	return newInvites
 }
 
 func invitesToSlice(invites map[inviteT]struct{}) []inviteT {
@@ -1290,11 +1225,13 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	invites, err := processInvites(ioutil.ReadFile(invitesFile(dataDir)))
+	invites, err := processInvites(
+		ioutil.ReadFile(invitesFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
-	uninvites, err := processInvites(ioutil.ReadFile(uninvitesFile(dataDir)))
+	uninvites, err := processInvites(
+		ioutil.ReadFile(uninvitesFile(dataDir)))
 	if err != nil {
 		return s, err
 	}
@@ -1823,14 +1760,6 @@ func unpackAndLaunchApp(g unpackAppT, s *stateT) {
 	g.doneCh <- struct{}{}
 }
 
-func copyAppCodes(old map[string]blake2bHash) map[string]blake2bHash {
-	newAppCodes := make(map[string]blake2bHash)
-	for code, hash := range old {
-		newAppCodes[code] = hash
-	}
-	return newAppCodes
-}
-
 func unpackTarArchive(source string, dest string) error {
 	fileHandle, err := os.Open(source)
 	if err != nil {
@@ -1862,14 +1791,6 @@ func unpackTarArchive(source string, dest string) error {
 		}
 	}
 	return nil
-}
-
-func copyApps(old []appMsgT) []appMsgT {
-	newApps := make([]appMsgT, len(old))
-	for i, app := range old {
-		newApps[i] = app
-	}
-	return newApps
 }
 
 func processNewApp(
@@ -1920,16 +1841,6 @@ func handler(route string, inputChan chan httpInputT) handlerT {
 		inputChan <- httpInputT{w, r, route, doneCh}
 		<-doneCh
 	}
-}
-
-type symmetricKeysT map[publicSignT]symmetricEncrypt
-
-func copySymmetricKeys(old symmetricKeysT) symmetricKeysT {
-	newSymmetricKeys := make(map[publicSignT]symmetricEncrypt)
-	for k, v := range old {
-		newSymmetricKeys[k] = v
-	}
-	return newSymmetricKeys
 }
 
 func encKeyToSlice(key [common.EncryptedKeyLen]byte) []byte {
