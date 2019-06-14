@@ -1294,7 +1294,7 @@ func main() {
 		state.tcpOutChan,
 		state.secretSign,
 		state.publicSign)
-	go httpServer(state.httpChan, state.homeCode, port)
+	go httpServer(state.httpChan, port)
 	fmt.Print(state.homeCode)
 	err = browser.OpenURL(appUrl(port, state.homeCode))
 	if err != nil {
@@ -2076,11 +2076,7 @@ func hash(i interface{}) ([32]byte, error) {
 	return blake2b.Sum256(buf.Bytes()), nil
 }
 
-func httpServer(
-	inputChan chan httpInputT,
-	homeCode string,
-	port string) {
-
+func httpServer(inputChan chan httpInputT, port string) {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:subRoute"),
