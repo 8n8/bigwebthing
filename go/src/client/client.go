@@ -1,7 +1,6 @@
 package main
 
 import (
-	"math/big"
 	"archive/tar"
 	"bytes"
 	"common"
@@ -24,6 +23,7 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	"io/ioutil"
+	"math/big"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -52,7 +52,6 @@ var keyPairs = map[publicEncryptT]secretEncryptT{}
 var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
 var tcpInChan = make(chan common.ClientToClient)
 var tcpOutChan = make(chan common.ClientToClient)
-var httpChan = make(chan httpInputT)
 
 type publicSignT [32]byte
 type publicEncryptT [32]byte
@@ -262,12 +261,6 @@ func hashFromString(s string) ([32]byte, error) {
 	return hash, nil
 }
 
-var subRouteApps = map[string]struct{}{
-	"getapp":       struct{}{},
-	"makeapproute": struct{}{},
-	"invite":       struct{}{},
-}
-
 func makeConn(
 	secretSign [64]byte) (net.Conn, error) {
 
@@ -332,15 +325,6 @@ func tcpServer() {
 	}
 }
 
-type normalApiInputT struct {
-	w            http.ResponseWriter
-	securityCode string
-	body         []byte
-	route        string
-	subRoute     string
-	doneCh       chan struct{}
-}
-
 func strEq(s1, s2 string) bool {
 	eq := subtle.ConstantTimeCompare([]byte(s1), []byte(s2))
 	return eq == 1
@@ -362,7 +346,7 @@ func hashToStr(h [32]byte) string {
 }
 
 type sendAppJsonT struct {
-	AppHash string
+	AppHash   string
 	Recipient string
 }
 
@@ -391,7 +375,7 @@ func logSendErr(
 		return
 	}
 	f, openErr := os.OpenFile(
-		dataDir + "/sendErrors.txt",
+		dataDir+"/sendErrors.txt",
 		appendFlags,
 		0600)
 	defer f.Close()
@@ -421,7 +405,7 @@ func logSentSuccess(
 		return
 	}
 	f, openErr := os.OpenFile(
-		dataDir + "/sentMsgPath", appendFlags, 0600)
+		dataDir+"/sentMsgPath", appendFlags, 0600)
 	if openErr != nil {
 		logSendErr(openErr, appHash, recipient, dataDir)
 		return
@@ -487,9 +471,9 @@ type appMsgT struct {
 type sendAppMsgT struct {
 	myPublicSign publicSignT
 	symmetricKey symmetricEncrypt
-	outChan chan common.ClientToClient
-	msg appMsgT
-	recipient publicSignT
+	outChan      chan common.ClientToClient
+	msg          appMsgT
+	recipient    publicSignT
 }
 
 func makeChunkFilePaths(ptrs []fileChunkPtrT) []string {
@@ -536,7 +520,7 @@ func (appSig appMsgT) process(author publicSignT) {
 		tmpPath:      makeChunkFilePath(appSig.AppHash),
 		finalPath:    makeAppPath(appSig.AppHash),
 		appSender:    author,
-		appMsg: appSig,
+		appMsg:       appSig,
 	})
 }
 
@@ -613,7 +597,7 @@ type fileChunkPtrT struct {
 	chunkHash [32]byte
 	counter   int
 	lastChunk bool
-	appHash blake2bHash
+	appHash   blake2bHash
 }
 
 func sendChunk(s sendChunkT) {
@@ -820,13 +804,6 @@ func getHashSecurityCode(hash blake2bHash) (string, error) {
 	return "", errors.New("Could not find app.")
 }
 
-type httpInputT struct {
-	w      http.ResponseWriter
-	r      *http.Request
-	route  string
-	doneCh chan struct{}
-}
-
 func decodeMsg(bs []byte) (Decrypted, error) {
 	var buf bytes.Buffer
 	n, err := buf.Write(bs)
@@ -919,9 +896,9 @@ func sendAppMsg(s sendAppMsgT) {
 		&nonce,
 		&keyBytes)
 	s.outChan <- common.ClientToClient{
-		Msg: common.Encrypted{encrypted, nonce},
+		Msg:       common.Encrypted{encrypted, nonce},
 		Recipient: s.recipient,
-		Author: s.myPublicSign,
+		Author:    s.myPublicSign,
 	}
 }
 
@@ -1023,9 +1000,9 @@ type chunkAwaitingReceiptT struct {
 	offset              int64
 	recipient           [32]byte
 	symmetricEncryptKey [32]byte
-	chunkHash blake2bHash
+	chunkHash           blake2bHash
 	counter             int
-	lastChunk bool
+	lastChunk           bool
 }
 
 type sendChunkT struct {
@@ -1049,15 +1026,15 @@ func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
 }
 
 type secretsFileT struct {
-	Publicsign    [32]byte
-	Nonce         [24]byte
-	Salt          [32]byte
-	EncryptedSecretSign    []byte
+	Publicsign          [32]byte
+	Nonce               [24]byte
+	Salt                [32]byte
+	EncryptedSecretSign []byte
 }
 
 type keysT struct {
-	publicsign    [32]byte
-	secretsign    [64]byte
+	publicsign [32]byte
+	secretsign [64]byte
 }
 
 func slowHash(pw []byte, salt [32]byte) [32]byte {
@@ -1116,10 +1093,10 @@ func createKeys(dataDir string) error {
 		&nonce,
 		&secretKey)
 	secretsFile := secretsFileT{
-		Publicsign:    *pubSign,
-		Nonce:         nonce,
-		Salt:          salt,
-		EncryptedSecretSign:    encryptedSecrets,
+		Publicsign:          *pubSign,
+		Nonce:               nonce,
+		Salt:                salt,
+		EncryptedSecretSign: encryptedSecrets,
 	}
 	encodedFile, err := json.Marshal(secretsFile)
 	if err != nil {
@@ -1187,7 +1164,7 @@ func initState() error {
 func main() {
 	gob.Register(*new(common.ClientToClient))
 	gob.Register(*new(common.Encrypted))
-    gob.Register(*new(common.GiveMeASymmetricKey))
+	gob.Register(*new(common.GiveMeASymmetricKey))
 	gob.Register(*new(common.HereIsAnEncryptionKey))
 	gob.Register(*new(AppReceiptT))
 	gob.Register(*new(ReceiptT))
@@ -1205,7 +1182,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	err = os.Mkdir(dataDir + "/tmp", 0755)
+	err = os.Mkdir(dataDir+"/tmp", 0755)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1264,7 +1241,7 @@ func (chunk FileChunk) process(author publicSignT) {
 				chunkHash: chunkHash,
 				counter:   chunk.Counter,
 				lastChunk: chunk.LastChunk,
-				appHash: chunk.AppHash,
+				appHash:   chunk.AppHash,
 			}}
 	} else {
 		lastChunk := previousChunks[len(previousChunks)-1]
@@ -1296,7 +1273,7 @@ func (chunk FileChunk) process(author publicSignT) {
 		tcpOutChan,
 		author,
 		publicSign,
-		})
+	})
 }
 
 func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte) {
@@ -1368,63 +1345,6 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte) {
 	decoded.process(author)
 }
 
-func processHttpInput(h httpInputT) {
-	securityCode := pat.Param(h.r, "securityCode")
-	subRoute := ""
-	if _, ok := subRouteApps[h.route]; ok {
-		subRoute = pat.Param(h.r, "subRoute")
-	}
-	if h.route == "saveapp" {
-		hash, tags, err := writeAppToFile(h.r)
-		if err != nil {
-			http.Error(h.w, err.Error(), 500)
-			h.doneCh <- struct{}{}
-		}
-		processNewApp(h, hash, tags)
-	}
-	body, err := ioutil.ReadAll(h.r.Body)
-	if err != nil {
-		http.Error(h.w, err.Error(), http.StatusInternalServerError)
-		h.doneCh <- struct{}{}
-	}
-	processNormalApiInput(
-		normalApiInputT{
-			h.w,
-			securityCode,
-			body,
-			h.route,
-			subRoute,
-			h.doneCh,
-		})
-}
-
-func processNormalApiInput(n normalApiInputT) {
-	homeGuard := func(processor func(normalApiInputT)) {
-
-		if !strEq(n.securityCode, homeCode) {
-			http.Error(n.w, "Bad security code", 400)
-			n.doneCh <- struct{}{}
-		}
-		processor(n)
-	}
-	switch n.route {
-	case "makeapproute":
-		homeGuard(processMakeAppRoute)
-	case "getapp":
-		processGetApp(n)
-	case "sendapp":
-		homeGuard(processSendApp)
-	case "searchapps":
-		homeGuard(processSearchApps)
-	case "invite":
-		homeGuard(processInvite)
-	case "getmyid":
-		homeGuard(processGetMyId)
-	case "getmembers":
-		homeGuard(processGetMembers)
-	}
-}
-
 func memberMapToList() []publicSignT {
 
 	memberList := make([]publicSignT, len(members))
@@ -1436,57 +1356,9 @@ func memberMapToList() []publicSignT {
 	return memberList
 }
 
-func processGetMembers(n normalApiInputT) {
-	encoded, err := json.Marshal(memberMapToList())
-	if err != nil {
-		http.Error(n.w, "Error encoding member list", 400)
-		n.doneCh <- struct{}{}
-	}
-	n.w.Write(encoded)
-	n.doneCh <- struct{}{}
-}
-
 func encodePubId(pubId publicSignT) []byte {
 	return []byte(base64.URLEncoding.EncodeToString(
 		common.HashToSlice(pubId)))
-}
-
-func processGetMyId(n normalApiInputT) {
-	n.w.Write(encodePubId(publicSign))
-	n.doneCh <- struct{}{}
-}
-
-func processInvite(n normalApiInputT) {
-	sendErr := func(err error, code int) {
-		http.Error(n.w, err.Error(), code)
-		n.doneCh <- struct{}{}
-	}
-	inviteeBytes, err := base64.URLEncoding.DecodeString(n.subRoute)
-	if err != nil {
-		sendErr(err, 400)
-	}
-	invitee := common.SliceToHash(inviteeBytes)
-	theTime := time.Now().Unix()
-	invite := inviteT{
-		PosixTime: theTime,
-		Invitee:   invitee,
-		Author:    publicSign,
-		Signature: sliceToSig(sign.Sign(
-			make([]byte, 0),
-			common.HashToSlice(inviteHash(theTime, invitee)),
-			&secretSign)),
-	}
-	invites[invite] = struct{}{}
-	encodedInvites, err := json.Marshal(invitesToSlice())
-	if err != nil {
-		sendErr(err, 500)
-	}
-	err = ioutil.WriteFile(
-		invitesFile(), encodedInvites, 0600)
-	if err != nil {
-		sendErr(err, 500)
-	}
-	n.doneCh <- struct{}{}
 }
 
 func processSearch(rawRequest []byte) ([]byte, error) {
@@ -1501,44 +1373,6 @@ func processSearch(rawRequest []byte) ([]byte, error) {
 		return *new([]byte), err
 	}
 	return json.Marshal(matchingApps)
-}
-
-func processSearchApps(n normalApiInputT) {
-	encoded, err := processSearch(n.body)
-	if err != nil {
-		http.Error(n.w, err.Error(), 400)
-	} else {
-		n.w.Write(encoded)
-	}
-	n.doneCh <- struct{}{}
-}
-
-func processGetApp(n normalApiInputT) {
-	sendErr := func(msg string, code int) {
-		http.Error(n.w, msg, code)
-		n.doneCh <- struct{}{}
-	}
-	if strEq(n.securityCode, homeCode) {
-		err := serveDoc(n.w, "home/" + n.subRoute)
-		if err != nil {
-			sendErr(err.Error(), 500)
-		}
-		n.doneCh <- struct{}{}
-	}
-	docHash, err := getDocHash(n.securityCode)
-	if err != nil {
-		sendErr("Bad security code", 400)
-	}
-	filePath := fmt.Sprintf(
-		"%s/tmp/%s/%s",
-		dataDir,
-		hashToStr(docHash),
-		n.subRoute)
-	err = serveDoc(n.w, filePath)
-	if err != nil {
-		sendErr(err.Error(), 500)
-	}
-	n.doneCh <- struct{}{}
 }
 
 func serveDoc(w http.ResponseWriter, filePath string) error {
@@ -1558,100 +1392,6 @@ func findApp(appHash publicSignT) (appMsgT, error) {
 		}
 	}
 	return *new(appMsgT), errors.New("Could not find app.")
-}
-
-func processSendApp(n normalApiInputT) {
-	sendErr := func(msg string) {
-		http.Error(n.w, msg, 400)
-		n.doneCh <- struct{}{}
-	}
-	var sendAppJson sendAppJsonT
-	err := json.Unmarshal(n.body, &sendAppJson)
-	if err != nil {
-		sendErr(err.Error())
-	}
-	appHashSlice, err := base64.URLEncoding.DecodeString(
-		sendAppJson.AppHash)
-	if err != nil {
-		sendErr(err.Error())
-	}
-	appHash := common.SliceToHash(appHashSlice)
-	recipientSlice, err := base64.URLEncoding.DecodeString(
-		sendAppJson.Recipient)
-	if err != nil {
-		sendErr(err.Error())
-	}
-	recipient := common.SliceToHash(recipientSlice)
-	app, err := findApp(appHash)
-	if err != nil {
-		sendErr(err.Error())
-	}
-	filepath := dataDir + "/apps/" + hashToStr(appHash)
-	symmetricEncryptKey, ok := symmetricKeys[recipient]
-	chunk := sendChunkT{
-		publicSign,
-		dataDir,
-		app,
-		tcpOutChan,
-		filepath,
-		0,
-		recipient,
-		symmetricEncryptKey,
-		0,
-	}
-	if !ok {
-		requestEncryptionKey(chunk)
-	}
-	sendChunk(chunk)
-}
-
-func processMakeAppRoute(n normalApiInputT) {
-	sendErr := func(err error) {
-		http.Error(n.w, err.Error(), 500)
-		n.doneCh <- struct{}{}
-	}
-	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
-	if err != nil {
-		sendErr(err)
-		return
-	}
-	hash := common.SliceToHash(hashSlice)
-	hashStr := hashToStr(hash)
-	tmpPath := dataDir + "/tmp/" + hashStr
-	_, err = os.Stat(tmpPath)
-	appPath := dataDir + "/apps/" + hashStr
-	if err == nil {
-		appCode, err := getHashSecurityCode(hash)
-		if err != nil {
-			sendErr(err)
-			return
-		}
-		err = browser.OpenURL(appUrl(appCode))
-		if err != nil {
-			sendErr(err)
-			return
-		}
-		n.doneCh <- struct{}{}
-		return
-	}
-
-	err = unpackTarArchive(appPath, tmpPath)
-	if err != nil {
-		sendErr(err)
-		return
-	}
-	newCode, err := genCode()
-	if err != nil {
-		sendErr(err)
-		return
-	}
-	err = browser.OpenURL(appUrl(newCode))
-	if err != nil {
-		sendErr(err)
-		return
-	}
-	appCodes[newCode] = hash
-	n.doneCh <- struct{}{}
 }
 
 func appUrl(appCode string) string {
@@ -1693,55 +1433,6 @@ func unpackTarArchive(source string, dest string) error {
 	}
 	return nil
 }
-
-func processNewApp(
-	h httpInputT,
-	hash string,
-	tags map[string]struct{}) {
-
-	sendErr := func(msg string, code int) {
-		http.Error(h.w, msg, code)
-		h.doneCh <- struct{}{}
-	}
-	appHash, err := hashFromString(hash)
-	if err != nil {
-		sendErr(err.Error(), 400)
-	}
-	posixTime := time.Now().Unix()
-	app := appMsgT{
-		publicSign,
-		tags,
-		appHash,
-		posixTime,
-		sliceToSig(sign.Sign(
-			make([]byte, 0),
-			common.HashToSlice(hashApp(
-				tags, appHash, posixTime)),
-			&secretSign)),
-	}
-	apps = append(apps, app)
-	encodedApps, err := json.Marshal(apps)
-	if err != nil {
-		sendErr(err.Error(), 500)
-	}
-
-	err = ioutil.WriteFile(appsFile(dataDir), encodedApps, 0600)
-	if err != nil {
-		sendErr(err.Error(), 500)
-	}
-	h.w.Write(common.HashToSlice(appHash))
-	h.doneCh <- struct{}{}
-}
-
-//type handlerT func(http.ResponseWriter, *http.Request)
-//
-//func handler(route string) handlerT {
-//	return func(w http.ResponseWriter, r *http.Request) {
-//		doneCh := make(chan struct{})
-//		httpChan <- httpInputT{w, r, route, doneCh}
-//		<-doneCh
-//	}
-//}
 
 func encKeyToSlice(key [common.EncryptedKeyLen]byte) []byte {
 	result := make([]byte, common.EncryptedKeyLen)
@@ -1793,7 +1484,7 @@ func processHereIsAnEncryptionKey(
 
 type makeSymmetricKeyT struct {
 	myPubSign              [32]byte
-	mySecretSign [64]byte
+	mySecretSign           [64]byte
 	recipientPublicEncrypt [32]byte
 	recipient              [32]byte
 	tcpOutChan             chan common.ClientToClient
@@ -1820,7 +1511,7 @@ type assembleApp struct {
 	tmpPath      string
 	finalPath    string
 	appSender    [32]byte
-	appMsg appMsgT
+	appMsg       appMsgT
 }
 
 func writeChunksToTmpFile(
@@ -1872,7 +1563,7 @@ func addChunkToFile(
 	if nFile != len(chunk) {
 		return errors.New("Could not write whole chunk to file.")
 	}
-    if nFile != nHash {
+	if nFile != nHash {
 		return errors.New("Could not write whole chunk to hasher.")
 	}
 	return nil
@@ -1916,13 +1607,13 @@ func assembleAppAndSendReceipt(a assembleApp) {
 }
 
 type writeAppToFileAndSendReceiptT struct {
-	appHash  blake2bHash
-	filePath string
-	chunk    []byte
-	secretSign secretSignT
+	appHash      blake2bHash
+	filePath     string
+	chunk        []byte
+	secretSign   secretSignT
 	symmetricKey symmetricEncrypt
-	tcpOutChan chan common.ClientToClient
-	sender publicSignT
+	tcpOutChan   chan common.ClientToClient
+	sender       publicSignT
 	myPublicSign publicSignT
 }
 
@@ -1955,9 +1646,9 @@ func writeAppToFileNew(w writeAppToFileAndSendReceiptT) {
 		&nonce,
 		&keyAsBytes)
 	w.tcpOutChan <- common.ClientToClient{
-		Msg: common.Encrypted{encrypted, nonce},
+		Msg:       common.Encrypted{encrypted, nonce},
 		Recipient: w.sender,
-		Author: w.myPublicSign,
+		Author:    w.myPublicSign,
 	}
 }
 
@@ -1979,7 +1670,7 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 	securityCode := pat.Param(r, "securityCode")
 	subRoute := pat.Param(r, "subRoute")
 	if strEq(securityCode, homeCode) {
-		err := serveDoc(w, "home/" + subRoute)
+		err := serveDoc(w, "home/"+subRoute)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -2064,8 +1755,8 @@ func httpInvite(w http.ResponseWriter, r *http.Request) {
 	theTime := time.Now().Unix()
 	invite := inviteT{
 		PosixTime: theTime,
-		Invitee: invitee,
-		Author: publicSign,
+		Invitee:   invitee,
+		Author:    publicSign,
 		Signature: sliceToSig(sig(
 			common.HashToSlice(inviteHash(theTime, invitee)),
 			&secretSign)),
@@ -2236,5 +1927,5 @@ func httpServer() {
 		pat.Post("/saveapp/:securityCode"), httpSaveApp)
 	mux.HandleFunc(
 		pat.Post("/searchapps/:securityCode"), httpSearchApps)
-	http.ListenAndServe(":" + port, mux)
+	http.ListenAndServe(":"+port, mux)
 }
