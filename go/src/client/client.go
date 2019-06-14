@@ -72,7 +72,7 @@ type stateT struct {
 	//appsAwaitingReceipt   map[blake2bHash]publicSignT
 	//symmetricKeys         map[publicSignT]symmetricEncrypt
 	//keyPairs              map[publicEncryptT]secretEncryptT
-	awaitingSymmetricKey  map[publicSignT]sendChunkT
+	//awaitingSymmetricKey  map[publicSignT]sendChunkT
 }
 
 type publicSignT [32]byte
@@ -607,7 +607,7 @@ func requestEncryptionKey(sendChunk sendChunkT, s *stateT) {
 		Recipient: sendChunk.recipient,
 		Author:    sendChunk.myPublicSign,
 	}
-	s.awaitingSymmetricKey[sendChunk.recipient] = sendChunk
+	awaitingSymmetricKey[sendChunk.recipient] = sendChunk
 	keyPairs[publicEncryptT(*pub)] = secretEncryptT(*priv)
 }
 
@@ -1829,7 +1829,7 @@ func processHereIsAnEncryptionKey(
 	author [32]byte,
 	s *stateT) {
 
-	awaitingKey, ok := s.awaitingSymmetricKey[author]
+	awaitingKey, ok := awaitingSymmetricKey[author]
 	if !ok {
 		return
 	}
@@ -1859,7 +1859,7 @@ func processHereIsAnEncryptionKey(
 		return
 	}
 	symmetricKey := common.SliceToHash(keySlice)
-	delete(s.awaitingSymmetricKey, author)
+	delete(awaitingSymmetricKey, author)
 	symmetricKeys[author] = symmetricKey
 	awaitingKey.symmetricEncryptKey = symmetricKey
 	sendChunk(s, sendChunkT(awaitingKey))
