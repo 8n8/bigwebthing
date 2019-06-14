@@ -2205,6 +2205,24 @@ func httpGetMembers(w http.ResponseWriter, r *http.Request) {
 	w.Write(encoded)
 }
 
+func httpSearchApps(w http.ResponseWriter, r *http.Request) {
+	if !strEq(pat.Param(r, "securityCode"), homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	encoded, err := processSearch(body)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	w.Write(encoded)
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
