@@ -65,7 +65,7 @@ type stateT struct {
 	//invites               map[inviteT]struct{}
 	//uninvites             map[inviteT]struct{}
 	//members               map[publicSignT]struct{}
-	chunksLoading         map[blake2bHash][]fileChunkPtrT
+	//chunksLoading         map[blake2bHash][]fileChunkPtrT
 	dataDir               string
 	port                  string
 	chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
@@ -520,18 +520,6 @@ type sendAppMsgT struct {
 	recipient publicSignT
 }
 
-func cleanChunksLoading(
-	oldChunksLoading map[blake2bHash][]fileChunkPtrT,
-	appHash blake2bHash) map[blake2bHash][]fileChunkPtrT {
-
-	newChunksLoading := make(map[blake2bHash][]fileChunkPtrT)
-	for appHash, chunkPtr := range oldChunksLoading {
-		newChunksLoading[appHash] = chunkPtr
-	}
-	delete(newChunksLoading, appHash)
-	return newChunksLoading
-}
-
 func makeChunkFilePaths(ptrs []fileChunkPtrT, dataDir string) []string {
 	filePaths := make([]string, len(ptrs))
 	for i, ptr := range ptrs {
@@ -547,8 +535,7 @@ func makeAppPath(dataDir string, appHash blake2bHash) string {
 }
 
 func (appSig appMsgT) process(author publicSignT, s *stateT) {
-	s.chunksLoading = cleanChunksLoading(
-		s.chunksLoading, appSig.AppHash)
+	delete(chunksLoading, appSig.AppHash)
 	signedHash, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appSig.Sig),
@@ -558,7 +545,7 @@ func (appSig appMsgT) process(author publicSignT, s *stateT) {
 	if !(ok && bytes.Equal(appHash, signedHash)) {
 		return
 	}
-	chunkPtrs, ok := s.chunksLoading[appSig.AppHash]
+	chunkPtrs, ok := chunksLoading[appSig.AppHash]
 	if !ok {
 		return
 	}
@@ -1255,7 +1242,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//invites:        invites,
 		//uninvites:      uninvites,
 		//members:        memberList,
-		chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
+		//chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
 		dataDir:        dataDir,
 		port:           port,
 	}, nil
@@ -1337,7 +1324,7 @@ func processTcpInput(s *stateT, c common.ClientToClient) {
 }
 
 func (chunk FileChunk) process(author publicSignT, s *stateT) {
-	previousChunks, ok := s.chunksLoading[chunk.AppHash]
+	previousChunks, ok := chunksLoading[chunk.AppHash]
 	chunkHash, err := hash(chunk)
 	if err != nil {
 		return
@@ -1346,7 +1333,7 @@ func (chunk FileChunk) process(author publicSignT, s *stateT) {
 		return
 	}
 	if !ok {
-		s.chunksLoading[chunk.AppHash] = []fileChunkPtrT{
+		chunksLoading[chunk.AppHash] = []fileChunkPtrT{
 			fileChunkPtrT{
 				chunkHash: chunkHash,
 				counter:   chunk.Counter,
@@ -1358,8 +1345,8 @@ func (chunk FileChunk) process(author publicSignT, s *stateT) {
 		if lastChunk.counter != chunk.Counter-1 {
 			return
 		}
-		s.chunksLoading[chunk.AppHash] = append(
-			s.chunksLoading[chunk.AppHash],
+		chunksLoading[chunk.AppHash] = append(
+			chunksLoading[chunk.AppHash],
 			fileChunkPtrT{
 				chunkHash: chunkHash,
 				counter:   chunk.Counter,
@@ -2052,7 +2039,7 @@ func writeAppToFileNew(w writeAppToFileAndSendReceiptT, s *stateT) {
 }
 
 func newChunksFinished(t blake2bHash, s *stateT) {
-	delete(s.chunksLoading, t)
+	delete(chunksLoading, t)
 }
 
 func hash(i interface{}) ([32]byte, error) {
