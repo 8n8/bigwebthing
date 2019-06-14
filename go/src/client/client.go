@@ -70,7 +70,7 @@ type stateT struct {
 	//port                  string
 	//chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
 	//appsAwaitingReceipt   map[blake2bHash]publicSignT
-	symmetricKeys         map[publicSignT]symmetricEncrypt
+	//symmetricKeys         map[publicSignT]symmetricEncrypt
 	keyPairs              map[publicEncryptT]secretEncryptT
 	awaitingSymmetricKey  map[publicSignT]sendChunkT
 }
@@ -550,7 +550,7 @@ func (appSig appMsgT) process(author publicSignT, s *stateT) {
 	if !finalChunkPtr.lastChunk {
 		return
 	}
-	symmetricKey, ok := s.symmetricKeys[author]
+	symmetricKey, ok := symmetricKeys[author]
 	if !ok {
 		return
 	}
@@ -903,7 +903,7 @@ func (receipt ReceiptT) process(author publicSignT, s *stateT) {
 		return
 	}
 	if chunkAwaiting.lastChunk {
-		symmetricKey, ok := s.symmetricKeys[author]
+		symmetricKey, ok := symmetricKeys[author]
 		if !ok {
 			return
 		}
@@ -1352,7 +1352,7 @@ func (chunk FileChunk) process(author publicSignT, s *stateT) {
 	}
 	tmpFileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
-	symmetricKey, ok := s.symmetricKeys[author]
+	symmetricKey, ok := symmetricKeys[author]
 	if !ok {
 		fmt.Println("Could not find symmetric key for author:")
 		fmt.Println(author)
@@ -1415,11 +1415,11 @@ func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte, s 
 		m.recipient,
 		m.myPubSign,
 	}
-	s.symmetricKeys[m.recipient] = symmetricKey
+	symmetricKeys[m.recipient] = symmetricKey
 }
 
 func processEncrypted(encrypted common.Encrypted, author [32]byte, s *stateT) {
-	decryptionKey, ok := s.symmetricKeys[author]
+	decryptionKey, ok := symmetricKeys[author]
 	if !ok {
 		return
 	}
@@ -1659,7 +1659,7 @@ func processSendApp(n normalApiInputT, s *stateT) {
 		sendErr(err.Error())
 	}
 	filepath := dataDir + "/apps/" + hashToStr(appHash)
-	symmetricEncryptKey, ok := s.symmetricKeys[recipient]
+	symmetricEncryptKey, ok := symmetricKeys[recipient]
 	chunk := sendChunkT{
 		publicSign,
 		dataDir,
@@ -1860,7 +1860,7 @@ func processHereIsAnEncryptionKey(
 	}
 	symmetricKey := common.SliceToHash(keySlice)
 	delete(s.awaitingSymmetricKey, author)
-	s.symmetricKeys[author] = symmetricKey
+	symmetricKeys[author] = symmetricKey
 	awaitingKey.symmetricEncryptKey = symmetricKey
 	sendChunk(s, sendChunkT(awaitingKey))
 }
