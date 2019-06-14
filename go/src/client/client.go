@@ -54,28 +54,6 @@ var tcpInChan = make(chan common.ClientToClient)
 var tcpOutChan = make(chan common.ClientToClient)
 var httpChan = make(chan httpInputT)
 
-//type stateT struct {
-//	//apps                  []appMsgT
-//	//httpChan              chan httpInputT
-//	//tcpInChan             chan common.ClientToClient
-//	//tcpOutChan            chan common.ClientToClient
-//	//homeCode              string
-//	//appCodes              map[string]blake2bHash
-//	//publicSign            publicSignT
-//	//secretSign            [64]byte
-//	//invites               map[inviteT]struct{}
-//	//uninvites             map[inviteT]struct{}
-//	//members               map[publicSignT]struct{}
-//	//chunksLoading         map[blake2bHash][]fileChunkPtrT
-//	//dataDir               string
-//	//port                  string
-//	//chunksAwaitingReceipt map[blake2bHash]chunkAwaitingReceiptT
-//	//appsAwaitingReceipt   map[blake2bHash]publicSignT
-//	//symmetricKeys         map[publicSignT]symmetricEncrypt
-//	//keyPairs              map[publicEncryptT]secretEncryptT
-//	//awaitingSymmetricKey  map[publicSignT]sendChunkT
-//}
-
 type publicSignT [32]byte
 type publicEncryptT [32]byte
 type secretEncryptT [32]byte
@@ -949,7 +927,6 @@ func sendAppMsg(s sendAppMsgT) {
 }
 
 const (
-	// pwlen = 5
 	appendFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
 )
 
@@ -983,18 +960,6 @@ func secretKeyToSlice(secret [64]byte) []byte {
 	}
 	return result
 }
-
-// func makePassword() ([]byte, error) {
-// 	pw := make([]byte, pwlen)
-// 	n, err := rand.Read(pw)
-// 	if err != nil {
-// 		return make([]byte, 0), err
-// 	}
-// 	if n != pwlen {
-// 		return make([]byte, 0), errors.New("Wrong number of bytes.")
-// 	}
-// 	return pw, err
-// }
 
 func makeSalt() ([32]byte, error) {
 	nonceSlice := make([]byte, 32)
@@ -1197,11 +1162,6 @@ func initState() error {
 	}
 	fmt.Println("Please enter your password:")
 	password, err := terminal.ReadPassword(int(syscall.Stdin))
-	// password := make([]byte, hex.DecodedLen(len(passwordtxt)))
-	// _, err = hex.Decode(password, passwordtxt)
-	// if err != nil {
-	// 	return s, err
-	// }
 	keys, err := extractKeys(password, rawSecrets)
 	secretSign = keys.secretsign
 	if err != nil {
@@ -1223,22 +1183,6 @@ func initState() error {
 	}
 	members = makeMemberList()
 	return nil
-	//return stateT{
-	//	//apps:           apps,
-	//	//httpChan:       make(chan httpInputT),
-	//	//tcpInChan:      make(chan common.ClientToClient),
-	//	//tcpOutChan:     make(chan common.ClientToClient),
-	//	//homeCode:       homeCode,
-	//	//appCodes:       make(map[string]blake2bHash),
-	//	//publicSign:     keys.publicsign,
-	//	//secretSign:     keys.secretsign,
-	//	//invites:        invites,
-	//	//uninvites:      uninvites,
-	//	//members:        memberList,
-	//	//chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
-	//	//dataDir:        dataDir,
-	//	//port:           port,
-	//}, nil
 }
 
 func main() {
