@@ -2110,7 +2110,18 @@ func httpServer() {
 		})
 	mux.HandleFunc(
 		pat.Get("/getmembers/:securityCode"),
-		handler("getmembers"))
+		func(w http.ResponseWriter, r *http.Request) {
+			if !strEq(pat.Param(r, "securityCode"), homeCode) {
+				http.Error(w, "Bad security code", 400)
+				return
+			}
+			encoded, err := json.Marshal(memberMapToList())
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Write(encoded)
+		})
 	mux.HandleFunc(
 		pat.Post("/sendapp/:securityCode"),
 		handler("sendapp"))
