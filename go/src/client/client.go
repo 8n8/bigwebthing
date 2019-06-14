@@ -801,7 +801,7 @@ func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
 	return blake2b.Sum256(concat)
 }
 
-func invitesToSlice(invites map[inviteT]struct{}) []inviteT {
+func invitesToSlice() []inviteT {
 	invitesSlice := make([]inviteT, len(invites))
 	i := 0
 	for invite, _ := range invites {
@@ -1482,7 +1482,7 @@ func processInvite(n normalApiInputT) {
 			&secretSign)),
 	}
 	invites[invite] = struct{}{}
-	encodedInvites, err := json.Marshal(invitesToSlice(invites))
+	encodedInvites, err := json.Marshal(invitesToSlice())
 	if err != nil {
 		sendErr(err, 500)
 	}
@@ -2009,7 +2009,7 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	securityCode := pat.Param(r, "securityCode")
 	subRoute := pat.Param(r, "subRoute")
-	if strEq(securityCode, homeCode) {
+	if !strEq(securityCode, homeCode) {
 		http.Error(w, "Bad security code", 400)
 		return
 	}
@@ -2053,6 +2053,44 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	appCodes[newCode] = hash
 }
 
+func httpInvite(w http.ResponseWriter, r *http.Request) {
+	securityCode := pat.Param(r, "securityCode")
+	if !strEq(securityCode, homeCode) {
+		http.Error(w, "Bad security code", 400)
+		return
+	}
+	subRoute := pat.Param(r, "subRoute")
+	inviteeBytes, err := base64.URLEncoding.DecodeString(subRoute)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	invitee := common.SliceToHash(inviteeBytes)
+	theTime := time.Now().Unix()
+	invite := inviteT{
+		PosixTime: theTime,
+		Invitee: invitee,
+		Author: publicSign,
+		Signature: sliceToSig(sig(
+			common.HashToSlice(inviteHash(theTime, invitee)),
+			&secretSign)),
+	}
+	encodedInvites, err := json.Marshal(invitesToSlice())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	invites[invite] = struct{}{}
+	err = ioutil.WriteFile(invitesFile(), encodedInvites, 0600)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+}
+
+func sig(msg []byte, privateKey *[64]byte) []byte {
+	return sign.Sign(make([]byte, 0), msg, privateKey)
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
@@ -2060,8 +2098,7 @@ func httpServer() {
 	mux.HandleFunc(
 		pat.Get("/makeapproute/:securityCode/:subRoute"), httpMakeApp)
 	mux.HandleFunc(
-		pat.Post("/invite/:securityCode/:subRoute"),
-		handler("invite"))
+		pat.Post("/invite/:securityCode/:subRoute"), httpInvite)
 	mux.HandleFunc(
 		pat.Get("/getmyid/:securityCode"),
 		handler("getmyid"))
