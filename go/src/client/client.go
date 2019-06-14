@@ -59,7 +59,7 @@ type stateT struct {
 	tcpInChan             chan common.ClientToClient
 	tcpOutChan            chan common.ClientToClient
 	//homeCode              string
-	appCodes              map[string]blake2bHash
+	//appCodes              map[string]blake2bHash
 	publicSign            publicSignT
 	secretSign            [64]byte
 	invites               map[inviteT]struct{}
@@ -378,9 +378,7 @@ func strEq(s1, s2 string) bool {
 	return eq == 1
 }
 
-func getDocHash(
-	securityCode string,
-	appCodes map[string]blake2bHash) (blake2bHash, error) {
+func getDocHash(securityCode string) (blake2bHash, error) {
 
 	for sc, hash := range appCodes {
 		if strEq(sc, securityCode) {
@@ -859,7 +857,7 @@ func invitesToSlice(invites map[inviteT]struct{}) []inviteT {
 	return invitesSlice
 }
 
-func getHashSecurityCode(appCodes map[string]blake2bHash, hash blake2bHash) (string, error) {
+func getHashSecurityCode(hash blake2bHash) (string, error) {
 	for c, h := range appCodes {
 		if equalHashes(h, hash) {
 			return c, nil
@@ -1255,7 +1253,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		tcpInChan:      make(chan common.ClientToClient),
 		tcpOutChan:     make(chan common.ClientToClient),
 		//homeCode:       homeCode,
-		appCodes:       make(map[string]blake2bHash),
+		//appCodes:       make(map[string]blake2bHash),
 		publicSign:     keys.publicsign,
 		secretSign:     keys.secretsign,
 		invites:        invites,
@@ -1622,7 +1620,7 @@ func processGetApp(n normalApiInputT, s *stateT) {
 		}
 		n.doneCh <- struct{}{}
 	}
-	docHash, err := getDocHash(n.securityCode, s.appCodes)
+	docHash, err := getDocHash(n.securityCode)
 	if err != nil {
 		sendErr("Bad security code", 400)
 	}
@@ -1718,7 +1716,7 @@ func processMakeAppRoute(n normalApiInputT, s *stateT) {
 	_, err = os.Stat(tmpPath)
 	appPath := s.dataDir + "/apps/" + hashStr
 	if err == nil {
-		appCode, err := getHashSecurityCode(s.appCodes, hash)
+		appCode, err := getHashSecurityCode(hash)
 		if err != nil {
 			sendErr(err)
 			return
@@ -1747,7 +1745,7 @@ func processMakeAppRoute(n normalApiInputT, s *stateT) {
 		sendErr(err)
 		return
 	}
-	s.appCodes[newCode] = hash
+	appCodes[newCode] = hash
 	n.doneCh <- struct{}{}
 }
 
