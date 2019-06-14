@@ -64,7 +64,7 @@ type stateT struct {
 	//secretSign            [64]byte
 	//invites               map[inviteT]struct{}
 	//uninvites             map[inviteT]struct{}
-	members               map[publicSignT]struct{}
+	//members               map[publicSignT]struct{}
 	chunksLoading         map[blake2bHash][]fileChunkPtrT
 	dataDir               string
 	port                  string
@@ -1242,7 +1242,7 @@ func initState(dataDir string, port string) (stateT, error) {
 	if err != nil {
 		return s, err
 	}
-	memberList := makeMemberList()
+	members = makeMemberList()
 	return stateT{
 		//apps:           apps,
 		httpChan:       make(chan httpInputT),
@@ -1254,7 +1254,7 @@ func initState(dataDir string, port string) (stateT, error) {
 		//secretSign:     keys.secretsign,
 		//invites:        invites,
 		//uninvites:      uninvites,
-		members:        memberList,
+		//members:        memberList,
 		chunksLoading:  make(map[blake2bHash][]fileChunkPtrT),
 		dataDir:        dataDir,
 		port:           port,
@@ -1513,8 +1513,7 @@ func processNormalApiInput(n normalApiInputT, s *stateT) {
 	}
 }
 
-func memberMapToList(
-	members map[publicSignT]struct{}) []publicSignT {
+func memberMapToList() []publicSignT {
 
 	memberList := make([]publicSignT, len(members))
 	i := 0
@@ -1526,7 +1525,7 @@ func memberMapToList(
 }
 
 func processGetMembers(n normalApiInputT, s *stateT) {
-	encoded, err := json.Marshal(memberMapToList(s.members))
+	encoded, err := json.Marshal(memberMapToList())
 	if err != nil {
 		http.Error(n.w, "Error encoding member list", 400)
 		n.doneCh <- struct{}{}
