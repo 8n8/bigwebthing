@@ -360,16 +360,6 @@ func strEq(s1, s2 string) bool {
 	return eq == 1
 }
 
-type unpackAppT struct {
-	appCodes map[string]blake2bHash
-	w        http.ResponseWriter
-	appHash  [32]byte
-	doneCh   chan struct{}
-	appPath  string
-	tmpPath  string
-	port     string
-}
-
 func getDocHash(
 	securityCode string,
 	appCodes map[string]blake2bHash) (blake2bHash, error) {
@@ -1494,7 +1484,6 @@ func processNormalApiInput(n normalApiInputT, s *stateT) {
 		}
 		processor(n, s)
 	}
-	fmt.Println(n)
 	switch n.route {
 	case "makeapproute":
 		homeGuard(processMakeAppRoute)
@@ -1697,23 +1686,52 @@ func processSendApp(n normalApiInputT, s *stateT) {
 }
 
 func processMakeAppRoute(n normalApiInputT, s *stateT) {
+	sendErr := func(err error) {
+		http.Error(n.w, err.Error(), 500)
+		n.doneCh <- struct{}{}
+	}
 	hashSlice, err := base64.URLEncoding.DecodeString(n.subRoute)
 	if err != nil {
-		http.Error(n.w, err.Error(), 400)
-		n.doneCh <- struct{}{}
+		sendErr(err)
+		return
 	}
 	hash := common.SliceToHash(hashSlice)
 	hashStr := hashToStr(hash)
-	unpackAndLaunchApp(
-		unpackAppT{
-			s.appCodes,
-			n.w,
-			hash,
-			n.doneCh,
-			s.dataDir + "/apps/" + hashStr,
-			s.dataDir + "/tmp/" + hashStr,
-			s.port,
-		}, s)
+	tmpPath := s.dataDir + "/tmp/" + hashStr
+	_, err = os.Stat(tmpPath)
+	appPath := s.dataDir + "/apps/" + hashStr
+	if err == nil {
+		appCode, err := getHashSecurityCode(s.appCodes, hash)
+		if err != nil {
+			sendErr(err)
+			return
+		}
+		err = browser.OpenURL(appUrl(s.port, appCode))
+		if err != nil {
+			sendErr(err)
+			return
+		}
+		n.doneCh <- struct{}{}
+		return
+	}
+
+	err = unpackTarArchive(appPath, tmpPath)
+	if err != nil {
+		sendErr(err)
+		return
+	}
+	newCode, err := genCode()
+	if err != nil {
+		sendErr(err)
+		return
+	}
+	err = browser.OpenURL(appUrl(s.port, newCode))
+	if err != nil {
+		sendErr(err)
+		return
+	}
+	s.appCodes[newCode] = hash
+	n.doneCh <- struct{}{}
 }
 
 func appUrl(port string, appCode string) string {
@@ -1721,43 +1739,6 @@ func appUrl(port string, appCode string) string {
 		"http://localhost:%s/getapp/%s/index.html",
 		port,
 		appCode)
-}
-
-func unpackAndLaunchApp(g unpackAppT, s *stateT) {
-	sendErr := func(err error) {
-		http.Error(g.w, err.Error(), 500)
-		g.doneCh <- struct{}{}
-	}
-
-	_, err := os.Stat(g.tmpPath)
-	if err == nil {
-		appCode, err := getHashSecurityCode(g.appCodes, g.appHash)
-		if err != nil {
-			sendErr(err)
-		}
-		err = browser.OpenURL(appUrl(g.port, appCode))
-		if err != nil {
-			sendErr(err)
-		}
-		g.doneCh <- struct{}{}
-	}
-
-	err = unpackTarArchive(g.appPath, g.tmpPath)
-	if err != nil {
-		sendErr(err)
-	}
-
-	newCode, err := genCode()
-	if err != nil {
-		sendErr(err)
-	}
-	err = browser.OpenURL(appUrl(g.port, newCode))
-	if err != nil {
-		sendErr(err)
-	}
-
-	s.appCodes[newCode] = g.appHash
-	g.doneCh <- struct{}{}
 }
 
 func unpackTarArchive(source string, dest string) error {
