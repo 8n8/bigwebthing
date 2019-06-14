@@ -57,7 +57,7 @@ type stateT struct {
 	//apps                  []appMsgT
 	httpChan              chan httpInputT
 	//tcpInChan             chan common.ClientToClient
-	tcpOutChan            chan common.ClientToClient
+	//tcpOutChan            chan common.ClientToClient
 	//homeCode              string
 	//appCodes              map[string]blake2bHash
 	//publicSign            publicSignT
@@ -316,9 +316,7 @@ func makeConn(
 	return conn, err
 }
 
-func tcpServer(
-	out chan common.ClientToClient) {
-
+func tcpServer() {
 	stop := make(chan struct{})
 	for {
 		conn, err := makeConn(secretSign)
@@ -338,7 +336,7 @@ func tcpServer(
 			}()
 			go func() {
 				for {
-					msg, err := common.EncodeClientToClient(<-out)
+					msg, err := common.EncodeClientToClient(<-tcpOutChan)
 					if err != nil {
 						continue
 					}
@@ -909,7 +907,7 @@ func (receipt ReceiptT) process(author publicSignT, s *stateT) {
 		sendAppMsg(sendAppMsgT{
 			publicSign,
 			symmetricKey,
-			s.tcpOutChan,
+			tcpOutChan,
 			chunkAwaiting.appMsg,
 			author,
 		}, s)
@@ -918,7 +916,7 @@ func (receipt ReceiptT) process(author publicSignT, s *stateT) {
 		publicSign,
 		dataDir,
 		chunkAwaiting.appMsg,
-		s.tcpOutChan,
+		tcpOutChan,
 		chunkAwaiting.filepath,
 		chunkAwaiting.offset + common.ChunkContentSize,
 		chunkAwaiting.recipient,
@@ -1230,7 +1228,7 @@ func initState() (stateT, error) {
 		//apps:           apps,
 		httpChan:       make(chan httpInputT),
 		//tcpInChan:      make(chan common.ClientToClient),
-		tcpOutChan:     make(chan common.ClientToClient),
+		//tcpOutChan:     make(chan common.ClientToClient),
 		//homeCode:       homeCode,
 		//appCodes:       make(map[string]blake2bHash),
 		//publicSign:     keys.publicsign,
@@ -1275,8 +1273,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	go tcpServer(
-		state.tcpOutChan)
+	go tcpServer()
 	go httpServer(state.httpChan)
 	fmt.Print(homeCode)
 	err = browser.OpenURL(appUrl(homeCode))
@@ -1362,7 +1359,7 @@ func (chunk FileChunk) process(author publicSignT, s *stateT) {
 		chunk.Chunk,
 		secretSign,
 		symmetricKey,
-		s.tcpOutChan,
+		tcpOutChan,
 		author,
 		publicSign,
 		}, s)
@@ -1375,7 +1372,7 @@ func processGiveMeKey(keyRequest common.GiveMeASymmetricKey, author [32]byte, s 
 		secretSign,
 		keyRequest.MyPublicEncrypt,
 		author,
-		s.tcpOutChan,
+		tcpOutChan,
 	}
 
 	pub, priv, err := box.GenerateKey(rand.Reader)
@@ -1662,7 +1659,7 @@ func processSendApp(n normalApiInputT, s *stateT) {
 		publicSign,
 		dataDir,
 		app,
-		s.tcpOutChan,
+		tcpOutChan,
 		filepath,
 		0,
 		recipient,
@@ -1978,7 +1975,7 @@ func assembleAppAndSendReceipt(a assembleApp, s *stateT) {
 		encoded,
 		&nonce,
 		&a.symmetricKey)
-	s.tcpOutChan <- common.ClientToClient{
+	tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
 		Recipient: a.appSender,
 		Author:    publicSign,
