@@ -1668,9 +1668,9 @@ func hash(i interface{}) ([32]byte, error) {
 
 func httpGetApp(w http.ResponseWriter, r *http.Request) {
 	securityCode := pat.Param(r, "securityCode")
-	subRoute := pat.Param(r, "subRoute")
+	filename := pat.Param(r, "filename")
 	if strEq(securityCode, homeCode) {
-		err := serveDoc(w, "home/"+subRoute)
+		err := serveDoc(w, "home/"+filename)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -1685,7 +1685,7 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 		"%s/tmp/%s/%s",
 		dataDir,
 		hashToStr(docHash),
-		subRoute)
+		filename)
 	err = serveDoc(w, filePath)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -1694,12 +1694,12 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 
 func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	securityCode := pat.Param(r, "securityCode")
-	subRoute := pat.Param(r, "subRoute")
+	appHash := pat.Param(r, "apphash")
 	if !strEq(securityCode, homeCode) {
 		http.Error(w, "Bad security code", 400)
 		return
 	}
-	hashSlice, err := base64.URLEncoding.DecodeString(subRoute)
+	hashSlice, err := base64.URLEncoding.DecodeString(appHash)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -1745,8 +1745,8 @@ func httpInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad security code", 400)
 		return
 	}
-	subRoute := pat.Param(r, "subRoute")
-	inviteeBytes, err := base64.URLEncoding.DecodeString(subRoute)
+	inviteeRaw := pat.Param(r, "invitee")
+	inviteeBytes, err := base64.URLEncoding.DecodeString(inviteeRaw)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -1912,11 +1912,11 @@ func httpSearchApps(w http.ResponseWriter, r *http.Request) {
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
-		pat.Get("/getapp/:securityCode/:subRoute"), httpGetApp)
+		pat.Get("/getapp/:securityCode/:filename"), httpGetApp)
 	mux.HandleFunc(
-		pat.Get("/makeapproute/:securityCode/:subRoute"), httpMakeApp)
+		pat.Get("/makeapproute/:securityCode/:apphash"), httpMakeApp)
 	mux.HandleFunc(
-		pat.Post("/invite/:securityCode/:subRoute"), httpInvite)
+		pat.Post("/invite/:securityCode/:invitee"), httpInvite)
 	mux.HandleFunc(
 		pat.Get("/getmyid/:securityCode"), httpGetMyId)
 	mux.HandleFunc(
