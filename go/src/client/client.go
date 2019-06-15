@@ -261,9 +261,7 @@ func hashFromString(s string) ([32]byte, error) {
 	return hash, nil
 }
 
-func makeConn(
-	secretSign [64]byte) (net.Conn, error) {
-
+func makeConn(secretSign [64]byte) (net.Conn, error) {
 	conn, err := net.Dial("tcp", "localhost:4000")
 	if err != nil {
 		return conn, err
@@ -277,11 +275,7 @@ func makeConn(
 	}
 	authSig := common.AuthSigT{
 		publicSign,
-		signedAuthToSlice(sign.Sign(
-			make([]byte, 0),
-			common.AuthCodeToSlice(
-				authCode),
-			&secretSign)),
+		signedAuthToSlice(sig(common.AuthCodeToSlice(authCode))),
 	}
 	err = enc.Encode(authSig)
 	return conn, err
@@ -1277,10 +1271,8 @@ func processGiveMeKey(
 		nonce,
 		*new([common.SigSize]byte),
 	}
-	signature := sliceToSig(sign.Sign(
-		make([]byte, 0),
-		common.HashToSlice(hashHereIsKey(hereIs)),
-		&m.mySecretSign))
+	signature := sliceToSig(sig(common.HashToSlice(
+		hashHereIsKey(hereIs))))
 	hereIs.Sig = signature
 	m.tcpOutChan <- common.ClientToClient{
 		hereIs,
@@ -1565,10 +1557,7 @@ func assembleApp(
 func sendAppReceipt(appHash blake2bHash, recipient publicSignT) error {
 	var receipt Decrypted
 	receipt = AppReceiptT{
-		sliceToSig(sign.Sign(
-			make([]byte, 0),
-			receiptHash(appHash, appReceiptCode),
-			&secretSign)),
+		sliceToSig(sig(receiptHash(appHash, appReceiptCode))),
 		appHash,
 	}
 	encoded, err := common.EncodeData(&receipt)
@@ -1617,12 +1606,8 @@ func sendChunkReceipt(
 		return errors.New("no symmetric key")
 	}
 	var receipt Decrypted
-	secretSignAsBytes := [64]byte(secretSign)
 	receipt = ReceiptT{
-		sliceToSig(sign.Sign(
-			make([]byte, 0),
-			receiptHash(chunkHash, receiptCode),
-			&secretSignAsBytes)),
+		sliceToSig(sig(receiptHash(chunkHash, receiptCode))),
 		chunkHash}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
@@ -1740,8 +1725,7 @@ func httpInvite(w http.ResponseWriter, r *http.Request) {
 		Invitee:   invitee,
 		Author:    publicSign,
 		Signature: sliceToSig(sig(
-			common.HashToSlice(inviteHash(theTime, invitee)),
-			&secretSign)),
+			common.HashToSlice(inviteHash(theTime, invitee)))),
 	}
 	invitesMux.Lock()
 	invites[invite] = struct{}{}
@@ -1761,8 +1745,8 @@ func saveInvites() error {
 	return err
 }
 
-func sig(msg []byte, privateKey *[64]byte) []byte {
-	return sign.Sign(make([]byte, 0), msg, privateKey)
+func sig(msg []byte) []byte {
+	return sign.Sign(make([]byte, 0), msg, &secretSign)
 }
 
 func httpSendApp(w http.ResponseWriter, r *http.Request) {
@@ -1832,8 +1816,7 @@ func httpSaveApp(w http.ResponseWriter, r *http.Request) {
 		appHash,
 		posixTime,
 		sliceToSig(sig(
-			common.HashToSlice(hashApp(tags, appHash, posixTime)),
-			&secretSign)),
+			common.HashToSlice(hashApp(tags, appHash, posixTime)))),
 	}
 	appsMux.Lock()
 	defer appsMux.Unlock()
