@@ -76,7 +76,7 @@ func makeMemberList() map[publicSignT]struct{} {
 	addedMember := true
 	for addedMember {
 		addedMember = false
-		for invite, _ := range invites {
+		for invite := range invites {
 			_, alreadyMember := members[invite.Invitee]
 			if alreadyMember {
 				continue
@@ -85,7 +85,7 @@ func makeMemberList() map[publicSignT]struct{} {
 			if !ok {
 				continue
 			}
-			for uninvite, _ := range uninvites {
+			for uninvite := range uninvites {
 				if uninviteCancels(uninvite, invite) {
 					continue
 				}
@@ -156,9 +156,9 @@ func getFilePart(
 	if err != nil {
 		return filepart, err
 	}
-	var filepartname string = filepart.FormName()
+	var filepartname = filepart.FormName()
 	if filepartname != "file" {
-		msg := "Could not find form element \"file\"."
+		msg := "could not find form element \"file\""
 		return filepart, errors.New(msg)
 	}
 	return filepart, nil
@@ -224,7 +224,7 @@ func writeAppToFile(
 
 func tagOk(tag string) error {
 	if len(tag) > 100 {
-		return errors.New("Tag too long.")
+		return errors.New("tag too long")
 	}
 	return nil
 }
@@ -251,8 +251,7 @@ func hashFromString(s string) ([32]byte, error) {
 		return *new([32]byte), err
 	}
 	if len(hashSlice) != 32 {
-		return *new([32]byte), errors.New(
-			"Hash wrong length.")
+		return *new([32]byte), errors.New("hash wrong length")
 	}
 	var hash [32]byte
 	for i, b := range hashSlice {
@@ -333,7 +332,7 @@ func getDocHash(securityCode string) (blake2bHash, error) {
 			return hash, nil
 		}
 	}
-	return *new(blake2bHash), errors.New("No document hash found.")
+	return *new(blake2bHash), errors.New("no document hash found")
 }
 
 func hashToStr(h [32]byte) string {
@@ -341,7 +340,7 @@ func hashToStr(h [32]byte) string {
 	return base64.URLEncoding.EncodeToString(asSlice)
 }
 
-type sendAppJsonT struct {
+type sendAppJSONT struct {
 	AppHash   string
 	Recipient string
 }
@@ -434,7 +433,7 @@ var appMsgCode = [16]byte{159, 43, 151, 217, 160, 129, 184, 128,
 func concatTags(t map[string]struct{}) []byte {
 	tagSlice := make([]string, len(t))
 	i := 0
-	for tag, _ := range t {
+	for tag := range t {
 		tagSlice[i] = tag
 	}
 	sort.Strings(tagSlice)
@@ -595,8 +594,8 @@ func sendChunk(s sendChunkT) {
 	}
 	chunk := chunkBuffer[:numBytesRead]
 	lastChunk := numBytesRead < common.ChunkContentSize
-	var beforeEncoding Decrypted
-	beforeEncoding = FileChunk{
+	var beforeEncoding decrypted
+	beforeEncoding = fileChunk{
 		AppHash:   s.appMsg.AppHash,
 		Chunk:     chunk,
 		Counter:   s.counter,
@@ -643,21 +642,21 @@ func sendChunk(s sendChunkT) {
 	chunksAwaitingReceipt[c.chunkHash] = c
 }
 
-type Decrypted interface {
+type decrypted interface {
 	process(publicSignT)
 }
 
-type ReceiptT struct {
+type receiptT struct {
 	Sig       [common.SigSize]byte
 	ChunkHash blake2bHash
 }
 
-type AppReceiptT struct {
+type appReceiptT struct {
 	Sig     [common.SigSize]byte
 	AppHash [32]byte
 }
 
-type FileChunk struct {
+type fileChunk struct {
 	AppHash   [32]byte
 	Chunk     []byte
 	Counter   int
@@ -679,9 +678,10 @@ func isSubset(sub []string, super map[string]struct{}) bool {
 	return true
 }
 
-func matchesSearch(searchString string, tags map[string]struct{}) bool {
-	for tag, _ := range tags {
-		if strings.Contains(tag, searchString) {
+func matchesSearch(query string, tags map[string]struct{}) bool {
+
+	for tag := range tags {
+		if strings.Contains(tag, query) {
 			return true
 		}
 	}
@@ -708,7 +708,7 @@ func filterApps(q searchQueryT) []appMsgT {
 func setToSlice(set map[string]struct{}) []string {
 	result := make([]string, len(set))
 	i := 0
-	for s, _ := range set {
+	for s := range set {
 		result[i] = s
 		i++
 	}
@@ -732,7 +732,7 @@ func search(q searchQueryT) (searchResultsT, error) {
 	matchingTags := make(map[string]struct{})
 	for i, app := range filtered {
 		matchingApps[i] = appToSearchResult(app)
-		for tag, _ := range app.Tags {
+		for tag := range app.Tags {
 			if strings.Contains(tag, q.SearchString) {
 				matchingTags[tag] = struct{}{}
 			}
@@ -770,7 +770,7 @@ func inviteHash(posixTime int64, invitee [32]byte) [32]byte {
 func invitesToSlice() []inviteT {
 	invitesSlice := make([]inviteT, len(invites))
 	i := 0
-	for invite, _ := range invites {
+	for invite := range invites {
 		invitesSlice[i] = invite
 		i++
 	}
@@ -783,15 +783,15 @@ func getHashSecurityCode(hash blake2bHash) (string, error) {
 			return c, nil
 		}
 	}
-	return "", errors.New("Could not find app.")
+	return "", errors.New("could not find app")
 }
 
-func decodeMsg(bs []byte) (Decrypted, error) {
+func decodeMsg(bs []byte) (decrypted, error) {
 	var buf bytes.Buffer
 	n, err := buf.Write(bs)
-	var msg Decrypted
+	var msg decrypted
 	if n != len(bs) {
-		return msg, errors.New("Could not read whole messag.")
+		return msg, errors.New("could not read whole message")
 	}
 	if err != nil {
 		return msg, err
@@ -806,7 +806,7 @@ func authBytes(author publicSignT) *[32]byte {
 	return &asBytes
 }
 
-func (appReceipt AppReceiptT) process(author publicSignT) {
+func (appReceipt appReceiptT) process(author publicSignT) {
 	signed, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appReceipt.Sig),
@@ -830,7 +830,7 @@ func (appReceipt AppReceiptT) process(author publicSignT) {
 	logSentSuccess(appReceipt.AppHash, author)
 }
 
-func (receipt ReceiptT) process(author publicSignT) {
+func (receipt receiptT) process(author publicSignT) {
 	chunksAwaitingReceiptMux.Lock()
 	defer chunksAwaitingReceiptMux.Unlock()
 	c, ok := chunksAwaitingReceipt[receipt.ChunkHash]
@@ -862,7 +862,7 @@ func sendAppMsg(appMsg appMsgT, recipient publicSignT) error {
 	if !ok {
 		return errors.New("couldn't find symmetric key")
 	}
-	encoded, err := common.EncodeData(Decrypted(appMsg))
+	encoded, err := common.EncodeData(decrypted(appMsg))
 	if err != nil {
 		return err
 	}
@@ -927,7 +927,7 @@ func makeSalt() ([32]byte, error) {
 		return nonce, err
 	}
 	if n != 32 {
-		return nonce, errors.New("Faulty random bytes reader.")
+		return nonce, errors.New("faulty random bytes reader")
 	}
 	for i, b := range nonceSlice {
 		nonce[i] = b
@@ -943,7 +943,7 @@ func makeSymmetricKey() ([32]byte, error) {
 		return nonce, err
 	}
 	if n != 32 {
-		return nonce, errors.New("Faulty random bytes reader.")
+		return nonce, errors.New("faulty random bytes reader")
 	}
 	for i, b := range nonceSlice {
 		nonce[i] = b
@@ -959,7 +959,7 @@ func makeNonce() ([24]byte, error) {
 		return nonce, err
 	}
 	if n != 24 {
-		return nonce, errors.New("Faulty random bytes reader.")
+		return nonce, errors.New("faulty random bytes reader")
 	}
 	for i, b := range nonceSlice {
 		nonce[i] = b
@@ -1036,7 +1036,7 @@ func extractKeys(password []byte, secretsFile []byte) (keysT, error) {
 		&decoded.Nonce,
 		&symmetricKey)
 	if !ok {
-		return keys, errors.New("Could not decrypt keys.")
+		return keys, errors.New("could not decrypt keys")
 	}
 	return keysT{
 		decoded.Publicsign,
@@ -1099,9 +1099,9 @@ func gobRegister() {
 	gob.Register(*new(common.Encrypted))
 	gob.Register(*new(common.GiveMeASymmetricKey))
 	gob.Register(*new(common.HereIsAnEncryptionKey))
-	gob.Register(*new(AppReceiptT))
-	gob.Register(*new(ReceiptT))
-	gob.Register(*new(FileChunk))
+	gob.Register(*new(appReceiptT))
+	gob.Register(*new(receiptT))
+	gob.Register(*new(fileChunk))
 	gob.Register(*new(appMsgT))
 }
 
@@ -1131,7 +1131,7 @@ func getCryptoKeys() error {
 func readArgs() error {
 	args := os.Args
 	if len(args) != 3 {
-		return errors.New("There must be two command-line arguments.")
+		return errors.New("there must be two command-line arguments")
 	}
 	port = args[1]
 	dataDir = args[2]
@@ -1176,7 +1176,7 @@ func setup() error {
 	if err != nil {
 		return err
 	}
-	err = browser.OpenURL(appUrl(homeCode))
+	err = browser.OpenURL(appURL(homeCode))
 	return err
 }
 
@@ -1189,11 +1189,11 @@ func main() {
 	go tcpServer()
 	go httpServer()
 	for {
-		processTcpInput(<-tcpInChan)
+		processTCPInput(<-tcpInChan)
 	}
 }
 
-func processTcpInput(c common.ClientToClient) {
+func processTCPInput(c common.ClientToClient) {
 	invitesMux.Lock()
 	_, isMember := makeMemberList()[c.Author]
 	invitesMux.Unlock()
@@ -1216,7 +1216,7 @@ func processTcpInput(c common.ClientToClient) {
 	}
 }
 
-func (chunk FileChunk) process(author publicSignT) {
+func (chunk fileChunk) process(author publicSignT) {
 	chunksLoadingMux.Lock()
 	defer chunksLoadingMux.Unlock()
 	previousChunks, ok := chunksLoading[chunk.AppHash]
@@ -1331,16 +1331,16 @@ func memberMapToList() []publicSignT {
 	members := makeMemberList()
 	memberList := make([]publicSignT, len(members))
 	i := 0
-	for k, _ := range members {
+	for k := range members {
 		memberList[i] = k
 		i++
 	}
 	return memberList
 }
 
-func encodePubId(pubId publicSignT) []byte {
+func encodePubID(pubID publicSignT) []byte {
 	return []byte(base64.URLEncoding.EncodeToString(
-		common.HashToSlice(pubId)))
+		common.HashToSlice(pubID)))
 }
 
 func processSearch(rawRequest []byte) ([]byte, error) {
@@ -1375,10 +1375,10 @@ func findApp(appHash publicSignT) (appMsgT, error) {
 			return thisApp, nil
 		}
 	}
-	return *new(appMsgT), errors.New("Could not find app.")
+	return *new(appMsgT), errors.New("could not find app")
 }
 
-func appUrl(appCode string) string {
+func appURL(appCode string) string {
 	return fmt.Sprintf(
 		"http://localhost:%s/getapp/%s/index.html",
 		port,
@@ -1519,7 +1519,7 @@ func writeChunksToTmpFile(
 		finalHash,
 		common.HashToSlice(appHash)) {
 
-		return errors.New("Hash of assembled app is wrong.")
+		return errors.New("hash of assembled app is wrong")
 	}
 	return nil
 }
@@ -1542,10 +1542,10 @@ func addChunkToFile(
 		return err
 	}
 	if nFile != len(chunk) {
-		return errors.New("Could not write whole chunk to file.")
+		return errors.New("could not write whole chunk to file")
 	}
 	if nFile != nHash {
-		return errors.New("Could not write whole chunk to hasher.")
+		return errors.New("could not write whole chunk to hasher")
 	}
 	return nil
 }
@@ -1575,8 +1575,8 @@ func assembleApp(
 }
 
 func sendAppReceipt(appHash blake2bHash, recipient publicSignT) error {
-	var receipt Decrypted
-	receipt = AppReceiptT{
+	var receipt decrypted
+	receipt = appReceiptT{
 		sliceToSig(sig(receiptHash(appHash, appReceiptCode))),
 		appHash,
 	}
@@ -1625,8 +1625,8 @@ func sendChunkReceipt(
 	if !ok {
 		return errors.New("no symmetric key")
 	}
-	var receipt Decrypted
-	receipt = ReceiptT{
+	var receipt decrypted
+	receipt = receiptT{
 		sliceToSig(sig(receiptHash(chunkHash, receiptCode))),
 		chunkHash}
 	encoded, err := common.EncodeData(&receipt)
@@ -1707,7 +1707,7 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		err = browser.OpenURL(appUrl(appCode))
+		err = browser.OpenURL(appURL(appCode))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 		}
@@ -1723,7 +1723,7 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	err = browser.OpenURL(appUrl(newCode))
+	err = browser.OpenURL(appURL(newCode))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -1775,21 +1775,21 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	var sendAppJson sendAppJsonT
-	err = json.Unmarshal(body, &sendAppJson)
+	var sendAppJSON sendAppJSONT
+	err = json.Unmarshal(body, &sendAppJSON)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 	appHashSlice, err := base64.URLEncoding.DecodeString(
-		sendAppJson.AppHash)
+		sendAppJSON.AppHash)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 	appHash := common.SliceToHash(appHashSlice)
 	recipientSlice, err := base64.URLEncoding.DecodeString(
-		sendAppJson.Recipient)
+		sendAppJSON.Recipient)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -1854,8 +1854,8 @@ func httpSaveApp(w http.ResponseWriter, r *http.Request) {
 	w.Write(common.HashToSlice(appHash))
 }
 
-func httpGetMyId(w http.ResponseWriter, r *http.Request) {
-	w.Write(encodePubId(publicSign))
+func httpGetMyID(w http.ResponseWriter, r *http.Request) {
+	w.Write(encodePubID(publicSign))
 }
 
 func httpGetMembers(w http.ResponseWriter, r *http.Request) {
@@ -1904,7 +1904,7 @@ func httpServer() {
 	mux.HandleFunc(
 		pat.Post("/invite/:securityCode/:invitee"), p(httpInvite))
 	mux.HandleFunc(
-		pat.Get("/getmyid/:securityCode"), p(httpGetMyId))
+		pat.Get("/getmyid/:securityCode"), p(httpGetMyID))
 	mux.HandleFunc(
 		pat.Get("/getmembers/:securityCode"), p(httpGetMembers))
 	mux.HandleFunc(
