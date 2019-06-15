@@ -44,7 +44,6 @@ var publicSign publicSignT
 var secretSign [64]byte
 var invites = map[inviteT]struct{}{}
 var uninvites = map[inviteT]struct{}{}
-var members = map[publicSignT]struct{}{}
 var chunksLoading = map[blake2bHash][]fileChunkPtrT{}
 var chunksLoadingMux sync.Mutex
 var dataDir string
@@ -1129,11 +1128,7 @@ func initState() error {
 		return err
 	}
 	err = processApps(ioutil.ReadFile(appsFile(dataDir)))
-	if err != nil {
-		return err
-	}
-	members = makeMemberList()
-	return nil
+	return err
 }
 
 func main() {
@@ -1181,7 +1176,7 @@ func main() {
 }
 
 func processTcpInput(c common.ClientToClient) {
-	_, isMember := members[c.Author]
+	_, isMember := makeMemberList()[c.Author]
 	if !isMember {
 		return
 	}
@@ -1311,6 +1306,7 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte) {
 }
 
 func memberMapToList() []publicSignT {
+	members := makeMemberList()
 	memberList := make([]publicSignT, len(members))
 	i := 0
 	for k, _ := range members {
@@ -1737,16 +1733,20 @@ func httpInvite(w http.ResponseWriter, r *http.Request) {
 			common.HashToSlice(inviteHash(theTime, invitee)),
 			&secretSign)),
 	}
-	encodedInvites, err := json.Marshal(invitesToSlice())
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
 	invites[invite] = struct{}{}
-	err = ioutil.WriteFile(invitesFile(), encodedInvites, 0600)
+	err = saveInvites()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 	}
+}
+
+func saveInvites() error {
+	encoded, err := json.Marshal(invitesToSlice())
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile(invitesFile(), encoded, 0600)
+	return err
 }
 
 func sig(msg []byte, privateKey *[64]byte) []byte {
