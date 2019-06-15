@@ -1175,11 +1175,10 @@ func setup() error {
 	}
 	rawApps, err := ioutil.ReadFile(appsFile())
 	if err != nil {
-		return err
-	}
-	err = json.Unmarshal(rawApps, &apps)
-	if err != nil {
-		return err
+		err = json.Unmarshal(rawApps, &apps)
+		if err != nil {
+			return err
+		}
 	}
 	err = browser.OpenURL(appURL(homeCode))
 	return err
