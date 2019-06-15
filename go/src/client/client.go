@@ -180,7 +180,8 @@ func getTagsPart(bodyFileReader *multipart.Reader) ([]byte, error) {
 	return ioutil.ReadAll(tagsPart)
 }
 
-func writeAppToFile(r *http.Request) (string, map[string]struct{}, error) {
+func writeAppToFile(
+	r *http.Request) (string, map[string]struct{}, error) {
 
 	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
@@ -560,10 +561,10 @@ func requestEncryptionKey(sendChunk sendChunkT) {
 	if err != nil {
 		return
 	}
-	sendChunk.tcpOutChan <- common.ClientToClient{
+	tcpOutChan <- common.ClientToClient{
 		Msg:       common.GiveMeASymmetricKey{*pub},
 		Recipient: sendChunk.recipient,
-		Author:    sendChunk.myPublicSign,
+		Author:    publicSign,
 	}
 	awaitingSymmetricKey[sendChunk.recipient] = sendChunk
 	keyPairs[publicEncryptT(*pub)] = secretEncryptT(*priv)
@@ -607,18 +608,22 @@ func sendChunk(s sendChunkT) {
 	}
 	if err != nil {
 		errOut(err)
+		return
 	}
 	newOffset, err := fileHandle.Seek(s.offset, 0)
 	if newOffset != s.offset {
 		errOut(errors.New("New offset is wrong."))
+		return
 	}
 	if err != nil {
 		errOut(err)
+		return
 	}
 	chunkBuffer := make([]byte, common.ChunkContentSize)
 	numBytesRead, err := fileHandle.Read(chunkBuffer)
 	if err != nil {
 		errOut(err)
+		return
 	}
 	chunk := chunkBuffer[:numBytesRead]
 	lastChunk := numBytesRead < common.ChunkContentSize
@@ -632,29 +637,36 @@ func sendChunk(s sendChunkT) {
 	encodedMsg, err := common.EncodeData(&beforeEncoding)
 	if err != nil {
 		errOut(err)
+		return
 	}
 	nonce, err := makeNonce()
 	if err != nil {
 		errOut(err)
+		return
 	}
-	s.tcpOutChan <- common.ClientToClient{
+	symmetricEncrypt, ok := symmetricKeys[s.recipient]
+	symEncArr := [32]byte(symmetricEncrypt)
+	if !ok {
+		errOut(errors.New("no symmetric key"))
+		return
+	}
+	tcpOutChan <- common.ClientToClient{
 		Msg: common.Encrypted{
 			Msg: secretbox.Seal(
 				make([]byte, 0),
 				encodedMsg,
 				&nonce,
-				&s.symmetricEncryptKey),
+				&symEncArr),
 			Nonce: nonce,
 		},
 		Recipient: s.recipient,
-		Author:    s.myPublicSign,
+		Author:    publicSign,
 	}
 	c := chunkAwaitingReceiptT{
 		s.appMsg,
 		s.filepath,
 		s.offset,
 		s.recipient,
-		s.symmetricEncryptKey,
 		blake2bHash(blake2b.Sum256(chunk)),
 		s.counter,
 		lastChunk,
@@ -855,15 +867,13 @@ func (receipt ReceiptT) process(author publicSignT) {
 	if chunkAwaiting.lastChunk {
 		sendAppMsg(chunkAwaiting.appMsg, author)
 	}
+	chunkAwaiting.offset += common.ChunkContentSize
+	chunkAwaiting.counter += 1
 	sendChunk(sendChunkT{
-		publicSign,
-		dataDir,
 		chunkAwaiting.appMsg,
-		tcpOutChan,
 		chunkAwaiting.filepath,
 		chunkAwaiting.offset + common.ChunkContentSize,
 		chunkAwaiting.recipient,
-		chunkAwaiting.symmetricEncryptKey,
 		chunkAwaiting.counter + 1,
 	})
 }
@@ -995,21 +1005,16 @@ type chunkAwaitingReceiptT struct {
 	filepath            string
 	offset              int64
 	recipient           [32]byte
-	symmetricEncryptKey [32]byte
 	chunkHash           blake2bHash
 	counter             int
 	lastChunk           bool
 }
 
 type sendChunkT struct {
-	myPublicSign        [32]byte
-	dataDir             string
 	appMsg              appMsgT
-	tcpOutChan          chan common.ClientToClient
 	filepath            string
 	offset              int64
 	recipient           [32]byte
-	symmetricEncryptKey [32]byte
 	counter             int
 }
 
@@ -1477,7 +1482,6 @@ func processHereIsAnEncryptionKey(
 	symmetricKey := common.SliceToHash(keySlice)
 	delete(awaitingSymmetricKey, author)
 	symmetricKeys[author] = symmetricKey
-	awaitingKey.symmetricEncryptKey = symmetricKey
 	sendChunk(sendChunkT(awaitingKey))
 }
 
@@ -1815,18 +1819,8 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filepath := dataDir + "/apps/" + hashToStr(appHash)
-	symmetricEncryptKey, ok := symmetricKeys[recipient]
-	chunk := sendChunkT{
-		publicSign,
-		dataDir,
-		app,
-		tcpOutChan,
-		filepath,
-		0,
-		recipient,
-		symmetricEncryptKey,
-		0,
-	}
+	_, ok := symmetricKeys[recipient]
+	chunk := sendChunkT{app, filepath, 0, recipient, 0}
 	if !ok {
 		requestEncryptionKey(chunk)
 	}
