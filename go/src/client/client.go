@@ -46,6 +46,7 @@ var invites = map[inviteT]struct{}{}
 var uninvites = map[inviteT]struct{}{}
 var members = map[publicSignT]struct{}{}
 var chunksLoading = map[blake2bHash][]fileChunkPtrT{}
+var chunksLoadingMux sync.Mutex
 var dataDir string
 var port string
 var chunksAwaitingReceipt = map[blake2bHash]chunkAwaitingReceiptT{}
@@ -494,6 +495,8 @@ func (appSig appMsgT) process(author publicSignT) {
 	if !(ok && bytes.Equal(appHash, signedHash)) {
 		return
 	}
+	chunksLoadingMux.Lock()
+	defer chunksLoadingMux.Unlock()
 	delete(chunksLoading, appSig.AppHash)
 	chunkPtrs, ok := chunksLoading[appSig.AppHash]
 	if !ok {
@@ -1196,11 +1199,10 @@ func processTcpInput(c common.ClientToClient) {
 }
 
 func (chunk FileChunk) process(author publicSignT) {
+	chunksLoadingMux.Lock()
+	defer chunksLoadingMux.Unlock()
 	previousChunks, ok := chunksLoading[chunk.AppHash]
-	chunkHash, err := hash(chunk)
-	if err != nil {
-		return
-	}
+	chunkHash := blake2b.Sum256(chunk.Chunk)
 	if !ok && chunk.Counter != 0 {
 		return
 	}
@@ -1224,7 +1226,15 @@ func (chunk FileChunk) process(author publicSignT) {
 				lastChunk: chunk.LastChunk,
 			})
 	}
-	writeChunk(chunk.AppHash, chunk.Chunk, chunkHash, author)
+	err := writeChunk(chunk.Chunk, chunkHash)
+	if err != nil {
+		delete(chunksLoading, chunk.AppHash)
+		return
+	}
+	err = sendChunkReceipt(chunkHash, author)
+	if err != nil {
+		delete(chunksLoading, chunk.AppHash)
+	}
 }
 
 func processGiveMeKey(
@@ -1570,24 +1580,20 @@ func sendAppReceipt(appHash blake2bHash, recipient publicSignT) error {
 	return nil
 }
 
-func writeChunk(
-	appHash blake2bHash,
-	chunk []byte,
-	chunkHash blake2bHash,
-	sender publicSignT) {
-
-	symmetricKey, ok := symmetricKeys[sender]
-	if !ok {
-		newChunksFinished(appHash)
-		return
-	}
+func writeChunk(chunk []byte, chunkHash blake2bHash) error {
 	fileName := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
 	filePath := dataDir + "/tmp/" + fileName
 	err := ioutil.WriteFile(filePath, chunk, 0600)
-	if err != nil {
-		newChunksFinished(appHash)
-		return
+	return err
+}
+
+func sendChunkReceipt(
+	chunkHash blake2bHash, recipient publicSignT) error {
+
+	symmetricKey, ok := symmetricKeys[recipient]
+	if !ok {
+		return errors.New("no symmetric key")
 	}
 	var receipt Decrypted
 	secretSignAsBytes := [64]byte(secretSign)
@@ -1599,11 +1605,11 @@ func writeChunk(
 		chunkHash}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
-		newChunksFinished(appHash)
+		return err
 	}
 	nonce, err := makeNonce()
 	if err != nil {
-		newChunksFinished(appHash)
+		return err
 	}
 	keyAsBytes := [32]byte(symmetricKey)
 	encrypted := secretbox.Seal(
@@ -1613,13 +1619,10 @@ func writeChunk(
 		&keyAsBytes)
 	tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
-		Recipient: sender,
+		Recipient: recipient,
 		Author:    publicSign,
 	}
-}
-
-func newChunksFinished(t blake2bHash) {
-	delete(chunksLoading, t)
+	return nil
 }
 
 func hash(i interface{}) ([32]byte, error) {
