@@ -119,15 +119,7 @@ func processInvites(
 	return invs, err
 }
 
-func processApps(rawApps []byte, err error) error {
-	if err != nil {
-		return err
-	}
-	err = json.Unmarshal(rawApps, &apps)
-	return err
-}
-
-func appsFile(dataDir string) string {
+func appsFile() string {
 	return dataDir + "/apps.txt"
 }
 
@@ -1101,7 +1093,7 @@ func invitesFile() string {
 	return dataDir + "/invites.txt"
 }
 
-func uninvitesFile(dataDir string) string {
+func uninvitesFile() string {
 	return dataDir + "/uninvites.txt"
 }
 
@@ -1109,12 +1101,18 @@ func keysFile(dataDir string) string {
 	return dataDir + "/TOP_SECRET_DONT_SHARE.txt"
 }
 
-func initState() error {
-	var err error
-	homeCode, err = genCode()
-	if err != nil {
-		return err
-	}
+func gobRegister() {
+	gob.Register(*new(common.ClientToClient))
+	gob.Register(*new(common.Encrypted))
+	gob.Register(*new(common.GiveMeASymmetricKey))
+	gob.Register(*new(common.HereIsAnEncryptionKey))
+	gob.Register(*new(AppReceiptT))
+	gob.Register(*new(ReceiptT))
+	gob.Register(*new(FileChunk))
+	gob.Register(*new(appMsgT))
+}
+
+func getCryptoKeys() error {
 	rawSecrets, err := ioutil.ReadFile(keysFile(dataDir))
 	if err != nil {
 		err := createKeys(dataDir)
@@ -1134,61 +1132,52 @@ func initState() error {
 	}
 	secretSign = keys.secretsign
 	publicSign = keys.publicsign
+	return nil
+}
+
+func readArgs() error {
+	args := os.Args
+	if len(args) != 3 {
+		return errors.New("There must be two command-line arguments.")
+	}
+	port = args[1]
+	dataDir = args[2]
+	return nil
+}
+
+func setup() error {
+	gobRegister()
+	err := readArgs()
+	if err != nil {return err}
+	err = os.RemoveAll(dataDir + "/tmp")
+	if err != nil {return err}
+	err = os.Mkdir(dataDir + "/tmp", 0755)
+	if err != nil {return err}
+	homeCode, err := genCode()
+	if err != nil {return err}
+	err = getCryptoKeys()
+	if err != nil {return err}
 	invites, err = processInvites(ioutil.ReadFile(invitesFile()))
-	if err != nil {
-		return err
-	}
-	uninvites, err = processInvites(
-		ioutil.ReadFile(uninvitesFile(dataDir)))
-	if err != nil {
-		return err
-	}
-	err = processApps(ioutil.ReadFile(appsFile(dataDir)))
+	if err != nil {return err}
+	uninvites, err = processInvites(ioutil.ReadFile(uninvitesFile()))
+	if err != nil {return err}
+	rawApps, err := ioutil.ReadFile(appsFile())
+	if err != nil {return err}
+	err = json.Unmarshal(rawApps, &apps)
+	if err != nil {return err}
+	err = browser.OpenURL(appUrl(homeCode))
 	return err
 }
 
 func main() {
-	gob.Register(*new(common.ClientToClient))
-	gob.Register(*new(common.Encrypted))
-	gob.Register(*new(common.GiveMeASymmetricKey))
-	gob.Register(*new(common.HereIsAnEncryptionKey))
-	gob.Register(*new(AppReceiptT))
-	gob.Register(*new(ReceiptT))
-	gob.Register(*new(FileChunk))
-	gob.Register(*new(appMsgT))
-	args := os.Args
-	if len(args) != 3 {
-		fmt.Println("There must be two command-line arguments.")
-		return
-	}
-	port = args[1]
-	dataDir = args[2]
-	err := os.RemoveAll(dataDir + "/tmp")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	err = os.Mkdir(dataDir+"/tmp", 0755)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	err = initState()
+	err := setup()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	go tcpServer()
 	go httpServer()
-	fmt.Print(homeCode)
-	err = browser.OpenURL(appUrl(homeCode))
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	for {
-		processTcpInput(<-tcpInChan)
-	}
+	for {processTcpInput(<-tcpInChan)}
 }
 
 func processTcpInput(c common.ClientToClient) {
@@ -1447,9 +1436,9 @@ func processHereIsAnEncryptionKey(
 	if !bytes.Equal(signed, common.HashToSlice([32]byte(keyHash))) {
 		return
 	}
-	keysPairsMux.Lock()
+	keyPairsMux.Lock()
 	secretKey, ok := keyPairs[newKey.YourPublicEncrypt]
-	keysPairsMux.Unlock()
+	keyPairsMux.Unlock()
 	secretKeyBytes := [32]byte(secretKey)
 	if !ok {
 		return
@@ -1567,7 +1556,7 @@ func assembleApp(
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(appsFile(dataDir), encodedApps, 0600)
+	err = ioutil.WriteFile(appsFile(), encodedApps, 0600)
 	if err != nil {
 		return err
 	}
@@ -1873,7 +1862,7 @@ func httpSaveApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	err = ioutil.WriteFile(appsFile(dataDir), encodedApps, 0600)
+	err = ioutil.WriteFile(appsFile(), encodedApps, 0600)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
