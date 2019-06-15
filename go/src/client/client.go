@@ -1774,19 +1774,6 @@ func httpInvite(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// func sendInvite(invite inviteT) error {
-// 	var beforeEncoding Decrypted = invite
-// 	encodedMsg, err := common.EncodeData(&beforeEncoding)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	nonce, err := makeNonce()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	symmetricEncrypt
-// }
-
 func saveInvites() error {
 	encoded, err := json.Marshal(invitesToSlice())
 	if err != nil {
