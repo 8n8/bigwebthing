@@ -470,12 +470,6 @@ type appMsgT struct {
 	Sig       [common.SigSize]byte
 }
 
-type sendAppMsgT struct {
-	symmetricKey symmetricEncrypt
-	msg          appMsgT
-	recipient    publicSignT
-}
-
 func makeChunkFilePaths(ptrs []fileChunkPtrT) []string {
 	filePaths := make([]string, len(ptrs))
 	for i, ptr := range ptrs {
@@ -509,19 +503,8 @@ func (appSig appMsgT) process(author publicSignT) {
 	if !finalChunkPtr.lastChunk {
 		return
 	}
-	symmetricKey, ok := symmetricKeys[author]
-	if !ok {
-		return
-	}
-	assembleAppAndSendReceipt(assembleApp{
-		symmetricKey: symmetricKey,
-		filePaths:    makeChunkFilePaths(chunkPtrs),
-		appHash:      appSig.AppHash,
-		tmpPath:      makeChunkFilePath(appSig.AppHash),
-		finalPath:    makeAppPath(appSig.AppHash),
-		appSender:    author,
-		appMsg:       appSig,
-	})
+	filePaths := makeChunkFilePaths(chunkPtrs)
+	assembleAppAndSendReceipt(filePaths, author, appSig)
 }
 
 func hashApp(
@@ -1508,11 +1491,10 @@ func makeChunkFilePath(chunkHash [32]byte) string {
 }
 
 type assembleApp struct {
-	symmetricKey [32]byte
 	filePaths    []string
-	appHash      [32]byte
-	tmpPath      string
-	finalPath    string
+	//appHash      [32]byte
+	//tmpPath      string
+	//finalPath    string
 	appSender    [32]byte
 	appMsg       appMsgT
 }
@@ -1572,42 +1554,51 @@ func addChunkToFile(
 	return nil
 }
 
-func assembleAppAndSendReceipt(a assembleApp) {
-	err := writeChunksToTmpFile(a.filePaths, a.tmpPath, a.appHash)
+func assembleAppAndSendReceipt(
+	filePaths []string, appSender [32]byte, appMsg appMsgT) {
+
+	tmpPath := makeChunkFilePath(appMsg.AppHash)
+	finalPath := makeAppPath(appMsg.AppHash)
+	err := writeChunksToTmpFile(filePaths, tmpPath, appMsg.AppHash)
 	if err != nil {
-		newChunksFinished(a.appHash)
+		newChunksFinished(appMsg.AppHash)
 	}
-	_ = os.Rename(a.tmpPath, a.finalPath)
+	_ = os.Rename(tmpPath, finalPath)
 
 	var receipt Decrypted
 	receipt = AppReceiptT{
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
-			receiptHash(a.appHash, appReceiptCode),
+			receiptHash(appMsg.AppHash, appReceiptCode),
 			&secretSign)),
-		a.appHash,
+		appMsg.AppHash,
 	}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
-		newChunksFinished(a.appHash)
+		newChunksFinished(appMsg.AppHash)
 	}
 	nonce, err := makeNonce()
 	if err != nil {
-		newChunksFinished(a.appHash)
+		newChunksFinished(appMsg.AppHash)
 	}
+	symmetricKey, ok := symmetricKeys[appSender]
+	if !ok {
+		return
+	}
+	keyArr := [32]byte(symmetricKey)
 	encrypted := secretbox.Seal(
 		make([]byte, 0),
 		encoded,
 		&nonce,
-		&a.symmetricKey)
+		&keyArr)
 	tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
-		Recipient: a.appSender,
+		Recipient: appSender,
 		Author:    publicSign,
 	}
 	appsMux.Lock()
 	defer appsMux.Unlock()
-	apps = append(apps, a.appMsg)
+	apps = append(apps, appMsg)
 }
 
 type writeAppToFileAndSendReceiptT struct {
