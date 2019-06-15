@@ -99,22 +99,22 @@ func processInvites(
 	rawInvites []byte,
 	err error) (map[inviteT]struct{}, error) {
 
-	invites := make(map[inviteT]struct{})
+	invs := make(map[inviteT]struct{})
 	if err != nil {
-		return invites, nil
+		return invs, nil
 	}
 	if err != nil {
-		return invites, nil
+		return invs, nil
 	}
 	var invitesSlice []inviteT
 	err = json.Unmarshal(rawInvites, &invitesSlice)
 	if err != nil {
-		return invites, nil
+		return invs, nil
 	}
 	for _, invite := range invitesSlice {
-		invites[invite] = struct{}{}
+		invs[invite] = struct{}{}
 	}
-	return invites, err
+	return invs, err
 }
 
 func processApps(rawApps []byte, err error) error {
