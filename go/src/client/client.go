@@ -99,10 +99,7 @@ func processInvites(
 	err error) (map[inviteT]struct{}, error) {
 
 	invs := make(map[inviteT]struct{})
-	if err != nil {
-		return invs, nil
-	}
-	if err != nil {
+	if err == nil {
 		return invs, nil
 	}
 	var invitesSlice []inviteT
