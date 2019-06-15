@@ -584,26 +584,26 @@ type fileChunkPtrT struct {
 }
 
 func sendChunk(s sendChunkT) {
-	fileHandle, err := os.Open(s.filepath)
+	//fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
 		fmt.Println(err)
 		logSendErr(err, s.appMsg.AppHash, s.recipient)
 	}
-	if err != nil {
-		errOut(err)
-		return
-	}
-	newOffset, err := fileHandle.Seek(s.offset, 0)
-	if newOffset != s.offset {
-		errOut(errors.New("New offset is wrong."))
-		return
-	}
-	if err != nil {
-		errOut(err)
-		return
-	}
+	//if err != nil {
+	//	errOut(err)
+	//	return
+	//}
+	//newOffset, err := fileHandle.Seek(s.offset, 0)
+	//if newOffset != s.offset {
+	//	errOut(errors.New("New offset is wrong."))
+	//	return
+	//}
+	//if err != nil {
+	//	errOut(err)
+	//	return
+	//}
 	chunkBuffer := make([]byte, common.ChunkContentSize)
-	numBytesRead, err := fileHandle.Read(chunkBuffer)
+	numBytesRead, err := s.file.Read(chunkBuffer)
 	if err != nil {
 		errOut(err)
 		return
@@ -647,8 +647,9 @@ func sendChunk(s sendChunkT) {
 	}
 	c := chunkAwaitingReceiptT{
 		s.appMsg,
-		s.filepath,
-		s.offset,
+		s.file,
+		//s.filepath,
+		//s.offset,
 		s.recipient,
 		blake2bHash(blake2b.Sum256(chunk)),
 		s.counter,
@@ -843,21 +844,21 @@ func (appReceipt AppReceiptT) process(author publicSignT) {
 }
 
 func (receipt ReceiptT) process(author publicSignT) {
-	chunkAwaiting, ok := chunksAwaitingReceipt[receipt.ChunkHash]
+	c, ok := chunksAwaitingReceipt[receipt.ChunkHash]
 	if !ok {
 		return
 	}
-	if chunkAwaiting.lastChunk {
-		sendAppMsg(chunkAwaiting.appMsg, author)
+	if c.lastChunk {
+		sendAppMsg(c.appMsg, author)
+		return
 	}
-	chunkAwaiting.offset += common.ChunkContentSize
-	chunkAwaiting.counter += 1
 	sendChunk(sendChunkT{
-		chunkAwaiting.appMsg,
-		chunkAwaiting.filepath,
-		chunkAwaiting.offset + common.ChunkContentSize,
-		chunkAwaiting.recipient,
-		chunkAwaiting.counter + 1,
+		c.appMsg,
+		c.file,
+		// c.filepath,
+		// c.offset + common.ChunkContentSize,
+		c.recipient,
+		c.counter + 1,
 	})
 }
 
@@ -985,8 +986,9 @@ func genCode() (string, error) {
 
 type chunkAwaitingReceiptT struct {
 	appMsg              appMsgT
-	filepath            string
-	offset              int64
+	file *os.File
+	//filepath            string
+	//offset              int64
 	recipient           [32]byte
 	chunkHash           blake2bHash
 	counter             int
@@ -995,8 +997,9 @@ type chunkAwaitingReceiptT struct {
 
 type sendChunkT struct {
 	appMsg              appMsgT
-	filepath            string
-	offset              int64
+	file *os.File
+	//filepath            string
+	//offset              int64
 	recipient           [32]byte
 	counter             int
 }
@@ -1331,7 +1334,6 @@ func processEncrypted(encrypted common.Encrypted, author [32]byte) {
 }
 
 func memberMapToList() []publicSignT {
-
 	memberList := make([]publicSignT, len(members))
 	i := 0
 	for k, _ := range members {
@@ -1810,8 +1812,13 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filepath := dataDir + "/apps/" + hashToStr(appHash)
+	fileHandle, err := os.Open(filepath)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	_, ok := symmetricKeys[recipient]
-	chunk := sendChunkT{app, filepath, 0, recipient, 0}
+	chunk := sendChunkT{app, fileHandle, recipient, 0}
 	if !ok {
 		requestEncryptionKey(chunk)
 	}
