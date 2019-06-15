@@ -584,24 +584,10 @@ type fileChunkPtrT struct {
 }
 
 func sendChunk(s sendChunkT) {
-	//fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
 		fmt.Println(err)
 		logSendErr(err, s.appMsg.AppHash, s.recipient)
 	}
-	//if err != nil {
-	//	errOut(err)
-	//	return
-	//}
-	//newOffset, err := fileHandle.Seek(s.offset, 0)
-	//if newOffset != s.offset {
-	//	errOut(errors.New("New offset is wrong."))
-	//	return
-	//}
-	//if err != nil {
-	//	errOut(err)
-	//	return
-	//}
 	chunkBuffer := make([]byte, common.ChunkContentSize)
 	numBytesRead, err := s.file.Read(chunkBuffer)
 	if err != nil {
@@ -648,8 +634,6 @@ func sendChunk(s sendChunkT) {
 	c := chunkAwaitingReceiptT{
 		s.appMsg,
 		s.file,
-		//s.filepath,
-		//s.offset,
 		s.recipient,
 		blake2bHash(blake2b.Sum256(chunk)),
 		s.counter,
@@ -855,8 +839,6 @@ func (receipt ReceiptT) process(author publicSignT) {
 	sendChunk(sendChunkT{
 		c.appMsg,
 		c.file,
-		// c.filepath,
-		// c.offset + common.ChunkContentSize,
 		c.recipient,
 		c.counter + 1,
 	})
@@ -987,8 +969,6 @@ func genCode() (string, error) {
 type chunkAwaitingReceiptT struct {
 	appMsg              appMsgT
 	file *os.File
-	//filepath            string
-	//offset              int64
 	recipient           [32]byte
 	chunkHash           blake2bHash
 	counter             int
@@ -998,8 +978,6 @@ type chunkAwaitingReceiptT struct {
 type sendChunkT struct {
 	appMsg              appMsgT
 	file *os.File
-	//filepath            string
-	//offset              int64
 	recipient           [32]byte
 	counter             int
 }
@@ -1490,15 +1468,6 @@ func makeChunkFilePath(chunkHash [32]byte) string {
 	filename := base64.URLEncoding.EncodeToString(
 		common.HashToSlice(chunkHash))
 	return dataDir + "/tmp/" + filename
-}
-
-type assembleApp struct {
-	filePaths    []string
-	//appHash      [32]byte
-	//tmpPath      string
-	//finalPath    string
-	appSender    [32]byte
-	appMsg       appMsgT
 }
 
 func writeChunksToTmpFile(
