@@ -12,15 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/pkg/browser"
-	"goji.io"
-	"goji.io/pat"
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/blake2b"
-	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/crypto/nacl/secretbox"
-	"golang.org/x/crypto/nacl/sign"
-	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	"io/ioutil"
 	"math/big"
@@ -30,9 +21,19 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
-	"sync"
+
+	"github.com/pkg/browser"
+	"goji.io"
+	"goji.io/pat"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/nacl/sign"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 var apps []appMsgT
@@ -43,6 +44,7 @@ var appCodesMux sync.Mutex
 var publicSign publicSignT
 var secretSign [64]byte
 var invites = map[inviteT]struct{}{}
+var invitesMux sync.Mutex
 var uninvites = map[inviteT]struct{}{}
 var chunksLoading = map[blake2bHash][]fileChunkPtrT{}
 var chunksLoadingMux sync.Mutex
@@ -973,19 +975,19 @@ func genCode() (string, error) {
 }
 
 type chunkAwaitingReceiptT struct {
-	appMsg              appMsgT
-	file *os.File
-	recipient           [32]byte
-	chunkHash           blake2bHash
-	counter             int
-	lastChunk           bool
+	appMsg    appMsgT
+	file      *os.File
+	recipient [32]byte
+	chunkHash blake2bHash
+	counter   int
+	lastChunk bool
 }
 
 type sendChunkT struct {
-	appMsg              appMsgT
-	file *os.File
-	recipient           [32]byte
-	counter             int
+	appMsg    appMsgT
+	file      *os.File
+	recipient [32]byte
+	counter   int
 }
 
 func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
@@ -1173,7 +1175,9 @@ func main() {
 }
 
 func processTcpInput(c common.ClientToClient) {
+	invitesMux.Lock()
 	_, isMember := makeMemberList()[c.Author]
+	invitesMux.Unlock()
 	if !isMember {
 		return
 	}
@@ -1730,12 +1734,27 @@ func httpInvite(w http.ResponseWriter, r *http.Request) {
 			common.HashToSlice(inviteHash(theTime, invitee)),
 			&secretSign)),
 	}
+	invitesMux.Lock()
 	invites[invite] = struct{}{}
 	err = saveInvites()
+	invitesMux.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 	}
 }
+
+// func sendInvite(invite inviteT) error {
+// 	var beforeEncoding Decrypted = invite
+// 	encodedMsg, err := common.EncodeData(&beforeEncoding)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	nonce, err := makeNonce()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	symmetricEncrypt
+// }
 
 func saveInvites() error {
 	encoded, err := json.Marshal(invitesToSlice())
@@ -1855,7 +1874,9 @@ func httpGetMembers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad security code", 400)
 		return
 	}
+	invitesMux.Lock()
 	encoded, err := json.Marshal(memberMapToList())
+	invitesMux.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
