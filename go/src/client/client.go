@@ -1219,24 +1219,7 @@ func (chunk FileChunk) process(author publicSignT) {
 				lastChunk: chunk.LastChunk,
 			})
 	}
-	tmpFileName := base64.URLEncoding.EncodeToString(
-		common.HashToSlice(chunkHash))
-	symmetricKey, ok := symmetricKeys[author]
-	if !ok {
-		fmt.Println("Could not find symmetric key for author:")
-		fmt.Println(author)
-		return
-	}
-	writeAppToFileNew(writeAppToFileAndSendReceiptT{
-		chunk.AppHash,
-		dataDir + "/tmp/" + tmpFileName,
-		chunk.Chunk,
-		secretSign,
-		symmetricKey,
-		tcpOutChan,
-		author,
-		publicSign,
-	})
+	writeChunk(chunk.AppHash, chunk.Chunk, chunkHash, author)
 }
 
 func processGiveMeKey(
@@ -1570,25 +1553,27 @@ func assembleAppAndSendReceipt(
 	apps = append(apps, appMsg)
 }
 
-type writeAppToFileAndSendReceiptT struct {
-	appHash      blake2bHash
-	filePath     string
-	chunk        []byte
-	secretSign   secretSignT
-	symmetricKey symmetricEncrypt
-	tcpOutChan   chan common.ClientToClient
-	sender       publicSignT
-	myPublicSign publicSignT
-}
+func writeChunk(
+	appHash blake2bHash,
+	chunk []byte,
+	chunkHash blake2bHash,
+	sender publicSignT) {
 
-func writeAppToFileNew(w writeAppToFileAndSendReceiptT) {
-	err := ioutil.WriteFile(w.filePath, w.chunk, 0600)
+	symmetricKey, ok := symmetricKeys[sender]
+	if !ok {
+		newChunksFinished(appHash)
+		return
+	}
+	fileName := base64.URLEncoding.EncodeToString(
+		common.HashToSlice(chunkHash))
+	filePath := dataDir + "/tmp/" + fileName
+	err := ioutil.WriteFile(filePath, chunk, 0600)
 	if err != nil {
-		newChunksFinished(w.appHash)
+		newChunksFinished(appHash)
+		return
 	}
 	var receipt Decrypted
-	chunkHash := blake2b.Sum256(w.chunk)
-	secretSignAsBytes := [64]byte(w.secretSign)
+	secretSignAsBytes := [64]byte(secretSign)
 	receipt = ReceiptT{
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
@@ -1597,22 +1582,22 @@ func writeAppToFileNew(w writeAppToFileAndSendReceiptT) {
 		chunkHash}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
-		newChunksFinished(w.appHash)
+		newChunksFinished(appHash)
 	}
 	nonce, err := makeNonce()
 	if err != nil {
-		newChunksFinished(w.appHash)
+		newChunksFinished(appHash)
 	}
-	keyAsBytes := [32]byte(w.symmetricKey)
+	keyAsBytes := [32]byte(symmetricKey)
 	encrypted := secretbox.Seal(
 		make([]byte, 0),
 		encoded,
 		&nonce,
 		&keyAsBytes)
-	w.tcpOutChan <- common.ClientToClient{
+	tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
-		Recipient: w.sender,
-		Author:    w.myPublicSign,
+		Recipient: sender,
+		Author:    publicSign,
 	}
 }
 
