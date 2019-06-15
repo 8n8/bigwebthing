@@ -68,7 +68,6 @@ type publicEncryptT [32]byte
 type secretEncryptT [32]byte
 type blake2bHash [32]byte
 type symmetricEncrypt [32]byte
-type secretSignT [64]byte
 
 func makeMemberList() map[publicSignT]struct{} {
 	members := make(map[publicSignT]struct{})
@@ -1653,16 +1652,6 @@ func sendChunkReceipt(
 		Author:    publicSign,
 	}
 	return nil
-}
-
-func hash(i interface{}) ([32]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(&i)
-	if err != nil {
-		return *new([32]byte), err
-	}
-	return blake2b.Sum256(buf.Bytes()), nil
 }
 
 func httpGetApp(w http.ResponseWriter, r *http.Request) {
