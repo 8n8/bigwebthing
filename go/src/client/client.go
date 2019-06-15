@@ -363,11 +363,7 @@ type logSendErrT struct {
 	Err       error
 }
 
-func logSendErr(
-	err error,
-	appHash [32]byte,
-	recipient [32]byte) {
-
+func logSendErr(err error, appHash [32]byte, recipient [32]byte) {
 	msg := logSendErrT{
 		time.Now().Unix(),
 		appHash,
@@ -872,17 +868,21 @@ func (receipt ReceiptT) process(author publicSignT) {
 	})
 }
 
-func sendAppMsg(appMsg Decrypted, recipient publicSignT) {
+func sendAppMsg(appMsg appMsgT, recipient publicSignT) {
 	symmetricKey, ok := symmetricKeys[recipient]
 	if !ok {
+		err := errors.New("couldn't find symmetric key")
+		logSendErr(err, appMsg.AppHash, recipient)
 		return
 	}
-	encoded, err := common.EncodeData(appMsg)
+	encoded, err := common.EncodeData(Decrypted(appMsg))
 	if err != nil {
+		logSendErr(err, appMsg.AppHash, recipient)
 		return
 	}
 	nonce, err := makeNonce()
 	if err != nil {
+		logSendErr(err, appMsg.AppHash, recipient)
 		return
 	}
 	keyBytes := [32]byte(symmetricKey)
