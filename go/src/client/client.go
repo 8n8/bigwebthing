@@ -50,6 +50,7 @@ var chunksLoadingMux sync.Mutex
 var dataDir string
 var port string
 var chunksAwaitingReceipt = map[blake2bHash]chunkAwaitingReceiptT{}
+var chunksAwaitingReceiptMux sync.Mutex
 var appsAwaitingReceipt = map[blake2bHash]publicSignT{}
 var symmetricKeys = map[publicSignT]symmetricEncrypt{}
 var keyPairs = map[publicEncryptT]secretEncryptT{}
@@ -835,6 +836,8 @@ func (appReceipt AppReceiptT) process(author publicSignT) {
 }
 
 func (receipt ReceiptT) process(author publicSignT) {
+	chunksAwaitingReceiptMux.Lock()
+	defer chunksAwaitingReceiptMux.Unlock()
 	c, ok := chunksAwaitingReceipt[receipt.ChunkHash]
 	if !ok {
 		return
@@ -1441,6 +1444,8 @@ func processHereIsAnEncryptionKey(
 	symmetricKey := common.SliceToHash(keySlice)
 	delete(awaitingSymmetricKey, author)
 	symmetricKeys[author] = symmetricKey
+	chunksAwaitingReceiptMux.Lock()
+	defer chunksAwaitingReceiptMux.Unlock()
 	sendChunk(sendChunkT(awaitingKey))
 }
 
@@ -1794,6 +1799,8 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		requestEncryptionKey(chunk)
 	}
+	chunksAwaitingReceiptMux.Lock()
+	defer chunksAwaitingReceiptMux.Unlock()
 	sendChunk(chunk)
 }
 
