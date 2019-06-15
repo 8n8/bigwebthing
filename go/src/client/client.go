@@ -55,6 +55,7 @@ var chunksAwaitingReceiptMux sync.Mutex
 var appsAwaitingReceipt = map[blake2bHash]publicSignT{}
 var appsAwaitingReceiptMux sync.Mutex
 var symmetricKeys = map[publicSignT]symmetricEncrypt{}
+var symmetricKeysMux sync.Mutex
 var keyPairs = map[publicEncryptT]secretEncryptT{}
 var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
 var tcpInChan = make(chan common.ClientToClient)
@@ -620,7 +621,9 @@ func sendChunk(s sendChunkT) {
 		errOut(err)
 		return
 	}
+	symmetricKeysMux.Lock()
 	symmetricEncrypt, ok := symmetricKeys[s.recipient]
+	symmetricKeysMux.Unlock()
 	symEncArr := [32]byte(symmetricEncrypt)
 	if !ok {
 		errOut(errors.New("no symmetric key"))
@@ -862,7 +865,9 @@ func (receipt ReceiptT) process(author publicSignT) {
 }
 
 func sendAppMsg(appMsg appMsgT, recipient publicSignT) error {
+	symmetricKeysMux.Lock()
 	symmetricKey, ok := symmetricKeys[recipient]
+	symmetricKeysMux.Unlock()
 	if !ok {
 		return errors.New("couldn't find symmetric key")
 	}
@@ -1288,11 +1293,15 @@ func processGiveMeKey(
 		m.recipient,
 		m.myPubSign,
 	}
+	symmetricKeysMux.Lock()
 	symmetricKeys[m.recipient] = symmetricKey
+	symmetricKeysMux.Unlock()
 }
 
 func processEncrypted(encrypted common.Encrypted, author [32]byte) {
+	symmetricKeysMux.Lock()
 	decryptionKey, ok := symmetricKeys[author]
+	symmetricKeysMux.Unlock()
 	if !ok {
 		return
 	}
@@ -1446,7 +1455,9 @@ func processHereIsAnEncryptionKey(
 	}
 	symmetricKey := common.SliceToHash(keySlice)
 	delete(awaitingSymmetricKey, author)
+	symmetricKeysMux.Lock()
 	symmetricKeys[author] = symmetricKey
+	symmetricKeysMux.Unlock()
 	chunksAwaitingReceiptMux.Lock()
 	defer chunksAwaitingReceiptMux.Unlock()
 	sendChunk(sendChunkT(awaitingKey))
@@ -1570,7 +1581,9 @@ func sendAppReceipt(appHash blake2bHash, recipient publicSignT) error {
 	if err != nil {
 		return err
 	}
+	symmetricKeysMux.Lock()
 	symmetricKey, ok := symmetricKeys[recipient]
+	symmetricKeysMux.Unlock()
 	if !ok {
 		return errors.New("no symmetric key")
 	}
@@ -1599,7 +1612,9 @@ func writeChunk(chunk []byte, chunkHash blake2bHash) error {
 func sendChunkReceipt(
 	chunkHash blake2bHash, recipient publicSignT) error {
 
+	symmetricKeysMux.Lock()
 	symmetricKey, ok := symmetricKeys[recipient]
+	symmetricKeysMux.Unlock()
 	if !ok {
 		return errors.New("no symmetric key")
 	}
@@ -1816,7 +1831,9 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	symmetricKeysMux.Lock()
 	_, ok := symmetricKeys[recipient]
+	symmetricKeysMux.Unlock()
 	chunk := sendChunkT{app, fileHandle, recipient, 0}
 	if !ok {
 		requestEncryptionKey(chunk)
