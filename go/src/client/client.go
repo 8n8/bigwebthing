@@ -53,6 +53,7 @@ var port string
 var chunksAwaitingReceipt = map[blake2bHash]chunkAwaitingReceiptT{}
 var chunksAwaitingReceiptMux sync.Mutex
 var appsAwaitingReceipt = map[blake2bHash]publicSignT{}
+var appsAwaitingReceiptMux sync.Mutex
 var symmetricKeys = map[publicSignT]symmetricEncrypt{}
 var keyPairs = map[publicEncryptT]secretEncryptT{}
 var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
@@ -822,6 +823,7 @@ func (appReceipt AppReceiptT) process(author publicSignT) {
 	if !bytes.Equal(signed, common.HashToSlice(appReceipt.AppHash)) {
 		return
 	}
+	appsAwaitingReceiptMux.Lock()
 	appAuthor, ok := appsAwaitingReceipt[appReceipt.AppHash]
 	if !ok {
 		return
@@ -830,6 +832,7 @@ func (appReceipt AppReceiptT) process(author publicSignT) {
 		return
 	}
 	delete(appsAwaitingReceipt, appReceipt.AppHash)
+	appsAwaitingReceiptMux.Unlock()
 	logSentSuccess(appReceipt.AppHash, author)
 }
 
@@ -841,8 +844,14 @@ func (receipt ReceiptT) process(author publicSignT) {
 		return
 	}
 	if c.lastChunk {
-		sendAppMsg(c.appMsg, author)
-		return
+		err := sendAppMsg(c.appMsg, author)
+		if err != nil {
+			logSendErr(err, c.appMsg.AppHash, author)
+			return
+		}
+		appsAwaitingReceiptMux.Lock()
+		appsAwaitingReceipt[c.appMsg.AppHash] = author
+		appsAwaitingReceiptMux.Unlock()
 	}
 	sendChunk(sendChunkT{
 		c.appMsg,
@@ -852,22 +861,18 @@ func (receipt ReceiptT) process(author publicSignT) {
 	})
 }
 
-func sendAppMsg(appMsg appMsgT, recipient publicSignT) {
+func sendAppMsg(appMsg appMsgT, recipient publicSignT) error {
 	symmetricKey, ok := symmetricKeys[recipient]
 	if !ok {
-		err := errors.New("couldn't find symmetric key")
-		logSendErr(err, appMsg.AppHash, recipient)
-		return
+		return errors.New("couldn't find symmetric key")
 	}
 	encoded, err := common.EncodeData(Decrypted(appMsg))
 	if err != nil {
-		logSendErr(err, appMsg.AppHash, recipient)
-		return
+		return err
 	}
 	nonce, err := makeNonce()
 	if err != nil {
-		logSendErr(err, appMsg.AppHash, recipient)
-		return
+		return err
 	}
 	keyBytes := [32]byte(symmetricKey)
 	encrypted := secretbox.Seal(
@@ -880,6 +885,7 @@ func sendAppMsg(appMsg appMsgT, recipient publicSignT) {
 		Recipient: recipient,
 		Author:    publicSign,
 	}
+	return nil
 }
 
 const (
