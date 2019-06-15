@@ -1147,7 +1147,7 @@ func setup() error {
 	gobRegister()
 	err := readArgs()
 	if err != nil {
-		return err
+		return fmt.Errorf("readArgs: %v", err)
 	}
 	err = os.RemoveAll(dataDir + "/tmp")
 	if err != nil {
@@ -1167,17 +1167,17 @@ func setup() error {
 	}
 	invites, err = processInvites(ioutil.ReadFile(invitesFile()))
 	if err != nil {
-		return err
+		return fmt.Errorf("process invites file: %v", err)
 	}
 	uninvites, err = processInvites(ioutil.ReadFile(uninvitesFile()))
 	if err != nil {
-		return err
+		return fmt.Errorf("process uninvites file: %v", err)
 	}
 	rawApps, err := ioutil.ReadFile(appsFile())
-	if err != nil {
+	if err == nil {
 		err = json.Unmarshal(rawApps, &apps)
 		if err != nil {
-			return err
+			return fmt.Errorf("process apps file: %v", err)
 		}
 	}
 	err = browser.OpenURL(appURL(homeCode))
