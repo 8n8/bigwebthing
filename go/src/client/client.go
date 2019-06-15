@@ -1128,10 +1128,15 @@ func getCryptoKeys() error {
 	return nil
 }
 
+const badArgs = `Required arguments:
+1. port
+2. directory containing the data
+`
+
 func readArgs() error {
 	args := os.Args
 	if len(args) != 3 {
-		return errors.New("there must be two command-line arguments")
+		return errors.New(badArgs)
 	}
 	port = args[1]
 	dataDir = args[2]
