@@ -1141,23 +1141,41 @@ func readArgs() error {
 func setup() error {
 	gobRegister()
 	err := readArgs()
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	err = os.RemoveAll(dataDir + "/tmp")
-	if err != nil {return err}
-	err = os.Mkdir(dataDir + "/tmp", 0755)
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
+	err = os.Mkdir(dataDir+"/tmp", 0755)
+	if err != nil {
+		return err
+	}
 	homeCode, err := genCode()
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	err = getCryptoKeys()
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	invites, err = processInvites(ioutil.ReadFile(invitesFile()))
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	uninvites, err = processInvites(ioutil.ReadFile(uninvitesFile()))
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	rawApps, err := ioutil.ReadFile(appsFile())
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	err = json.Unmarshal(rawApps, &apps)
-	if err != nil {return err}
+	if err != nil {
+		return err
+	}
 	err = browser.OpenURL(appUrl(homeCode))
 	return err
 }
@@ -1170,7 +1188,9 @@ func main() {
 	}
 	go tcpServer()
 	go httpServer()
-	for {processTcpInput(<-tcpInChan)}
+	for {
+		processTcpInput(<-tcpInChan)
+	}
 }
 
 func processTcpInput(c common.ClientToClient) {
