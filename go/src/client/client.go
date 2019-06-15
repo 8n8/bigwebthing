@@ -485,7 +485,6 @@ func makeAppPath(appHash blake2bHash) string {
 }
 
 func (appSig appMsgT) process(author publicSignT) {
-	delete(chunksLoading, appSig.AppHash)
 	signedHash, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appSig.Sig),
@@ -495,6 +494,7 @@ func (appSig appMsgT) process(author publicSignT) {
 	if !(ok && bytes.Equal(appHash, signedHash)) {
 		return
 	}
+	delete(chunksLoading, appSig.AppHash)
 	chunkPtrs, ok := chunksLoading[appSig.AppHash]
 	if !ok {
 		return
@@ -504,7 +504,12 @@ func (appSig appMsgT) process(author publicSignT) {
 		return
 	}
 	filePaths := makeChunkFilePaths(chunkPtrs)
-	assembleAppAndSendReceipt(filePaths, author, appSig)
+	err := assembleApp(filePaths, author, appSig)
+	delete(chunksLoading, appSig.AppHash)
+	if err != nil {
+		return
+	}
+	_ = sendAppReceipt(appSig.AppHash, author)
 }
 
 func hashApp(
@@ -1506,36 +1511,50 @@ func addChunkToFile(
 	return nil
 }
 
-func assembleAppAndSendReceipt(
-	filePaths []string, appSender [32]byte, appMsg appMsgT) {
+func assembleApp(
+	filePaths []string, appSender [32]byte, appMsg appMsgT) error {
 
 	tmpPath := makeChunkFilePath(appMsg.AppHash)
 	finalPath := makeAppPath(appMsg.AppHash)
 	err := writeChunksToTmpFile(filePaths, tmpPath, appMsg.AppHash)
 	if err != nil {
-		newChunksFinished(appMsg.AppHash)
+		return err
 	}
 	_ = os.Rename(tmpPath, finalPath)
+	appsMux.Lock()
+	defer appsMux.Unlock()
+	apps = append(apps, appMsg)
+	encodedApps, err := json.Marshal(apps)
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile(appsFile(dataDir), encodedApps, 0600)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
+func sendAppReceipt(appHash blake2bHash, recipient publicSignT) error {
 	var receipt Decrypted
 	receipt = AppReceiptT{
 		sliceToSig(sign.Sign(
 			make([]byte, 0),
-			receiptHash(appMsg.AppHash, appReceiptCode),
+			receiptHash(appHash, appReceiptCode),
 			&secretSign)),
-		appMsg.AppHash,
+		appHash,
 	}
 	encoded, err := common.EncodeData(&receipt)
 	if err != nil {
-		newChunksFinished(appMsg.AppHash)
+		return err
 	}
 	nonce, err := makeNonce()
 	if err != nil {
-		newChunksFinished(appMsg.AppHash)
+		return err
 	}
-	symmetricKey, ok := symmetricKeys[appSender]
+	symmetricKey, ok := symmetricKeys[recipient]
 	if !ok {
-		return
+		return errors.New("no symmetric key")
 	}
 	keyArr := [32]byte(symmetricKey)
 	encrypted := secretbox.Seal(
@@ -1545,12 +1564,10 @@ func assembleAppAndSendReceipt(
 		&keyArr)
 	tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
-		Recipient: appSender,
+		Recipient: recipient,
 		Author:    publicSign,
 	}
-	appsMux.Lock()
-	defer appsMux.Unlock()
-	apps = append(apps, appMsg)
+	return nil
 }
 
 func writeChunk(
