@@ -57,7 +57,9 @@ var appsAwaitingReceiptMux sync.Mutex
 var symmetricKeys = map[publicSignT]symmetricEncrypt{}
 var symmetricKeysMux sync.Mutex
 var keyPairs = map[publicEncryptT]secretEncryptT{}
+var keyPairsMux sync.Mutex
 var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
+var awaitingSymmetricKeyMux sync.Mutex
 var tcpInChan = make(chan common.ClientToClient)
 var tcpOutChan = make(chan common.ClientToClient)
 
@@ -558,8 +560,12 @@ func requestEncryptionKey(sendChunk sendChunkT) {
 		Recipient: sendChunk.recipient,
 		Author:    publicSign,
 	}
+	awaitingSymmetricKeyMux.Lock()
 	awaitingSymmetricKey[sendChunk.recipient] = sendChunk
+	awaitingSymmetricKeyMux.Unlock()
+	keyPairsMux.Lock()
 	keyPairs[publicEncryptT(*pub)] = secretEncryptT(*priv)
+	keyPairsMux.Unlock()
 }
 
 func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
@@ -1424,6 +1430,8 @@ func processHereIsAnEncryptionKey(
 	newKey common.HereIsAnEncryptionKey,
 	author [32]byte) {
 
+	awaitingSymmetricKeyMux.Lock()
+	defer awaitingSymmetricKeyMux.Unlock()
 	awaitingKey, ok := awaitingSymmetricKey[author]
 	if !ok {
 		return
@@ -1439,7 +1447,9 @@ func processHereIsAnEncryptionKey(
 	if !bytes.Equal(signed, common.HashToSlice([32]byte(keyHash))) {
 		return
 	}
+	keysPairsMux.Lock()
 	secretKey, ok := keyPairs[newKey.YourPublicEncrypt]
+	keysPairsMux.Unlock()
 	secretKeyBytes := [32]byte(secretKey)
 	if !ok {
 		return
