@@ -332,7 +332,6 @@ func strEq(s1, s2 string) bool {
 }
 
 func getDocHash(securityCode string) (blake2bHash, error) {
-
 	appCodesMux.Lock()
 	defer appCodesMux.Unlock()
 	for sc, hash := range appCodes {
@@ -1684,12 +1683,7 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpMakeApp(w http.ResponseWriter, r *http.Request) {
-	securityCode := pat.Param(r, "securityCode")
 	appHash := pat.Param(r, "apphash")
-	if !strEq(securityCode, homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	hashSlice, err := base64.URLEncoding.DecodeString(appHash)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -1733,11 +1727,6 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpInvite(w http.ResponseWriter, r *http.Request) {
-	securityCode := pat.Param(r, "securityCode")
-	if !strEq(securityCode, homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	inviteeRaw := pat.Param(r, "invitee")
 	inviteeBytes, err := base64.URLEncoding.DecodeString(inviteeRaw)
 	if err != nil {
@@ -1777,10 +1766,6 @@ func sig(msg []byte, privateKey *[64]byte) []byte {
 }
 
 func httpSendApp(w http.ResponseWriter, r *http.Request) {
-	if !strEq(pat.Param(r, "securityCode"), homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -1830,10 +1815,6 @@ func httpSendApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpSaveApp(w http.ResponseWriter, r *http.Request) {
-	if !strEq(pat.Param(r, "securityCode"), homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	hash, tags, err := writeAppToFile(r)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -1871,18 +1852,10 @@ func httpSaveApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpGetMyId(w http.ResponseWriter, r *http.Request) {
-	if !strEq(pat.Param(r, "securityCode"), homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	w.Write(encodePubId(publicSign))
 }
 
 func httpGetMembers(w http.ResponseWriter, r *http.Request) {
-	if !strEq(pat.Param(r, "securityCode"), homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	invitesMux.Lock()
 	encoded, err := json.Marshal(memberMapToList())
 	invitesMux.Unlock()
@@ -1894,10 +1867,6 @@ func httpGetMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpSearchApps(w http.ResponseWriter, r *http.Request) {
-	if !strEq(pat.Param(r, "securityCode"), homeCode) {
-		http.Error(w, "Bad security code", 400)
-		return
-	}
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -1911,23 +1880,35 @@ func httpSearchApps(w http.ResponseWriter, r *http.Request) {
 	w.Write(encoded)
 }
 
+type handler func(w http.ResponseWriter, r *http.Request)
+
+func p(f handler) handler {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strEq(pat.Param(r, "securityCode"), homeCode) {
+			http.Error(w, "bad security code", 400)
+			return
+		}
+		f(w, r)
+	}
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
 		pat.Get("/getapp/:securityCode/:filename"), httpGetApp)
 	mux.HandleFunc(
-		pat.Get("/makeapproute/:securityCode/:apphash"), httpMakeApp)
+		pat.Get("/makeapp/:securityCode/:apphash"), p(httpMakeApp))
 	mux.HandleFunc(
-		pat.Post("/invite/:securityCode/:invitee"), httpInvite)
+		pat.Post("/invite/:securityCode/:invitee"), p(httpInvite))
 	mux.HandleFunc(
-		pat.Get("/getmyid/:securityCode"), httpGetMyId)
+		pat.Get("/getmyid/:securityCode"), p(httpGetMyId))
 	mux.HandleFunc(
-		pat.Get("/getmembers/:securityCode"), httpGetMembers)
+		pat.Get("/getmembers/:securityCode"), p(httpGetMembers))
 	mux.HandleFunc(
-		pat.Post("/sendapp/:securityCode"), httpSendApp)
+		pat.Post("/sendapp/:securityCode"), p(httpSendApp))
 	mux.HandleFunc(
-		pat.Post("/saveapp/:securityCode"), httpSaveApp)
+		pat.Post("/saveapp/:securityCode"), p(httpSaveApp))
 	mux.HandleFunc(
-		pat.Post("/searchapps/:securityCode"), httpSearchApps)
+		pat.Post("/searchapps/:securityCode"), p(httpSearchApps))
 	http.ListenAndServe(":"+port, mux)
 }
