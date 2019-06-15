@@ -580,7 +580,6 @@ type fileChunkPtrT struct {
 	chunkHash [32]byte
 	counter   int
 	lastChunk bool
-	appHash   blake2bHash
 }
 
 func sendChunk(s sendChunkT) {
@@ -1203,10 +1202,9 @@ func (chunk FileChunk) process(author publicSignT) {
 	if !ok {
 		chunksLoading[chunk.AppHash] = []fileChunkPtrT{
 			fileChunkPtrT{
-				chunkHash: chunkHash,
-				counter:   chunk.Counter,
-				lastChunk: chunk.LastChunk,
-				appHash:   chunk.AppHash,
+				chunkHash,
+				chunk.Counter,
+				chunk.LastChunk,
 			}}
 	} else {
 		lastChunk := previousChunks[len(previousChunks)-1]
