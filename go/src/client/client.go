@@ -366,8 +366,7 @@ type logSendErrT struct {
 func logSendErr(
 	err error,
 	appHash [32]byte,
-	recipient [32]byte,
-	dataDir string) {
+	recipient [32]byte) {
 
 	msg := logSendErrT{
 		time.Now().Unix(),
@@ -407,19 +406,19 @@ func logSentSuccess(
 	msg := logSentSuccessT{appHash, recipient}
 	encoded, jsonErr := json.Marshal(msg)
 	if jsonErr != nil {
-		logSendErr(jsonErr, appHash, recipient, dataDir)
+		logSendErr(jsonErr, appHash, recipient)
 		return
 	}
 	f, openErr := os.OpenFile(
 		dataDir+"/sentMsgPath", appendFlags, 0600)
 	if openErr != nil {
-		logSendErr(openErr, appHash, recipient, dataDir)
+		logSendErr(openErr, appHash, recipient)
 		return
 	}
 	defer f.Close()
 	_, writeErr := f.Write(append([]byte("\n"), encoded...))
 	if writeErr != nil {
-		logSendErr(writeErr, appHash, recipient, dataDir)
+		logSendErr(writeErr, appHash, recipient)
 	}
 }
 
@@ -475,9 +474,7 @@ type appMsgT struct {
 }
 
 type sendAppMsgT struct {
-	myPublicSign publicSignT
 	symmetricKey symmetricEncrypt
-	outChan      chan common.ClientToClient
 	msg          appMsgT
 	recipient    publicSignT
 }
@@ -610,7 +607,7 @@ func sendChunk(s sendChunkT) {
 	fileHandle, err := os.Open(s.filepath)
 	errOut := func(err error) {
 		fmt.Println(err)
-		logSendErr(err, s.appMsg.AppHash, s.recipient, s.dataDir)
+		logSendErr(err, s.appMsg.AppHash, s.recipient)
 	}
 	if err != nil {
 		errOut(err)
@@ -833,7 +830,6 @@ func authBytes(author publicSignT) *[32]byte {
 }
 
 func (appReceipt AppReceiptT) process(author publicSignT) {
-
 	signed, ok := sign.Open(
 		make([]byte, 0),
 		common.SigToSlice(appReceipt.Sig),
@@ -861,17 +857,7 @@ func (receipt ReceiptT) process(author publicSignT) {
 		return
 	}
 	if chunkAwaiting.lastChunk {
-		symmetricKey, ok := symmetricKeys[author]
-		if !ok {
-			return
-		}
-		sendAppMsg(sendAppMsgT{
-			publicSign,
-			symmetricKey,
-			tcpOutChan,
-			chunkAwaiting.appMsg,
-			author,
-		})
+		sendAppMsg(chunkAwaiting.appMsg, author)
 	}
 	sendChunk(sendChunkT{
 		publicSign,
@@ -886,10 +872,12 @@ func (receipt ReceiptT) process(author publicSignT) {
 	})
 }
 
-func sendAppMsg(s sendAppMsgT) {
-	var msg Decrypted
-	msg = s.msg
-	encoded, err := common.EncodeData(&msg)
+func sendAppMsg(appMsg Decrypted, recipient publicSignT) {
+	symmetricKey, ok := symmetricKeys[recipient]
+	if !ok {
+		return
+	}
+	encoded, err := common.EncodeData(appMsg)
 	if err != nil {
 		return
 	}
@@ -897,16 +885,16 @@ func sendAppMsg(s sendAppMsgT) {
 	if err != nil {
 		return
 	}
-	keyBytes := [32]byte(s.symmetricKey)
+	keyBytes := [32]byte(symmetricKey)
 	encrypted := secretbox.Seal(
 		make([]byte, 0),
 		encoded,
 		&nonce,
 		&keyBytes)
-	s.outChan <- common.ClientToClient{
+	tcpOutChan <- common.ClientToClient{
 		Msg:       common.Encrypted{encrypted, nonce},
-		Recipient: s.recipient,
-		Author:    s.myPublicSign,
+		Recipient: recipient,
+		Author:    publicSign,
 	}
 }
 
@@ -1214,7 +1202,7 @@ func main() {
 }
 
 func processTcpInput(c common.ClientToClient) {
-	_, isMember := makeMemberList()[c.Author]
+	_, isMember := members[c.Author]
 	if !isMember {
 		return
 	}
