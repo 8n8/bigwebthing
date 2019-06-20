@@ -321,8 +321,8 @@ func processCToC(c common.ClientToClient) error {
 			return err
 		}
 		encoded := buf.Bytes()
-		fileName := hashToStr(blake2b.Sum256(encoded))
-		err = ioutil.WriteFile(fileName, encoded, 0600)
+		filePath := inboxPath() + hashToStr(blake2b.Sum256(encoded))
+		err = ioutil.WriteFile(filePath, encoded, 0600)
 		return err
 	case common.GiveMeASymmetricKey:
 		pub, priv, err := box.GenerateKey(rand.Reader)
@@ -395,43 +395,54 @@ func processCToC(c common.ClientToClient) error {
 		symmetricKeysMux.Lock()
 		symmetricKeys[c.Author] = symmetricKey
 		symmetricKeysMux.Unlock()
-		fileHandle, err := os.Open(string(filePath))
-		if err != nil {
-			return err
-		}
-		var buf bytes.Buffer
-		_, err = io.Copy(io.Writer(&buf), fileHandle)
-		if err != nil {
-			return err
-		}
-		dec := gob.NewDecoder(&buf)
-		var unencrypted plain
-		err = dec.Decode(&unencrypted)
-		if err != nil {
-			return err
-		}
-		nonce, err := makeNonce()
-		if err != nil {
-			return err
-		}
-		encrypted := secretbox.Seal(
-			make([]byte, 0),
-			unencrypted.Bin,
-			&nonce,
-			&symmetricKey)
-		tcpOutChan <- common.ClientToClient{
-			common.Encrypted{encrypted, nonce},
-			unencrypted.Correspondent,
-			publicSign}
-		return nil
+		err := sendFileTcp(string(filePath))
+		return err
 	}
 	return errors.New("bad pattern match")
 }
 
+func sendFileTcp(filePath string) error {
+	fileHandle, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	_, err = io.Copy(io.Writer(&buf), fileHandle)
+	if err != nil {
+		return err
+	}
+	dec := gob.NewDecoder(&buf)
+	var unencrypted plain
+	err = dec.Decode(&unencrypted)
+	if err != nil {
+		return err
+	}
+	symmetricKeysMux.Lock()
+	symmetricKey, ok := symmetricKeys[unencrypted.Correspondent]
+	if !ok {
+		return errors.New("no symmetric key to send file with")
+	}
+	nonce, err := makeNonce()
+	if err != nil {
+		return err
+	}
+	symKeyArr := [32]byte(symmetricKey)
+	encrypted := secretbox.Seal(
+		make([]byte, 0),
+		unencrypted.Bin,
+		&nonce,
+		&symKeyArr)
+	tcpOutChan <- common.ClientToClient{
+		common.Encrypted{encrypted, nonce},
+		unencrypted.Correspondent,
+		publicSign}
+	return nil
+}
+
 func tcpServer() {
 	stop := make(chan struct{})
-	inboxWatcher, err := fsnotify.NewWatcher()
-	inboxWatcher.Add(inboxPath())
+	outboxWatcher, err := fsnotify.NewWatcher()
+	outboxWatcher.Add(outboxPath())
 	if err != nil {
 		panic(err)
 	}
@@ -441,6 +452,15 @@ func tcpServer() {
 			time.Sleep(time.Second)
 			continue
 		}
+		go func() {
+			for {
+				select {
+				case event := <-outboxWatcher.Events:
+					if event.Op != fsnotify.Create { continue }
+					_ = sendFileTcp(event.Name)
+				}
+			}
+		}()
 		func() {
 			go func() {
 				for {
@@ -448,7 +468,7 @@ func tcpServer() {
 					if err != nil {
 						stop <- struct{}{}
 					}
-					tcpInChan <- msg
+					_ = processCToC(msg)
 				}
 			}()
 			go func() {
