@@ -436,7 +436,9 @@ func sendFileTcp(filePath string) error {
 		common.Encrypted{encrypted, nonce},
 		unencrypted.Correspondent,
 		publicSign}
-	return nil
+	fileHandle.Close()
+	err = os.Remove(filePath)
+	return err
 }
 
 func tcpServer() {
