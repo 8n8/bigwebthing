@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/fsnotify/fsnotify"
 	"archive/tar"
 	"bytes"
 	"common"
@@ -60,14 +61,21 @@ var keyPairs = map[publicEncryptT]secretEncryptT{}
 var keyPairsMux sync.Mutex
 var awaitingSymmetricKey = map[publicSignT]sendChunkT{}
 var awaitingSymmetricKeyMux sync.Mutex
+var newAwaitingKey = make(map[publicSignT]filePathT)
+var newAwaitingKeyMux sync.Mutex
 var tcpInChan = make(chan common.ClientToClient)
 var tcpOutChan = make(chan common.ClientToClient)
 
+type filePathT string
 type publicSignT [32]byte
 type publicEncryptT [32]byte
 type secretEncryptT [32]byte
 type blake2bHash [32]byte
 type symmetricEncrypt [32]byte
+
+func inboxPath() string { return dataDir + "/inbox" }
+
+func outboxPath() string { return dataDir + "/outbox" }
 
 func makeMemberList() map[publicSignT]struct{} {
 	members := make(map[publicSignT]struct{})
@@ -279,8 +287,154 @@ func makeConn(secretSign [64]byte) (net.Conn, error) {
 	return conn, err
 }
 
+type plain struct {
+	Bin []byte
+	Correspondent publicSignT
+}
+
+func processCToC(c common.ClientToClient) error {
+	switch payload := c.Msg.(type) {
+	case common.Encrypted:
+		symmetricKeysMux.Lock()
+		symmetricKey, ok := symmetricKeys[c.Author]
+		symmetricKeysMux.Unlock()
+		if !ok {
+			return errors.New("could not find symmetric key")
+		}
+		symmetricKeySlice := [32]byte(symmetricKey)
+		decrypted, ok := secretbox.Open(
+			make([]byte, 0),
+			payload.Msg,
+			&payload.Nonce,
+			&symmetricKeySlice)
+		if !ok {
+			return errors.New("could not decrypt message")
+		}
+		if !equalHashes(c.Recipient, publicSign) {
+			return errors.New("ClientToClient wrongly addressed")
+		}
+		msg := plain{decrypted, c.Author}
+		var buf bytes.Buffer
+		enc := gob.NewEncoder(&buf)
+		err := enc.Encode(msg)
+		if err != nil {
+			return err
+		}
+		encoded := buf.Bytes()
+		fileName := hashToStr(blake2b.Sum256(encoded))
+		err = ioutil.WriteFile(fileName, encoded, 0600)
+		return err
+	case common.GiveMeASymmetricKey:
+		pub, priv, err := box.GenerateKey(rand.Reader)
+		if err != nil { return err }
+		symmetricKey, err := makeSymmetricKey()
+		if err != nil { return err }
+		nonce, err := makeNonce()
+		if err != nil { return err }
+		encryptedKey := box.Seal(
+			make([]byte, 0),
+			common.HashToSlice(symmetricKey),
+			&nonce,
+			&payload.MyPublicEncrypt,
+			priv)
+		hereIs := common.HereIsAnEncryptionKey{
+			payload.MyPublicEncrypt,
+			*pub,
+			encryptedKeyToArr(encryptedKey),
+			nonce,
+			*new([common.SigSize]byte),
+		}
+		signature := sliceToSig(sig(common.HashToSlice(
+			hashHereIsKey(hereIs))))
+		hereIs.Sig = signature
+		tcpOutChan <- common.ClientToClient{
+			hereIs, c.Author, publicSign}
+		symmetricKeysMux.Lock()
+		symmetricKeys[c.Author] = symmetricKey
+		symmetricKeysMux.Unlock()
+		return nil
+	case common.HereIsAnEncryptionKey:
+		newAwaitingKeyMux.Lock()
+		filePath, ok := newAwaitingKey[c.Author]
+		newAwaitingKeyMux.Unlock()
+		if !ok {
+			return errors.New("symmetric key not expected")
+		}
+		keyHash := hashHereIsKey(payload)
+		signed, ok := sign.Open(
+			make([]byte, 0),
+			common.SigToSlice(payload.Sig),
+			&c.Author)
+		if !ok {
+			return errors.New("bad signature on new key")
+		}
+		symKeySlice := common.HashToSlice([32]byte(keyHash))
+		if !bytes.Equal(signed, symKeySlice) {
+			return errors.New("bad key hash on new key")
+		}
+		keyPairsMux.Lock()
+		secretKey, ok := keyPairs[payload.YourPublicEncrypt]
+		keyPairsMux.Unlock()
+		if !ok {
+			return errors.New("no key pair to decrypt new key")
+		}
+		secretKeyBytes := [32]byte(secretKey)
+		keySlice, ok := box.Open(
+			make([]byte, 0),
+			encKeyToSlice(payload.EncryptedSymmetricKey),
+			&payload.Nonce,
+			&payload.MyPublicEncrypt,
+			&secretKeyBytes)
+		if !ok {
+			return errors.New("could not decrypt new key")
+		}
+		symmetricKey := common.SliceToHash(keySlice)
+		newAwaitingKeyMux.Lock()
+		delete(newAwaitingKey, c.Author)
+		newAwaitingKeyMux.Unlock()
+		symmetricKeysMux.Lock()
+		symmetricKeys[c.Author] = symmetricKey
+		symmetricKeysMux.Unlock()
+		fileHandle, err := os.Open(string(filePath))
+		if err != nil {
+			return err
+		}
+		var buf bytes.Buffer
+		_, err = io.Copy(io.Writer(&buf), fileHandle)
+		if err != nil {
+			return err
+		}
+		dec := gob.NewDecoder(&buf)
+		var unencrypted plain
+		err = dec.Decode(&unencrypted)
+		if err != nil {
+			return err
+		}
+		nonce, err := makeNonce()
+		if err != nil {
+			return err
+		}
+		encrypted := secretbox.Seal(
+			make([]byte, 0),
+			unencrypted.Bin,
+			&nonce,
+			&symmetricKey)
+		tcpOutChan <- common.ClientToClient{
+			common.Encrypted{encrypted, nonce},
+			unencrypted.Correspondent,
+			publicSign}
+		return nil
+	}
+	return errors.New("bad pattern match")
+}
+
 func tcpServer() {
 	stop := make(chan struct{})
+	inboxWatcher, err := fsnotify.NewWatcher()
+	inboxWatcher.Add(inboxPath())
+	if err != nil {
+		panic(err)
+	}
 	for {
 		conn, err := makeConn(secretSign)
 		if err != nil {
