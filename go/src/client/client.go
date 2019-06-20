@@ -1359,6 +1359,33 @@ func setup() error {
 	return err
 }
 
+func masterPath() string { return dataDir + "/master.bwt" }
+
+func httpLoadMaster(w http.ResponseWriter, r *http.Request) {
+	f, err := os.Open(masterPath())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	_, err = io.Copy(w, f)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+}
+
+func httpSaveMaster(w http.ResponseWriter, r *http.Request) {
+	f, err := os.Open(masterPath())
+	defer f.Close()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	_, err = io.Copy(f, r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+}
+
 func main() {
 	err := setup()
 	if err != nil {
@@ -2070,17 +2097,23 @@ func httpServer() {
 		pat.Get("/getapp/:securityCode/:filename"), httpGetApp)
 	mux.HandleFunc(
 		pat.Get("/makeapp/:securityCode/:apphash"), p(httpMakeApp))
-	mux.HandleFunc(
-		pat.Post("/invite/:securityCode/:invitee"), p(httpInvite))
+	// mux.HandleFunc(
+	// 	pat.Post("/invite/:securityCode/:invitee"), p(httpInvite))
 	mux.HandleFunc(
 		pat.Get("/getmyid/:securityCode"), p(httpGetMyID))
-	mux.HandleFunc(
-		pat.Get("/getmembers/:securityCode"), p(httpGetMembers))
-	mux.HandleFunc(
-		pat.Post("/sendapp/:securityCode"), p(httpSendApp))
+	// mux.HandleFunc(
+	// 	pat.Get("/getmembers/:securityCode"), p(httpGetMembers))
+	// mux.HandleFunc(
+	// 	pat.Post("/sendapp/:securityCode"), p(httpSendApp))
 	mux.HandleFunc(
 		pat.Post("/saveapp/:securityCode"), p(httpSaveApp))
+	// mux.HandleFunc(
+	// 	pat.Post("/searchapps/:securityCode"), p(httpSearchApps))
+	//mux.HandleFunc(pat.Post("/push/:securityCode"), p(httpPush))
+	//mux.HandleFunc(pat.Post("/pull/:securityCode"), p(httpPull))
 	mux.HandleFunc(
-		pat.Post("/searchapps/:securityCode"), p(httpSearchApps))
+		pat.Post("/savemaster/:securityCode"), p(httpSaveMaster))
+	mux.HandleFunc(
+		pat.Get("/loadmaster/:securityCode"), p(httpLoadMaster))
 	http.ListenAndServe(":"+port, mux)
 }
