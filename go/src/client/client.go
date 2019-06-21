@@ -2216,14 +2216,81 @@ func sortBunchPtrs(ptrs []newChunkPtr) {
 	sort.Slice(ptrs, f)
 }
 
+func docsDir() string { return dataDir + "/docs" }
+
 func httpPull(w http.ResponseWriter, r *http.Request) {
-	ptrs, err := getInboxPtrs()
+	rawPtrs, err := getInboxPtrs()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	_ = sortAndCheckBunchPtrs(bunchPtrs(ptrs))
+	ptrs := sortAndCheckBunchPtrs(bunchPtrs(rawPtrs))
+	for _, msgPtrs := range ptrs {
+		_ = stitchChunks(msgPtrs)
+	}
 }
+
+func tmpDir() string { return dataDir + "/tmp" }
+
+func stitchChunks(ptrs []newChunkPtr) error {
+	hasher, err := blake2b.New256(nil)
+	if err != nil {
+		return err
+	}
+	tmpFileName, err := genCode()
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpDir() + "/" + tmpFileName
+	tmpDest, err := os.Create(tmpPath)
+	defer tmpDest.Close()
+	if err != nil {
+		return err
+	}
+	for _, ptr := range ptrs {
+		chunkPath := inboxPath() + "/" + ptr.Hash
+		chunkHandle, err := os.Create(chunkPath)
+		defer chunkHandle.Close()
+		if err != nil {
+			return err
+		}
+		var buf bytes.Buffer
+		_, err = io.Copy(io.Writer(&buf), chunkHandle)
+		if err != nil {
+			return err
+		}
+		dec := gob.NewDecoder(&buf)
+		var msg plain
+		err = dec.Decode(&msg)
+		if err != nil {
+			return err
+		}
+		lenBin := len(msg.Bin)
+		n, err := hasher.Write(msg.Bin)
+		if n != lenBin {
+			return errors.New("could not write whole chunk to hasher")
+		}
+		if err != nil {
+			return err
+		}
+		n, err = tmpDest.Write(msg.Bin)
+		if n != lenBin {
+			return errors.New("could not write whole chunk to tmp")
+		}
+		if err != nil {
+			return err
+		}
+		chunkHandle.Close()
+	}
+	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
+	if hash != ptrs[0].Hash {
+		return errors.New("stitched app has bad hash")
+	}
+	err = os.Rename(tmpPath, stitchedDir()+"/"+hash)
+	return err
+}
+
+func stitchedDir() string { return dataDir + "/stitched" }
 
 func httpServer() {
 	mux := goji.NewMux()
