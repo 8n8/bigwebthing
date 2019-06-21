@@ -327,16 +327,8 @@ func processCToC(c common.ClientToClient) error {
 		if !equalHashes(c.Recipient, publicSign) {
 			return errors.New("ClientToClient wrongly addressed")
 		}
-		msg := plain{decrypted, c.Author}
-		var buf bytes.Buffer
-		enc := gob.NewEncoder(&buf)
-		err := enc.Encode(msg)
-		if err != nil {
-			return err
-		}
-		encoded := buf.Bytes()
-		path := inboxPath() + "/" + hashToStr(blake2b.Sum256(encoded))
-		err = ioutil.WriteFile(path, encoded, 0600)
+		path := inboxPath()+"/"+hashToStr(blake2b.Sum256(decrypted))
+		err := ioutil.WriteFile(path, decrypted, 0600)
 		return err
 	case common.GiveMeASymmetricKey:
 		pub, priv, err := box.GenerateKey(rand.Reader)
@@ -2120,23 +2112,18 @@ func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
 		return ptrs, err
 	}
 	for _, f := range files {
-		fileHandle, err := os.Open(inboxPath() + "/" + f.Name())
-		if err != nil {
-			return ptrs, err
-		}
-		var raw plain
-		err = gob.NewDecoder(fileHandle).Decode(&raw)
+		rawBin, err := ioutil.ReadFile(inboxPath()+"/"+f.Name())
 		if err != nil {
 			return ptrs, err
 		}
 		var ptr newChunkPtr
 		ptr.Hash = f.Name()
 		var buf bytes.Buffer
-		n, err := buf.Write(raw.Bin)
+		n, err := buf.Write(rawBin)
 		if err != nil {
 			return ptrs, err
 		}
-		if n != len(raw.Bin) {
+		if n != len(rawBin) {
 			err = errors.New("could not write plain.Bin to buffer")
 			return ptrs, err
 		}
