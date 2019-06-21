@@ -1,7 +1,6 @@
 package main
 
 import (
-	"github.com/fsnotify/fsnotify"
 	"archive/tar"
 	"bytes"
 	"common"
@@ -26,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/pkg/browser"
 	"goji.io"
 	"goji.io/pat"
@@ -287,8 +287,22 @@ func makeConn(secretSign [64]byte) (net.Conn, error) {
 	return conn, err
 }
 
+type newChunk struct {
+	Body     []byte
+	CakeHash blake2bHash
+	Counter  int
+	Final    bool
+}
+
+type newChunkPtr struct {
+	Hash     string
+	CakeHash blake2bHash
+	Counter  int
+	Final    bool
+}
+
 type plain struct {
-	Bin []byte
+	Bin           []byte
 	Correspondent publicSignT
 }
 
@@ -321,16 +335,22 @@ func processCToC(c common.ClientToClient) error {
 			return err
 		}
 		encoded := buf.Bytes()
-		filePath := inboxPath() + hashToStr(blake2b.Sum256(encoded))
-		err = ioutil.WriteFile(filePath, encoded, 0600)
+		path := inboxPath() + "/" + hashToStr(blake2b.Sum256(encoded))
+		err = ioutil.WriteFile(path, encoded, 0600)
 		return err
 	case common.GiveMeASymmetricKey:
 		pub, priv, err := box.GenerateKey(rand.Reader)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		symmetricKey, err := makeSymmetricKey()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		nonce, err := makeNonce()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		encryptedKey := box.Seal(
 			make([]byte, 0),
 			common.HashToSlice(symmetricKey),
@@ -458,7 +478,9 @@ func tcpServer() {
 			for {
 				select {
 				case event := <-outboxWatcher.Events:
-					if event.Op != fsnotify.Create { continue }
+					if event.Op != fsnotify.Create {
+						continue
+					}
 					_ = sendFileTcp(event.Name)
 				}
 			}
@@ -2091,6 +2113,118 @@ func p(f handler) handler {
 	}
 }
 
+func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
+	ptrs := make(map[newChunkPtr]struct{})
+	files, err := ioutil.ReadDir(inboxPath())
+	if err != nil {
+		return ptrs, err
+	}
+	for _, f := range files {
+		fileHandle, err := os.Open(inboxPath() + "/" + f.Name())
+		if err != nil {
+			return ptrs, err
+		}
+		var raw plain
+		err = gob.NewDecoder(fileHandle).Decode(&raw)
+		if err != nil {
+			return ptrs, err
+		}
+		var ptr newChunkPtr
+		ptr.Hash = f.Name()
+		var buf bytes.Buffer
+		n, err := buf.Write(raw.Bin)
+		if err != nil {
+			return ptrs, err
+		}
+		if n != len(raw.Bin) {
+			err = errors.New("could not write plain.Bin to buffer")
+			return ptrs, err
+		}
+		var chnk newChunk
+		err = gob.NewDecoder(&buf).Decode(&chnk)
+		if err != nil {
+			return ptrs, err
+		}
+		ptr.CakeHash = chnk.CakeHash
+		ptr.Counter = chnk.Counter
+		ptr.Final = chnk.Final
+		ptrs[ptr] = struct{}{}
+	}
+	return ptrs, nil
+}
+
+type ptrMap map[newChunkPtr]struct{}
+
+func bunchPtrs(ptrs ptrMap) bunchMap {
+	bunched := make(bunchMap)
+	for ptr := range ptrs {
+		bunch, ok := bunched[ptr.Hash]
+		if ok {
+			bunched[ptr.Hash] = append(bunch, ptr)
+			continue
+		}
+		bunched[ptr.Hash] = []newChunkPtr{ptr}
+	}
+	return bunched
+}
+
+type bunchMap map[string][]newChunkPtr
+
+func sortAndCheckBunchPtrs(m bunchMap) bunchMap {
+	result := make(bunchMap)
+	for hash, ptrs := range m {
+		sorted := ptrs[:]
+		sortBunchPtrs(sorted)
+		err := checkBunchPtrs(sorted)
+		if err != nil {
+			continue
+		}
+		result[hash] = sorted
+	}
+	return result
+}
+
+func checkBunchPtrs(ptrs []newChunkPtr) error {
+	lenPtrs := len(ptrs)
+	if lenPtrs == 0 {
+		return errors.New("no pointers in slice")
+	}
+	firstHash := ptrs[0].Hash
+	for i, ptr := range ptrs {
+		if i != ptr.Counter {
+			return errors.New("bad counter")
+		}
+		if ptr.Hash != firstHash {
+			return errors.New("bad hash")
+		}
+	}
+	for _, ptr := range ptrs[:lenPtrs-1] {
+		if ptr.Final {
+			return errors.New("non-final pointer has 'Final' set")
+		}
+	}
+	if !ptrs[lenPtrs].Final {
+		return errors.New("final pointer doesn't have 'Final' set")
+	}
+	return nil
+}
+
+func sortBunchPtrs(ptrs []newChunkPtr) {
+	f := func(i, j int) bool {
+		return ptrs[i].Counter < ptrs[j].Counter
+	}
+	sort.Slice(ptrs, f)
+}
+
+func httpPull(w http.ResponseWriter, r *http.Request) {
+	ptrs, err := getInboxPtrs()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	_ = sortAndCheckBunchPtrs(bunchPtrs(ptrs))
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
@@ -2110,7 +2244,7 @@ func httpServer() {
 	// mux.HandleFunc(
 	// 	pat.Post("/searchapps/:securityCode"), p(httpSearchApps))
 	//mux.HandleFunc(pat.Post("/push/:securityCode"), p(httpPush))
-	//mux.HandleFunc(pat.Post("/pull/:securityCode"), p(httpPull))
+	mux.HandleFunc(pat.Post("/pull/:securityCode"), p(httpPull))
 	mux.HandleFunc(
 		pat.Post("/savemaster/:securityCode"), p(httpSaveMaster))
 	mux.HandleFunc(
