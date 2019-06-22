@@ -24,6 +24,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/pkg/browser"
@@ -306,6 +307,10 @@ type plain struct {
 	Correspondent publicSignT
 }
 
+const txtMsgCodeLen = 16
+
+var txtMsgCode = [txtMsgCodeLen]byte{244, 108, 174, 239, 63, 159, 201, 117, 90, 254, 165, 34, 118, 208, 130, 224}
+
 func processCToC(c common.ClientToClient) error {
 	switch payload := c.Msg.(type) {
 	case common.Encrypted:
@@ -327,7 +332,7 @@ func processCToC(c common.ClientToClient) error {
 		if !equalHashes(c.Recipient, publicSign) {
 			return errors.New("ClientToClient wrongly addressed")
 		}
-		path := inboxPath()+"/"+hashToStr(blake2b.Sum256(decrypted))
+		path := inboxPath() + "/" + hashToStr(blake2b.Sum256(decrypted))
 		err := ioutil.WriteFile(path, decrypted, 0600)
 		return err
 	case common.GiveMeASymmetricKey:
@@ -2112,7 +2117,7 @@ func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
 		return ptrs, err
 	}
 	for _, f := range files {
-		rawBin, err := ioutil.ReadFile(inboxPath()+"/"+f.Name())
+		rawBin, err := ioutil.ReadFile(inboxPath() + "/" + f.Name())
 		if err != nil {
 			return ptrs, err
 		}
@@ -2205,6 +2210,8 @@ func sortBunchPtrs(ptrs []newChunkPtr) {
 
 func docsDir() string { return dataDir + "/docs" }
 
+const maxTxtFileSize = 10e7
+
 func httpPull(w http.ResponseWriter, r *http.Request) {
 	rawPtrs, err := getInboxPtrs()
 	if err != nil {
@@ -2215,6 +2222,111 @@ func httpPull(w http.ResponseWriter, r *http.Request) {
 	for _, msgPtrs := range ptrs {
 		_ = stitchChunks(msgPtrs)
 	}
+	files, err := ioutil.ReadDir(stitchedDir())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	txtMsgs := make([]string, 0)
+	txtFilePaths := make([]string, 0)
+	for _, f := range files {
+		fsize := f.Size()
+		if fsize > maxTxtFileSize || fsize < txtMsgCodeLen {
+			continue
+		}
+		path := stitchedDir() + "/" + f.Name()
+		txtErr := func(msg string) {
+			err = os.Remove(path)
+			if err != nil {
+				msg += "; " + err.Error()
+			}
+			http.Error(w, msg, 500)
+		}
+		h, err := os.Create(path)
+		defer h.Close()
+		if err != nil {
+			txtErr(err.Error())
+			return
+		}
+		codeCandidate := make([]byte, txtMsgCodeLen)
+		n, err := h.Read(codeCandidate)
+		if n != txtMsgCodeLen {
+			txtErr("could not read text message code")
+			return
+		}
+		if !equalTxtCodes(
+			txtCodeSliceToArr(codeCandidate), txtMsgCode) {
+
+			continue
+		}
+		txtBytes, err := ioutil.ReadAll(h)
+		if err != nil {
+			txtErr("could not read text file")
+			return
+		}
+		h.Close()
+		if !utf8.Valid(txtBytes) {
+			err := os.Remove(path)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			continue
+		}
+		txtMsgs = append(txtMsgs, string(txtBytes))
+		txtFilePaths = append(txtFilePaths, path)
+	}
+	encodedTxt, err := json.Marshal(txtMsgs)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	n, err := w.Write(encodedTxt)
+	if n != len(encodedTxt) {
+		http.Error(w, "could not send all messages", 500)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	for _, txtFilePath := range txtFilePaths {
+		err := os.Remove(txtFilePath)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+		}
+	}
+	binFiles, err := ioutil.ReadDir(stitchedDir())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	for _, file := range binFiles {
+		oldPath := stitchedDir() + "/" + file.Name()
+		newPath := docsDir() + "/" + file.Name()
+		err = os.Rename(oldPath, newPath)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+}
+
+func txtCodeSliceToArr(xs []byte) [txtMsgCodeLen]byte {
+	var result [txtMsgCodeLen]byte
+	for i, x := range xs {
+		result[i] = x
+	}
+	return result
+}
+
+func equalTxtCodes(as, bs [txtMsgCodeLen]byte) bool {
+	for i, a := range as {
+		if a != bs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func tmpDir() string { return dataDir + "/tmp" }
