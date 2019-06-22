@@ -2391,6 +2391,92 @@ func stitchChunks(ptrs []newChunkPtr) error {
 
 func stitchedDir() string { return dataDir + "/stitched" }
 
+type push struct {
+	Txts []txtMsg
+	Bins []binMsg
+}
+
+type binMsg struct {
+	FileName string
+	Recipient string
+}
+
+type txtMsg struct {
+	Msg string
+	Recipient string
+}
+
+func httpPush(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	var msgs push
+	err = json.Unmarshal(body, &msgs)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	for _, msg := range msgs.Txts {
+		recipient, err := hashFromString(msg.Recipient)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		err = chunkAndSend(bytes.NewReader([]byte(msg.Msg)), recipient)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	for _, msg := range msgs.Bins {
+		recipient, err := hashFromString(msg.Recipient)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		handle, err := os.Open(msg.FileName)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		err = chunkAndSend(handle, recipient)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+}
+
+func chunkAndSend(r io.Reader, recipient publicSignT) error {
+	for {
+		chunk := make([]byte, common.ChunkContentSize)
+		n, err := r.Read(chunk)
+		if n == 0 {
+			return errors.New("no bytes in reader")
+		}
+		if err != nil {
+			return err
+		}
+		msg := plain{chunk[:n], recipient}
+		var buf bytes.Buffer
+		enc := gob.NewEncoder(&buf)
+		err = enc.Encode(msg)
+		if err != nil {
+			return err
+		}
+		encoded := buf.Bytes()
+		hash := blake2b.Sum256(encoded)
+		err = ioutil.WriteFile(
+			inboxPath() + "/" + hashToStr(hash), encoded, 0600)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(
@@ -2409,7 +2495,7 @@ func httpServer() {
 		pat.Post("/saveapp/:securityCode"), p(httpSaveApp))
 	// mux.HandleFunc(
 	// 	pat.Post("/searchapps/:securityCode"), p(httpSearchApps))
-	//mux.HandleFunc(pat.Post("/push/:securityCode"), p(httpPush))
+	mux.HandleFunc(pat.Post("/push/:securityCode"), p(httpPush))
 	mux.HandleFunc(pat.Post("/pull/:securityCode"), p(httpPull))
 	mux.HandleFunc(
 		pat.Post("/savemaster/:securityCode"), p(httpSaveMaster))
