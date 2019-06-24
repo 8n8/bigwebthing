@@ -842,7 +842,7 @@ func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
 }
 
 func httpGetApp(w http.ResponseWriter, r *http.Request) {
-	securityCode := pat.Param(r, "securityCode")
+	securityCode := pat.Param(r, "pass")
 	filename := pat.Param(r, "filename")
 	if strEq(securityCode, homeCode) {
 		err := serveDoc(w, "home/"+filename)
@@ -930,7 +930,7 @@ type handler func(w http.ResponseWriter, r *http.Request)
 
 func p(f handler) handler {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !strEq(pat.Param(r, "securityCode"), homeCode) {
+		if !strEq(pat.Param(r, "pass"), homeCode) {
 			http.Error(w, "bad security code", 400)
 			return
 		}
@@ -1248,7 +1248,8 @@ func httpPushErr(r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		err = chunkAndSend(bytes.NewReader([]byte(msg.Msg)), recipient)
+		msgReader := bytes.NewReader([]byte(msg.Msg))
+		err = chunkAndSend(msgReader, recipient)
 		if err != nil {
 			return err
 		}
@@ -1305,19 +1306,13 @@ func chunkAndSend(r io.Reader, recipient publicSignT) error {
 
 func httpServer() {
 	mux := goji.NewMux()
-	mux.HandleFunc(
-		pat.Get("/getapp/:securityCode/:filename"), httpGetApp)
-	mux.HandleFunc(
-		pat.Get("/makeapp/:securityCode/:apphash"), p(httpMakeApp))
-	mux.HandleFunc(
-		pat.Get("/getmyid/:securityCode"), p(httpGetMyID))
-	mux.HandleFunc(
-		pat.Post("/saveapp/:securityCode"), p(httpSaveApp))
-	mux.HandleFunc(pat.Post("/push/:securityCode"), p(httpPush))
-	mux.HandleFunc(pat.Post("/pull/:securityCode"), p(httpPull))
-	mux.HandleFunc(
-		pat.Post("/savemaster/:securityCode"), p(httpSaveMaster))
-	mux.HandleFunc(
-		pat.Get("/loadmaster/:securityCode"), p(httpLoadMaster))
-	http.ListenAndServe(":"+port, mux)
+	mux.HandleFunc(pat.Get("/getapp/:pass/:filename"), httpGetApp)
+	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), p(httpMakeApp))
+	mux.HandleFunc(pat.Get("/getmyid/:pass"), p(httpGetMyID))
+	mux.HandleFunc(pat.Post("/saveapp/:pass"), p(httpSaveApp))
+	mux.HandleFunc(pat.Post("/push/:pass"), p(httpPush))
+	mux.HandleFunc(pat.Post("/pull/:pass"), p(httpPull))
+	mux.HandleFunc(pat.Post("/savemaster/:pass"), p(httpSaveMaster))
+	mux.HandleFunc(pat.Get("/loadmaster/:pass"), p(httpLoadMaster))
+	http.ListenAndServe(":" + port, mux)
 }
