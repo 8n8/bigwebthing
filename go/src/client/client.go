@@ -146,7 +146,7 @@ type chunkT struct {
 	Final    bool
 }
 
-type newChunkPtr struct {
+type chunkPtrT struct {
 	Hash     string
 	CakeHash blake2bHash
 	Counter  int
@@ -946,8 +946,8 @@ func p(f handler) handler {
 	}
 }
 
-func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
-	ptrs := make(map[newChunkPtr]struct{})
+func getInboxPtrs() (map[chunkPtrT]struct{}, error) {
+	ptrs := make(map[chunkPtrT]struct{})
 	files, err := ioutil.ReadDir(inboxPath())
 	if err != nil {
 		return ptrs, err
@@ -957,7 +957,7 @@ func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
 		if err != nil {
 			return ptrs, err
 		}
-		var ptr newChunkPtr
+		var ptr chunkPtrT
 		ptr.Hash = f.Name()
 		var buf bytes.Buffer
 		n, err := buf.Write(rawBin)
@@ -981,7 +981,7 @@ func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
 	return ptrs, nil
 }
 
-type ptrMap map[newChunkPtr]struct{}
+type ptrMap map[chunkPtrT]struct{}
 
 func bunchPtrs(ptrs ptrMap) bunchMap {
 	bunched := make(bunchMap)
@@ -991,12 +991,12 @@ func bunchPtrs(ptrs ptrMap) bunchMap {
 			bunched[ptr.Hash] = append(bunch, ptr)
 			continue
 		}
-		bunched[ptr.Hash] = []newChunkPtr{ptr}
+		bunched[ptr.Hash] = []chunkPtrT{ptr}
 	}
 	return bunched
 }
 
-type bunchMap map[string][]newChunkPtr
+type bunchMap map[string][]chunkPtrT
 
 func sortAndCheckBunchPtrs(m bunchMap) bunchMap {
 	result := make(bunchMap)
@@ -1012,7 +1012,7 @@ func sortAndCheckBunchPtrs(m bunchMap) bunchMap {
 	return result
 }
 
-func checkBunchPtrs(ptrs []newChunkPtr) error {
+func checkBunchPtrs(ptrs []chunkPtrT) error {
 	lenPtrs := len(ptrs)
 	if lenPtrs == 0 {
 		return errors.New("no pointers in slice")
@@ -1037,7 +1037,7 @@ func checkBunchPtrs(ptrs []newChunkPtr) error {
 	return nil
 }
 
-func sortBunchPtrs(ptrs []newChunkPtr) {
+func sortBunchPtrs(ptrs []chunkPtrT) {
 	f := func(i, j int) bool {
 		return ptrs[i].Counter < ptrs[j].Counter
 	}
@@ -1166,7 +1166,7 @@ func equalTxtCodes(as, bs [txtMsgCodeLen]byte) bool {
 
 func tmpDir() string { return dataDir + "/tmp" }
 
-func stitchChunks(ptrs []newChunkPtr) error {
+func stitchChunks(ptrs []chunkPtrT) error {
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
 		return err
