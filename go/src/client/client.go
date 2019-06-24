@@ -1158,6 +1158,39 @@ func equalTxtCodes(as, bs [txtMsgCodeLen]byte) bool {
 
 func tmpDir() string { return dataDir + "/tmp" }
 
+func addChunkToBin(
+	ptr chunkPtrT, dest io.Writer, hasher io.Writer) error {
+
+	chunkPath := inboxPath() + "/" + ptr.Hash
+	chunkHandle, err := os.Create(chunkPath)
+	defer chunkHandle.Close()
+	if err != nil {
+		return err
+	}
+	var msg plain
+	err = gob.NewDecoder(chunkHandle).Decode(&msg)
+	if err != nil {
+		return err
+	}
+	lenBin := len(msg.Bin)
+	n, err := hasher.Write(msg.Bin)
+	if n != lenBin {
+		return errors.New("could not write whole chunk to hasher")
+	}
+	if err != nil {
+		return err
+	}
+	n, err = dest.Write(msg.Bin)
+	if n != lenBin {
+		return errors.New("could not write whole chunk to tmp")
+	}
+	if err != nil {
+		return err
+	}
+	chunkHandle.Close()
+	return nil
+}
+
 func stitchChunks(ptrs []chunkPtrT) error {
 	hasher, err := blake2b.New256(nil)
 	if err != nil {
@@ -1174,39 +1207,10 @@ func stitchChunks(ptrs []chunkPtrT) error {
 		return err
 	}
 	for _, ptr := range ptrs {
-		chunkPath := inboxPath() + "/" + ptr.Hash
-		chunkHandle, err := os.Create(chunkPath)
-		defer chunkHandle.Close()
+		err = addChunkToBin(ptr, tmpDest, hasher)
 		if err != nil {
 			return err
 		}
-		var buf bytes.Buffer
-		_, err = io.Copy(io.Writer(&buf), chunkHandle)
-		if err != nil {
-			return err
-		}
-		dec := gob.NewDecoder(&buf)
-		var msg plain
-		err = dec.Decode(&msg)
-		if err != nil {
-			return err
-		}
-		lenBin := len(msg.Bin)
-		n, err := hasher.Write(msg.Bin)
-		if n != lenBin {
-			return errors.New("could not write whole chunk to hasher")
-		}
-		if err != nil {
-			return err
-		}
-		n, err = tmpDest.Write(msg.Bin)
-		if n != lenBin {
-			return errors.New("could not write whole chunk to tmp")
-		}
-		if err != nil {
-			return err
-		}
-		chunkHandle.Close()
 	}
 	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 	if hash != ptrs[0].Hash {
