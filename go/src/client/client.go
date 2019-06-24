@@ -14,7 +14,6 @@ import (
 	"io"
 	"io/ioutil"
 	"math/big"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -71,29 +70,17 @@ func equalHashes(as [32]byte, bs [32]byte) bool {
 	return true
 }
 
-func getFilePart(
-	bodyFileReader *multipart.Reader) (*multipart.Part, error) {
-
-	filepart, err := bodyFileReader.NextPart()
-	if err != nil {
-		return filepart, err
-	}
-	var filepartname = filepart.FormName()
-	if filepartname != "file" {
-		msg := "could not find form element \"file\""
-		return filepart, errors.New(msg)
-	}
-	return filepart, nil
-}
-
 func writeAppToFile(r *http.Request) error {
 	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
 		return err
 	}
-	filepart, err := getFilePart(bodyFileReader)
+	filepart, err := bodyFileReader.NextPart()
 	if err != nil {
 		return err
+	}
+	if filepart.FormName() != "file" {
+		return errors.New("could not find form element \"file\"")
 	}
 	tmpFileName, err := genCode()
 	if err != nil {
@@ -121,20 +108,20 @@ func writeAppToFile(r *http.Request) error {
 
 func hashFromString(s string) ([32]byte, error) {
 	hashSlice, err := base64.URLEncoding.DecodeString(s)
+	var hash [32]byte
 	if err != nil {
-		return *new([32]byte), err
+		return hash, err
 	}
 	if len(hashSlice) != 32 {
-		return *new([32]byte), errors.New("hash wrong length")
+		return hash, errors.New("hash wrong length")
 	}
-	var hash [32]byte
 	for i, b := range hashSlice {
 		hash[i] = b
 	}
 	return hash, nil
 }
 
-func makeConn(secretSign [64]byte) (net.Conn, error) {
+func makeConn() (net.Conn, error) {
 	conn, err := net.Dial("tcp", "localhost:4000")
 	if err != nil {
 		return conn, err
@@ -288,7 +275,7 @@ func processCToC(c common.ClientToClient) error {
 	return errors.New("bad pattern match")
 }
 
-var pubEncHashCode = [16]byte{128, 174, 215, 253, 100, 130, 29, 105,  25, 9, 193, 255, 3, 66, 215, 111}
+var pubEncHashCode = [16]byte{128, 174, 215, 253, 100, 130, 29, 105, 25, 9, 193, 255, 3, 66, 215, 111}
 
 func hashPubEncrypt(pub publicEncryptT) blake2bHash {
 	const resultLen = 32 + 16
@@ -363,7 +350,7 @@ func tcpServer() {
 		panic(err)
 	}
 	for {
-		conn, err := makeConn(secretSign)
+		conn, err := makeConn()
 		if err != nil {
 			time.Sleep(time.Second)
 			continue
