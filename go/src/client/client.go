@@ -713,11 +713,11 @@ func setup() error {
 	if err != nil {
 		return fmt.Errorf("readArgs: %v", err)
 	}
-	err = os.RemoveAll(dataDir + "/tmp")
+	err = os.RemoveAll(tmpDir())
 	if err != nil {
 		return err
 	}
-	err = os.Mkdir(dataDir+"/tmp", 0755)
+	err = os.Mkdir(tmpDir(), 0755)
 	if err != nil {
 		return err
 	}
@@ -857,8 +857,8 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filePath := fmt.Sprintf(
-		"%s/tmp/%s/%s",
-		dataDir,
+		"%s/%s/%s",
+		tmpDir(),
 		hashToStr(docHash),
 		filename)
 	err = serveDoc(w, filePath)
@@ -876,7 +876,7 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sliceToHash(hashSlice)
 	hashStr := hashToStr(hash)
-	tmpPath := dataDir + "/tmp/" + hashStr
+	tmpPath := tmpDir() + hashStr
 	_, err = os.Stat(tmpPath)
 	appPath := dataDir + "/apps/" + hashStr
 	appCodesMux.Lock()
@@ -1212,7 +1212,7 @@ func stitchChunks(ptrs []chunkPtrT) error {
 	if hash != ptrs[0].Hash {
 		return errors.New("stitched app has bad hash")
 	}
-	err = os.Rename(tmpPath, stitchedDir()+"/"+hash)
+	err = os.Rename(tmpPath, stitchedDir() + "/" + hash)
 	return err
 }
 
