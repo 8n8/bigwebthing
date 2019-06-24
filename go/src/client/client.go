@@ -475,7 +475,9 @@ func hashToStr(h [32]byte) string {
 	return base64.URLEncoding.EncodeToString(hashToSlice(h))
 }
 
-var hereIsCode = [16]byte{223, 237, 163, 168, 233, 246, 38, 223, 196, 115, 89, 99, 226, 11, 157, 155}
+var hereIsCode = [16]byte{
+	223, 237, 163, 168, 233, 246, 38, 223, 196, 115, 89, 99, 226,
+	11, 157, 155}
 
 func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
 	result := make([]byte, 32+common.EncryptedKeyLen+24+16)
@@ -759,7 +761,7 @@ func setup() error {
 	if err != nil {
 		return err
 	}
-	homeCode, err := genCode()
+	homeCode, err = genCode()
 	if err != nil {
 		return err
 	}
@@ -827,11 +829,11 @@ func encodePubID(pubID publicSignT) []byte {
 }
 
 func serveDoc(w http.ResponseWriter, filePath string) error {
-	fmt.Println("Top of serveDoc.")
 	fileHandle, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
+	defer fileHandle.Close()
 	_, err = io.Copy(w, fileHandle)
 	return err
 }
@@ -893,19 +895,25 @@ func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
 }
 
 func httpGetApp(w http.ResponseWriter, r *http.Request) {
+	err := httpGetAppErr(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+}
+
+func httpGetAppErr(w http.ResponseWriter, r *http.Request) error {
 	securityCode := pat.Param(r, "pass")
 	filename := pat.Param(r, "filename")
 	if strEq(securityCode, homeCode) {
-		err := serveDoc(w, "home/"+filename)
+		err := serveDoc(w, "home/" + filename)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return err
 		}
+		return nil
 	}
 	docHash, err := getDocHash(securityCode)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return err
 	}
 	filePath := fmt.Sprintf(
 		"%s/%s/%s",
@@ -914,8 +922,9 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 		filename)
 	err = serveDoc(w, filePath)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		return err
 	}
+	return nil
 }
 
 func httpMakeApp(w http.ResponseWriter, r *http.Request) {
