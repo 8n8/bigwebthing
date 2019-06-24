@@ -139,7 +139,7 @@ func makeConn() (net.Conn, error) {
 	return conn, err
 }
 
-type newChunk struct {
+type chunkT struct {
 	Body     []byte
 	CakeHash blake2bHash
 	Counter  int
@@ -968,7 +968,7 @@ func getInboxPtrs() (map[newChunkPtr]struct{}, error) {
 			err = errors.New("could not write plain.Bin to buffer")
 			return ptrs, err
 		}
-		var chnk newChunk
+		var chnk chunkT
 		err = gob.NewDecoder(&buf).Decode(&chnk)
 		if err != nil {
 			return ptrs, err
