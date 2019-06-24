@@ -59,8 +59,6 @@ type symmetricEncrypt [32]byte
 
 func inboxPath() string { return dataDir + "/inbox" }
 
-func outboxPath() string { return dataDir + "/outbox" }
-
 func equalHashes(as [32]byte, bs [32]byte) bool {
 	for i, b := range bs {
 		if as[i] != b {
@@ -405,7 +403,7 @@ func sendFileTcp(filePath string) error {
 func tcpServer() {
 	stop := make(chan struct{})
 	outboxWatcher, err := fsnotify.NewWatcher()
-	outboxWatcher.Add(outboxPath())
+	outboxWatcher.Add(dataDir + "/outbox")
 	if err != nil {
 		panic(err)
 	}
@@ -626,7 +624,7 @@ func slowHash(pw []byte, salt [32]byte) [32]byte {
 	return sliceToHash(argon2.IDKey(
 		pw,
 		hashToSlice(salt),
-		10,
+		100,
 		64*1024,
 		4,
 		32))
@@ -807,6 +805,10 @@ func main() {
 		return
 	}
 	go tcpServer()
+	httpServer()
+}
+
+func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(pat.Get("/getapp/:pass/:filename"), httpGetApp)
 	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), p(httpMakeApp))
@@ -1309,5 +1311,4 @@ func chunkAndSend(r io.Reader, recipient publicSignT) error {
 			return err
 		}
 	}
-	return nil
 }
