@@ -126,10 +126,8 @@ func makeConn() (net.Conn, error) {
 	if err != nil {
 		return conn, err
 	}
-	enc := gob.NewEncoder(conn)
-	dec := gob.NewDecoder(conn)
 	var authCode [common.AuthCodeLength]byte
-	err = dec.Decode(&authCode)
+	err = gob.NewDecoder(conn).Decode(&authCode)
 	if err != nil {
 		return conn, err
 	}
@@ -137,7 +135,7 @@ func makeConn() (net.Conn, error) {
 		publicSign,
 		signedAuthToSlice(sig(common.AuthCodeToSlice(authCode))),
 	}
-	err = enc.Encode(authSig)
+	err = gob.NewEncoder(conn).Encode(authSig)
 	return conn, err
 }
 
