@@ -70,6 +70,46 @@ func equalHashes(as [32]byte, bs [32]byte) bool {
 	return true
 }
 
+func httpMakeAppErr(r *http.Request) (error, int) {
+	appHash := pat.Param(r, "apphash")
+	hashSlice, err := base64.URLEncoding.DecodeString(appHash)
+	if err != nil {
+		return err, 400
+	}
+	hash := sliceToHash(hashSlice)
+	hashStr := hashToStr(hash)
+	tmpPath := tmpDir() + hashStr
+	_, err = os.Stat(tmpPath)
+	appPath := dataDir + "/apps/" + hashStr
+	appCodesMux.Lock()
+	defer appCodesMux.Unlock()
+	if err == nil {
+		appCode, err := getHashSecurityCode(hash)
+		if err != nil {
+			return err, 400
+		}
+		err = browser.OpenURL(appURL(appCode))
+		if err != nil {
+			return err, 500
+		}
+		return nil, 0
+	}
+	err = unpackTarArchive(appPath, tmpPath)
+	if err != nil {
+		return err, 500
+	}
+	newCode, err := genCode()
+	if err != nil {
+		return err, 500
+	}
+	err = browser.OpenURL(appURL(newCode))
+	if err != nil {
+		return err, 500
+	}
+	appCodes[newCode] = hash
+	return nil, 0
+}
+
 func writeAppToFile(r *http.Request) error {
 	bodyFileReader, err := r.MultipartReader()
 	if err != nil {
@@ -868,47 +908,10 @@ func httpGetApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpMakeApp(w http.ResponseWriter, r *http.Request) {
-	appHash := pat.Param(r, "apphash")
-	hashSlice, err := base64.URLEncoding.DecodeString(appHash)
+	err, code := httpMakeAppErr(r)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		http.Error(w, err.Error(), code)
 	}
-	hash := sliceToHash(hashSlice)
-	hashStr := hashToStr(hash)
-	tmpPath := tmpDir() + hashStr
-	_, err = os.Stat(tmpPath)
-	appPath := dataDir + "/apps/" + hashStr
-	appCodesMux.Lock()
-	defer appCodesMux.Unlock()
-	if err == nil {
-		appCode, err := getHashSecurityCode(hash)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		err = browser.OpenURL(appURL(appCode))
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-		}
-		return
-	}
-	err = unpackTarArchive(appPath, tmpPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	newCode, err := genCode()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	err = browser.OpenURL(appURL(newCode))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	appCodes[newCode] = hash
 }
 
 func sig(msg []byte) []byte {
