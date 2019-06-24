@@ -1040,102 +1040,97 @@ func docsDir() string { return dataDir + "/docs" }
 
 const maxTxtFileSize = 1e7
 
-func httpPull(w http.ResponseWriter, r *http.Request) {
+func httpPullErr(w http.ResponseWriter) error {
 	rawPtrs, err := getInboxPtrs()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return err
 	}
 	ptrs := sortAndCheckBunchPtrs(bunchPtrs(rawPtrs))
 	for _, msgPtrs := range ptrs {
 		_ = stitchChunks(msgPtrs)
 	}
-	files, err := ioutil.ReadDir(stitchedDir())
+	txtMsgs, err := getStitchedTxtMsgs()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	txtMsgs := make([]string, 0)
-	txtFilePaths := make([]string, 0)
-	for _, f := range files {
-		fsize := f.Size()
-		if fsize > maxTxtFileSize || fsize < txtMsgCodeLen {
-			continue
-		}
-		path := stitchedDir() + "/" + f.Name()
-		txtErr := func(msg string) {
-			err = os.Remove(path)
-			if err != nil {
-				msg += "; " + err.Error()
-			}
-			http.Error(w, msg, 500)
-		}
-		h, err := os.Create(path)
-		defer h.Close()
-		if err != nil {
-			txtErr(err.Error())
-			return
-		}
-		codeCandidate := make([]byte, txtMsgCodeLen)
-		n, err := h.Read(codeCandidate)
-		if n != txtMsgCodeLen {
-			txtErr("could not read text message code")
-			return
-		}
-		txtCodeArr := txtCodeSliceToArr(codeCandidate)
-		if !equalTxtCodes(txtCodeArr, txtMsgCode) {
-			continue
-		}
-		txtBytes, err := ioutil.ReadAll(h)
-		if err != nil {
-			txtErr("could not read text file")
-			return
-		}
-		h.Close()
-		if !utf8.Valid(txtBytes) {
-			err := os.Remove(path)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			continue
-		}
-		txtMsgs = append(txtMsgs, string(txtBytes))
-		txtFilePaths = append(txtFilePaths, path)
+		return err
 	}
 	encodedTxt, err := json.Marshal(txtMsgs)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return err
 	}
 	n, err := w.Write(encodedTxt)
 	if n != len(encodedTxt) {
-		http.Error(w, "could not send all messages", 500)
-		return
+		return errors.New("could not send all messages")
 	}
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	for _, txtFilePath := range txtFilePaths {
-		err := os.Remove(txtFilePath)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-		}
+		return err
 	}
 	binFiles, err := ioutil.ReadDir(stitchedDir())
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return err
 	}
 	for _, file := range binFiles {
 		oldPath := stitchedDir() + "/" + file.Name()
 		newPath := docsDir() + "/" + file.Name()
 		err = os.Rename(oldPath, newPath)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return err
 		}
+	}
+	return nil
+}
+
+func getStitchedTxtMsgs() ([]string, error) {
+	msgs := make([]string, 0)
+	files, err := ioutil.ReadDir(stitchedDir())
+	if err != nil {
+		return msgs, err
+	}
+	for _, f := range files {
+		fsize := f.Size()
+		if fsize > maxTxtFileSize || fsize < txtMsgCodeLen {
+			continue
+		}
+		path := stitchedDir() + "/" + f.Name()
+		h, err := os.Open(path)
+		if err != nil {
+			return msgs, err
+		}
+		codeCandidate := make([]byte, txtMsgCodeLen)
+		n, err := h.Read(codeCandidate)
+		if n != txtMsgCodeLen {
+			h.Close()
+			return msgs, err
+		}
+		txtCodeArr := txtCodeSliceToArr(codeCandidate)
+		if !equalTxtCodes(txtCodeArr, txtMsgCode) {
+			h.Close()
+			continue
+		}
+		txtBytes, err := ioutil.ReadAll(h)
+		if err != nil {
+			h.Close()
+			return msgs, err
+		}
+		h.Close()
+		if !utf8.Valid(txtBytes) {
+			if err != nil {
+				return msgs, err
+			}
+			continue
+		}
+		msgs = append(msgs, string(txtBytes))
+		err = os.Remove(path)
+		if err != nil {
+			return msgs, err
+		}
+	}
+	return msgs, nil
+}
+
+func httpPull(w http.ResponseWriter, r *http.Request) {
+	err := httpPullErr(w)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
 	}
 }
 
@@ -1158,15 +1153,13 @@ func equalTxtCodes(as, bs [txtMsgCodeLen]byte) bool {
 
 func tmpDir() string { return dataDir + "/tmp" }
 
-func addChunkToBin(
-	ptr chunkPtrT, dest io.Writer, hasher io.Writer) error {
-
+func addChunkToBin(ptr chunkPtrT, dest, hasher io.Writer) error {
 	chunkPath := inboxPath() + "/" + ptr.Hash
 	chunkHandle, err := os.Create(chunkPath)
-	defer chunkHandle.Close()
 	if err != nil {
 		return err
 	}
+	defer chunkHandle.Close()
 	var msg plain
 	err = gob.NewDecoder(chunkHandle).Decode(&msg)
 	if err != nil {
@@ -1187,7 +1180,6 @@ func addChunkToBin(
 	if err != nil {
 		return err
 	}
-	chunkHandle.Close()
 	return nil
 }
 
