@@ -37,16 +37,16 @@ import (
 )
 
 var homeCode string
-var appCodes = map[string]blake2bHash{}
+var appCodes = make(map[string]blake2bHash)
 var appCodesMux sync.Mutex
 var publicSign publicSignT
 var secretSign [64]byte
+var publicEncrypt publicEncryptT
+var secretEncrypt secretEncryptT
 var dataDir string
 var port string
-var symmetricKeys = map[publicSignT]symmetricEncrypt{}
+var symmetricKeys = make(map[publicSignT]symmetricEncrypt)
 var symmetricKeysMux sync.Mutex
-var keyPairs = map[publicEncryptT]secretEncryptT{}
-var keyPairsMux sync.Mutex
 var newAwaitingKey = make(map[publicSignT]filePathT)
 var newAwaitingKeyMux sync.Mutex
 var tcpOutChan = make(chan common.ClientToClient)
@@ -198,13 +198,23 @@ func processCToC(c common.ClientToClient) error {
 		if !equalHashes(c.Recipient, publicSign) {
 			return errors.New("ClientToClient wrongly addressed")
 		}
-		path := inboxPath() + "/" + hashToStr(blake2b.Sum256(decrypted))
+		fileName := hashToStr(blake2b.Sum256(decrypted))
+		path := inboxPath() + "/" + fileName
 		err := ioutil.WriteFile(path, decrypted, 0600)
 		return err
 	case common.GiveMeASymmetricKey:
-		pub, priv, err := box.GenerateKey(rand.Reader)
-		if err != nil {
-			return err
+		signed, ok := sign.Open(
+			make([]byte, 0),
+			common.SigToSlice(payload.Sig),
+			&c.Author)
+		if !ok {
+			return errors.New("bad signature")
+		}
+		if !equalHashes(
+			common.SliceToHash(signed),
+			hashPubEncrypt(payload.MyPublicEncrypt)) {
+
+			return errors.New("signature doesn't match public key")
 		}
 		symmetricKey, err := makeSymmetricKey()
 		if err != nil {
@@ -214,15 +224,15 @@ func processCToC(c common.ClientToClient) error {
 		if err != nil {
 			return err
 		}
+		secretEncBytes := [32]byte(secretEncrypt)
 		encryptedKey := box.Seal(
 			make([]byte, 0),
 			common.HashToSlice(symmetricKey),
 			&nonce,
 			&payload.MyPublicEncrypt,
-			priv)
+			&secretEncBytes)
 		hereIs := common.HereIsAnEncryptionKey{
-			payload.MyPublicEncrypt,
-			*pub,
+			publicEncrypt,
 			encryptedKeyToArr(encryptedKey),
 			nonce,
 			*new([common.SigSize]byte),
@@ -255,13 +265,7 @@ func processCToC(c common.ClientToClient) error {
 		if !bytes.Equal(signed, symKeySlice) {
 			return errors.New("bad key hash on new key")
 		}
-		keyPairsMux.Lock()
-		secretKey, ok := keyPairs[payload.YourPublicEncrypt]
-		keyPairsMux.Unlock()
-		if !ok {
-			return errors.New("no key pair to decrypt new key")
-		}
-		secretKeyBytes := [32]byte(secretKey)
+		secretKeyBytes := [32]byte(secretEncrypt)
 		keySlice, ok := box.Open(
 			make([]byte, 0),
 			encKeyToSlice(payload.EncryptedSymmetricKey),
@@ -284,6 +288,21 @@ func processCToC(c common.ClientToClient) error {
 	return errors.New("bad pattern match")
 }
 
+var pubEncHashCode = [16]byte{128, 174, 215, 253, 100, 130, 29, 105,  25, 9, 193, 255, 3, 66, 215, 111}
+
+func hashPubEncrypt(pub publicEncryptT) blake2bHash {
+	const resultLen = 32 + 16
+	result := make([]byte, resultLen)
+	i := 0
+	for ; i < 32; i++ {
+		result[i] = pub[i]
+	}
+	for ; i < resultLen; i++ {
+		result[i] = pubEncHashCode[i-32]
+	}
+	return blake2b.Sum256(result)
+}
+
 func sendFileTcp(filePath string) error {
 	fileHandle, err := os.Open(filePath)
 	if err != nil {
@@ -302,7 +321,19 @@ func sendFileTcp(filePath string) error {
 	}
 	symmetricKeysMux.Lock()
 	symmetricKey, ok := symmetricKeys[unencrypted.Correspondent]
+	symmetricKeysMux.Unlock()
 	if !ok {
+		newAwaitingKeyMux.Lock()
+		newAwaitingKey[unencrypted.Correspondent] = filePathT(filePath)
+		newAwaitingKeyMux.Unlock()
+		tcpOutChan <- common.ClientToClient{
+			common.GiveMeASymmetricKey{
+				publicEncrypt,
+				sliceToSig(sig(common.HashToSlice(hashPubEncrypt(publicEncrypt)))),
+			},
+			unencrypted.Correspondent,
+			publicSign,
+		}
 		return errors.New("no symmetric key to send file with")
 	}
 	nonce, err := makeNonce()
@@ -408,8 +439,10 @@ type appMsgT struct {
 	Sig       [common.SigSize]byte
 }
 
+var hereIsCode = [16]byte{223, 237, 163, 168, 233, 246, 38, 223, 196, 115, 89, 99, 226, 11, 157, 155}
+
 func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
-	result := make([]byte, 32+common.EncryptedKeyLen+24)
+	result := make([]byte, 32+common.EncryptedKeyLen+24+16)
 	i := 0
 	for ; i < 32; i++ {
 		result[i] = h.MyPublicEncrypt[i]
@@ -419,6 +452,9 @@ func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
 	}
 	for ; i < 32+common.EncryptedKeyLen+24; i++ {
 		result[i] = h.Nonce[i-32-common.EncryptedKeyLen]
+	}
+	for ; i < 32+common.EncryptedKeyLen+24+16; i++ {
+		result[i] = hereIsCode[i-32-common.EncryptedKeyLen-24]
 	}
 	return blake2b.Sum256(result)
 }
@@ -670,6 +706,12 @@ func getCryptoKeys() error {
 	}
 	secretSign = keys.secretsign
 	publicSign = keys.publicsign
+	pub, priv, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	secretEncrypt = *priv
+	publicEncrypt = *pub
 	return nil
 }
 
@@ -1063,9 +1105,8 @@ func httpPull(w http.ResponseWriter, r *http.Request) {
 			txtErr("could not read text message code")
 			return
 		}
-		if !equalTxtCodes(
-			txtCodeSliceToArr(codeCandidate), txtMsgCode) {
-
+		txtCodeArr := txtCodeSliceToArr(codeCandidate)
+		if !equalTxtCodes(txtCodeArr, txtMsgCode) {
 			continue
 		}
 		txtBytes, err := ioutil.ReadAll(h)

@@ -101,12 +101,12 @@ type Encrypted struct {
 
 type GiveMeASymmetricKey struct {
 	MyPublicEncrypt [32]byte
+	Sig [SigSize]byte
 }
 
 const EncryptedKeyLen = secretbox.Overhead + 32
 
 type HereIsAnEncryptionKey struct {
-	YourPublicEncrypt     [32]byte
 	MyPublicEncrypt       [32]byte
 	EncryptedSymmetricKey [EncryptedKeyLen]byte
 	Nonce                 [24]byte
