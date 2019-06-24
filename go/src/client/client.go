@@ -1233,46 +1233,47 @@ type txtMsg struct {
 	Recipient string
 }
 
-func httpPush(w http.ResponseWriter, r *http.Request) {
+func httpPushErr(r *http.Request) error {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return err
 	}
 	var msgs push
 	err = json.Unmarshal(body, &msgs)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return err
 	}
 	for _, msg := range msgs.Txts {
 		recipient, err := hashFromString(msg.Recipient)
 		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
+			return err
 		}
 		err = chunkAndSend(bytes.NewReader([]byte(msg.Msg)), recipient)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return err
 		}
 	}
 	for _, msg := range msgs.Bins {
 		recipient, err := hashFromString(msg.Recipient)
 		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
+			return err
 		}
 		handle, err := os.Open(msg.FileName)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return err
 		}
 		err = chunkAndSend(handle, recipient)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return err
 		}
+	}
+	return nil
+}
+
+func httpPush(w http.ResponseWriter, r *http.Request) {
+	err := httpPushErr(r)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
 	}
 }
 
@@ -1288,15 +1289,13 @@ func chunkAndSend(r io.Reader, recipient publicSignT) error {
 		}
 		msg := plain{chunk[:n], recipient}
 		var buf bytes.Buffer
-		enc := gob.NewEncoder(&buf)
-		err = enc.Encode(msg)
+		err = gob.NewEncoder(&buf).Encode(msg)
 		if err != nil {
 			return err
 		}
 		encoded := buf.Bytes()
-		hash := blake2b.Sum256(encoded)
-		err = ioutil.WriteFile(
-			inboxPath()+"/"+hashToStr(hash), encoded, 0600)
+		path := inboxPath() + "/" + hashToStr(blake2b.Sum256(encoded))
+		err = ioutil.WriteFile(path, encoded, 0600)
 		if err != nil {
 			return err
 		}
