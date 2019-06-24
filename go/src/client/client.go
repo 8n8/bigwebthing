@@ -322,6 +322,7 @@ func sendFileTcp(filePath string) error {
 	}
 	var unencrypted plain
 	err = gob.NewDecoder(fileHandle).Decode(&unencrypted)
+	fileHandle.Close()
 	if err != nil {
 		return err
 	}
@@ -341,7 +342,7 @@ func sendFileTcp(filePath string) error {
 			unencrypted.Correspondent,
 			publicSign,
 		}
-		return errors.New("no symmetric key to send file with")
+		return nil
 	}
 	nonce, err := makeNonce()
 	if err != nil {
@@ -357,7 +358,6 @@ func sendFileTcp(filePath string) error {
 		common.Encrypted{encrypted, nonce},
 		unencrypted.Correspondent,
 		publicSign}
-	fileHandle.Close()
 	err = os.Remove(filePath)
 	return err
 }
@@ -434,16 +434,7 @@ func getDocHash(securityCode string) (blake2bHash, error) {
 }
 
 func hashToStr(h [32]byte) string {
-	asSlice := hashToSlice(h)
-	return base64.URLEncoding.EncodeToString(asSlice)
-}
-
-type appMsgT struct {
-	Author    [32]byte
-	Tags      map[string]struct{}
-	AppHash   [32]byte
-	PosixTime int64
-	Sig       [common.SigSize]byte
+	return base64.URLEncoding.EncodeToString(hashToSlice(h))
 }
 
 var hereIsCode = [16]byte{223, 237, 163, 168, 233, 246, 38, 223, 196, 115, 89, 99, 226, 11, 157, 155}
@@ -472,23 +463,6 @@ func sliceToSig(bs []byte) [common.SigSize]byte {
 		result[i] = b
 	}
 	return result
-}
-
-type receiptT struct {
-	Sig       [common.SigSize]byte
-	ChunkHash blake2bHash
-}
-
-type appReceiptT struct {
-	Sig     [common.SigSize]byte
-	AppHash [32]byte
-}
-
-type fileChunk struct {
-	AppHash   [32]byte
-	Chunk     []byte
-	Counter   int
-	LastChunk bool
 }
 
 func getHashSecurityCode(hash blake2bHash) (string, error) {
@@ -687,10 +661,6 @@ func gobRegister() {
 	gob.Register(*new(common.Encrypted))
 	gob.Register(*new(common.GiveMeASymmetricKey))
 	gob.Register(*new(common.HereIsAnEncryptionKey))
-	gob.Register(*new(appReceiptT))
-	gob.Register(*new(receiptT))
-	gob.Register(*new(fileChunk))
-	gob.Register(*new(appMsgT))
 }
 
 func getCryptoKeys() error {
