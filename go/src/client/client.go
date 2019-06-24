@@ -46,8 +46,8 @@ var dataDir string
 var port string
 var symmetricKeys = make(map[publicSignT]symmetricEncrypt)
 var symmetricKeysMux sync.Mutex
-var newAwaitingKey = make(map[publicSignT]filePathT)
-var newAwaitingKeyMux sync.Mutex
+var awaitingKey = make(map[publicSignT]filePathT)
+var awaitingKeyMux sync.Mutex
 var tcpOutChan = make(chan common.ClientToClient)
 
 type filePathT string
@@ -160,7 +160,9 @@ type plain struct {
 
 const txtMsgCodeLen = 16
 
-var txtMsgCode = [txtMsgCodeLen]byte{244, 108, 174, 239, 63, 159, 201, 117, 90, 254, 165, 34, 118, 208, 130, 224}
+var txtMsgCode = [txtMsgCodeLen]byte{
+	244, 108, 174, 239, 63, 159, 201, 117, 90, 254, 165, 34, 118,
+	208, 130, 224}
 
 func processCToC(c common.ClientToClient) error {
 	switch payload := c.Msg.(type) {
@@ -232,9 +234,9 @@ func processCToC(c common.ClientToClient) error {
 		symmetricKeysMux.Unlock()
 		return nil
 	case common.HereIsAnEncryptionKey:
-		newAwaitingKeyMux.Lock()
-		filePath, ok := newAwaitingKey[c.Author]
-		newAwaitingKeyMux.Unlock()
+		awaitingKeyMux.Lock()
+		filePath, ok := awaitingKey[c.Author]
+		awaitingKeyMux.Unlock()
 		if !ok {
 			return errors.New("symmetric key not expected")
 		}
@@ -261,9 +263,9 @@ func processCToC(c common.ClientToClient) error {
 			return errors.New("could not decrypt new key")
 		}
 		symmetricKey := common.SliceToHash(keySlice)
-		newAwaitingKeyMux.Lock()
-		delete(newAwaitingKey, c.Author)
-		newAwaitingKeyMux.Unlock()
+		awaitingKeyMux.Lock()
+		delete(awaitingKey, c.Author)
+		awaitingKeyMux.Unlock()
 		symmetricKeysMux.Lock()
 		symmetricKeys[c.Author] = symmetricKey
 		symmetricKeysMux.Unlock()
@@ -308,13 +310,15 @@ func sendFileTcp(filePath string) error {
 	symmetricKey, ok := symmetricKeys[unencrypted.Correspondent]
 	symmetricKeysMux.Unlock()
 	if !ok {
-		newAwaitingKeyMux.Lock()
-		newAwaitingKey[unencrypted.Correspondent] = filePathT(filePath)
-		newAwaitingKeyMux.Unlock()
+		awaitingKeyMux.Lock()
+		awaitingKey[unencrypted.Correspondent] = filePathT(
+			filePath)
+		awaitingKeyMux.Unlock()
 		tcpOutChan <- common.ClientToClient{
 			common.GiveMeASymmetricKey{
 				publicEncrypt,
-				sliceToSig(sig(common.HashToSlice(hashPubEncrypt(publicEncrypt)))),
+				sliceToSig(sig(common.HashToSlice(hashPubEncrypt(
+					publicEncrypt)))),
 			},
 			unencrypted.Correspondent,
 			publicSign,
