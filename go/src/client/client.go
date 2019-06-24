@@ -164,6 +164,30 @@ var txtMsgCode = [txtMsgCodeLen]byte{
 	244, 108, 174, 239, 63, 159, 201, 117, 90, 254, 165, 34, 118,
 	208, 130, 224}
 
+func sigToSlice(bs [common.SigSize]byte) []byte {
+	result := make([]byte, common.SigSize)
+	for i, b := range bs {
+		result[i] = b
+	}
+	return result
+}
+
+func hashToSlice(hash [32]byte) []byte {
+	newHash := make([]byte, 32)
+	for i, el := range hash {
+		newHash[i] = el
+	}
+	return newHash
+}
+
+func sliceToHash(sl []byte) [32]byte {
+	var newHash [32]byte
+	for i, el := range sl {
+		newHash[i] = el
+	}
+	return newHash
+}
+
 func processCToC(c common.ClientToClient) error {
 	switch payload := c.Msg.(type) {
 	case common.Encrypted:
@@ -192,13 +216,13 @@ func processCToC(c common.ClientToClient) error {
 	case common.GiveMeASymmetricKey:
 		signed, ok := sign.Open(
 			make([]byte, 0),
-			common.SigToSlice(payload.Sig),
+			sigToSlice(payload.Sig),
 			&c.Author)
 		if !ok {
 			return errors.New("bad signature")
 		}
 		if !equalHashes(
-			common.SliceToHash(signed),
+			sliceToHash(signed),
 			hashPubEncrypt(payload.MyPublicEncrypt)) {
 
 			return errors.New("signature doesn't match public key")
@@ -214,7 +238,7 @@ func processCToC(c common.ClientToClient) error {
 		secretEncBytes := [32]byte(secretEncrypt)
 		encryptedKey := box.Seal(
 			make([]byte, 0),
-			common.HashToSlice(symmetricKey),
+			hashToSlice(symmetricKey),
 			&nonce,
 			&payload.MyPublicEncrypt,
 			&secretEncBytes)
@@ -224,7 +248,7 @@ func processCToC(c common.ClientToClient) error {
 			nonce,
 			*new([common.SigSize]byte),
 		}
-		signature := sliceToSig(sig(common.HashToSlice(
+		signature := sliceToSig(sig(hashToSlice(
 			hashHereIsKey(hereIs))))
 		hereIs.Sig = signature
 		tcpOutChan <- common.ClientToClient{
@@ -243,13 +267,12 @@ func processCToC(c common.ClientToClient) error {
 		keyHash := hashHereIsKey(payload)
 		signed, ok := sign.Open(
 			make([]byte, 0),
-			common.SigToSlice(payload.Sig),
+			sigToSlice(payload.Sig),
 			&c.Author)
 		if !ok {
 			return errors.New("bad signature on new key")
 		}
-		symKeySlice := common.HashToSlice([32]byte(keyHash))
-		if !bytes.Equal(signed, symKeySlice) {
+		if !equalHashes(sliceToHash(signed), keyHash) {
 			return errors.New("bad key hash on new key")
 		}
 		secretKeyBytes := [32]byte(secretEncrypt)
@@ -262,7 +285,7 @@ func processCToC(c common.ClientToClient) error {
 		if !ok {
 			return errors.New("could not decrypt new key")
 		}
-		symmetricKey := common.SliceToHash(keySlice)
+		symmetricKey := sliceToHash(keySlice)
 		awaitingKeyMux.Lock()
 		delete(awaitingKey, c.Author)
 		awaitingKeyMux.Unlock()
@@ -275,7 +298,9 @@ func processCToC(c common.ClientToClient) error {
 	return errors.New("bad pattern match")
 }
 
-var pubEncHashCode = [16]byte{128, 174, 215, 253, 100, 130, 29, 105, 25, 9, 193, 255, 3, 66, 215, 111}
+var pubEncHashCode = [16]byte{
+	128, 174, 215, 253, 100, 130, 29, 105, 25, 9, 193, 255, 3, 66,
+	215, 111}
 
 func hashPubEncrypt(pub publicEncryptT) blake2bHash {
 	const resultLen = 32 + 16
@@ -295,14 +320,8 @@ func sendFileTcp(filePath string) error {
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	_, err = io.Copy(io.Writer(&buf), fileHandle)
-	if err != nil {
-		return err
-	}
-	dec := gob.NewDecoder(&buf)
 	var unencrypted plain
-	err = dec.Decode(&unencrypted)
+	err = gob.NewDecoder(fileHandle).Decode(&unencrypted)
 	if err != nil {
 		return err
 	}
@@ -311,13 +330,12 @@ func sendFileTcp(filePath string) error {
 	symmetricKeysMux.Unlock()
 	if !ok {
 		awaitingKeyMux.Lock()
-		awaitingKey[unencrypted.Correspondent] = filePathT(
-			filePath)
+		awaitingKey[unencrypted.Correspondent] = filePathT(filePath)
 		awaitingKeyMux.Unlock()
 		tcpOutChan <- common.ClientToClient{
 			common.GiveMeASymmetricKey{
 				publicEncrypt,
-				sliceToSig(sig(common.HashToSlice(hashPubEncrypt(
+				sliceToSig(sig(hashToSlice(hashPubEncrypt(
 					publicEncrypt)))),
 			},
 			unencrypted.Correspondent,
@@ -416,7 +434,7 @@ func getDocHash(securityCode string) (blake2bHash, error) {
 }
 
 func hashToStr(h [32]byte) string {
-	asSlice := common.HashToSlice(h)
+	asSlice := hashToSlice(h)
 	return base64.URLEncoding.EncodeToString(asSlice)
 }
 
@@ -591,9 +609,9 @@ type keysT struct {
 }
 
 func slowHash(pw []byte, salt [32]byte) [32]byte {
-	return common.SliceToHash(argon2.IDKey(
+	return sliceToHash(argon2.IDKey(
 		pw,
-		common.HashToSlice(salt),
+		hashToSlice(salt),
 		10,
 		64*1024,
 		4,
@@ -784,7 +802,7 @@ func main() {
 
 func encodePubID(pubID publicSignT) []byte {
 	return []byte(base64.URLEncoding.EncodeToString(
-		common.HashToSlice(pubID)))
+		hashToSlice(pubID)))
 }
 
 func serveDoc(w http.ResponseWriter, filePath string) error {
@@ -886,7 +904,7 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	hash := common.SliceToHash(hashSlice)
+	hash := sliceToHash(hashSlice)
 	hashStr := hashToStr(hash)
 	tmpPath := dataDir + "/tmp/" + hashStr
 	_, err = os.Stat(tmpPath)

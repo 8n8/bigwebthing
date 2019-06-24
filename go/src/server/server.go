@@ -91,13 +91,21 @@ func (e endConnT) update(s *stateT) (stateT, outputT) {
 	return newState, readChans(s)
 }
 
+func authSigToSlice(sig [common.AuthSigSize]byte) []byte {
+	result := make([]byte, common.AuthSigSize)
+	for i := 0; i < common.AuthSigSize; i++ {
+		result[i] = sig[i]
+	}
+	return result
+}
+
 func authOk(
 	a common.AuthSigT,
 	code [common.AuthCodeLength]byte) bool {
 
 	givenCode, sigOk := sign.Open(
 		make([]byte, 0),
-		common.AuthSigToSlice(a.Sig),
+		authSigToSlice(a.Sig),
 		&a.Author)
 	okAuth := bytes.Equal(givenCode, common.AuthCodeToSlice(code))
 	return sigOk && okAuth
