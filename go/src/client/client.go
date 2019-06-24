@@ -613,7 +613,7 @@ func extractKeys(password []byte, secretsFile []byte) (keysT, error) {
 		sliceToSecretKey(secretSignBytes)}, nil
 }
 
-func createKeys(dataDir string) error {
+func createKeys() error {
 	pubSign, secretSign, err := sign.GenerateKey(rand.Reader)
 	if err != nil {
 		return err
@@ -648,11 +648,11 @@ func createKeys(dataDir string) error {
 		fmt.Println("Could not encode.")
 		return err
 	}
-	err = ioutil.WriteFile(keysFile(dataDir), encodedFile, 0600)
+	err = ioutil.WriteFile(keysFile(), encodedFile, 0600)
 	return err
 }
 
-func keysFile(dataDir string) string {
+func keysFile() string {
 	return dataDir + "/TOP_SECRET_DONT_SHARE.txt"
 }
 
@@ -664,13 +664,13 @@ func gobRegister() {
 }
 
 func getCryptoKeys() error {
-	rawSecrets, err := ioutil.ReadFile(keysFile(dataDir))
+	rawSecrets, err := ioutil.ReadFile(keysFile())
 	if err != nil {
-		err := createKeys(dataDir)
+		err := createKeys()
 		if err != nil {
 			return err
 		}
-		rawSecrets, err = ioutil.ReadFile(keysFile(dataDir))
+		rawSecrets, err = ioutil.ReadFile(keysFile())
 		if err != nil {
 			return err
 		}
