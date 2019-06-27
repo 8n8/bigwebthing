@@ -38,18 +38,18 @@ main =
 
 parseRoute : Up.Parser (( Page, Maybe String ) -> a) a
 parseRoute =
-    (</>) (Up.s "getapp") <|
-        Up.oneOf
-            [ Up.map (\x -> ( Home, Just x )) <|
-                Up.string
-                    </> Up.s "index.html"
-            , Up.map (\x -> ( NewDoc, Just x )) <|
-                Up.string
-                    </> Up.s "newdocument"
-            , Up.map (\x -> ( Members, Just x )) <|
-                Up.string
-                    </> Up.s "members"
-            ]
+    Up.s "getapp"
+        </> Up.oneOf
+                [ Up.map (\x -> ( Home, Just x )) <|
+                    Up.string
+                        </> Up.s "index.html"
+                , Up.map (\x -> ( NewDoc, Just x )) <|
+                    Up.string
+                        </> Up.s "newdocument"
+                , Up.map (\x -> ( Members, Just x )) <|
+                    Up.string
+                        </> Up.s "members"
+                ]
 
 
 urlToPage : Url.Url -> ( Page, Maybe String )
@@ -189,16 +189,14 @@ type Tag
     = Tag String
 
 
+{-| The fields are
 
-{-
-   The fields are
-   1. recipients
-   2. invitee
-   3. author
-   4. signature
+1.  recipients
+2.  invitee
+3.  author
+4.  signature
+
 -}
-
-
 type InviteLike
     = InviteLike (Set.Set String) String String Signature
 
