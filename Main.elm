@@ -16,12 +16,13 @@ import Http
 import Json.Decode as Jd
 import Json.Encode as Je
 import List as L
+import Parser as P exposing ((|.), (|=))
 import Set
+import String.Extra as Se
 import Task
 import Time
 import Url
 import Url.Parser as Up exposing ((</>))
-import String.Extra as Se
 
 
 main =
@@ -78,6 +79,8 @@ initModel page securityCode key =
     , selectAll = False
     , sendDrawOpen = Nothing
     , publicId = "Loading..."
+    , rawData = "Loading..."
+    , parsedData = []
     }
 
 
@@ -95,12 +98,14 @@ init _ url key =
                         [ postMsg "" [] code
                         , Task.perform Zone Time.here
                         , Http.get { url = "/getmyid/" ++ code, expect = Http.expectString MyPublicId }
+                        , Http.get { url = "/loadmaster/" ++ code, expect = Http.expectString LoadedMaster }
                         ]
             )
 
 
 type Msg
     = SearchBox String
+    | LoadedMaster (Result Http.Error String)
     | TagBox String
     | NewDocumentButtonClick
     | NewSearchResults (Result Http.Error SearchResults)
@@ -165,11 +170,322 @@ decodeSearchResults =
         (Jd.field "Apps" (Jd.list decodeSearchResult))
         (Jd.field "Tags" (Jd.list Jd.string))
 
+
+type PublicSign
+    = String
+
+
+type Message
+    = Human (Set.Set String) (Set.Set String) (List HumanMsgPart)
+    | Invite InviteLike
+    | Uninvite InviteLike
+
+
+type Id
+    = Id String
+
+
+type Tag
+    = Tag String
+
+
+
+{-
+   The fields are
+   1. recipients
+   2. invitee
+   3. author
+   4. signature
+-}
+
+
+type InviteLike
+    = InviteLike (Set.Set String) String String Signature
+
+
+type alias Signature =
+    String
+
+
+type alias FileHash =
+    String
+
+
+type HumanMsgPart
+    = Text (List Paragraph)
+    | File FileHash
+
+
+type Paragraph
+    = Paragraph (List Line)
+
+
+type Line
+    = Line String
+
+
+{-| The syntax for the messages file is like this:
+
+messages {
+human
+to { JXQ3EM8ulCcl9YfLPCI1OqiESWccBrchHKi8lcyMRTo= }
+tags { `the` `tags` `for my first message example` }
+body {
+\`The time now approached for Lady Russell's return; the
+day was even fixed, and Anne, being engaged to join her as
+soon as she was resettled, was looking forward to an early
+removal to Kellynch, and beginning to think how her own
+comfort was likely to be affected by it.
+
+It would place here in the same village with Captain Went-
+worth, within half a mile of him; they would have to fre-
+quent the same church, and there must be intercourse
+between the two families.
+
+`file aGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0=`
+
+This was much against her; but, on
+the other hand, he spent so much of his time at Upper-
+cross, that in removing thence she might be considered
+rather as leaving him behind, than as going towards him;
+\`
+}
+invite
+to { }
+invitee ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
+author hurxrCzrSyhOt6g66nno5QeCH71QeMWvpaPtoXuxcLI=
+signature 21jFWq5NzZfa-vzb6hC8DcleS74W2jhvGWfR33Cv5UIaGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
+}
+
+-}
+masterParser : P.Parser (List Message)
+masterParser =
+    listP messageP
+
+
+isSpace : Char -> Bool
+isSpace c =
+    c == ' ' || c == '\n' || c == '\u{000D}'
+
+
+oneSpaceP : P.Parser ()
+oneSpaceP =
+    P.oneOf <| L.map P.symbol [ " ", "\n", "\u{000D}" ]
+
+
+spacesP : P.Parser ()
+spacesP =
+    oneSpaceP |. P.chompWhile isSpace
+
+
+messageP : P.Parser Message
+messageP =
+    P.succeed identity
+        |= P.oneOf [ humanP, inviteP, uninviteP ]
+        |. P.oneOf [ P.end, spacesP ]
+
+
+inviteP : P.Parser Message
+inviteP =
+    P.succeed Invite
+        |. P.token "invite"
+        |. spacesP
+        |= inviteLikeP
+
+
+uninviteP : P.Parser Message
+uninviteP =
+    P.succeed Invite
+        |. P.token "uninvite"
+        |. spacesP
+        |= inviteLikeP
+
+
+inviteLikeP : P.Parser InviteLike
+inviteLikeP =
+    P.succeed InviteLike
+        |. P.token "to"
+        |. spacesP
+        |= toListP
+        |. spacesP
+        |. P.token "invitee"
+        |. spacesP
+        |= hashP
+        |. spacesP
+        |. P.token "author"
+        |. spacesP
+        |= hashP
+        |. P.token "signature"
+        |. spacesP
+        |= sigP
+
+
+humanP : P.Parser Message
+humanP =
+    P.succeed Human
+        |. P.token "human"
+        |. spacesP
+        |. P.token "to"
+        |. spacesP
+        |= toListP
+        |. spacesP
+        |. P.token "tags"
+        |. spacesP
+        |= tagListP
+        |. spacesP
+        |. P.token "body"
+        |. spacesP
+        |= listP humanPartP
+
+
+tagListP : P.Parser (Set.Set String)
+tagListP =
+    P.map Set.fromList <| listP tagP
+
+
+toListP : P.Parser (Set.Set String)
+toListP =
+    P.map Set.fromList <| listP hashP
+
+
+humanPartP : P.Parser HumanMsgPart
+humanPartP =
+    P.oneOf [ humanTextP, humanFileP ]
+
+
+humanTextP : P.Parser HumanMsgPart
+humanTextP =
+    P.map Text <| listP paragraphP
+
+
+humanFileP : P.Parser HumanMsgPart
+humanFileP =
+    P.succeed File
+        |. P.token "file"
+        |. spacesP
+        |= hashP
+
+
+paragraphP : P.Parser Paragraph
+paragraphP =
+    P.map Paragraph <| listP lineP
+
+
+lineP : P.Parser Line
+lineP =
+    P.succeed Line
+        |= P.getChompedString (P.chompWhile isTagChar)
+        |. P.oneOf
+            [ P.token "\n"
+            , P.token "\u{000D}"
+            , P.end
+            ]
+
+
+idP : P.Parser Id
+idP =
+    P.map Id hashP
+
+
+tagP : P.Parser String
+tagP =
+    P.succeed identity
+        |. P.symbol "`"
+        |= P.getChompedString (P.chompWhile isTagChar)
+        |. P.symbol "`"
+
+
+isTagChar : Char -> Bool
+isTagChar c =
+    Set.member c tagSet
+
+
+tagSet : Set.Set Char
+tagSet =
+    Set.fromList <| String.toList tagChars
+
+
+tagChars : String
+tagChars =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        ++ "!\"£$%^&*()-_=+#~{[}];:'@<,>.?/\\| "
+
+
+{-| Go Nacl adds 64 bytes to a signed message. So the signature is
+a 32-byte hash plus the 64 byte overhead, which is 96 bytes.
+In Go, base64.URLEncoding.EncodeToString(<some 96 byte slice>)
+gives a string of length 128, with no padding (i.e. no "=" on the
+end).
+-}
+sigP : P.Parser String
+sigP =
+    P.getChompedString (P.chompWhile isBase64Char)
+        |> P.andThen checkSig
+
+
+checkSig : String -> P.Parser String
+checkSig sig =
+    if String.length sig == 128 then
+        P.succeed sig
+
+    else
+        P.problem "base64 signature has 128 characters and no padding"
+
+
+hashP : P.Parser String
+hashP =
+    P.getChompedString (P.chompWhile isBase64Char)
+        |> P.andThen checkBase64
+
+
+checkBase64 : String -> P.Parser String
+checkBase64 base64 =
+    if String.length base64 == 43 then
+        P.succeed (base64 ++ "=") |. P.token "="
+
+    else
+        P.problem "base64 hash has 43 characters followed by ="
+
+
+base64Set : Set.Set Char
+base64Set =
+    Set.fromList <| String.toList base64String
+
+
+base64String : String
+base64String =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+
+isBase64Char : Char -> Bool
+isBase64Char c =
+    Set.member c base64Set
+
+
+listP : P.Parser a -> P.Parser (List a)
+listP itemP =
+    P.succeed identity
+        |. P.symbol "{"
+        |= P.loop [] (buildListP itemP)
+
+
+buildListP : P.Parser a -> List a -> P.Parser (P.Step (List a) (List a))
+buildListP itemP revItems =
+    P.oneOf
+        [ P.symbol "}"
+            |> P.map (\_ -> P.Done (L.reverse revItems))
+        , P.map (\item -> P.Loop (item :: revItems)) itemP
+        , P.map (\_ -> P.Loop revItems) spacesP
+        ]
+
+
 type alias Model =
-    { page : Page
+    { rawData : String
+    , parsedData : List Message
+    , searchStr : String
+    , page : Page
     , inviteeBox : String
     , securityCode : Maybe String
-    , searchStr : String
     , searchResults : Result Http.Error SearchResults
     , key : Nav.Key
     , sendDrawOpen : Maybe SendDrawer
@@ -184,10 +500,12 @@ type alias Model =
     , publicId : String
     }
 
+
 type alias SendDrawer =
     { recipient : String
     , appHash : String
     }
+
 
 encodeSearchQuery tags searchString =
     Je.object
@@ -195,11 +513,13 @@ encodeSearchQuery tags searchString =
         , ( "SearchString", Je.string searchString )
         ]
 
+
 encodeSendApp sendDrawer =
     Je.object
         [ ( "AppHash", Je.string sendDrawer.appHash )
         , ( "Recipient", Je.string sendDrawer.recipient )
         ]
+
 
 postSendApp sendDrawer securityCode =
     Http.post
@@ -221,41 +541,66 @@ postMsg searchString tags securityCode =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        MyPublicId (Err _) -> (model, Cmd.none)
+        MyPublicId (Err _) ->
+            ( model, Cmd.none )
+
         MyPublicId (Ok id) ->
             ( { model | publicId = id }, Cmd.none )
-        InviteeBox str -> ({ model | inviteeBox = str }, Cmd.none)
+
+        LoadedMaster (Err _) ->
+            ( model, Cmd.none )
+
+        LoadedMaster (Ok newMaster) ->
+            case P.run masterParser newMaster of
+                Err _ ->
+                    ( model, Cmd.none )
+
+                Ok parsed ->
+                    ( { model | parsedData = parsed }, Cmd.none )
+
+        InviteeBox str ->
+            ( { model | inviteeBox = str }, Cmd.none )
+
         InviteSent _ ->
-            (model, Cmd.none)
+            ( model, Cmd.none )
+
         SendInvite ->
             case model.securityCode of
-                Nothing -> (model, Cmd.none)
+                Nothing ->
+                    ( model, Cmd.none )
+
                 Just code ->
                     ( { model | inviteeBox = "" }
                     , Http.post
                         { url = "/invite/" ++ code ++ "/" ++ model.inviteeBox
-                        , expect = Http.expectWhatever InviteSent 
+                        , expect = Http.expectWhatever InviteSent
                         , body = Http.emptyBody
                         }
                     )
+
         OpenSendDrawer hash ->
-            ( { model | sendDrawOpen = Just
-                    { recipient = ""
-                    , appHash = hash
-                    }
+            ( { model
+                | sendDrawOpen =
+                    Just
+                        { recipient = ""
+                        , appHash = hash
+                        }
               }
             , Cmd.none
             )
 
         UpdateSendDrawer newDrawer ->
             ( { model | sendDrawOpen = Just newDrawer }, Cmd.none )
-            
-        SendApp -> case (model.sendDrawOpen, model.securityCode) of
-            (Just drawer, Just code) ->
-                ( { model | sendDrawOpen = Nothing }
-                , postSendApp drawer code
-                )
-            _ -> ( model, Cmd.none )
+
+        SendApp ->
+            case ( model.sendDrawOpen, model.securityCode ) of
+                ( Just drawer, Just code ) ->
+                    ( { model | sendDrawOpen = Nothing }
+                    , postSendApp drawer code
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
 
         AppSent _ ->
             ( model, Cmd.none )
@@ -402,10 +747,6 @@ update msg model =
                 Just code ->
                     ( { model | searchStr = txt }, postMsg txt (Set.toList model.selectedTags) code )
 
-        -- FromServer (Err err) ->
-        --     ( model, Cmd.none )
-        -- FromServer (Ok searchResults) ->
-        --     ( { model | displayStr = str }, Cmd.none )
         ChooseDoc ->
             ( model, Fs.file [ "application/octet-stream" ] DocLoaded )
 
@@ -457,7 +798,7 @@ update msg model =
 
 view model =
     { title = "BigWebThing"
-    , body = [ E.layout [] (mainEl model) ]
+    , body = [ E.layout [] (homePage model) ]
     }
 
 
@@ -471,12 +812,7 @@ black =
 
 
 searchStyle =
-    [ Border.width 1
-    , Border.color black
-    , Border.solid
-    , Border.rounded 0
-    , E.width <| E.px 600
-    ]
+    [ E.width <| E.px 600 ]
 
 
 edges =
@@ -491,14 +827,9 @@ idPadding =
     }
 
 
--- idtxt =
---     [ "8XKTUnNufTH"
---     , "mkEqNv0zxI7"
---     , "z/+npv+RPpD"
---     , "vm7HyN7zc0="
---     ]
+idtxt id =
+    Se.break 11 id
 
-idtxt id = Se.break 11 id
 
 myId id =
     E.row
@@ -507,21 +838,11 @@ myId id =
         [ E.el [ Font.bold ] <| E.text "Public ID:"
         , E.text id
         ]
--- E.text <| "Public ID: " ++ id
---     E.column
---         (idStyle
---             ++ [ E.alignRight
---                , E.alignTop
---                ]
---         )
---     <|
---         (E.el [ Font.bold ] <| E.text "Public ID:")
---             :: L.map E.text (idtxt id)
--- 
+
 
 searchBoxStyle =
-    [ Font.family [ Font.typeface "Courier", Font.monospace ]
-    , Font.size 28
+    [ Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
+    , Font.size 37
     , E.alignTop
     ]
 
@@ -588,10 +909,7 @@ searchBox txt =
 
 
 topButtonsAndSearch page txt =
-    E.column [ E.spacing 20, E.alignTop ]
-        [ topButtons page
-        , searchBox txt
-        ]
+    E.column [ E.spacing 20, E.alignTop ] [ searchBox txt ]
 
 
 homeTopSection txt id =
@@ -619,12 +937,6 @@ greyNewDocButtonStyle =
 
 newDocTopSection tagText fileUpload id =
     E.column []
-        -- [ E.row [ E.width E.fill, E.spacing 20 ]
-        --     [ E.column
-        --         [ E.alignTop, E.height E.fill ]
-        --         [ topButtons NewDoc ]
-        --     , myId id
-        --     ]
         [ myId id
         , topButtons NewDoc
         , E.row [ E.spacing 20 ]
@@ -675,22 +987,6 @@ membersTopSection id =
         ]
 
 
-mainEl : Model -> E.Element Msg
-mainEl model =
-    case model.page of
-        Home ->
-            homePage model
-
-        NewDoc ->
-            newDocPage model
-
-        Members ->
-            memberPage model
-
-        Unknown ->
-            unknownPage
-
-
 unknownPage =
     E.el [] <| E.text "Page doesn't exist"
 
@@ -701,15 +997,16 @@ memberPage model =
         , E.padding 20
         , E.spacing 20
         ]
-        -- [ membersTopSection model.publicId
         [ myId model.publicId
         , topButtons Members
         , E.row []
             [ Ei.text []
                 { onChange = InviteeBox
                 , text = model.inviteeBox
-                , placeholder = Just <| Ei.placeholder [] <|
-                    E.text "Type ID of person to invite."
+                , placeholder =
+                    Just <|
+                        Ei.placeholder [] <|
+                            E.text "Type ID of person to invite."
                 , label = Ei.labelAbove [] E.none
                 }
             , Ei.button []
@@ -724,7 +1021,7 @@ tagStyle color =
     [ Bg.color color
     , E.alignLeft
     , Font.size 28
-    , Font.family [ Font.typeface "Courier", Font.monospace ]
+    , Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
     , E.paddingXY 0 5
     ]
 
@@ -776,8 +1073,8 @@ choosableTags searchResults =
 
 
 idStyle =
-    [ Font.family [ Font.typeface "Courier", Font.monospace ]
-    , Font.size 28
+    [ Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
+    , Font.size 37
     ]
 
 
@@ -929,29 +1226,39 @@ viewSearchResult zone checkedBoxes securityCode sendDrawOpen result =
                             (Time.millisToPosix <| result.posixTime * 1000)
                             zone
                 ]
-            , let button = Ei.button [] { onPress = Just (OpenSendDrawer result.hash), label = E.text "Send this app" }
-                  drawer recipStr = E.row []
-                      [ Ei.text []
-                          { onChange = \txt -> UpdateSendDrawer
-                              { recipient = txt
-                              , appHash = result.hash
-                              }
-                          , text = recipStr
-                          , placeholder = Just <| Ei.placeholder [] <| E.text "Type recipient ID code"
-                          , label = Ei.labelAbove [] E.none
-                          }
-                      , Ei.button []
-                          { onPress = Just SendApp
-                          , label = E.text "Send"
-                          }
-                      ]
-              in case sendDrawOpen of
-                  Nothing -> button
-                  Just draw ->
-                      if draw.appHash == result.hash then
-                          drawer draw.recipient
-                      else
-                          button
+            , let
+                button =
+                    Ei.button [] { onPress = Just (OpenSendDrawer result.hash), label = E.text "Send this app" }
+
+                drawer recipStr =
+                    E.row []
+                        [ Ei.text []
+                            { onChange =
+                                \txt ->
+                                    UpdateSendDrawer
+                                        { recipient = txt
+                                        , appHash = result.hash
+                                        }
+                            , text = recipStr
+                            , placeholder = Just <| Ei.placeholder [] <| E.text "Type recipient ID code"
+                            , label = Ei.labelAbove [] E.none
+                            }
+                        , Ei.button []
+                            { onPress = Just SendApp
+                            , label = E.text "Send"
+                            }
+                        ]
+              in
+              case sendDrawOpen of
+                Nothing ->
+                    button
+
+                Just draw ->
+                    if draw.appHash == result.hash then
+                        drawer draw.recipient
+
+                    else
+                        button
             ]
         ]
 
@@ -1050,25 +1357,28 @@ homePage : Model -> E.Element Msg
 homePage model =
     E.column
         [ E.width E.fill
-        , E.padding 20
-        , E.spacing 20
+        , E.padding 5
+        , E.spacing 5
         ]
-        --[ homeTopSection model.searchStr model.publicId
         [ myId model.publicId
-        , topButtonsAndSearch Home model.searchStr
-        , homeShowTags UnchooseTag (Set.toList model.selectedTags) blue (E.padding 0)
+        , searchBox model.searchStr
+        , homeShowTags
+            UnchooseTag
+            (Set.toList model.selectedTags)
+            blue
+            (E.padding 0)
         , homeShowTags
             ChooseTag
             (Set.toList model.unselectedTags)
             paleBlue
             (E.padding 0)
-        , case model.securityCode of
-            Nothing ->
-                E.text "Internal error: no security code."
-
-            Just code ->
-                homeSearchResults model.searchResults model.zone model.checkedBoxes model.selectAll code model.sendDrawOpen
+        , txtEditor model.rawData
         ]
+
+
+txtEditor : String -> E.Element Msg
+txtEditor rawData =
+    E.el idStyle <| E.text rawData
 
 
 newDocPage model =
@@ -1118,5 +1428,3 @@ newDocPage model =
                 }
             ]
         ]
-        -- [ newDocTopSection model.newTagsBox model.fileUpload model.publicId
-        -- ]
