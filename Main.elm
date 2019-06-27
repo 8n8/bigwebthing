@@ -79,7 +79,6 @@ initModel page securityCode key =
     , selectAll = False
     , sendDrawOpen = Nothing
     , publicId = "Loading..."
-    , rawData = "Loading..."
     , parsedData = []
     }
 
@@ -478,8 +477,7 @@ buildListP itemP revItems =
 
 
 type alias Model =
-    { rawData : String
-    , parsedData : List Message
+    { parsedData : List Message
     , searchStr : String
     , page : Page
     , inviteeBox : String
@@ -1370,7 +1368,6 @@ homePage model =
             (Set.toList model.unselectedTags)
             paleBlue
             (E.padding 0)
-        , txtEditor model.rawData
         ]
 
 
