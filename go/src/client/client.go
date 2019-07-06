@@ -1150,6 +1150,14 @@ func getStitchedTxtMsgs() ([]string, error) {
 	return msgs, nil
 }
 
+func txtCodeToSlice(arr [txtMsgCodeLen]byte) []byte {
+	result := make([]byte, txtMsgCodeLen)
+	for i, b := range arr {
+		result[i] = b
+	}
+	return result
+}
+
 func httpPull(w http.ResponseWriter, r *http.Request) {
 	err := httpPullErr(w)
 	if err != nil {
@@ -1267,7 +1275,8 @@ func httpPushErr(r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		msgReader := bytes.NewReader([]byte(msg.Msg))
+		msgReader := bytes.NewReader(append(
+			txtCodeToSlice(txtMsgCode), []byte(msg.Msg)...))
 		err = chunkAndSend(msgReader, recipient)
 		if err != nil {
 			return err
