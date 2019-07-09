@@ -2,6 +2,8 @@ module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
+import Debug exposing (log)
+import Dict exposing (Dict)
 import Element as E
 import Element.Background as Bg
 import Element.Border as Border
@@ -17,7 +19,7 @@ import Json.Decode as Jd
 import Json.Encode as Je
 import List as L
 import Parser as P exposing ((|.), (|=))
-import Set
+import Set exposing (Set)
 import String.Extra as Se
 import Task
 import Time
@@ -25,6 +27,7 @@ import Url
 import Url.Parser as Up exposing ((</>))
 
 
+main : Program () Model Msg
 main =
     Browser.application
         { init = init
@@ -62,9 +65,11 @@ urlToPage url =
             result
 
 
+initModel : Page -> Maybe String -> Nav.Key -> Model
 initModel page securityCode key =
     { page = page
     , securityCode = securityCode
+    , msgMaker = Nothing
     , inviteeBox = ""
     , searchStr = ""
     , fileUpload = Nothing
@@ -79,7 +84,7 @@ initModel page securityCode key =
     , selectAll = False
     , sendDrawOpen = Nothing
     , publicId = "Loading..."
-    , parsedData = []
+    , metadata = Nothing
     }
 
 
@@ -96,14 +101,35 @@ init _ url key =
                     Cmd.batch
                         [ postMsg "" [] code
                         , Task.perform Zone Time.here
-                        , Http.get { url = "/getmyid/" ++ code, expect = Http.expectString MyPublicId }
-                        , Http.get { url = "/loadmaster/" ++ code, expect = Http.expectString LoadedMaster }
+                        , getId code
+                        , loadMaster code
                         ]
             )
 
 
+getId : String -> Cmd Msg
+getId code =
+    Http.get
+        { url = "/getmyid/" ++ code
+        , expect = Http.expectString MyPublicId
+        }
+
+
+loadMaster : String -> Cmd Msg
+loadMaster code =
+    Http.get
+        { url = "/loadmaster/" ++ code
+        , expect = Http.expectString LoadedMaster
+        }
+
+
 type Msg
     = SearchBox String
+    | CancelMakeNewMsg
+    | NewTagButtonClick
+    | EditingTag String
+    | RemoveTag String
+    | NewMsgClick
     | LoadedMaster (Result Http.Error String)
     | TagBox String
     | NewDocumentButtonClick
@@ -174,90 +200,77 @@ type PublicSign
     = String
 
 
-type Message
-    = Human (Set.Set String) (Set.Set String) (List HumanMsgPart)
-    | Invite InviteLike
-    | Uninvite InviteLike
 
-
-type Id
-    = Id String
-
-
-type Tag
-    = Tag String
-
-
-{-| The fields are
-
-1.  recipients
-2.  invitee
-3.  author
-4.  signature
-
--}
-type InviteLike
-    = InviteLike (Set.Set String) String String Signature
-
-
-type alias Signature =
-    String
-
-
-type alias FileHash =
-    String
-
-
-type HumanMsgPart
-    = Text (List Paragraph)
-    | File FileHash
-
-
-type Paragraph
-    = Paragraph (List Line)
-
-
-type Line
-    = Line String
-
-
-{-| The syntax for the messages file is like this:
-
-messages {
-human
-to { JXQ3EM8ulCcl9YfLPCI1OqiESWccBrchHKi8lcyMRTo= }
-tags { `the` `tags` `for my first message example` }
-body {
-\`The time now approached for Lady Russell's return; the
-day was even fixed, and Anne, being engaged to join her as
-soon as she was resettled, was looking forward to an early
-removal to Kellynch, and beginning to think how her own
-comfort was likely to be affected by it.
-
-It would place here in the same village with Captain Went-
-worth, within half a mile of him; they would have to fre-
-quent the same church, and there must be intercourse
-between the two families.
-
-`file aGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0=`
-
-This was much against her; but, on
-the other hand, he spent so much of his time at Upper-
-cross, that in removing thence she might be considered
-rather as leaving him behind, than as going towards him;
-\`
-}
-invite
-to { }
-invitee ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
-author hurxrCzrSyhOt6g66nno5QeCH71QeMWvpaPtoXuxcLI=
-signature 21jFWq5NzZfa-vzb6hC8DcleS74W2jhvGWfR33Cv5UIaGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
-}
-
--}
-masterParser : P.Parser (List Message)
-masterParser =
-    listP messageP
+-- type Message
+--     = Human (Set.Set String) (Set.Set String) (List HumanMsgPart)
+--     | Invite InviteLike
+--     | Uninvite InviteLike
+-- type Id
+--     = Id String
+-- type Tag
+--     = Tag String
+-- {-| The fields are
+--
+-- 1.  recipients
+-- 2.  invitee
+-- 3.  author
+-- 4.  signature
+--
+-- -}
+-- type InviteLike
+--     = InviteLike (Set.Set String) String String Signature
+-- type alias Signature =
+--     String
+--
+--
+-- type alias FileHash =
+--     String
+-- type HumanMsgPart
+--     = Text (List Paragraph)
+--     | File FileHash
+--
+--
+-- type Paragraph
+--     = Paragraph (List Line)
+-- type Line
+--     = Line String
+-- {-| The syntax for the messages file is like this:
+--
+-- messages {
+-- human
+-- to { JXQ3EM8ulCcl9YfLPCI1OqiESWccBrchHKi8lcyMRTo= }
+-- tags { `the` `tags` `for my first message example` }
+-- body {
+-- \`The time now approached for Lady Russell's return; the
+-- day was even fixed, and Anne, being engaged to join her as
+-- soon as she was resettled, was looking forward to an early
+-- removal to Kellynch, and beginning to think how her own
+-- comfort was likely to be affected by it.
+--
+-- It would place here in the same village with Captain Went-
+-- worth, within half a mile of him; they would have to fre-
+-- quent the same church, and there must be intercourse
+-- between the two families.
+--
+-- `file aGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0=`
+--
+-- This was much against her; but, on
+-- the other hand, he spent so much of his time at Upper-
+-- cross, that in removing thence she might be considered
+-- rather as leaving him behind, than as going towards him;
+-- \`
+-- }
+-- invite
+-- to { }
+-- invitee ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
+-- author hurxrCzrSyhOt6g66nno5QeCH71QeMWvpaPtoXuxcLI=
+-- signature 21jFWq5NzZfa-vzb6hC8DcleS74W2jhvGWfR33Cv5UIaGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
+-- }
+--
+-- -}
+-- masterParser : P.Parser (List Message)
+-- masterParser =
+--     listP messageP
 
 
 isSpace : Char -> Bool
@@ -275,210 +288,212 @@ spacesP =
     oneSpaceP |. P.chompWhile isSpace
 
 
-messageP : P.Parser Message
-messageP =
-    P.succeed identity
-        |= P.oneOf [ humanP, inviteP, uninviteP ]
-        |. P.oneOf [ P.end, spacesP ]
 
-
-inviteP : P.Parser Message
-inviteP =
-    P.succeed Invite
-        |. P.token "invite"
-        |. spacesP
-        |= inviteLikeP
-
-
-uninviteP : P.Parser Message
-uninviteP =
-    P.succeed Invite
-        |. P.token "uninvite"
-        |. spacesP
-        |= inviteLikeP
-
-
-inviteLikeP : P.Parser InviteLike
-inviteLikeP =
-    P.succeed InviteLike
-        |. P.token "to"
-        |. spacesP
-        |= toListP
-        |. spacesP
-        |. P.token "invitee"
-        |. spacesP
-        |= hashP
-        |. spacesP
-        |. P.token "author"
-        |. spacesP
-        |= hashP
-        |. P.token "signature"
-        |. spacesP
-        |= sigP
-
-
-humanP : P.Parser Message
-humanP =
-    P.succeed Human
-        |. P.token "human"
-        |. spacesP
-        |. P.token "to"
-        |. spacesP
-        |= toListP
-        |. spacesP
-        |. P.token "tags"
-        |. spacesP
-        |= tagListP
-        |. spacesP
-        |. P.token "body"
-        |. spacesP
-        |= listP humanPartP
-
-
-tagListP : P.Parser (Set.Set String)
-tagListP =
-    P.map Set.fromList <| listP tagP
-
-
-toListP : P.Parser (Set.Set String)
-toListP =
-    P.map Set.fromList <| listP hashP
-
-
-humanPartP : P.Parser HumanMsgPart
-humanPartP =
-    P.oneOf [ humanTextP, humanFileP ]
-
-
-humanTextP : P.Parser HumanMsgPart
-humanTextP =
-    P.map Text <| listP paragraphP
-
-
-humanFileP : P.Parser HumanMsgPart
-humanFileP =
-    P.succeed File
-        |. P.token "file"
-        |. spacesP
-        |= hashP
-
-
-paragraphP : P.Parser Paragraph
-paragraphP =
-    P.map Paragraph <| listP lineP
-
-
-lineP : P.Parser Line
-lineP =
-    P.succeed Line
-        |= P.getChompedString (P.chompWhile isTagChar)
-        |. P.oneOf
-            [ P.token "\n"
-            , P.token "\u{000D}"
-            , P.end
-            ]
-
-
-idP : P.Parser Id
-idP =
-    P.map Id hashP
-
-
-tagP : P.Parser String
-tagP =
-    P.succeed identity
-        |. P.symbol "`"
-        |= P.getChompedString (P.chompWhile isTagChar)
-        |. P.symbol "`"
-
-
-isTagChar : Char -> Bool
-isTagChar c =
-    Set.member c tagSet
-
-
-tagSet : Set.Set Char
-tagSet =
-    Set.fromList <| String.toList tagChars
-
-
-tagChars : String
-tagChars =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        ++ "!\"£$%^&*()-_=+#~{[}];:'@<,>.?/\\| "
-
-
-{-| Go Nacl adds 64 bytes to a signed message. So the signature is
-a 32-byte hash plus the 64 byte overhead, which is 96 bytes.
-In Go, base64.URLEncoding.EncodeToString(<some 96 byte slice>)
-gives a string of length 128, with no padding (i.e. no "=" on the
-end).
--}
-sigP : P.Parser String
-sigP =
-    P.getChompedString (P.chompWhile isBase64Char)
-        |> P.andThen checkSig
-
-
-checkSig : String -> P.Parser String
-checkSig sig =
-    if String.length sig == 128 then
-        P.succeed sig
-
-    else
-        P.problem "base64 signature has 128 characters and no padding"
-
-
-hashP : P.Parser String
-hashP =
-    P.getChompedString (P.chompWhile isBase64Char)
-        |> P.andThen checkBase64
-
-
-checkBase64 : String -> P.Parser String
-checkBase64 base64 =
-    if String.length base64 == 43 then
-        P.succeed (base64 ++ "=") |. P.token "="
-
-    else
-        P.problem "base64 hash has 43 characters followed by ="
-
-
-base64Set : Set.Set Char
-base64Set =
-    Set.fromList <| String.toList base64String
-
-
-base64String : String
-base64String =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-
-
-isBase64Char : Char -> Bool
-isBase64Char c =
-    Set.member c base64Set
-
-
-listP : P.Parser a -> P.Parser (List a)
-listP itemP =
-    P.succeed identity
-        |. P.symbol "{"
-        |= P.loop [] (buildListP itemP)
-
-
-buildListP : P.Parser a -> List a -> P.Parser (P.Step (List a) (List a))
-buildListP itemP revItems =
-    P.oneOf
-        [ P.symbol "}"
-            |> P.map (\_ -> P.Done (L.reverse revItems))
-        , P.map (\item -> P.Loop (item :: revItems)) itemP
-        , P.map (\_ -> P.Loop revItems) spacesP
-        ]
+-- messageP : P.Parser Message
+-- messageP =
+--     P.succeed identity
+--         |= P.oneOf [ humanP, inviteP, uninviteP ]
+--         |. P.oneOf [ P.end, spacesP ]
+--
+--
+-- inviteP : P.Parser Message
+-- inviteP =
+--     P.succeed Invite
+--         |. P.token "invite"
+--         |. spacesP
+--         |= inviteLikeP
+--
+--
+-- uninviteP : P.Parser Message
+-- uninviteP =
+--     P.succeed Invite
+--         |. P.token "uninvite"
+--         |. spacesP
+--         |= inviteLikeP
+--
+--
+-- inviteLikeP : P.Parser InviteLike
+-- inviteLikeP =
+--     P.succeed InviteLike
+--         |. P.token "to"
+--         |. spacesP
+--         |= toListP
+--         |. spacesP
+--         |. P.token "invitee"
+--         |. spacesP
+--         |= hashP
+--         |. spacesP
+--         |. P.token "author"
+--         |. spacesP
+--         |= hashP
+--         |. P.token "signature"
+--         |. spacesP
+--         |= sigP
+--
+--
+-- humanP : P.Parser Message
+-- humanP =
+--     P.succeed Human
+--         |. P.token "human"
+--         |. spacesP
+--         |. P.token "to"
+--         |. spacesP
+--         |= toListP
+--         |. spacesP
+--         |. P.token "tags"
+--         |. spacesP
+--         |= tagListP
+--         |. spacesP
+--         |. P.token "body"
+--         |. spacesP
+--         |= listP humanPartP
+--
+--
+-- tagListP : P.Parser (Set.Set String)
+-- tagListP =
+--     P.map Set.fromList <| listP tagP
+--
+--
+-- toListP : P.Parser (Set.Set String)
+-- toListP =
+--     P.map Set.fromList <| listP hashP
+--
+--
+-- humanPartP : P.Parser HumanMsgPart
+-- humanPartP =
+--     P.oneOf [ humanTextP, humanFileP ]
+--
+--
+-- humanTextP : P.Parser HumanMsgPart
+-- humanTextP =
+--     P.map Text <| listP paragraphP
+--
+--
+-- humanFileP : P.Parser HumanMsgPart
+-- humanFileP =
+--     P.succeed File
+--         |. P.token "file"
+--         |. spacesP
+--         |= hashP
+--
+--
+-- paragraphP : P.Parser Paragraph
+-- paragraphP =
+--     P.map Paragraph <| listP lineP
+--
+--
+-- lineP : P.Parser Line
+-- lineP =
+--     P.succeed Line
+--         |= P.getChompedString (P.chompWhile isTagChar)
+--         |. P.oneOf
+--             [ P.token "\n"
+--             , P.token "\u{000D}"
+--             , P.end
+--             ]
+--
+--
+-- idP : P.Parser Id
+-- idP =
+--     P.map Id hashP
+--
+--
+-- tagP : P.Parser String
+-- tagP =
+--     P.succeed identity
+--         |. P.symbol "`"
+--         |= P.getChompedString (P.chompWhile isTagChar)
+--         |. P.symbol "`"
+--
+--
+-- isTagChar : Char -> Bool
+-- isTagChar c =
+--     Set.member c tagSet
+--
+--
+-- tagSet : Set.Set Char
+-- tagSet =
+--     Set.fromList <| String.toList tagChars
+--
+--
+-- tagChars : String
+-- tagChars =
+--     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+--         ++ "!\"£$%^&*()-_=+#~{[}];:'@<,>.?/\\| "
+--
+--
+-- {-| Go Nacl adds 64 bytes to a signed message. So the signature is
+-- a 32-byte hash plus the 64 byte overhead, which is 96 bytes.
+-- In Go, base64.URLEncoding.EncodeToString(<some 96 byte slice>)
+-- gives a string of length 128, with no padding (i.e. no "=" on the
+-- end).
+-- -}
+-- sigP : P.Parser String
+-- sigP =
+--     P.getChompedString (P.chompWhile isBase64Char)
+--         |> P.andThen checkSig
+--
+--
+-- checkSig : String -> P.Parser String
+-- checkSig sig =
+--     if String.length sig == 128 then
+--         P.succeed sig
+--
+--     else
+--         P.problem "base64 signature has 128 characters and no padding"
+--
+--
+-- hashP : P.Parser String
+-- hashP =
+--     P.getChompedString (P.chompWhile isBase64Char)
+--         |> P.andThen checkBase64
+--
+--
+-- checkBase64 : String -> P.Parser String
+-- checkBase64 base64 =
+--     if String.length base64 == 43 then
+--         P.succeed (base64 ++ "=") |. P.token "="
+--
+--     else
+--         P.problem "base64 hash has 43 characters followed by ="
+--
+--
+-- base64Set : Set.Set Char
+-- base64Set =
+--     Set.fromList <| String.toList base64String
+--
+--
+-- base64String : String
+-- base64String =
+--     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+--
+--
+-- isBase64Char : Char -> Bool
+-- isBase64Char c =
+--     Set.member c base64Set
+--
+--
+-- listP : P.Parser a -> P.Parser (List a)
+-- listP itemP =
+--     P.succeed identity
+--         |. P.symbol "{"
+--         |= P.loop [] (buildListP itemP)
+--
+--
+-- buildListP : P.Parser a -> List a -> P.Parser (P.Step (List a) (List a))
+-- buildListP itemP revItems =
+--     P.oneOf
+--         [ P.symbol "}"
+--             |> P.map (\_ -> P.Done (L.reverse revItems))
+--         , P.map (\item -> P.Loop (item :: revItems)) itemP
+--         , P.map (\_ -> P.Loop revItems) spacesP
+--         ]
 
 
 type alias Model =
-    { parsedData : List Message
-    , searchStr : String
+    --{ parsedData : List Message
+    { searchStr : String
+    , msgMaker : Maybe MsgMaker
     , page : Page
     , inviteeBox : String
     , securityCode : Maybe String
@@ -494,6 +509,32 @@ type alias Model =
     , checkedBoxes : Set.Set String
     , selectAll : Bool
     , publicId : String
+    , metadata : Maybe Metadata
+    }
+
+
+type alias Metadata =
+    { invites : List Invite
+    , uninvites : List Invite
+    , tags : Dict String (Set String)
+    , access : Dict String (Set String)
+    , byte32 : Dict String String
+    }
+
+
+type alias Invite =
+    { to : String
+    , from : String
+    , sig : String
+    , posixTime : Int
+    }
+
+
+type alias MsgMaker =
+    { chosenTags : Set String
+    , currentTag : String
+    , recipients : Set String
+    , msgHash : Maybe String
     }
 
 
@@ -503,6 +544,7 @@ type alias SendDrawer =
     }
 
 
+encodeSearchQuery : List String -> String -> Je.Value
 encodeSearchQuery tags searchString =
     Je.object
         [ ( "Tags", Je.list Je.string tags )
@@ -510,6 +552,7 @@ encodeSearchQuery tags searchString =
         ]
 
 
+encodeSendApp : SendDrawer -> Je.Value
 encodeSendApp sendDrawer =
     Je.object
         [ ( "AppHash", Je.string sendDrawer.appHash )
@@ -517,6 +560,7 @@ encodeSendApp sendDrawer =
         ]
 
 
+postSendApp : SendDrawer -> String -> Cmd Msg
 postSendApp sendDrawer securityCode =
     Http.post
         { url = "/sendapp/" ++ securityCode
@@ -534,9 +578,118 @@ postMsg searchString tags securityCode =
         }
 
 
+metaDec : Jd.Decoder Metadata
+metaDec =
+    Jd.map5 Metadata
+        (Jd.field "invites" invitesDec)
+        (Jd.field "uninvites" invitesDec)
+        (Jd.field "tags" tagsDec)
+        (Jd.field "access" accessDec)
+        (Jd.field "byte32" byte32Dec)
+
+
+invitesDec : Jd.Decoder (List Invite)
+invitesDec =
+    Jd.list inviteDec
+
+
+accessDec : Jd.Decoder (Dict String (Set String))
+accessDec =
+    Jd.dict <| Jd.map Set.fromList <| Jd.list Jd.string
+
+
+tagsDec : Jd.Decoder (Dict String (Set String))
+tagsDec =
+    Jd.dict <| Jd.map Set.fromList <| Jd.list Jd.string
+
+
+byte32Dec : Jd.Decoder (Dict String String)
+byte32Dec =
+    Jd.dict Jd.string
+
+
+inviteDec : Jd.Decoder Invite
+inviteDec =
+    Jd.map4 Invite
+        (Jd.field "t" Jd.string)
+        (Jd.field "f" Jd.string)
+        (Jd.field "s" Jd.string)
+        (Jd.field "d" Jd.int)
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        CancelMakeNewMsg ->
+            ( { model | msgMaker = Nothing }
+            , Cmd.none
+            )
+
+        NewTagButtonClick ->
+            case model.msgMaker of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just mm ->
+                    ( { model
+                        | msgMaker =
+                            Just
+                                { mm
+                                    | chosenTags =
+                                        if mm.currentTag == "" then
+                                            mm.chosenTags
+
+                                        else
+                                            Set.insert mm.currentTag mm.chosenTags
+                                    , currentTag = ""
+                                }
+                      }
+                    , Cmd.none
+                    )
+
+        EditingTag new ->
+            case model.msgMaker of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just mm ->
+                    ( { model
+                        | msgMaker =
+                            Just { mm | currentTag = new }
+                      }
+                    , Cmd.none
+                    )
+
+        RemoveTag tag ->
+            case model.msgMaker of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just mm ->
+                    ( { model
+                        | msgMaker =
+                            Just
+                                { mm
+                                    | chosenTags =
+                                        Set.remove tag mm.chosenTags
+                                }
+                      }
+                    , Cmd.none
+                    )
+
+        NewMsgClick ->
+            ( { model
+                | msgMaker =
+                    Just
+                        { chosenTags = Set.empty
+                        , currentTag = ""
+                        , recipients = Set.empty
+                        , msgHash = Nothing
+                        }
+              }
+            , Cmd.none
+            )
+
         MyPublicId (Err _) ->
             ( model, Cmd.none )
 
@@ -547,12 +700,12 @@ update msg model =
             ( model, Cmd.none )
 
         LoadedMaster (Ok newMaster) ->
-            case P.run masterParser newMaster of
+            case Jd.decodeString metaDec newMaster of
                 Err _ ->
                     ( model, Cmd.none )
 
                 Ok parsed ->
-                    ( { model | parsedData = parsed }, Cmd.none )
+                    ( { model | metadata = Just parsed }, Cmd.none )
 
         InviteeBox str ->
             ( { model | inviteeBox = str }, Cmd.none )
@@ -568,7 +721,13 @@ update msg model =
                 Just code ->
                     ( { model | inviteeBox = "" }
                     , Http.post
-                        { url = "/invite/" ++ code ++ "/" ++ model.inviteeBox
+                        { url =
+                            String.concat
+                                [ "/invite/"
+                                , code
+                                , "/"
+                                , model.inviteeBox
+                                ]
                         , expect = Http.expectWhatever InviteSent
                         , body = Http.emptyBody
                         }
@@ -792,6 +951,7 @@ update msg model =
                     )
 
 
+view : Model -> Browser.Document Msg
 view model =
     { title = "BigWebThing"
     , body = [ E.layout [] (homePage model) ]
@@ -803,30 +963,17 @@ placeholder =
     Ei.placeholder [] <| E.text "Type here to search"
 
 
+black : E.Color
 black =
     E.rgb 0 0 0
 
 
+searchStyle : List (E.Attribute Msg)
 searchStyle =
     [ E.width <| E.px 600 ]
 
 
-edges =
-    { top = 0, left = 0, right = 0, bottom = 0 }
-
-
-idPadding =
-    { top = 5
-    , right = 20
-    , bottom = 0
-    , left = 0
-    }
-
-
-idtxt id =
-    Se.break 11 id
-
-
+myId : String -> E.Element Msg
 myId id =
     E.row
         (E.spacing 20 :: idStyle)
@@ -836,13 +983,25 @@ myId id =
         ]
 
 
+monoFont : E.Attribute Msg
+monoFont =
+    Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
+
+
+monoSize : E.Attribute Msg
+monoSize =
+    Font.size 37
+
+
+searchBoxStyle : List (E.Attribute Msg)
 searchBoxStyle =
-    [ Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
+    [ monoFont
     , Font.size 37
     , E.alignTop
     ]
 
 
+topButtonStyle : List (E.Attribute Msg)
 topButtonStyle =
     [ E.alignLeft
     , E.alignTop
@@ -851,22 +1010,27 @@ topButtonStyle =
     ]
 
 
+blue : E.Color
 blue =
     E.rgb255 132 179 255
 
 
+paleBlue : E.Color
 paleBlue =
     E.rgb255 214 229 255
 
 
+grey : E.Color
 grey =
     E.rgb255 169 169 169
 
 
+white : E.Color
 white =
     E.rgb255 255 255 255
 
 
+buttonColor : Page -> Page -> E.Attribute Msg
 buttonColor p1 p2 =
     if p1 == p2 then
         Bg.color blue
@@ -884,6 +1048,7 @@ makeTopButton page ( msg, buttonPage, label ) =
             }
 
 
+topButtons : Page -> E.Element Msg
 topButtons page =
     E.row [ E.spacing 20, E.alignTop ] <|
         L.map (makeTopButton page)
@@ -893,6 +1058,7 @@ topButtons page =
             ]
 
 
+searchBox : String -> E.Element Msg
 searchBox txt =
     E.el searchBoxStyle <|
         Ei.text
@@ -904,10 +1070,12 @@ searchBox txt =
             }
 
 
+topButtonsAndSearch : Page -> String -> E.Element Msg
 topButtonsAndSearch page txt =
     E.column [ E.spacing 20, E.alignTop ] [ searchBox txt ]
 
 
+homeTopSection : String -> String -> E.Element Msg
 homeTopSection txt id =
     E.row [ E.width E.fill, E.spacing 20 ]
         [ topButtonsAndSearch Home txt
@@ -915,6 +1083,7 @@ homeTopSection txt id =
         ]
 
 
+newDocButtonStyle : List (E.Attribute Msg)
 newDocButtonStyle =
     [ E.alignBottom
     , E.padding 5
@@ -923,6 +1092,7 @@ newDocButtonStyle =
     ]
 
 
+greyNewDocButtonStyle : List (E.Attribute Msg)
 greyNewDocButtonStyle =
     newDocButtonStyle
         ++ [ Border.color grey
@@ -931,51 +1101,54 @@ greyNewDocButtonStyle =
            ]
 
 
-newDocTopSection tagText fileUpload id =
-    E.column []
-        [ myId id
-        , topButtons NewDoc
-        , E.row [ E.spacing 20 ]
-            [ E.el [] <|
-                Ei.text
-                    [ E.width <| E.px 600, E.height <| E.px 50 ]
-                    { onChange = TagBox
-                    , text = tagText
-                    , placeholder =
-                        Just <|
-                            Ei.placeholder [] <|
-                                E.text "Type tags separated by commas"
-                    , label = Ei.labelAbove [] E.none
-                    }
-            , Ei.button newDocButtonStyle
-                { onPress = Just ChooseDoc
-                , label =
-                    E.el [ E.padding 3 ] <|
-                        E.text "Choose local file"
-                }
-            , Ei.button
-                (case fileUpload of
-                    Nothing ->
-                        greyNewDocButtonStyle
 
-                    Just _ ->
-                        newDocButtonStyle
-                )
-                { onPress =
-                    case fileUpload of
-                        Nothing ->
-                            Nothing
+-- newDocTopSection : String -> Maybe Int -> String -> E.Element Msg
+-- newDocTopSection tagText fileUpload id =
+--     E.column []
+--         [ myId id
+--         , topButtons NewDoc
+--         , E.row [ E.spacing 20 ]
+--             [ E.el [] <|
+--                 Ei.text
+--                     [ E.width <| E.px 600, E.height <| E.px 50 ]
+--                     { onChange = TagBox
+--                     , text = tagText
+--                     , placeholder =
+--                         Just <|
+--                             Ei.placeholder [] <|
+--                                 E.text "Type tags separated by commas"
+--                     , label = Ei.labelAbove [] E.none
+--                     }
+--             , Ei.button newDocButtonStyle
+--                 { onPress = Just ChooseDoc
+--                 , label =
+--                     E.el [ E.padding 3 ] <|
+--                         E.text "Choose local file"
+--                 }
+--             , Ei.button
+--                 (case fileUpload of
+--                     Nothing ->
+--                         greyNewDocButtonStyle
+--
+--                     Just _ ->
+--                         newDocButtonStyle
+--                 )
+--                 { onPress =
+--                     case fileUpload of
+--                         Nothing ->
+--                             Nothing
+--
+--                         Just _ ->
+--                             Just UploadDoc
+--                 , label =
+--                     E.el [ E.padding 3 ] <|
+--                         E.text "Upload file"
+--                 }
+--             ]
+--         ]
 
-                        Just _ ->
-                            Just UploadDoc
-                , label =
-                    E.el [ E.padding 3 ] <|
-                        E.text "Upload file"
-                }
-            ]
-        ]
 
-
+membersTopSection : String -> E.Element Msg
 membersTopSection id =
     E.row [ E.width E.fill, E.spacing 20 ]
         [ topButtons Members
@@ -983,10 +1156,12 @@ membersTopSection id =
         ]
 
 
+unknownPage : E.Element Msg
 unknownPage =
     E.el [] <| E.text "Page doesn't exist"
 
 
+memberPage : Model -> E.Element Msg
 memberPage model =
     E.column
         [ E.width E.fill
@@ -1013,23 +1188,27 @@ memberPage model =
         ]
 
 
+tagStyle : E.Color -> List (E.Attribute Msg)
 tagStyle color =
     [ Bg.color color
     , E.alignLeft
-    , Font.size 28
-    , Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
-    , E.paddingXY 0 5
+    , monoFont
+    , monoSize
+    , E.paddingXY 0 13
     ]
 
 
+showTag : (String -> Msg) -> E.Color -> String -> E.Element Msg
 showTag msg color tag =
     Ei.button (tagStyle color) { onPress = Just (msg tag), label = E.text tag }
 
 
+tagSort : List String -> List String
 tagSort =
     L.sortWith tagCompare
 
 
+tagCompare : String -> String -> Order
 tagCompare a b =
     case compare (String.length a) (String.length b) of
         LT ->
@@ -1068,12 +1247,14 @@ choosableTags searchResults =
             results.tags
 
 
+idStyle : List (E.Attribute Msg)
 idStyle =
     [ Font.family [ Font.typeface "Source Code Pro", Font.monospace ]
     , Font.size 37
     ]
 
 
+normalText : List (E.Attribute Msg)
 normalText =
     [ Font.family [ Font.typeface "Georgia", Font.serif ]
     , Font.size 28
@@ -1145,6 +1326,7 @@ monthToStr month =
             "December"
 
 
+prettyTime : Time.Posix -> Time.Zone -> String
 prettyTime posix zone =
     let
         year =
@@ -1188,6 +1370,7 @@ prettyTime posix zone =
            )
 
 
+bigCheckbox : (Bool -> Msg) -> Bool -> E.Element Msg
 bigCheckbox onChange checked =
     Ei.checkbox
         [ E.alignTop
@@ -1322,6 +1505,7 @@ defaultCheckbox checked =
         )
 
 
+noResults : E.Element Msg
 noResults =
     E.text "No results."
 
@@ -1368,58 +1552,125 @@ homePage model =
             (Set.toList model.unselectedTags)
             paleBlue
             (E.padding 0)
+        , msgMaker model
         ]
 
 
-txtEditor : String -> E.Element Msg
-txtEditor rawData =
-    E.el idStyle <| E.text rawData
+msgMaker : Model -> E.Element Msg
+msgMaker model =
+    case model.msgMaker of
+        Nothing ->
+            Ei.button []
+                { onPress = Just NewMsgClick
+                , label =
+                    E.el
+                        [ monoFont, monoSize ]
+                    <|
+                        E.text "Make new message"
+                }
 
-
-newDocPage model =
-    E.column
-        [ E.width E.fill
-        , E.padding 20
-        , E.spacing 20
-        ]
-        [ myId model.publicId
-        , topButtons NewDoc
-        , E.row [ E.spacing 20 ]
-            [ E.el [] <|
-                Ei.text
-                    [ E.width <| E.px 600, E.height <| E.px 50 ]
-                    { onChange = TagBox
-                    , text = model.newTagsBox
-                    , placeholder =
-                        Just <|
-                            Ei.placeholder [] <|
-                                E.text "Type tags separated by commas"
-                    , label = Ei.labelAbove [] E.none
+        Just m ->
+            E.column
+                [ E.spacing 10 ]
+                [ Ei.button []
+                    { onPress = Just CancelMakeNewMsg
+                    , label =
+                        E.el [ monoFont, monoSize ] <|
+                            E.text "Cancel new message"
                     }
-            , Ei.button newDocButtonStyle
-                { onPress = Just ChooseDoc
-                , label =
-                    E.el [ E.padding 3 ] <|
-                        E.text "Choose local file"
-                }
-            , Ei.button
-                (case model.fileUpload of
-                    Nothing ->
-                        greyNewDocButtonStyle
+                , makeTags model m
 
-                    Just _ ->
-                        newDocButtonStyle
-                )
-                { onPress =
-                    case model.fileUpload of
-                        Nothing ->
-                            Nothing
+                -- , makeRecipients
+                ]
 
-                        Just _ ->
-                            Just UploadDoc
-                , label =
-                    E.el [ E.padding 3 ] <|
-                        E.text "Upload file"
-                }
+
+makeTags : Model -> MsgMaker -> E.Element Msg
+makeTags model msgMakerState =
+    E.row [ E.alignTop, monoFont, monoSize, E.spacing 10 ] <|
+        L.map chosenTag (Set.toList msgMakerState.chosenTags)
+            ++ [ editingTag msgMakerState.currentTag
+               , newTagButton
+               ]
+
+
+editingTag : String -> E.Element Msg
+editingTag soFar =
+    E.el searchBoxStyle <|
+        Ei.text
+            [ E.width <| E.px 300
+            , E.moveUp 1
             ]
-        ]
+            { onChange = EditingTag
+            , text = soFar
+            , placeholder =
+                Just <|
+                    Ei.placeholder [] <|
+                        E.el [] <|
+                            E.text "Type new tag"
+            , label = Ei.labelAbove [] E.none
+            }
+
+
+newTagButton : E.Element Msg
+newTagButton =
+    Ei.button []
+        { onPress = Just NewTagButtonClick
+        , label = E.el [ E.padding 3 ] <| E.text "+"
+        }
+
+
+chosenTag : String -> E.Element Msg
+chosenTag tag =
+    showTag RemoveTag blue tag
+
+
+
+{-
+   newDocPage model =
+       E.column
+           [ E.width E.fill
+           , E.padding 20
+           , E.spacing 20
+           ]
+           [ myId model.publicId
+           , topButtons NewDoc
+           , E.row [ E.spacing 20 ]
+               [ E.el [] <|
+                   Ei.text
+                       [ E.width <| E.px 600, E.height <| E.px 50 ]
+                       { onChange = TagBox
+                       , text = model.newTagsBox
+                       , placeholder =
+                           Just <|
+                               Ei.placeholder [] <|
+                                   E.text "Type tags separated by commas"
+                       , label = Ei.labelAbove [] E.none
+                       }
+               , Ei.button newDocButtonStyle
+                   { onPress = Just ChooseDoc
+                   , label =
+                       E.el [ E.padding 3 ] <|
+                           E.text "Choose local file"
+                   }
+               , Ei.button
+                   (case model.fileUpload of
+                       Nothing ->
+                           greyNewDocButtonStyle
+
+                       Just _ ->
+                           newDocButtonStyle
+                   )
+                   { onPress =
+                       case model.fileUpload of
+                           Nothing ->
+                               Nothing
+
+                           Just _ ->
+                               Just UploadDoc
+                   , label =
+                       E.el [ E.padding 3 ] <|
+                           E.text "Upload file"
+                   }
+               ]
+           ]
+-}

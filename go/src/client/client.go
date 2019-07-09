@@ -773,7 +773,7 @@ func setup() error {
 	return err
 }
 
-func masterPath() string { return dataDir + "/master.bwt" }
+func masterPath() string { return dataDir + "/metadata.json" }
 
 func httpLoadMaster(w http.ResponseWriter, r *http.Request) {
 	f, err := os.Open(masterPath())
