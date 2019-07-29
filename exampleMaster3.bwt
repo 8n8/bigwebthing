@@ -1,0 +1,36 @@
+{
+	"shares": [{
+		"people": [21],
+		"files": [22, 88]
+	}, {
+		"people": [800, 50, 30],
+		"files": [2]
+	}],
+	"filetags": {
+		"23": ["Jane Smith", "invoice", "accounting"],
+		"44": ["BBC", "Radio 3", "playlist"]
+	},
+	"peopletags": {
+		"55": ["True Ghiassi"],
+		"733": ["Jane Smith", "barrister"]
+	},
+	"receipts": [{
+		"fileid": 87,
+		"time": 1563793426,
+		"signature": 221,
+		"recipient": 22
+	}, {
+		"fileid": 87,
+		"time": 1563793426,
+		"signature": 221,
+		"recipient": 22
+	}],
+	"me": 3,
+	"32byte": {
+		"44": "hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI",
+		"5667": "hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI",
+		"4": "hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI",
+		"1234": "hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI",
+		"909090": "hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI"
+	}
+}

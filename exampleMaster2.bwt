@@ -1,0 +1,55 @@
+{ invites:
+    [ { from: 55, invitee: 23, timestamp: 1563790154, signature: 1111 }
+    , { from: 55, invitee: 23, timestamp: 1563790154, signature: 432 }
+    ]
+, uninvites:
+    [ { from: 55, invitee: 23, timestamp: 1563790154, signature: 3390 }
+    , { invitee: `Jane` }
+    ]
+, messageSearch: [ `airbnb`, `fox` ]
+, messages:
+    [ { body:
+          [ txt `True
+
+Thanks for the info and doing the adjustment, as you can see, it's workd!!
+
+See you Tuesday, I'll pay your invoice tomorrow when I'm back st my desk.
+
+Sent from my iPhone
+
+Kind Regards
+Jane Smith
+07888 777666`
+          , bin 82
+          ]
+      , to: [`Jane`, `Josephine`, `Jack`] 
+      , tags: [`Jane Smith`, `Jane Austen`, `calculator`]
+      , id: 87
+      }
+    , { body:
+        [ txt `Here is my invoice for this week:
+`
+        , path `/invoice.pdf`
+        ]
+      , to: [ `Amanda` ]
+      }
+    , { body: [`Thank you Jane. See you on Tuesday.`]
+      , to: [443, 82, 97, 64] 
+      , tags: [`Jane Smith`, `Jane Austen`, `calculator`]
+      }
+    ]
+, publicIdKeys:
+    { 0: hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI
+    , 1: hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI
+    , 2: hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI
+    , 3: hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI
+    , 4: hurxrCzrSyhOt7g66nno5QeCH71QeMWvpaPtoXuxcLI
+    }
+, idtags:
+    { 55: [`True Ghiassi`]
+    , 733: [`Jane Smith`, `barrister`]
+    }
+, receipts:
+    [ { id: 87, time: 1563793426, signature: 221, recipient: 22 }
+    ]
+}

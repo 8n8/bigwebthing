@@ -125,6 +125,7 @@ loadMaster code =
 
 type Msg
     = SearchBox String
+    | AddTag String
     | CancelMakeNewMsg
     | NewTagButtonClick
     | EditingTag String
@@ -516,7 +517,8 @@ type alias Model =
 type alias Metadata =
     { invites : List Invite
     , uninvites : List Invite
-    , tags : Dict String (Set String)
+    , idtags : Dict String (Set String)
+    , apptags : Dict String (Set String)
     , access : Dict String (Set String)
     , byte32 : Dict String String
     }
@@ -533,10 +535,11 @@ type alias Invite =
 type alias MsgMaker =
     { chosenTags : Set String
     , currentTag : String
-    , recipients : Set String
+    , chosenRecipients : Set String
+    , recipientSearchStr : String
+    , recipChosenTags : Set String
     , msgHash : Maybe String
     }
-
 
 type alias SendDrawer =
     { recipient : String
@@ -580,10 +583,11 @@ postMsg searchString tags securityCode =
 
 metaDec : Jd.Decoder Metadata
 metaDec =
-    Jd.map5 Metadata
+    Jd.map6 Metadata
         (Jd.field "invites" invitesDec)
         (Jd.field "uninvites" invitesDec)
-        (Jd.field "tags" tagsDec)
+        (Jd.field "idtags" tagsDec)
+        (Jd.field "apptags" tagsDec)
         (Jd.field "access" accessDec)
         (Jd.field "byte32" byte32Dec)
 
@@ -620,6 +624,34 @@ inviteDec =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        AddTag tag ->
+            case model.msgMaker of
+                Nothing ->
+                    ( { model
+                        | msgMaker =
+                            Just
+                                { chosenTags = Set.singleton tag
+                                , currentTag = ""
+                                , chosenRecipients = Set.empty
+                                , currentRecipient = ""
+                                , msgHash = Nothing
+                                }
+                      }
+                    , Cmd.none
+                    )
+
+                Just mm ->
+                    ( { model
+                        | msgMaker =
+                            Just
+                                { mm
+                                    | chosenTags =
+                                        Set.insert tag mm.chosenTags
+                                }
+                      }
+                    , Cmd.none
+                    )
+
         CancelMakeNewMsg ->
             ( { model | msgMaker = Nothing }
             , Cmd.none
@@ -683,8 +715,9 @@ update msg model =
                     Just
                         { chosenTags = Set.empty
                         , currentTag = ""
-                        , recipients = Set.empty
                         , msgHash = Nothing
+                        , chosenRecipients = Set.empty
+                        , currentRecipient = ""
                         }
               }
             , Cmd.none
@@ -701,8 +734,9 @@ update msg model =
 
         LoadedMaster (Ok newMaster) ->
             case Jd.decodeString metaDec newMaster of
-                Err _ ->
-                    ( model, Cmd.none )
+                Err parseErr ->
+                    log ("master parse failed: " ++ Debug.toString parseErr)
+                        ( model, Cmd.none )
 
                 Ok parsed ->
                     ( { model | metadata = Just parsed }, Cmd.none )
@@ -1579,14 +1613,66 @@ msgMaker model =
                             E.text "Cancel new message"
                     }
                 , makeTags model m
+                , showTagCandidates model m
 
-                -- , makeRecipients
+                --, makeRecipients
                 ]
+
+
+makeRecipients : Model -> MsgMaker -> E.Element Msg
+makeRecipients model msgMakerState =
+    E.wrappedRow [ E.alignTop, monoFont, monoSize, E.spacing 10 ] <|
+        L.map recipientTag <|
+            Set.toList <|
+                recipTagCandidates model msgMakerState
+
+
+showRecipients : Model -> Set String -> List (E.Element Msg)
+showRecipients model recipients =
+    L.map (showRecipient model) recipients
+
+
+showRecipient : Model -> String -> E.Element Msg
+showRecipient model recipient =
+    E.row 
+
+
+showTagCandidates : Model -> MsgMaker -> E.Element Msg
+showTagCandidates model msgMakerState =
+    E.wrappedRow [ E.alignTop, monoFont, monoSize, E.spacing 15 ] <|
+        L.map candidateTag <|
+            Set.toList <|
+                tagCandidates model msgMakerState
+
+
+{-| Candidates are any tags that contain the current tag string.
+-}
+tagCandidates : Model -> MsgMaker -> Set String
+tagCandidates model m =
+    Set.diff (Set.filter (String.contains m.currentTag) <| getTags model) m.chosenTags
+
+
+recipTagCandidates : Model -> MsgMaker -> Set String
+recipTagCandidates model m =
+    Set.diff (Set.filter (String.contains m.
+
+
+getTags : Model -> Set String
+getTags { metadata } =
+    case log "metadata" metadata of
+        Nothing ->
+            Set.empty
+
+        Just { apptags } ->
+            Dict.foldr
+                (\_ ts accum -> Set.union ts accum)
+                Set.empty
+                apptags
 
 
 makeTags : Model -> MsgMaker -> E.Element Msg
 makeTags model msgMakerState =
-    E.row [ E.alignTop, monoFont, monoSize, E.spacing 10 ] <|
+    E.wrappedRow [ E.alignTop, monoFont, monoSize, E.spacing 10 ] <|
         L.map chosenTag (Set.toList msgMakerState.chosenTags)
             ++ [ editingTag msgMakerState.currentTag
                , newTagButton
@@ -1622,6 +1708,16 @@ newTagButton =
 chosenTag : String -> E.Element Msg
 chosenTag tag =
     showTag RemoveTag blue tag
+
+
+candidateTag : String -> E.Element Msg
+candidateTag tag =
+    showTag AddTag paleBlue tag
+
+
+recipientTag : String -> E.Element Msg
+recipientTag tag =
+    showTag AddRecipTag paleBlue tag
 
 
 
