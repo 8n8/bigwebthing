@@ -14,16 +14,12 @@ import (
 	"io"
 	"io/ioutil"
 	"math/big"
-	"net"
 	"net/http"
 	"os"
 	"sort"
 	"sync"
 	"syscall"
-	"time"
 	"unicode/utf8"
-
-	"github.com/fsnotify/fsnotify"
 	"github.com/pkg/browser"
 	"goji.io"
 	"goji.io/pat"
@@ -44,18 +40,11 @@ var publicEncrypt publicEncryptT
 var secretEncrypt secretEncryptT
 var dataDir string
 var port string
-var symmetricKeys = make(map[publicSignT]symmetricEncrypt)
-var symmetricKeysMux sync.Mutex
-var awaitingKey = make(map[publicSignT]filePathT)
-var awaitingKeyMux sync.Mutex
-var tcpOutChan = make(chan common.ClientToClient)
 
-type filePathT string
 type publicSignT [32]byte
 type publicEncryptT [32]byte
 type secretEncryptT [32]byte
 type blake2bHash [32]byte
-type symmetricEncrypt [32]byte
 
 func inboxPath() string { return dataDir + "/inbox" }
 
@@ -159,24 +148,6 @@ func hashFromString(s string) ([32]byte, error) {
 	return hash, nil
 }
 
-func makeConn() (net.Conn, error) {
-	conn, err := net.Dial("tcp", "localhost:4000")
-	if err != nil {
-		return conn, err
-	}
-	var authCode [common.AuthCodeLength]byte
-	err = gob.NewDecoder(conn).Decode(&authCode)
-	if err != nil {
-		return conn, err
-	}
-	authSig := common.AuthSigT{
-		publicSign,
-		signedAuthToSlice(sig(common.AuthCodeToSlice(authCode))),
-	}
-	err = gob.NewEncoder(conn).Encode(authSig)
-	return conn, err
-}
-
 type chunkT struct {
 	Body     []byte
 	CakeHash blake2bHash
@@ -202,14 +173,6 @@ var txtMsgCode = [txtMsgCodeLen]byte{
 	244, 108, 174, 239, 63, 159, 201, 117, 90, 254, 165, 34, 118,
 	208, 130, 224}
 
-func sigToSlice(bs [common.SigSize]byte) []byte {
-	result := make([]byte, common.SigSize)
-	for i, b := range bs {
-		result[i] = b
-	}
-	return result
-}
-
 func hashToSlice(hash [32]byte) []byte {
 	newHash := make([]byte, 32)
 	for i, el := range hash {
@@ -224,235 +187,6 @@ func sliceToHash(sl []byte) [32]byte {
 		newHash[i] = el
 	}
 	return newHash
-}
-
-func processCToC(c common.ClientToClient) error {
-	switch payload := c.Msg.(type) {
-	case common.Encrypted:
-		symmetricKeysMux.Lock()
-		symmetricKey, ok := symmetricKeys[c.Author]
-		symmetricKeysMux.Unlock()
-		if !ok {
-			return errors.New("could not find symmetric key")
-		}
-		symmetricKeySlice := [32]byte(symmetricKey)
-		decrypted, ok := secretbox.Open(
-			make([]byte, 0),
-			payload.Msg,
-			&payload.Nonce,
-			&symmetricKeySlice)
-		if !ok {
-			return errors.New("could not decrypt message")
-		}
-		if !equalHashes(c.Recipient, publicSign) {
-			return errors.New("ClientToClient wrongly addressed")
-		}
-		fileName := hashToStr(blake2b.Sum256(decrypted))
-		path := inboxPath() + "/" + fileName
-		err := ioutil.WriteFile(path, decrypted, 0600)
-		return err
-	case common.GiveMeASymmetricKey:
-		signed, ok := sign.Open(
-			make([]byte, 0),
-			sigToSlice(payload.Sig),
-			&c.Author)
-		if !ok {
-			return errors.New("bad signature")
-		}
-		if !equalHashes(
-			sliceToHash(signed),
-			hashPubEncrypt(payload.MyPublicEncrypt)) {
-
-			return errors.New("signature doesn't match public key")
-		}
-		symmetricKey, err := makeSymmetricKey()
-		if err != nil {
-			return err
-		}
-		nonce, err := makeNonce()
-		if err != nil {
-			return err
-		}
-		secretEncBytes := [32]byte(secretEncrypt)
-		encryptedKey := box.Seal(
-			make([]byte, 0),
-			hashToSlice(symmetricKey),
-			&nonce,
-			&payload.MyPublicEncrypt,
-			&secretEncBytes)
-		hereIs := common.HereIsAnEncryptionKey{
-			publicEncrypt,
-			encryptedKeyToArr(encryptedKey),
-			nonce,
-			*new([common.SigSize]byte),
-		}
-		signature := sliceToSig(sig(hashToSlice(
-			hashHereIsKey(hereIs))))
-		hereIs.Sig = signature
-		tcpOutChan <- common.ClientToClient{
-			hereIs, c.Author, publicSign}
-		symmetricKeysMux.Lock()
-		symmetricKeys[c.Author] = symmetricKey
-		symmetricKeysMux.Unlock()
-		return nil
-	case common.HereIsAnEncryptionKey:
-		awaitingKeyMux.Lock()
-		filePath, ok := awaitingKey[c.Author]
-		awaitingKeyMux.Unlock()
-		if !ok {
-			return errors.New("symmetric key not expected")
-		}
-		keyHash := hashHereIsKey(payload)
-		signed, ok := sign.Open(
-			make([]byte, 0),
-			sigToSlice(payload.Sig),
-			&c.Author)
-		if !ok {
-			return errors.New("bad signature on new key")
-		}
-		if !equalHashes(sliceToHash(signed), keyHash) {
-			return errors.New("bad key hash on new key")
-		}
-		secretKeyBytes := [32]byte(secretEncrypt)
-		keySlice, ok := box.Open(
-			make([]byte, 0),
-			encKeyToSlice(payload.EncryptedSymmetricKey),
-			&payload.Nonce,
-			&payload.MyPublicEncrypt,
-			&secretKeyBytes)
-		if !ok {
-			return errors.New("could not decrypt new key")
-		}
-		symmetricKey := sliceToHash(keySlice)
-		awaitingKeyMux.Lock()
-		delete(awaitingKey, c.Author)
-		awaitingKeyMux.Unlock()
-		symmetricKeysMux.Lock()
-		symmetricKeys[c.Author] = symmetricKey
-		symmetricKeysMux.Unlock()
-		err := sendFileTcp(string(filePath))
-		return err
-	}
-	return errors.New("bad pattern match")
-}
-
-var pubEncHashCode = [16]byte{
-	128, 174, 215, 253, 100, 130, 29, 105, 25, 9, 193, 255, 3, 66,
-	215, 111}
-
-func hashPubEncrypt(pub publicEncryptT) blake2bHash {
-	const resultLen = 32 + 16
-	result := make([]byte, resultLen)
-	i := 0
-	for ; i < 32; i++ {
-		result[i] = pub[i]
-	}
-	for ; i < resultLen; i++ {
-		result[i] = pubEncHashCode[i-32]
-	}
-	return blake2b.Sum256(result)
-}
-
-func sendFileTcp(filePath string) error {
-	fileHandle, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	var unencrypted plain
-	err = gob.NewDecoder(fileHandle).Decode(&unencrypted)
-	fileHandle.Close()
-	if err != nil {
-		return err
-	}
-	symmetricKeysMux.Lock()
-	symmetricKey, ok := symmetricKeys[unencrypted.Correspondent]
-	symmetricKeysMux.Unlock()
-	if !ok {
-		awaitingKeyMux.Lock()
-		awaitingKey[unencrypted.Correspondent] = filePathT(filePath)
-		awaitingKeyMux.Unlock()
-		tcpOutChan <- common.ClientToClient{
-			common.GiveMeASymmetricKey{
-				publicEncrypt,
-				sliceToSig(sig(hashToSlice(hashPubEncrypt(
-					publicEncrypt)))),
-			},
-			unencrypted.Correspondent,
-			publicSign,
-		}
-		return nil
-	}
-	nonce, err := makeNonce()
-	if err != nil {
-		return err
-	}
-	symKeyArr := [32]byte(symmetricKey)
-	encrypted := secretbox.Seal(
-		make([]byte, 0),
-		unencrypted.Bin,
-		&nonce,
-		&symKeyArr)
-	tcpOutChan <- common.ClientToClient{
-		common.Encrypted{encrypted, nonce},
-		unencrypted.Correspondent,
-		publicSign}
-	err = os.Remove(filePath)
-	return err
-}
-
-func tcpServer() {
-	stop := make(chan struct{})
-	outboxWatcher, err := fsnotify.NewWatcher()
-	outboxWatcher.Add(dataDir + "/outbox")
-	if err != nil {
-		panic(err)
-	}
-	for {
-		conn, err := makeConn()
-		if err != nil {
-			time.Sleep(time.Second)
-			continue
-		}
-		go func() {
-			for {
-				select {
-				case event := <-outboxWatcher.Events:
-					if event.Op != fsnotify.Create {
-						continue
-					}
-					_ = sendFileTcp(event.Name)
-				}
-			}
-		}()
-		func() {
-			go func() {
-				for {
-					msg, err := common.ReadClientToClient(conn)
-					if err != nil {
-						stop <- struct{}{}
-					}
-					_ = processCToC(msg)
-				}
-			}()
-			go func() {
-				for {
-					msg, err := common.EncodeClientToClient(
-						<-tcpOutChan)
-					if err != nil {
-						continue
-					}
-					n, err := conn.Write(msg)
-					if err != nil {
-						stop <- struct{}{}
-					}
-					if n != len(msg) {
-						stop <- struct{}{}
-					}
-				}
-			}()
-			<-stop
-		}()
-	}
 }
 
 func strEq(s1, s2 string) bool {
@@ -473,36 +207,6 @@ func getDocHash(securityCode string) (blake2bHash, error) {
 
 func hashToStr(h [32]byte) string {
 	return base64.URLEncoding.EncodeToString(hashToSlice(h))
-}
-
-var hereIsCode = [16]byte{
-	223, 237, 163, 168, 233, 246, 38, 223, 196, 115, 89, 99, 226,
-	11, 157, 155}
-
-func hashHereIsKey(h common.HereIsAnEncryptionKey) blake2bHash {
-	result := make([]byte, 32+common.EncryptedKeyLen+24+16)
-	i := 0
-	for ; i < 32; i++ {
-		result[i] = h.MyPublicEncrypt[i]
-	}
-	for ; i < 32+common.EncryptedKeyLen; i++ {
-		result[i] = h.EncryptedSymmetricKey[i-32]
-	}
-	for ; i < 32+common.EncryptedKeyLen+24; i++ {
-		result[i] = h.Nonce[i-32-common.EncryptedKeyLen]
-	}
-	for ; i < 32+common.EncryptedKeyLen+24+16; i++ {
-		result[i] = hereIsCode[i-32-common.EncryptedKeyLen-24]
-	}
-	return blake2b.Sum256(result)
-}
-
-func sliceToSig(bs []byte) [common.SigSize]byte {
-	var result [common.SigSize]byte
-	for i, b := range bs {
-		result[i] = b
-	}
-	return result
 }
 
 func getHashSecurityCode(hash blake2bHash) (string, error) {
@@ -561,22 +265,6 @@ func makeSalt() ([32]byte, error) {
 	return nonce, nil
 }
 
-func makeSymmetricKey() ([32]byte, error) {
-	nonceSlice := make([]byte, 32)
-	var nonce [32]byte
-	n, err := rand.Read(nonceSlice)
-	if err != nil {
-		return nonce, err
-	}
-	if n != 32 {
-		return nonce, errors.New("faulty random bytes reader")
-	}
-	for i, b := range nonceSlice {
-		nonce[i] = b
-	}
-	return nonce, nil
-}
-
 func makeNonce() ([24]byte, error) {
 	nonceSlice := make([]byte, 24)
 	var nonce [24]byte
@@ -600,14 +288,6 @@ func genCode() (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(authSlice), nil
-}
-
-func signedAuthToSlice(bs []byte) [common.AuthSigSize]byte {
-	var result [common.AuthSigSize]byte
-	for i, b := range bs {
-		result[i] = b
-	}
-	return result
 }
 
 type secretsFileT struct {
@@ -806,7 +486,6 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	go tcpServer()
 	httpServer()
 }
 
@@ -878,22 +557,6 @@ func unpackTarArchive(source string, dest string) error {
 	return nil
 }
 
-func encKeyToSlice(key [common.EncryptedKeyLen]byte) []byte {
-	result := make([]byte, common.EncryptedKeyLen)
-	for i, b := range key {
-		result[i] = b
-	}
-	return result
-}
-
-func encryptedKeyToArr(slice []byte) [common.EncryptedKeyLen]byte {
-	var result [common.EncryptedKeyLen]byte
-	for i, b := range slice {
-		result[i] = b
-	}
-	return result
-}
-
 func httpGetApp(w http.ResponseWriter, r *http.Request) {
 	err := httpGetAppErr(w, r)
 	if err != nil {
@@ -932,10 +595,6 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), code)
 	}
-}
-
-func sig(msg []byte) []byte {
-	return sign.Sign(make([]byte, 0), msg, &secretSign)
 }
 
 func httpSaveApp(w http.ResponseWriter, r *http.Request) {
