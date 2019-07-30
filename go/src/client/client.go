@@ -493,12 +493,6 @@ func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(pat.Get("/getapp/:pass/:filename"), httpGetApp)
 	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), p(httpMakeApp))
-	mux.HandleFunc(pat.Get("/getmyid/:pass"), p(httpGetMyID))
-	mux.HandleFunc(pat.Post("/saveapp/:pass"), p(httpSaveApp))
-	mux.HandleFunc(pat.Post("/push/:pass"), p(httpPush))
-	mux.HandleFunc(pat.Post("/pull/:pass"), p(httpPull))
-	mux.HandleFunc(pat.Post("/savemaster/:pass"), p(httpSaveMaster))
-	mux.HandleFunc(pat.Get("/loadmaster/:pass"), p(httpLoadMaster))
 	http.ListenAndServe(":" + port, mux)
 }
 
