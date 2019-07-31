@@ -67,24 +67,7 @@ urlToPage url =
 
 initModel : Page -> Maybe String -> Nav.Key -> Model
 initModel page securityCode key =
-    { page = page
-    , securityCode = securityCode
-    , msgMaker = Nothing
-    , inviteeBox = ""
-    , searchStr = ""
-    , fileUpload = Nothing
-    , searchResults = Ok { apps = [], tags = [] }
-    , key = key
-    , newTagsBox = ""
-    , selectedTags = Set.empty
-    , unselectedTags = Set.empty
-    , uploadStatus = Ok ()
-    , zone = Time.utc
-    , checkedBoxes = Set.empty
-    , selectAll = False
-    , sendDrawOpen = Nothing
-    , publicId = "Loading..."
-    , metadata = Nothing
+    { securityCode = securityCode
     }
 
 
@@ -160,24 +143,7 @@ spacesP =
 
 
 type alias Model =
-    { searchStr : String
-    , msgMaker : Maybe MsgMaker
-    , page : Page
-    , inviteeBox : String
-    , securityCode : Maybe String
-    , searchResults : Result Http.Error SearchResults
-    , key : Nav.Key
-    , sendDrawOpen : Maybe SendDrawer
-    , newTagsBox : String
-    , unselectedTags : Set.Set String
-    , selectedTags : Set.Set String
-    , fileUpload : Maybe File.File
-    , uploadStatus : Result Http.Error ()
-    , zone : Time.Zone
-    , checkedBoxes : Set.Set String
-    , selectAll : Bool
-    , publicId : String
-    , metadata : Maybe Metadata
+    { securityCode : Maybe String
     }
 
 
