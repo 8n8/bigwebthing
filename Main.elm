@@ -35,7 +35,7 @@ main =
         , update = update
         , subscriptions = \_ -> Sub.none
         , onUrlRequest = \_ -> DoNothing
-        , onUrlChange = \url -> NewUrl url
+        , onUrlChange = \_ -> DoNothing
         }
 
 
@@ -93,71 +93,14 @@ init _ url key =
     case urlToPage url of
         ( page, securityCode ) ->
             ( initModel page securityCode key
-            , case securityCode of
-                Nothing ->
-                    Cmd.none
-
-                Just code ->
-                    Cmd.batch
-                        [ postMsg "" [] code
-                        , Task.perform Zone Time.here
-                        , getId code
-                        , loadMaster code
-                        ]
+            , Cmd.none
             )
 
 
-getId : String -> Cmd Msg
-getId code =
-    Http.get
-        { url = "/getmyid/" ++ code
-        , expect = Http.expectString MyPublicId
-        }
-
-
-loadMaster : String -> Cmd Msg
-loadMaster code =
-    Http.get
-        { url = "/loadmaster/" ++ code
-        , expect = Http.expectString LoadedMaster
-        }
-
-
 type Msg
-    = SearchBox String
-    | AddTag String
-    | CancelMakeNewMsg
-    | NewTagButtonClick
-    | EditingTag String
-    | RemoveTag String
-    | NewMsgClick
-    | LoadedMaster (Result Http.Error String)
-    | TagBox String
-    | NewDocumentButtonClick
-    | NewSearchResults (Result Http.Error SearchResults)
-    | MembershipButtonClick
-    | HomeButtonClick
-    | DoNothing
-    | NewUrl Url.Url
-    | UploadDoc
-    | DocLoaded File.File
-    | AppHash (Result Http.Error ())
-    | UnchooseTag String
-    | ChooseTag String
-    | ChooseDoc
-    | Zone Time.Zone
-    | FileSelected String Bool
-    | TickAll Bool
-    | LaunchApp String
+    = LaunchApp String
     | AppLaunched (Result Http.Error ())
-    | AppSent (Result Http.Error ())
-    | OpenSendDrawer String
-    | UpdateSendDrawer SendDrawer
-    | SendApp
-    | SendInvite
-    | InviteeBox String
-    | InviteSent (Result Http.Error ())
-    | MyPublicId (Result Http.Error String)
+    | DoNothing
 
 
 type Page
@@ -201,79 +144,6 @@ type PublicSign
     = String
 
 
-
--- type Message
---     = Human (Set.Set String) (Set.Set String) (List HumanMsgPart)
---     | Invite InviteLike
---     | Uninvite InviteLike
--- type Id
---     = Id String
--- type Tag
---     = Tag String
--- {-| The fields are
---
--- 1.  recipients
--- 2.  invitee
--- 3.  author
--- 4.  signature
---
--- -}
--- type InviteLike
---     = InviteLike (Set.Set String) String String Signature
--- type alias Signature =
---     String
---
---
--- type alias FileHash =
---     String
--- type HumanMsgPart
---     = Text (List Paragraph)
---     | File FileHash
---
---
--- type Paragraph
---     = Paragraph (List Line)
--- type Line
---     = Line String
--- {-| The syntax for the messages file is like this:
---
--- messages {
--- human
--- to { JXQ3EM8ulCcl9YfLPCI1OqiESWccBrchHKi8lcyMRTo= }
--- tags { `the` `tags` `for my first message example` }
--- body {
--- \`The time now approached for Lady Russell's return; the
--- day was even fixed, and Anne, being engaged to join her as
--- soon as she was resettled, was looking forward to an early
--- removal to Kellynch, and beginning to think how her own
--- comfort was likely to be affected by it.
---
--- It would place here in the same village with Captain Went-
--- worth, within half a mile of him; they would have to fre-
--- quent the same church, and there must be intercourse
--- between the two families.
---
--- `file aGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0=`
---
--- This was much against her; but, on
--- the other hand, he spent so much of his time at Upper-
--- cross, that in removing thence she might be considered
--- rather as leaving him behind, than as going towards him;
--- \`
--- }
--- invite
--- to { }
--- invitee ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
--- author hurxrCzrSyhOt6g66nno5QeCH71QeMWvpaPtoXuxcLI=
--- signature 21jFWq5NzZfa-vzb6hC8DcleS74W2jhvGWfR33Cv5UIaGpub1w63ntWPeIDOi3SIwDSsLx5sOdzZIbZkcioon0ffzeJbaGlXZ-t10NWtuhUUdwi0rm5eqI030j9hOEjWk=
--- }
---
--- -}
--- masterParser : P.Parser (List Message)
--- masterParser =
---     listP messageP
-
-
 isSpace : Char -> Bool
 isSpace c =
     c == ' ' || c == '\n' || c == '\u{000D}'
@@ -289,210 +159,7 @@ spacesP =
     oneSpaceP |. P.chompWhile isSpace
 
 
-
--- messageP : P.Parser Message
--- messageP =
---     P.succeed identity
---         |= P.oneOf [ humanP, inviteP, uninviteP ]
---         |. P.oneOf [ P.end, spacesP ]
---
---
--- inviteP : P.Parser Message
--- inviteP =
---     P.succeed Invite
---         |. P.token "invite"
---         |. spacesP
---         |= inviteLikeP
---
---
--- uninviteP : P.Parser Message
--- uninviteP =
---     P.succeed Invite
---         |. P.token "uninvite"
---         |. spacesP
---         |= inviteLikeP
---
---
--- inviteLikeP : P.Parser InviteLike
--- inviteLikeP =
---     P.succeed InviteLike
---         |. P.token "to"
---         |. spacesP
---         |= toListP
---         |. spacesP
---         |. P.token "invitee"
---         |. spacesP
---         |= hashP
---         |. spacesP
---         |. P.token "author"
---         |. spacesP
---         |= hashP
---         |. P.token "signature"
---         |. spacesP
---         |= sigP
---
---
--- humanP : P.Parser Message
--- humanP =
---     P.succeed Human
---         |. P.token "human"
---         |. spacesP
---         |. P.token "to"
---         |. spacesP
---         |= toListP
---         |. spacesP
---         |. P.token "tags"
---         |. spacesP
---         |= tagListP
---         |. spacesP
---         |. P.token "body"
---         |. spacesP
---         |= listP humanPartP
---
---
--- tagListP : P.Parser (Set.Set String)
--- tagListP =
---     P.map Set.fromList <| listP tagP
---
---
--- toListP : P.Parser (Set.Set String)
--- toListP =
---     P.map Set.fromList <| listP hashP
---
---
--- humanPartP : P.Parser HumanMsgPart
--- humanPartP =
---     P.oneOf [ humanTextP, humanFileP ]
---
---
--- humanTextP : P.Parser HumanMsgPart
--- humanTextP =
---     P.map Text <| listP paragraphP
---
---
--- humanFileP : P.Parser HumanMsgPart
--- humanFileP =
---     P.succeed File
---         |. P.token "file"
---         |. spacesP
---         |= hashP
---
---
--- paragraphP : P.Parser Paragraph
--- paragraphP =
---     P.map Paragraph <| listP lineP
---
---
--- lineP : P.Parser Line
--- lineP =
---     P.succeed Line
---         |= P.getChompedString (P.chompWhile isTagChar)
---         |. P.oneOf
---             [ P.token "\n"
---             , P.token "\u{000D}"
---             , P.end
---             ]
---
---
--- idP : P.Parser Id
--- idP =
---     P.map Id hashP
---
---
--- tagP : P.Parser String
--- tagP =
---     P.succeed identity
---         |. P.symbol "`"
---         |= P.getChompedString (P.chompWhile isTagChar)
---         |. P.symbol "`"
---
---
--- isTagChar : Char -> Bool
--- isTagChar c =
---     Set.member c tagSet
---
---
--- tagSet : Set.Set Char
--- tagSet =
---     Set.fromList <| String.toList tagChars
---
---
--- tagChars : String
--- tagChars =
---     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
---         ++ "!\"£$%^&*()-_=+#~{[}];:'@<,>.?/\\| "
---
---
--- {-| Go Nacl adds 64 bytes to a signed message. So the signature is
--- a 32-byte hash plus the 64 byte overhead, which is 96 bytes.
--- In Go, base64.URLEncoding.EncodeToString(<some 96 byte slice>)
--- gives a string of length 128, with no padding (i.e. no "=" on the
--- end).
--- -}
--- sigP : P.Parser String
--- sigP =
---     P.getChompedString (P.chompWhile isBase64Char)
---         |> P.andThen checkSig
---
---
--- checkSig : String -> P.Parser String
--- checkSig sig =
---     if String.length sig == 128 then
---         P.succeed sig
---
---     else
---         P.problem "base64 signature has 128 characters and no padding"
---
---
--- hashP : P.Parser String
--- hashP =
---     P.getChompedString (P.chompWhile isBase64Char)
---         |> P.andThen checkBase64
---
---
--- checkBase64 : String -> P.Parser String
--- checkBase64 base64 =
---     if String.length base64 == 43 then
---         P.succeed (base64 ++ "=") |. P.token "="
---
---     else
---         P.problem "base64 hash has 43 characters followed by ="
---
---
--- base64Set : Set.Set Char
--- base64Set =
---     Set.fromList <| String.toList base64String
---
---
--- base64String : String
--- base64String =
---     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
---
---
--- isBase64Char : Char -> Bool
--- isBase64Char c =
---     Set.member c base64Set
---
---
--- listP : P.Parser a -> P.Parser (List a)
--- listP itemP =
---     P.succeed identity
---         |. P.symbol "{"
---         |= P.loop [] (buildListP itemP)
---
---
--- buildListP : P.Parser a -> List a -> P.Parser (P.Step (List a) (List a))
--- buildListP itemP revItems =
---     P.oneOf
---         [ P.symbol "}"
---             |> P.map (\_ -> P.Done (L.reverse revItems))
---         , P.map (\item -> P.Loop (item :: revItems)) itemP
---         , P.map (\_ -> P.Loop revItems) spacesP
---         ]
-
-
 type alias Model =
-    --{ parsedData : List Message
     { searchStr : String
     , msgMaker : Maybe MsgMaker
     , page : Page
@@ -541,6 +208,7 @@ type alias MsgMaker =
     , msgHash : Maybe String
     }
 
+
 type alias SendDrawer =
     { recipient : String
     , appHash : String
@@ -561,24 +229,6 @@ encodeSendApp sendDrawer =
         [ ( "AppHash", Je.string sendDrawer.appHash )
         , ( "Recipient", Je.string sendDrawer.recipient )
         ]
-
-
-postSendApp : SendDrawer -> String -> Cmd Msg
-postSendApp sendDrawer securityCode =
-    Http.post
-        { url = "/sendapp/" ++ securityCode
-        , expect = Http.expectWhatever AppSent
-        , body = Http.jsonBody <| encodeSendApp sendDrawer
-        }
-
-
-postMsg : String -> List String -> String -> Cmd Msg
-postMsg searchString tags securityCode =
-    Http.post
-        { url = "/searchapps/" ++ securityCode
-        , expect = Http.expectJson NewSearchResults decodeSearchResults
-        , body = Http.jsonBody <| encodeSearchQuery tags searchString
-        }
 
 
 metaDec : Jd.Decoder Metadata
@@ -624,174 +274,7 @@ inviteDec =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        AddTag tag ->
-            case model.msgMaker of
-                Nothing ->
-                    ( { model
-                        | msgMaker =
-                            Just
-                                { chosenTags = Set.singleton tag
-                                , currentTag = ""
-                                , chosenRecipients = Set.empty
-                                , currentRecipient = ""
-                                , msgHash = Nothing
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-                Just mm ->
-                    ( { model
-                        | msgMaker =
-                            Just
-                                { mm
-                                    | chosenTags =
-                                        Set.insert tag mm.chosenTags
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-        CancelMakeNewMsg ->
-            ( { model | msgMaker = Nothing }
-            , Cmd.none
-            )
-
-        NewTagButtonClick ->
-            case model.msgMaker of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just mm ->
-                    ( { model
-                        | msgMaker =
-                            Just
-                                { mm
-                                    | chosenTags =
-                                        if mm.currentTag == "" then
-                                            mm.chosenTags
-
-                                        else
-                                            Set.insert mm.currentTag mm.chosenTags
-                                    , currentTag = ""
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-        EditingTag new ->
-            case model.msgMaker of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just mm ->
-                    ( { model
-                        | msgMaker =
-                            Just { mm | currentTag = new }
-                      }
-                    , Cmd.none
-                    )
-
-        RemoveTag tag ->
-            case model.msgMaker of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just mm ->
-                    ( { model
-                        | msgMaker =
-                            Just
-                                { mm
-                                    | chosenTags =
-                                        Set.remove tag mm.chosenTags
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-        NewMsgClick ->
-            ( { model
-                | msgMaker =
-                    Just
-                        { chosenTags = Set.empty
-                        , currentTag = ""
-                        , msgHash = Nothing
-                        , chosenRecipients = Set.empty
-                        , currentRecipient = ""
-                        }
-              }
-            , Cmd.none
-            )
-
-        MyPublicId (Err _) ->
-            ( model, Cmd.none )
-
-        MyPublicId (Ok id) ->
-            ( { model | publicId = id }, Cmd.none )
-
-        LoadedMaster (Err _) ->
-            ( model, Cmd.none )
-
-        LoadedMaster (Ok newMaster) ->
-            case Jd.decodeString metaDec newMaster of
-                Err parseErr ->
-                    log ("master parse failed: " ++ Debug.toString parseErr)
-                        ( model, Cmd.none )
-
-                Ok parsed ->
-                    ( { model | metadata = Just parsed }, Cmd.none )
-
-        InviteeBox str ->
-            ( { model | inviteeBox = str }, Cmd.none )
-
-        InviteSent _ ->
-            ( model, Cmd.none )
-
-        SendInvite ->
-            case model.securityCode of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just code ->
-                    ( { model | inviteeBox = "" }
-                    , Http.post
-                        { url =
-                            String.concat
-                                [ "/invite/"
-                                , code
-                                , "/"
-                                , model.inviteeBox
-                                ]
-                        , expect = Http.expectWhatever InviteSent
-                        , body = Http.emptyBody
-                        }
-                    )
-
-        OpenSendDrawer hash ->
-            ( { model
-                | sendDrawOpen =
-                    Just
-                        { recipient = ""
-                        , appHash = hash
-                        }
-              }
-            , Cmd.none
-            )
-
-        UpdateSendDrawer newDrawer ->
-            ( { model | sendDrawOpen = Just newDrawer }, Cmd.none )
-
-        SendApp ->
-            case ( model.sendDrawOpen, model.securityCode ) of
-                ( Just drawer, Just code ) ->
-                    ( { model | sendDrawOpen = Nothing }
-                    , postSendApp drawer code
-                    )
-
-                _ ->
-                    ( model, Cmd.none )
-
-        AppSent _ ->
+        DoNothing ->
             ( model, Cmd.none )
 
         AppLaunched _ ->
@@ -808,180 +291,6 @@ update msg model =
                         { url = "/makeapproute/" ++ code ++ "/" ++ str
                         , expect = Http.expectWhatever AppLaunched
                         }
-                    )
-
-        TickAll True ->
-            case model.searchResults of
-                Err _ ->
-                    ( { model | selectAll = True }, Cmd.none )
-
-                Ok results ->
-                    ( { model
-                        | checkedBoxes = Set.fromList (List.map .hash results.apps)
-                        , selectAll = True
-                      }
-                    , Cmd.none
-                    )
-
-        TickAll False ->
-            ( { model
-                | checkedBoxes = Set.empty
-                , selectAll = False
-              }
-            , Cmd.none
-            )
-
-        FileSelected hash False ->
-            ( { model
-                | checkedBoxes = Set.remove hash model.checkedBoxes
-              }
-            , Cmd.none
-            )
-
-        FileSelected hash True ->
-            ( { model
-                | checkedBoxes = Set.insert hash model.checkedBoxes
-              }
-            , Cmd.none
-            )
-
-        Zone zone ->
-            ( { model | zone = zone }, Cmd.none )
-
-        ChooseTag tag ->
-            let
-                newTags =
-                    Set.insert tag model.selectedTags
-            in
-            case model.securityCode of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just code ->
-                    ( { model | selectedTags = newTags }
-                    , postMsg model.searchStr (Set.toList newTags) code
-                    )
-
-        UnchooseTag tag ->
-            let
-                newTags =
-                    Set.remove tag model.selectedTags
-            in
-            case model.securityCode of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just code ->
-                    ( { model | selectedTags = newTags }
-                    , postMsg model.searchStr (Set.toList newTags) code
-                    )
-
-        NewSearchResults results ->
-            ( { model
-                | searchResults = results
-                , unselectedTags =
-                    case results of
-                        Err _ ->
-                            model.unselectedTags
-
-                        Ok r ->
-                            let
-                                newTags =
-                                    Set.fromList r.tags
-                            in
-                            Set.diff newTags model.selectedTags
-              }
-            , Cmd.none
-            )
-
-        TagBox tags ->
-            ( { model | newTagsBox = tags }, Cmd.none )
-
-        DocLoaded file ->
-            ( { model | fileUpload = Just file }, Cmd.none )
-
-        UploadDoc ->
-            case ( model.securityCode, model.fileUpload ) of
-                ( Just code, Just file ) ->
-                    ( { model | fileUpload = Nothing }
-                    , Http.post
-                        { url = "/saveapp/" ++ code
-                        , body =
-                            Http.multipartBody
-                                [ Http.filePart "file" file
-                                , Http.stringPart "tags" model.newTagsBox
-                                ]
-                        , expect = Http.expectWhatever AppHash
-                        }
-                    )
-
-                _ ->
-                    ( model, Cmd.none )
-
-        AppHash status ->
-            ( { model | uploadStatus = status }
-            , Cmd.none
-            )
-
-        NewUrl path ->
-            case urlToPage path of
-                ( page, _ ) ->
-                    ( { model | page = page }, Cmd.none )
-
-        SearchBox txt ->
-            case model.securityCode of
-                Nothing ->
-                    ( { model | page = Unknown }, Cmd.none )
-
-                Just code ->
-                    ( { model | searchStr = txt }, postMsg txt (Set.toList model.selectedTags) code )
-
-        ChooseDoc ->
-            ( model, Fs.file [ "application/octet-stream" ] DocLoaded )
-
-        DoNothing ->
-            ( model, Cmd.none )
-
-        MembershipButtonClick ->
-            case model.securityCode of
-                Nothing ->
-                    ( { model | page = Unknown }, Cmd.none )
-
-                Just code ->
-                    ( { model | page = Members }
-                    , Nav.pushUrl model.key <|
-                        "/getapp/"
-                            ++ code
-                            ++ "/members"
-                    )
-
-        NewDocumentButtonClick ->
-            case model.securityCode of
-                Nothing ->
-                    ( { model | page = Unknown }, Cmd.none )
-
-                Just code ->
-                    ( { model | page = NewDoc }
-                    , Nav.pushUrl model.key <|
-                        "/getapp/"
-                            ++ code
-                            ++ "/newdocument"
-                    )
-
-        HomeButtonClick ->
-            case model.securityCode of
-                Nothing ->
-                    ( { model | page = Unknown }, Cmd.none )
-
-                Just code ->
-                    ( { model | page = Home }
-                    , Cmd.batch
-                        [ Nav.pushUrl model.key <| "/getapp/" ++ code ++ "/index.html"
-                        , postMsg
-                            model.searchStr
-                            (Set.toList model.selectedTags)
-                            code
-                        ]
                     )
 
 
@@ -1082,41 +391,6 @@ makeTopButton page ( msg, buttonPage, label ) =
             }
 
 
-topButtons : Page -> E.Element Msg
-topButtons page =
-    E.row [ E.spacing 20, E.alignTop ] <|
-        L.map (makeTopButton page)
-            [ ( HomeButtonClick, Home, "Home" )
-            , ( NewDocumentButtonClick, NewDoc, "New document" )
-            , ( MembershipButtonClick, Members, "Members" )
-            ]
-
-
-searchBox : String -> E.Element Msg
-searchBox txt =
-    E.el searchBoxStyle <|
-        Ei.text
-            searchStyle
-            { onChange = SearchBox
-            , text = txt
-            , placeholder = Just placeholder
-            , label = Ei.labelAbove [] E.none
-            }
-
-
-topButtonsAndSearch : Page -> String -> E.Element Msg
-topButtonsAndSearch page txt =
-    E.column [ E.spacing 20, E.alignTop ] [ searchBox txt ]
-
-
-homeTopSection : String -> String -> E.Element Msg
-homeTopSection txt id =
-    E.row [ E.width E.fill, E.spacing 20 ]
-        [ topButtonsAndSearch Home txt
-        , myId id
-        ]
-
-
 newDocButtonStyle : List (E.Attribute Msg)
 newDocButtonStyle =
     [ E.alignBottom
@@ -1135,91 +409,39 @@ greyNewDocButtonStyle =
            ]
 
 
-
--- newDocTopSection : String -> Maybe Int -> String -> E.Element Msg
--- newDocTopSection tagText fileUpload id =
---     E.column []
---         [ myId id
---         , topButtons NewDoc
---         , E.row [ E.spacing 20 ]
---             [ E.el [] <|
---                 Ei.text
---                     [ E.width <| E.px 600, E.height <| E.px 50 ]
---                     { onChange = TagBox
---                     , text = tagText
---                     , placeholder =
---                         Just <|
---                             Ei.placeholder [] <|
---                                 E.text "Type tags separated by commas"
---                     , label = Ei.labelAbove [] E.none
---                     }
---             , Ei.button newDocButtonStyle
---                 { onPress = Just ChooseDoc
---                 , label =
---                     E.el [ E.padding 3 ] <|
---                         E.text "Choose local file"
---                 }
---             , Ei.button
---                 (case fileUpload of
---                     Nothing ->
---                         greyNewDocButtonStyle
---
---                     Just _ ->
---                         newDocButtonStyle
---                 )
---                 { onPress =
---                     case fileUpload of
---                         Nothing ->
---                             Nothing
---
---                         Just _ ->
---                             Just UploadDoc
---                 , label =
---                     E.el [ E.padding 3 ] <|
---                         E.text "Upload file"
---                 }
---             ]
---         ]
-
-
-membersTopSection : String -> E.Element Msg
-membersTopSection id =
-    E.row [ E.width E.fill, E.spacing 20 ]
-        [ topButtons Members
-        , myId id
-        ]
-
-
 unknownPage : E.Element Msg
 unknownPage =
     E.el [] <| E.text "Page doesn't exist"
 
 
-memberPage : Model -> E.Element Msg
-memberPage model =
-    E.column
-        [ E.width E.fill
-        , E.padding 20
-        , E.spacing 20
-        ]
-        [ myId model.publicId
-        , topButtons Members
-        , E.row []
-            [ Ei.text []
-                { onChange = InviteeBox
-                , text = model.inviteeBox
-                , placeholder =
-                    Just <|
-                        Ei.placeholder [] <|
-                            E.text "Type ID of person to invite."
-                , label = Ei.labelAbove [] E.none
-                }
-            , Ei.button []
-                { onPress = Just SendInvite
-                , label = E.text "Send invite"
-                }
-            ]
-        ]
+
+{-
+   memberPage : Model -> E.Element Msg
+   memberPage model =
+       E.column
+           [ E.width E.fill
+           , E.padding 20
+           , E.spacing 20
+           ]
+           [ myId model.publicId
+           , topButtons Members
+           , E.row []
+               [ Ei.text []
+                   { onChange = InviteeBox
+                   , text = model.inviteeBox
+                   , placeholder =
+                       Just <|
+                           Ei.placeholder [] <|
+                               E.text "Type ID of person to invite."
+                   , label = Ei.labelAbove [] E.none
+                   }
+               , Ei.button []
+                   { onPress = Just SendInvite
+                   , label = E.text "Send invite"
+                   }
+               ]
+           ]
+-}
 
 
 tagStyle : E.Color -> List (E.Attribute Msg)
@@ -1404,139 +626,142 @@ prettyTime posix zone =
            )
 
 
-bigCheckbox : (Bool -> Msg) -> Bool -> E.Element Msg
-bigCheckbox onChange checked =
-    Ei.checkbox
-        [ E.alignTop
-        , E.alignLeft
-        ]
-        { onChange = onChange
-        , icon = defaultCheckbox
-        , checked = checked
-        , label = Ei.labelHidden "Select document"
-        }
 
+{-
+   bigCheckbox : (Bool -> Msg) -> Bool -> E.Element Msg
+   bigCheckbox onChange checked =
+       Ei.checkbox
+           [ E.alignTop
+           , E.alignLeft
+           ]
+           { onChange = onChange
+           , icon = defaultCheckbox
+           , checked = checked
+           , label = Ei.labelHidden "Select document"
+           }
+-}
+{-
+   viewSearchResult : Time.Zone -> Set.Set String -> String -> Maybe SendDrawer -> SearchResult -> E.Element Msg
+   viewSearchResult zone checkedBoxes securityCode sendDrawOpen result =
+       E.row [ E.spacing 30 ]
+           [ bigCheckbox (FileSelected result.hash) (Set.member result.hash checkedBoxes)
+           , E.column [ E.spacing 10 ]
+               [ homeShowTags ChooseTag result.tags paleBlue (E.padding 0)
+               , E.row []
+                   [ E.el normalText <| E.text "Author ID: "
+                   , E.el idStyle <| E.text result.author
+                   ]
+               , E.row []
+                   [ E.el normalText <| E.text "Document ID: "
+                   , E.el idStyle <| Ei.button [] { onPress = Just (LaunchApp result.hash), label = E.text result.hash }
+                   ]
+               , E.row []
+                   [ E.el normalText <| E.text "Date: "
+                   , E.el normalText <|
+                       E.text <|
+                           prettyTime
+                               (Time.millisToPosix <| result.posixTime * 1000)
+                               zone
+                   ]
+               , let
+                   button =
+                       Ei.button [] { onPress = Just (OpenSendDrawer result.hash), label = E.text "Send this app" }
 
-viewSearchResult : Time.Zone -> Set.Set String -> String -> Maybe SendDrawer -> SearchResult -> E.Element Msg
-viewSearchResult zone checkedBoxes securityCode sendDrawOpen result =
-    E.row [ E.spacing 30 ]
-        [ bigCheckbox (FileSelected result.hash) (Set.member result.hash checkedBoxes)
-        , E.column [ E.spacing 10 ]
-            [ homeShowTags ChooseTag result.tags paleBlue (E.padding 0)
-            , E.row []
-                [ E.el normalText <| E.text "Author ID: "
-                , E.el idStyle <| E.text result.author
-                ]
-            , E.row []
-                [ E.el normalText <| E.text "Document ID: "
-                , E.el idStyle <| Ei.button [] { onPress = Just (LaunchApp result.hash), label = E.text result.hash }
-                ]
-            , E.row []
-                [ E.el normalText <| E.text "Date: "
-                , E.el normalText <|
-                    E.text <|
-                        prettyTime
-                            (Time.millisToPosix <| result.posixTime * 1000)
-                            zone
-                ]
-            , let
-                button =
-                    Ei.button [] { onPress = Just (OpenSendDrawer result.hash), label = E.text "Send this app" }
+                   drawer recipStr =
+                       E.row []
+                           [ Ei.text []
+                               { onChange =
+                                   \txt ->
+                                       UpdateSendDrawer
+                                           { recipient = txt
+                                           , appHash = result.hash
+                                           }
+                               , text = recipStr
+                               , placeholder = Just <| Ei.placeholder [] <| E.text "Type recipient ID code"
+                               , label = Ei.labelAbove [] E.none
+                               }
+                           , Ei.button []
+                               { onPress = Just SendApp
+                               , label = E.text "Send"
+                               }
+                           ]
+                 in
+                 case sendDrawOpen of
+                   Nothing ->
+                       button
 
-                drawer recipStr =
-                    E.row []
-                        [ Ei.text []
-                            { onChange =
-                                \txt ->
-                                    UpdateSendDrawer
-                                        { recipient = txt
-                                        , appHash = result.hash
-                                        }
-                            , text = recipStr
-                            , placeholder = Just <| Ei.placeholder [] <| E.text "Type recipient ID code"
-                            , label = Ei.labelAbove [] E.none
-                            }
-                        , Ei.button []
-                            { onPress = Just SendApp
-                            , label = E.text "Send"
-                            }
-                        ]
-              in
-              case sendDrawOpen of
-                Nothing ->
-                    button
+                   Just draw ->
+                       if draw.appHash == result.hash then
+                           drawer draw.recipient
 
-                Just draw ->
-                    if draw.appHash == result.hash then
-                        drawer draw.recipient
+                       else
+                           button
+               ]
+           ]
+-}
+{-
+   defaultCheckbox : Bool -> E.Element msg
+   defaultCheckbox checked =
+       E.el
+           [ E.width (E.px 35)
+           , E.height (E.px 35)
+           , Font.color white
+           , E.centerY
+           , Font.size 9
+           , Font.center
+           , Border.rounded 3
+           , Border.color <|
+               if checked then
+                   E.rgb255 59 153 252
 
-                    else
-                        button
-            ]
-        ]
+               else
+                   E.rgb255 211 211 211
+           , Border.shadow <|
+               { offset = ( 0, 0 )
+               , blur = 1
+               , size = 1
+               , color =
+                   if checked then
+                       E.rgba255 238 238 238 0
 
+                   else
+                       E.rgb255 238 238 238
+               }
+           , Bg.color <|
+               if checked then
+                   E.rgb255 59 153 252
 
-defaultCheckbox : Bool -> E.Element msg
-defaultCheckbox checked =
-    E.el
-        [ E.width (E.px 35)
-        , E.height (E.px 35)
-        , Font.color white
-        , E.centerY
-        , Font.size 9
-        , Font.center
-        , Border.rounded 3
-        , Border.color <|
-            if checked then
-                E.rgb255 59 153 252
+               else
+                   white
+           , Border.width <|
+               if checked then
+                   0
+
+               else
+                   1
+           ]
+           (if checked then
+               E.el
+                   [ Border.color white
+                   , E.height (E.px 12)
+                   , E.width (E.px 18)
+                   , E.rotate (degrees -45)
+                   , E.centerX
+                   , E.centerY
+                   , E.moveUp 2
+                   , Border.widthEach
+                       { top = 0
+                       , left = 4
+                       , bottom = 4
+                       , right = 0
+                       }
+                   ]
+                   E.none
 
             else
-                E.rgb255 211 211 211
-        , Border.shadow <|
-            { offset = ( 0, 0 )
-            , blur = 1
-            , size = 1
-            , color =
-                if checked then
-                    E.rgba255 238 238 238 0
-
-                else
-                    E.rgb255 238 238 238
-            }
-        , Bg.color <|
-            if checked then
-                E.rgb255 59 153 252
-
-            else
-                white
-        , Border.width <|
-            if checked then
-                0
-
-            else
-                1
-        ]
-        (if checked then
-            E.el
-                [ Border.color white
-                , E.height (E.px 12)
-                , E.width (E.px 18)
-                , E.rotate (degrees -45)
-                , E.centerX
-                , E.centerY
-                , E.moveUp 2
-                , Border.widthEach
-                    { top = 0
-                    , left = 4
-                    , bottom = 4
-                    , right = 0
-                    }
-                ]
-                E.none
-
-         else
-            E.none
-        )
+               E.none
+           )
+-}
 
 
 noResults : E.Element Msg
@@ -1544,23 +769,26 @@ noResults =
     E.text "No results."
 
 
-homeSearchResults : Result Http.Error SearchResults -> Time.Zone -> Set.Set String -> Bool -> String -> Maybe SendDrawer -> E.Element Msg
-homeSearchResults results zone checkedBoxes selectAll securityCode sendDrawOpen =
-    case results of
-        Err _ ->
-            noResults
 
-        Ok r ->
-            case r.apps of
-                [] ->
-                    noResults
+{-
+   homeSearchResults : Result Http.Error SearchResults -> Time.Zone -> Set.Set String -> Bool -> String -> Maybe SendDrawer -> E.Element Msg
+   homeSearchResults results zone checkedBoxes selectAll securityCode sendDrawOpen =
+       case results of
+           Err _ ->
+               noResults
 
-                _ ->
-                    E.column
-                        [ E.spacing 30, E.paddingXY 0 10 ]
-                    <|
-                        (E.el [] <| bigCheckbox TickAll selectAll)
-                            :: List.map (viewSearchResult zone checkedBoxes securityCode sendDrawOpen) r.apps
+           Ok r ->
+               case r.apps of
+                   [] ->
+                       noResults
+
+                   _ ->
+                       E.column
+                           [ E.spacing 30, E.paddingXY 0 10 ]
+                       <|
+                           (E.el [] <| bigCheckbox TickAll selectAll)
+                               :: List.map (viewSearchResult zone checkedBoxes securityCode sendDrawOpen) r.apps
+-}
 
 
 allChecked searchResults checkedBoxes =
@@ -1574,199 +802,5 @@ homePage model =
         , E.padding 5
         , E.spacing 5
         ]
-        [ myId model.publicId
-        , searchBox model.searchStr
-        , homeShowTags
-            UnchooseTag
-            (Set.toList model.selectedTags)
-            blue
-            (E.padding 0)
-        , homeShowTags
-            ChooseTag
-            (Set.toList model.unselectedTags)
-            paleBlue
-            (E.padding 0)
-        , msgMaker model
+        [ E.text "hello"
         ]
-
-
-msgMaker : Model -> E.Element Msg
-msgMaker model =
-    case model.msgMaker of
-        Nothing ->
-            Ei.button []
-                { onPress = Just NewMsgClick
-                , label =
-                    E.el
-                        [ monoFont, monoSize ]
-                    <|
-                        E.text "Make new message"
-                }
-
-        Just m ->
-            E.column
-                [ E.spacing 10 ]
-                [ Ei.button []
-                    { onPress = Just CancelMakeNewMsg
-                    , label =
-                        E.el [ monoFont, monoSize ] <|
-                            E.text "Cancel new message"
-                    }
-                , makeTags model m
-                , showTagCandidates model m
-
-                --, makeRecipients
-                ]
-
-
-makeRecipients : Model -> MsgMaker -> E.Element Msg
-makeRecipients model msgMakerState =
-    E.wrappedRow [ E.alignTop, monoFont, monoSize, E.spacing 10 ] <|
-        L.map recipientTag <|
-            Set.toList <|
-                recipTagCandidates model msgMakerState
-
-
-showRecipients : Model -> Set String -> List (E.Element Msg)
-showRecipients model recipients =
-    L.map (showRecipient model) recipients
-
-
-showRecipient : Model -> String -> E.Element Msg
-showRecipient model recipient =
-    E.row 
-
-
-showTagCandidates : Model -> MsgMaker -> E.Element Msg
-showTagCandidates model msgMakerState =
-    E.wrappedRow [ E.alignTop, monoFont, monoSize, E.spacing 15 ] <|
-        L.map candidateTag <|
-            Set.toList <|
-                tagCandidates model msgMakerState
-
-
-{-| Candidates are any tags that contain the current tag string.
--}
-tagCandidates : Model -> MsgMaker -> Set String
-tagCandidates model m =
-    Set.diff (Set.filter (String.contains m.currentTag) <| getTags model) m.chosenTags
-
-
-recipTagCandidates : Model -> MsgMaker -> Set String
-recipTagCandidates model m =
-    Set.diff (Set.filter (String.contains m.
-
-
-getTags : Model -> Set String
-getTags { metadata } =
-    case log "metadata" metadata of
-        Nothing ->
-            Set.empty
-
-        Just { apptags } ->
-            Dict.foldr
-                (\_ ts accum -> Set.union ts accum)
-                Set.empty
-                apptags
-
-
-makeTags : Model -> MsgMaker -> E.Element Msg
-makeTags model msgMakerState =
-    E.wrappedRow [ E.alignTop, monoFont, monoSize, E.spacing 10 ] <|
-        L.map chosenTag (Set.toList msgMakerState.chosenTags)
-            ++ [ editingTag msgMakerState.currentTag
-               , newTagButton
-               ]
-
-
-editingTag : String -> E.Element Msg
-editingTag soFar =
-    E.el searchBoxStyle <|
-        Ei.text
-            [ E.width <| E.px 300
-            , E.moveUp 1
-            ]
-            { onChange = EditingTag
-            , text = soFar
-            , placeholder =
-                Just <|
-                    Ei.placeholder [] <|
-                        E.el [] <|
-                            E.text "Type new tag"
-            , label = Ei.labelAbove [] E.none
-            }
-
-
-newTagButton : E.Element Msg
-newTagButton =
-    Ei.button []
-        { onPress = Just NewTagButtonClick
-        , label = E.el [ E.padding 3 ] <| E.text "+"
-        }
-
-
-chosenTag : String -> E.Element Msg
-chosenTag tag =
-    showTag RemoveTag blue tag
-
-
-candidateTag : String -> E.Element Msg
-candidateTag tag =
-    showTag AddTag paleBlue tag
-
-
-recipientTag : String -> E.Element Msg
-recipientTag tag =
-    showTag AddRecipTag paleBlue tag
-
-
-
-{-
-   newDocPage model =
-       E.column
-           [ E.width E.fill
-           , E.padding 20
-           , E.spacing 20
-           ]
-           [ myId model.publicId
-           , topButtons NewDoc
-           , E.row [ E.spacing 20 ]
-               [ E.el [] <|
-                   Ei.text
-                       [ E.width <| E.px 600, E.height <| E.px 50 ]
-                       { onChange = TagBox
-                       , text = model.newTagsBox
-                       , placeholder =
-                           Just <|
-                               Ei.placeholder [] <|
-                                   E.text "Type tags separated by commas"
-                       , label = Ei.labelAbove [] E.none
-                       }
-               , Ei.button newDocButtonStyle
-                   { onPress = Just ChooseDoc
-                   , label =
-                       E.el [ E.padding 3 ] <|
-                           E.text "Choose local file"
-                   }
-               , Ei.button
-                   (case model.fileUpload of
-                       Nothing ->
-                           greyNewDocButtonStyle
-
-                       Just _ ->
-                           newDocButtonStyle
-                   )
-                   { onPress =
-                       case model.fileUpload of
-                           Nothing ->
-                               Nothing
-
-                           Just _ ->
-                               Just UploadDoc
-                   , label =
-                       E.el [ E.padding 3 ] <|
-                           E.text "Upload file"
-                   }
-               ]
-           ]
--}
