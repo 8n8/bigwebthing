@@ -39,45 +39,20 @@ main =
         }
 
 
-parseRoute : Up.Parser (( Page, Maybe String ) -> a) a
+parseRoute : Up.Parser (String -> a) a
 parseRoute =
-    Up.s "getapp"
-        </> Up.oneOf
-                [ Up.map (\x -> ( Home, Just x )) <|
-                    Up.string
-                        </> Up.s "index.html"
-                , Up.map (\x -> ( NewDoc, Just x )) <|
-                    Up.string
-                        </> Up.s "newdocument"
-                , Up.map (\x -> ( Members, Just x )) <|
-                    Up.string
-                        </> Up.s "members"
-                ]
+    Up.s "getapp" </> Up.string </> Up.s "index.html"
 
 
-urlToPage : Url.Url -> ( Page, Maybe String )
-urlToPage url =
-    case Up.parse parseRoute url of
-        Nothing ->
-            ( Unknown, Nothing )
-
-        Just result ->
-            result
-
-
-initModel : Page -> Maybe String -> Nav.Key -> Model
-initModel page securityCode key =
+initModel : Maybe String -> Nav.Key -> Model
+initModel securityCode key =
     { securityCode = securityCode
     }
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
-    case urlToPage url of
-        ( page, securityCode ) ->
-            ( initModel page securityCode key
-            , Cmd.none
-            )
+    ( { securityCode = Up.parse parseRoute url }, Cmd.none )
 
 
 type Msg
@@ -86,74 +61,8 @@ type Msg
     | DoNothing
 
 
-type Page
-    = Home
-    | NewDoc
-    | Members
-    | Unknown
-
-
-type alias SearchResult =
-    { author : String
-    , tags : List String
-    , hash : String
-    , posixTime : Int
-    }
-
-
-decodeSearchResult : Jd.Decoder SearchResult
-decodeSearchResult =
-    Jd.map4 SearchResult
-        (Jd.field "Author" Jd.string)
-        (Jd.field "Tags" (Jd.list Jd.string))
-        (Jd.field "Hash" Jd.string)
-        (Jd.field "Posixtime" Jd.int)
-
-
-type alias SearchResults =
-    { apps : List SearchResult
-    , tags : List String
-    }
-
-
-decodeSearchResults : Jd.Decoder SearchResults
-decodeSearchResults =
-    Jd.map2 SearchResults
-        (Jd.field "Apps" (Jd.list decodeSearchResult))
-        (Jd.field "Tags" (Jd.list Jd.string))
-
-
-type PublicSign
-    = String
-
-
-isSpace : Char -> Bool
-isSpace c =
-    c == ' ' || c == '\n' || c == '\u{000D}'
-
-
-oneSpaceP : P.Parser ()
-oneSpaceP =
-    P.oneOf <| L.map P.symbol [ " ", "\n", "\u{000D}" ]
-
-
-spacesP : P.Parser ()
-spacesP =
-    oneSpaceP |. P.chompWhile isSpace
-
-
 type alias Model =
     { securityCode : Maybe String
-    }
-
-
-type alias Metadata =
-    { invites : List Invite
-    , uninvites : List Invite
-    , idtags : Dict String (Set String)
-    , apptags : Dict String (Set String)
-    , access : Dict String (Set String)
-    , byte32 : Dict String String
     }
 
 
@@ -195,17 +104,6 @@ encodeSendApp sendDrawer =
         [ ( "AppHash", Je.string sendDrawer.appHash )
         , ( "Recipient", Je.string sendDrawer.recipient )
         ]
-
-
-metaDec : Jd.Decoder Metadata
-metaDec =
-    Jd.map6 Metadata
-        (Jd.field "invites" invitesDec)
-        (Jd.field "uninvites" invitesDec)
-        (Jd.field "idtags" tagsDec)
-        (Jd.field "apptags" tagsDec)
-        (Jd.field "access" accessDec)
-        (Jd.field "byte32" byte32Dec)
 
 
 invitesDec : Jd.Decoder (List Invite)
@@ -339,134 +237,9 @@ white =
     E.rgb255 255 255 255
 
 
-buttonColor : Page -> Page -> E.Attribute Msg
-buttonColor p1 p2 =
-    if p1 == p2 then
-        Bg.color blue
-
-    else
-        Bg.color paleBlue
-
-
-makeTopButton : Page -> ( Msg, Page, String ) -> E.Element Msg
-makeTopButton page ( msg, buttonPage, label ) =
-    E.el (buttonColor page buttonPage :: topButtonStyle) <|
-        Ei.button [ E.padding 5 ]
-            { onPress = Just msg
-            , label = E.text label
-            }
-
-
-newDocButtonStyle : List (E.Attribute Msg)
-newDocButtonStyle =
-    [ E.alignBottom
-    , E.padding 5
-    , Border.width 1
-    , E.height <| E.px 50
-    ]
-
-
-greyNewDocButtonStyle : List (E.Attribute Msg)
-greyNewDocButtonStyle =
-    newDocButtonStyle
-        ++ [ Border.color grey
-           , Font.color grey
-           , E.htmlAttribute <| Hat.style "box-shadow" "none"
-           ]
-
-
-unknownPage : E.Element Msg
-unknownPage =
-    E.el [] <| E.text "Page doesn't exist"
-
-
-
-{-
-   memberPage : Model -> E.Element Msg
-   memberPage model =
-       E.column
-           [ E.width E.fill
-           , E.padding 20
-           , E.spacing 20
-           ]
-           [ myId model.publicId
-           , topButtons Members
-           , E.row []
-               [ Ei.text []
-                   { onChange = InviteeBox
-                   , text = model.inviteeBox
-                   , placeholder =
-                       Just <|
-                           Ei.placeholder [] <|
-                               E.text "Type ID of person to invite."
-                   , label = Ei.labelAbove [] E.none
-                   }
-               , Ei.button []
-                   { onPress = Just SendInvite
-                   , label = E.text "Send invite"
-                   }
-               ]
-           ]
--}
-
-
-tagStyle : E.Color -> List (E.Attribute Msg)
-tagStyle color =
-    [ Bg.color color
-    , E.alignLeft
-    , monoFont
-    , monoSize
-    , E.paddingXY 0 13
-    ]
-
-
-showTag : (String -> Msg) -> E.Color -> String -> E.Element Msg
-showTag msg color tag =
-    Ei.button (tagStyle color) { onPress = Just (msg tag), label = E.text tag }
-
-
-tagSort : List String -> List String
-tagSort =
-    L.sortWith tagCompare
-
-
-tagCompare : String -> String -> Order
-tagCompare a b =
-    case compare (String.length a) (String.length b) of
-        LT ->
-            LT
-
-        GT ->
-            GT
-
-        EQ ->
-            compare a b
-
-
-homeShowTags : (String -> Msg) -> List String -> E.Color -> E.Attribute Msg -> E.Element Msg
-homeShowTags msgFun tags color padding =
-    case tags of
-        [] ->
-            E.none
-
-        _ ->
-            E.wrappedRow [ E.spacing 15, padding ] <|
-                List.map (showTag msgFun color) (tagSort tags)
-
-
 addToSet : List String -> Set.Set String -> Set.Set String
 addToSet ls accum =
     Set.union accum (Set.fromList ls)
-
-
-choosableTags : Result Http.Error SearchResults -> List String
-choosableTags searchResults =
-    case searchResults of
-        Err _ ->
-            []
-
-        Ok results ->
-            results.tags
 
 
 idStyle : List (E.Attribute Msg)
