@@ -75,6 +75,23 @@ view model =
 
 homePage : Model -> E.Element Msg
 homePage model =
+    case model.securityCode of
+        Nothing ->
+            badSecurityCode
+
+        Just _ ->
+            goodSecurityCode model
+
+
+badSecurityCode : E.Element Msg
+badSecurityCode =
+    E.text <|
+        "BigWebThing can't run at the moment because it could "
+            ++ "not read the security code from the URL."
+
+
+goodSecurityCode : Model -> E.Element Msg
+goodSecurityCode model =
     E.column
         [ E.width E.fill
         , E.padding 5
