@@ -132,23 +132,21 @@ badSecurityCode =
 
 prettyHttpError : Http.Error -> String
 prettyHttpError err =
-    "Error installing app: "
-        ++ (case err of
-                Http.BadUrl str ->
-                    "bad url: " ++ str
+    case err of
+        Http.BadUrl str ->
+            "bad url: " ++ str
 
-                Http.Timeout ->
-                    "timeout"
+        Http.Timeout ->
+            "timeout"
 
-                Http.NetworkError ->
-                    "network error"
+        Http.NetworkError ->
+            "network error"
 
-                Http.BadStatus code ->
-                    "bad status code: " ++ String.fromInt code
+        Http.BadStatus code ->
+            "bad status code: " ++ String.fromInt code
 
-                Http.BadBody str ->
-                    "bad response body: " ++ str
-           )
+        Http.BadBody str ->
+            "bad response body: " ++ str
 
 
 goodSecurityCode : Model -> E.Element Msg
@@ -167,7 +165,10 @@ goodSecurityCode model =
                         []
 
                     Just err ->
-                        [ E.text <| prettyHttpError err ]
+                        [ E.text <|
+                            "Error installing app: "
+                                ++ prettyHttpError err
+                        ]
                )
 
 
