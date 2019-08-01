@@ -16,10 +16,9 @@ import (
 	"math/big"
 	"net/http"
 	"os"
-	"sort"
 	"sync"
 	"syscall"
-	"unicode/utf8"
+
 	"github.com/pkg/browser"
 	"goji.io"
 	"goji.io/pat"
@@ -40,13 +39,14 @@ var publicEncrypt publicEncryptT
 var secretEncrypt secretEncryptT
 var dataDir string
 var port string
+var globalMetadata []metadataT
+var metadataMux sync.Mutex
 
 type publicSignT [32]byte
 type publicEncryptT [32]byte
 type secretEncryptT [32]byte
 type blake2bHash [32]byte
-
-func inboxPath() string { return dataDir + "/inbox" }
+type sigT [96]byte
 
 func equalHashes(as [32]byte, bs [32]byte) bool {
 	for i, b := range bs {
@@ -96,82 +96,6 @@ func httpMakeAppErr(r *http.Request) (error, int) {
 	appCodes[newCode] = hash
 	return nil, 0
 }
-
-func writeAppToFile(r *http.Request) error {
-	bodyFileReader, err := r.MultipartReader()
-	if err != nil {
-		return err
-	}
-	filepart, err := bodyFileReader.NextPart()
-	if err != nil {
-		return err
-	}
-	if filepart.FormName() != "file" {
-		return errors.New("could not find form element \"file\"")
-	}
-	tmpFileName, err := genCode()
-	if err != nil {
-		return err
-	}
-	tmpPath := dataDir + "/tmp/" + tmpFileName
-	fileHandle, err := os.Create(tmpPath)
-	defer fileHandle.Close()
-	if err != nil {
-		return err
-	}
-	hasher, err := blake2b.New256(nil)
-	if err != nil {
-		return err
-	}
-	tee := io.TeeReader(filepart, hasher)
-	_, err = io.Copy(fileHandle, tee)
-	if err != nil {
-		return err
-	}
-	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
-	err = os.Rename(tmpPath, dataDir+"/apps/"+hash)
-	return err
-}
-
-func hashFromString(s string) ([32]byte, error) {
-	hashSlice, err := base64.URLEncoding.DecodeString(s)
-	var hash [32]byte
-	if err != nil {
-		return hash, err
-	}
-	if len(hashSlice) != 32 {
-		return hash, errors.New("hash wrong length")
-	}
-	for i, b := range hashSlice {
-		hash[i] = b
-	}
-	return hash, nil
-}
-
-type chunkT struct {
-	Body     []byte
-	CakeHash blake2bHash
-	Counter  int
-	Final    bool
-}
-
-type chunkPtrT struct {
-	Hash     string
-	CakeHash blake2bHash
-	Counter  int
-	Final    bool
-}
-
-type plain struct {
-	Bin           []byte
-	Correspondent publicSignT
-}
-
-const txtMsgCodeLen = 16
-
-var txtMsgCode = [txtMsgCodeLen]byte{
-	244, 108, 174, 239, 63, 159, 201, 117, 90, 254, 165, 34, 118,
-	208, 130, 224}
 
 func hashToSlice(hash [32]byte) []byte {
 	newHash := make([]byte, 32)
@@ -453,33 +377,6 @@ func setup() error {
 	return err
 }
 
-func masterPath() string { return dataDir + "/metadata.json" }
-
-func httpLoadMaster(w http.ResponseWriter, r *http.Request) {
-	f, err := os.Open(masterPath())
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	_, err = io.Copy(w, f)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
-}
-
-func httpSaveMaster(w http.ResponseWriter, r *http.Request) {
-	f, err := os.Open(masterPath())
-	defer f.Close()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	_, err = io.Copy(f, r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
-}
-
 func main() {
 	err := setup()
 	if err != nil {
@@ -492,13 +389,206 @@ func main() {
 func httpServer() {
 	mux := goji.NewMux()
 	mux.HandleFunc(pat.Get("/getapp/:pass/:filename"), httpGetApp)
-	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), p(httpMakeApp))
-	http.ListenAndServe(":" + port, mux)
+	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), h(httpMakeApp))
+	mux.HandleFunc(pat.Post("/install/:pass"), h(httpInstall))
+	http.ListenAndServe(":"+port, mux)
 }
 
-func encodePubID(pubID publicSignT) []byte {
-	return []byte(base64.URLEncoding.EncodeToString(
-		hashToSlice(pubID)))
+func httpInstall(w http.ResponseWriter, r *http.Request) {
+	err, code := httpInstallErr(r)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+	}
+}
+
+func readApp(tarReader *tar.Reader, hasher io.Writer) error {
+
+	tarHeader, err := tarReader.Next()
+	if err != nil {
+		return err
+	}
+	if tarHeader.Name != "app.tar" {
+		return errors.New("no app.tar file")
+	}
+	_, err = io.Copy(hasher, tarReader)
+	return err
+}
+
+func readTxt(
+	tarReader *tar.Reader,
+	hasher io.Writer,
+	filename string) (string, error) {
+
+	tarHeader, err := tarReader.Next()
+	if err != nil {
+		return "", err
+	}
+	if tarHeader.Name != filename {
+		return "", errors.New("no " + filename + " file")
+	}
+	description, err := ioutil.ReadAll(tarReader)
+	if err != nil {
+		return "", err
+	}
+	_, err = hasher.Write(description)
+	return string(description), err
+}
+
+func httpInstallErr(r *http.Request) (error, int) {
+	urlBytes, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err, 400
+	}
+	urlString := string(urlBytes)
+	resp, err := http.Get(urlString)
+	defer resp.Body.Close()
+	if err != nil {
+		return err, 400
+	}
+	tmpFileName, err := genCode()
+	if err != nil {
+		return err, 500
+	}
+	tmpPath := tmpDir() + "/" + tmpFileName
+	tmpHandle, err := os.Open(tmpPath)
+	if err != nil {
+		return err, 500
+	}
+	metadata, err := checkAppSig(io.TeeReader(resp.Body, tmpHandle))
+	if err != nil {
+		return err, 500
+	}
+	metadataMux.Lock()
+	globalMetadata = append(globalMetadata, metadata)
+	encoded, err := json.Marshal(globalMetadata)
+	metadataMux.Unlock()
+	if err != nil {
+		return err, 500
+	}
+	err = ioutil.WriteFile(metadataPath(), encoded, 0600)
+	if err != nil {
+		return err, 500
+	}
+	err = os.Rename(
+		tmpPath, appsPath()+"/"+hashToStr(metadata.appHash))
+	if err != nil {
+		return err, 500
+	}
+	return nil, 0
+}
+
+func appsPath() string {
+	return dataDir + "/apps"
+}
+
+func metadataPath() string {
+	return dataDir + "/metadata.json"
+}
+
+func readAppSig(tarReader *tar.Reader) (sigT, error) {
+	var sig sigT
+	tarHeader, err := tarReader.Next()
+	if err != nil {
+		return sig, err
+	}
+	if tarHeader.Name != "signature" {
+		return sig, errors.New("no signature file")
+	}
+	n, err := tarReader.Read(sig[:])
+	if n != 96 {
+		return sig, errors.New("could not read from tarReader")
+	}
+	return sig, err
+}
+
+func readAppAuthor(tarReader *tar.Reader) (publicSignT, error) {
+	var author publicSignT
+	tarHeader, err := tarReader.Next()
+	if err != nil {
+		return author, err
+	}
+	if tarHeader.Name != "author" {
+		return author, errors.New("no author file")
+	}
+	n, err := tarReader.Read(author[:])
+	if n != 32 {
+		return author, errors.New("could not read from tarReader")
+	}
+	return author, err
+}
+
+func readIcon(tarReader *tar.Reader, hasher io.Writer) ([]byte, error) {
+	tarHeader, err := tarReader.Next()
+	if err != nil {
+		return []byte{}, err
+	}
+	if tarHeader.Name != "icon.webp" {
+		return []byte{}, errors.New("no icon.webp file")
+	}
+	icon, err := ioutil.ReadAll(tarReader)
+	if err != nil {
+		return []byte{}, err
+	}
+	_, err = hasher.Write(icon)
+	return icon, err
+}
+
+type metadataT struct {
+	name        string
+	description string
+	icon        []byte
+	appHash     blake2bHash
+}
+
+func checkAppSig(appReader io.Reader) (metadataT, error) {
+	tarReader := tar.NewReader(appReader)
+	signature, err := readAppSig(tarReader)
+	var md metadataT
+	if err != nil {
+		return md, err
+	}
+	author, err := readAppAuthor(tarReader)
+	if err != nil {
+		return md, err
+	}
+	hasher, err := blake2b.New256(nil)
+	if err != nil {
+		return md, err
+	}
+	err = readApp(tarReader, hasher)
+	if err != nil {
+		return md, err
+	}
+	icon, err := readIcon(tarReader, hasher)
+	if err != nil {
+		return md, err
+	}
+	md.icon = icon
+	description, err := readTxt(tarReader, hasher, "description.txt")
+	if err != nil {
+		return md, err
+	}
+	md.description = description
+
+	name, err := readTxt(tarReader, hasher, "name.txt")
+	if err != nil {
+		return md, err
+	}
+	md.name = name
+	sigBytes := make([]byte, 96)
+	copy(sigBytes, signature[:])
+	var authArr [32]byte
+	copy(authArr[:], author[:])
+	signedHash, ok := sign.Open(make([]byte, 0), sigBytes, &authArr)
+	if !ok {
+		return md, errors.New("bad signature")
+	}
+	appHash := hasher.Sum(nil)
+	copy(md.appHash[:], appHash)
+	if !bytes.Equal(signedHash, appHash) {
+		return md, errors.New("bad app hash")
+	}
+	return md, nil
 }
 
 func serveDoc(w http.ResponseWriter, filePath string) error {
@@ -523,8 +613,12 @@ func unpackTarArchive(source string, dest string) error {
 	if err != nil {
 		return err
 	}
+	err = unpackTarReader(fileHandle, dest)
+	return err
+}
 
-	err = os.Mkdir(dest, 0755)
+func unpackTarReader(fileHandle io.Reader, dest string) error {
+	err := os.Mkdir(dest, 0755)
 	if err != nil {
 		return err
 	}
@@ -562,7 +656,7 @@ func httpGetAppErr(w http.ResponseWriter, r *http.Request) error {
 	securityCode := pat.Param(r, "pass")
 	filename := pat.Param(r, "filename")
 	if strEq(securityCode, homeCode) {
-		err := serveDoc(w, "home/" + filename)
+		err := serveDoc(w, "home/"+filename)
 		if err != nil {
 			return err
 		}
@@ -591,20 +685,9 @@ func httpMakeApp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func httpSaveApp(w http.ResponseWriter, r *http.Request) {
-	err := writeAppToFile(r)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
-}
-
-func httpGetMyID(w http.ResponseWriter, r *http.Request) {
-	w.Write(encodePubID(publicSign))
-}
-
 type handler func(w http.ResponseWriter, r *http.Request)
 
-func p(f handler) handler {
+func h(f handler) handler {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !strEq(pat.Param(r, "pass"), homeCode) {
 			http.Error(w, "bad security code", 400)
@@ -614,372 +697,4 @@ func p(f handler) handler {
 	}
 }
 
-func getInboxPtrs() (map[chunkPtrT]struct{}, error) {
-	ptrs := make(map[chunkPtrT]struct{})
-	files, err := ioutil.ReadDir(inboxPath())
-	if err != nil {
-		return ptrs, err
-	}
-	for _, f := range files {
-		rawBin, err := ioutil.ReadFile(inboxPath() + "/" + f.Name())
-		if err != nil {
-			return ptrs, err
-		}
-		var ptr chunkPtrT
-		ptr.Hash = f.Name()
-		var buf bytes.Buffer
-		n, err := buf.Write(rawBin)
-		if err != nil {
-			return ptrs, err
-		}
-		if n != len(rawBin) {
-			err = errors.New("could not write plain.Bin to buffer")
-			return ptrs, err
-		}
-		var chnk chunkT
-		err = gob.NewDecoder(&buf).Decode(&chnk)
-		if err != nil {
-			return ptrs, err
-		}
-		ptr.CakeHash = chnk.CakeHash
-		ptr.Counter = chnk.Counter
-		ptr.Final = chnk.Final
-		ptrs[ptr] = struct{}{}
-	}
-	return ptrs, nil
-}
-
-type ptrMap map[chunkPtrT]struct{}
-
-func bunchPtrs(ptrs ptrMap) bunchMap {
-	bunched := make(bunchMap)
-	for ptr := range ptrs {
-		bunch, ok := bunched[ptr.Hash]
-		if ok {
-			bunched[ptr.Hash] = append(bunch, ptr)
-			continue
-		}
-		bunched[ptr.Hash] = []chunkPtrT{ptr}
-	}
-	return bunched
-}
-
-type bunchMap map[string][]chunkPtrT
-
-func sortAndCheckBunchPtrs(m bunchMap) bunchMap {
-	result := make(bunchMap)
-	for hash, ptrs := range m {
-		sorted := ptrs[:]
-		sortBunchPtrs(sorted)
-		err := checkBunchPtrs(sorted)
-		if err != nil {
-			continue
-		}
-		result[hash] = sorted
-	}
-	return result
-}
-
-func checkBunchPtrs(ptrs []chunkPtrT) error {
-	lenPtrs := len(ptrs)
-	if lenPtrs == 0 {
-		return errors.New("no pointers in slice")
-	}
-	firstHash := ptrs[0].Hash
-	for i, ptr := range ptrs {
-		if i != ptr.Counter {
-			return errors.New("bad counter")
-		}
-		if ptr.Hash != firstHash {
-			return errors.New("bad hash")
-		}
-	}
-	for _, ptr := range ptrs[:lenPtrs-1] {
-		if ptr.Final {
-			return errors.New("non-final pointer has 'Final' set")
-		}
-	}
-	if !ptrs[lenPtrs].Final {
-		return errors.New("final pointer doesn't have 'Final' set")
-	}
-	return nil
-}
-
-func sortBunchPtrs(ptrs []chunkPtrT) {
-	f := func(i, j int) bool {
-		return ptrs[i].Counter < ptrs[j].Counter
-	}
-	sort.Slice(ptrs, f)
-}
-
-func docsDir() string { return dataDir + "/docs" }
-
-const maxTxtFileSize = 1e7
-
-func httpPullErr(w http.ResponseWriter) error {
-	rawPtrs, err := getInboxPtrs()
-	if err != nil {
-		return err
-	}
-	ptrs := sortAndCheckBunchPtrs(bunchPtrs(rawPtrs))
-	for _, msgPtrs := range ptrs {
-		_ = stitchChunks(msgPtrs)
-	}
-	txtMsgs, err := getStitchedTxtMsgs()
-	if err != nil {
-		return err
-	}
-	encodedTxt, err := json.Marshal(txtMsgs)
-	if err != nil {
-		return err
-	}
-	n, err := w.Write(encodedTxt)
-	if n != len(encodedTxt) {
-		return errors.New("could not send all messages")
-	}
-	if err != nil {
-		return err
-	}
-	binFiles, err := ioutil.ReadDir(stitchedDir())
-	if err != nil {
-		return err
-	}
-	for _, file := range binFiles {
-		oldPath := stitchedDir() + "/" + file.Name()
-		newPath := docsDir() + "/" + file.Name()
-		err = os.Rename(oldPath, newPath)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func getStitchedTxtMsgs() ([]string, error) {
-	msgs := make([]string, 0)
-	files, err := ioutil.ReadDir(stitchedDir())
-	if err != nil {
-		return msgs, err
-	}
-	for _, f := range files {
-		fsize := f.Size()
-		if fsize > maxTxtFileSize || fsize < txtMsgCodeLen {
-			continue
-		}
-		path := stitchedDir() + "/" + f.Name()
-		h, err := os.Open(path)
-		if err != nil {
-			return msgs, err
-		}
-		codeCandidate := make([]byte, txtMsgCodeLen)
-		n, err := h.Read(codeCandidate)
-		if n != txtMsgCodeLen {
-			h.Close()
-			return msgs, err
-		}
-		txtCodeArr := txtCodeSliceToArr(codeCandidate)
-		if !equalTxtCodes(txtCodeArr, txtMsgCode) {
-			h.Close()
-			continue
-		}
-		txtBytes, err := ioutil.ReadAll(h)
-		if err != nil {
-			h.Close()
-			return msgs, err
-		}
-		h.Close()
-		if !utf8.Valid(txtBytes) {
-			if err != nil {
-				return msgs, err
-			}
-			continue
-		}
-		msgs = append(msgs, string(txtBytes))
-		err = os.Remove(path)
-		if err != nil {
-			return msgs, err
-		}
-	}
-	return msgs, nil
-}
-
-func txtCodeToSlice(arr [txtMsgCodeLen]byte) []byte {
-	result := make([]byte, txtMsgCodeLen)
-	for i, b := range arr {
-		result[i] = b
-	}
-	return result
-}
-
-func httpPull(w http.ResponseWriter, r *http.Request) {
-	err := httpPullErr(w)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
-}
-
-func txtCodeSliceToArr(xs []byte) [txtMsgCodeLen]byte {
-	var result [txtMsgCodeLen]byte
-	for i, x := range xs {
-		result[i] = x
-	}
-	return result
-}
-
-func equalTxtCodes(as, bs [txtMsgCodeLen]byte) bool {
-	for i, a := range as {
-		if a != bs[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func tmpDir() string { return dataDir + "/tmp" }
-
-func addChunkToBin(ptr chunkPtrT, dest, hasher io.Writer) error {
-	chunkPath := inboxPath() + "/" + ptr.Hash
-	chunkHandle, err := os.Create(chunkPath)
-	if err != nil {
-		return err
-	}
-	defer chunkHandle.Close()
-	var msg plain
-	err = gob.NewDecoder(chunkHandle).Decode(&msg)
-	if err != nil {
-		return err
-	}
-	lenBin := len(msg.Bin)
-	n, err := hasher.Write(msg.Bin)
-	if n != lenBin {
-		return errors.New("could not write whole chunk to hasher")
-	}
-	if err != nil {
-		return err
-	}
-	n, err = dest.Write(msg.Bin)
-	if n != lenBin {
-		return errors.New("could not write whole chunk to tmp")
-	}
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func stitchChunks(ptrs []chunkPtrT) error {
-	hasher, err := blake2b.New256(nil)
-	if err != nil {
-		return err
-	}
-	tmpFileName, err := genCode()
-	if err != nil {
-		return err
-	}
-	tmpPath := tmpDir() + "/" + tmpFileName
-	tmpDest, err := os.Create(tmpPath)
-	defer tmpDest.Close()
-	if err != nil {
-		return err
-	}
-	for _, ptr := range ptrs {
-		err = addChunkToBin(ptr, tmpDest, hasher)
-		if err != nil {
-			return err
-		}
-	}
-	hash := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
-	if hash != ptrs[0].Hash {
-		return errors.New("stitched app has bad hash")
-	}
-	err = os.Rename(tmpPath, stitchedDir() + "/" + hash)
-	return err
-}
-
-func stitchedDir() string { return dataDir + "/stitched" }
-
-type push struct {
-	Txts []txtMsg
-	Bins []binMsg
-}
-
-type binMsg struct {
-	FileName  string
-	Recipient string
-}
-
-type txtMsg struct {
-	Msg       string
-	Recipient string
-}
-
-func httpPushErr(r *http.Request) error {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return err
-	}
-	var msgs push
-	err = json.Unmarshal(body, &msgs)
-	if err != nil {
-		return err
-	}
-	for _, msg := range msgs.Txts {
-		recipient, err := hashFromString(msg.Recipient)
-		if err != nil {
-			return err
-		}
-		msgReader := bytes.NewReader(append(
-			txtCodeToSlice(txtMsgCode), []byte(msg.Msg)...))
-		err = chunkAndSend(msgReader, recipient)
-		if err != nil {
-			return err
-		}
-	}
-	for _, msg := range msgs.Bins {
-		recipient, err := hashFromString(msg.Recipient)
-		if err != nil {
-			return err
-		}
-		handle, err := os.Open(msg.FileName)
-		if err != nil {
-			return err
-		}
-		err = chunkAndSend(handle, recipient)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func httpPush(w http.ResponseWriter, r *http.Request) {
-	err := httpPushErr(r)
-	if err != nil {
-		http.Error(w, err.Error(), 400)
-	}
-}
-
-func chunkAndSend(r io.Reader, recipient publicSignT) error {
-	for {
-		chunk := make([]byte, common.ChunkContentSize)
-		n, err := r.Read(chunk)
-		if n == 0 {
-			return errors.New("no bytes in reader")
-		}
-		if err != nil {
-			return err
-		}
-		msg := plain{chunk[:n], recipient}
-		var buf bytes.Buffer
-		err = gob.NewEncoder(&buf).Encode(msg)
-		if err != nil {
-			return err
-		}
-		encoded := buf.Bytes()
-		path := inboxPath() + "/" + hashToStr(blake2b.Sum256(encoded))
-		err = ioutil.WriteFile(path, encoded, 0600)
-		if err != nil {
-			return err
-		}
-	}
-}
