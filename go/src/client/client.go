@@ -351,6 +351,15 @@ func readArgs() error {
 	return nil
 }
 
+func readMetadata() error {
+	raw, err := ioutil.ReadFile(metadataPath())
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(raw, globalMetadata)
+	return err
+}
+
 func setup() error {
 	gobRegister()
 	err := readArgs()
@@ -370,6 +379,10 @@ func setup() error {
 		return err
 	}
 	err = getCryptoKeys()
+	if err != nil {
+		return err
+	}
+	err = readMetadata()
 	if err != nil {
 		return err
 	}
