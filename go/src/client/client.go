@@ -39,7 +39,7 @@ var publicEncrypt publicEncryptT
 var secretEncrypt secretEncryptT
 var dataDir string
 var port string
-var globalMetadata []metadataT
+var globalMetadata []metadataTxtT
 var metadataMux sync.Mutex
 
 type publicSignT [32]byte
@@ -441,25 +441,40 @@ func httpInstallErr(r *http.Request) (error, int) {
 	}
 	urlString := string(urlBytes)
 	resp, err := http.Get(urlString)
-	defer resp.Body.Close()
 	if err != nil {
 		return err, 400
 	}
+	defer resp.Body.Close()
 	tmpFileName, err := genCode()
 	if err != nil {
 		return err, 500
 	}
 	tmpPath := tmpDir() + "/" + tmpFileName
-	tmpHandle, err := os.Open(tmpPath)
+	tmpHandle, err := os.Create(tmpPath)
 	if err != nil {
 		return err, 500
 	}
+
 	metadata, err := checkAppSig(io.TeeReader(resp.Body, tmpHandle))
 	if err != nil {
 		return err, 500
 	}
+	iconName, err := genCode()
+	if err != nil {
+		return err, 500
+	}
+	err = ioutil.WriteFile(iconsPath()+"/"+iconName, metadata.Icon, 0600)
+	if err != nil {
+		return err, 500
+	}
+	metadataTxt := metadataTxtT{
+		Name:        metadata.Name,
+		Description: metadata.Description,
+		AppHash:     hashToStr(metadata.AppHash),
+		IconFile:    iconName,
+	}
 	metadataMux.Lock()
-	globalMetadata = append(globalMetadata, metadata)
+	globalMetadata = append(globalMetadata, metadataTxt)
 	encoded, err := json.Marshal(globalMetadata)
 	metadataMux.Unlock()
 	if err != nil {
@@ -470,11 +485,22 @@ func httpInstallErr(r *http.Request) (error, int) {
 		return err, 500
 	}
 	err = os.Rename(
-		tmpPath, appsPath()+"/"+hashToStr(metadata.appHash))
+		tmpPath, appsPath()+"/"+hashToStr(metadata.AppHash))
 	if err != nil {
 		return err, 500
 	}
 	return nil, 0
+}
+
+type metadataTxtT struct {
+	Name        string
+	Description string
+	AppHash     string
+	IconFile    string
+}
+
+func iconsPath() string {
+	return dataDir + "/icons"
 }
 
 func appsPath() string {
@@ -494,11 +520,15 @@ func readAppSig(tarReader *tar.Reader) (sigT, error) {
 	if tarHeader.Name != "signature" {
 		return sig, errors.New("no signature file")
 	}
-	n, err := tarReader.Read(sig[:])
-	if n != 96 {
+	sigBytes, err := ioutil.ReadAll(tarReader)
+	if err != nil {
+		return sig, err
+	}
+	if len(sigBytes) != 96 {
 		return sig, errors.New("could not read from tarReader")
 	}
-	return sig, err
+	copy(sig[:], sigBytes)
+	return sig, nil
 }
 
 func readAppAuthor(tarReader *tar.Reader) (publicSignT, error) {
@@ -510,11 +540,15 @@ func readAppAuthor(tarReader *tar.Reader) (publicSignT, error) {
 	if tarHeader.Name != "author" {
 		return author, errors.New("no author file")
 	}
-	n, err := tarReader.Read(author[:])
-	if n != 32 {
+	authorBytes, err := ioutil.ReadAll(tarReader)
+	if err != nil {
+		return author, err
+	}
+	if len(authorBytes) != 32 {
 		return author, errors.New("could not read from tarReader")
 	}
-	return author, err
+	copy(author[:], authorBytes)
+	return author, nil
 }
 
 func readIcon(tarReader *tar.Reader, hasher io.Writer) ([]byte, error) {
@@ -534,10 +568,10 @@ func readIcon(tarReader *tar.Reader, hasher io.Writer) ([]byte, error) {
 }
 
 type metadataT struct {
-	name        string
-	description string
-	icon        []byte
-	appHash     blake2bHash
+	Name        string
+	Description string
+	Icon        []byte
+	AppHash     blake2bHash
 }
 
 func checkAppSig(appReader io.Reader) (metadataT, error) {
@@ -563,18 +597,18 @@ func checkAppSig(appReader io.Reader) (metadataT, error) {
 	if err != nil {
 		return md, err
 	}
-	md.icon = icon
+	md.Icon = icon
 	description, err := readTxt(tarReader, hasher, "description.txt")
 	if err != nil {
 		return md, err
 	}
-	md.description = description
+	md.Description = description
 
 	name, err := readTxt(tarReader, hasher, "name.txt")
 	if err != nil {
 		return md, err
 	}
-	md.name = name
+	md.Name = name
 	sigBytes := make([]byte, 96)
 	copy(sigBytes, signature[:])
 	var authArr [32]byte
@@ -584,7 +618,7 @@ func checkAppSig(appReader io.Reader) (metadataT, error) {
 		return md, errors.New("bad signature")
 	}
 	appHash := hasher.Sum(nil)
-	copy(md.appHash[:], appHash)
+	copy(md.AppHash[:], appHash)
 	if !bytes.Equal(signedHash, appHash) {
 		return md, errors.New("bad app hash")
 	}

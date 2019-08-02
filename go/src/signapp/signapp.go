@@ -11,7 +11,7 @@ import (
 
 
 var filenames []string = []string{
-	"name.txt", "description.txt", "icon.webp", "app.tar"}
+	"app.tar", "icon.webp", "description.txt", "name.txt"}
 
 const badArgs = "There must be one argument: " +
 	"the name of the file containing the private key."
@@ -42,6 +42,8 @@ func main() {
 			return
 		}
 		_, err = io.Copy(hasher, handle)
+		fmt.Println(filename)
+		fmt.Println(hasher.Sum(nil))
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -49,7 +51,9 @@ func main() {
 	}
 
 	appHash := hasher.Sum(nil)
+	fmt.Println(appHash)
 	signature := sign.Sign(make([]byte, 0), appHash, &privateKey)
+	fmt.Println("signature: %v", signature)
 	err = ioutil.WriteFile("signature", signature, 0600)
 	if err != nil {
 		fmt.Println(err)
