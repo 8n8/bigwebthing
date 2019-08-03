@@ -39,7 +39,7 @@ var publicEncrypt publicEncryptT
 var secretEncrypt secretEncryptT
 var dataDir string
 var port string
-var globalMetadata []metadataTxtT
+var globalMetadata = make(map[string]metadataTxtT)
 var metadataMux sync.Mutex
 
 type publicSignT [32]byte
@@ -354,9 +354,9 @@ func readArgs() error {
 func readMetadata() error {
 	raw, err := ioutil.ReadFile(metadataPath())
 	if err != nil {
-		return err
+		return nil
 	}
-	err = json.Unmarshal(raw, globalMetadata)
+	err = json.Unmarshal(raw, &globalMetadata)
 	return err
 }
 
@@ -404,7 +404,22 @@ func httpServer() {
 	mux.HandleFunc(pat.Get("/getapp/:pass/:filename"), httpGetApp)
 	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), h(httpMakeApp))
 	mux.HandleFunc(pat.Post("/install/:pass"), h(httpInstall))
+	mux.HandleFunc(pat.Get("/metadata/:pass"), h(httpGetMetadata))
 	http.ListenAndServe(":"+port, mux)
+}
+
+func httpGetMetadata(w http.ResponseWriter, r *http.Request) {
+	metadataMux.Lock()
+	encodedMd, err := json.Marshal(globalMetadata)
+	metadataMux.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	_, err = w.Write(encodedMd)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
 }
 
 func httpInstall(w http.ResponseWriter, r *http.Request) {
@@ -483,11 +498,10 @@ func httpInstallErr(r *http.Request) (error, int) {
 	metadataTxt := metadataTxtT{
 		Name:        metadata.Name,
 		Description: metadata.Description,
-		AppHash:     hashToStr(metadata.AppHash),
 		IconFile:    iconName,
 	}
 	metadataMux.Lock()
-	globalMetadata = append(globalMetadata, metadataTxt)
+	globalMetadata[hashToStr(metadata.AppHash)] = metadataTxt
 	encoded, err := json.Marshal(globalMetadata)
 	metadataMux.Unlock()
 	if err != nil {
@@ -508,7 +522,6 @@ func httpInstallErr(r *http.Request) (error, int) {
 type metadataTxtT struct {
 	Name        string
 	Description string
-	AppHash     string
 	IconFile    string
 }
 
