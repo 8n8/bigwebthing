@@ -7,6 +7,7 @@ import Element as E
 import Element.Font as Font
 import Element.Input as Ei
 import Http
+import Json.Decode as Jd
 import Time
 import Url
 import Url.Parser as Up exposing ((</>))
@@ -31,12 +32,32 @@ parseRoute =
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
-    ( { securityCode = Up.parse parseRoute url
-      , installBox = ""
-      , installErr = Nothing
-      }
-    , Cmd.none
-    )
+    case Up.parse parseRoute url of
+        Nothing ->
+            ( { securityCode = Nothing
+              , installBox = ""
+              , installErr = Nothing
+              , metadata = Ok []
+              }
+            , Cmd.none
+            )
+
+        Just code ->
+            ( { securityCode = Just code
+              , installBox = ""
+              , installErr = Nothing
+              , metadata = Ok []
+              }
+            , getMetadata code
+            )
+
+
+getMetadata : String -> Cmd.Cmd Msg
+getMetadata code =
+    Http.get
+        { url = "/metadata/" ++ code
+        , expect = Http.expectJson GotMetadata (Jd.list metadataDec)
+        }
 
 
 type Msg
@@ -46,12 +67,29 @@ type Msg
     | InstallBox String
     | PressInstallButton
     | Installed (Result Http.Error ())
+    | GotMetadata (Result Http.Error (List Metadata))
+
+
+type alias Metadata =
+    { name : String
+    , description : String
+    , iconUrl : String
+    }
+
+
+metadataDec : Jd.Decoder Metadata
+metadataDec =
+    Jd.map3 Metadata
+        (Jd.field "Name" Jd.string)
+        (Jd.field "Description" Jd.string)
+        (Jd.field "IconFile" Jd.string)
 
 
 type alias Model =
     { securityCode : Maybe String
     , installBox : String
     , installErr : Maybe Http.Error
+    , metadata : Result Http.Error (List Metadata)
     }
 
 
@@ -67,6 +105,9 @@ installApp code url =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        GotMetadata metadata ->
+            ( { model | metadata = metadata }, Cmd.none )
+
         Installed (Ok ()) ->
             ( model, Cmd.none )
 
