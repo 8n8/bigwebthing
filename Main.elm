@@ -8,6 +8,8 @@ import Browser.Navigation as Nav
 import Debug
 import Dict
 import Element as E
+import Element.Background as Eb
+import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Ei
 import Http
@@ -24,25 +26,19 @@ main =
         { init = init
         , view = view
         , update = update
-        , subscriptions = subscriptions
+        , subscriptions = \_ -> Sub.none
         , onUrlRequest = \_ -> DoNothing
         , onUrlChange = \_ -> DoNothing
         }
 
 
-subscriptions : Model -> Sub.Sub Msg
-subscriptions _ =
-    Browser.Events.onResize Viewport
+paleBlue =
+    E.rgb255 52 164 235
 
 
 parseRoute : Up.Parser (String -> a) a
 parseRoute =
     Up.s "getapp" </> Up.string </> Up.s "index.html"
-
-
-winSize : Browser.Dom.Viewport -> Msg
-winSize vp =
-    Viewport (round vp.viewport.width) (round vp.scene.height)
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -53,8 +49,6 @@ init _ url key =
               , installBox = ""
               , installErr = Nothing
               , metadata = Ok Dict.empty
-              , winWidth = 0
-              , winHeight = 0
               }
             , Cmd.none
             )
@@ -64,13 +58,8 @@ init _ url key =
               , installBox = ""
               , installErr = Nothing
               , metadata = Ok Dict.empty
-              , winWidth = 0
-              , winHeight = 0
               }
-            , Cmd.batch
-                [ getMetadata code
-                , Task.perform winSize Browser.Dom.getViewport
-                ]
+            , getMetadata code
             )
 
 
@@ -99,7 +88,6 @@ getMetadata code =
 
 type Msg
     = LaunchApp String
-    | Viewport Int Int
     | AppLaunched (Result Http.Error ())
     | DoNothing
     | InstallBox String
@@ -128,8 +116,6 @@ type alias Model =
     , installBox : String
     , installErr : Maybe Http.Error
     , metadata : Result Http.Error (Dict.Dict String Metadata)
-    , winWidth : Int
-    , winHeight : Int
     }
 
 
@@ -145,14 +131,11 @@ installApp code url =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        Viewport width height ->
-            ( { model | winWidth = width, winHeight = height }, Cmd.none )
-
         GotMetadata metadata ->
             ( { model | metadata = metadata }, Cmd.none )
 
         Installed (Ok ()) ->
-            ( model, Cmd.none )
+            ( { model | installErr = Nothing }, Cmd.none )
 
         Installed (Err err) ->
             ( { model | installErr = Just err }, Cmd.none )
@@ -238,11 +221,14 @@ goodSecurityCode code model =
     E.column
         [ E.width E.fill
         , E.padding 5
-        , E.spacing 5
+        , E.spacing 20
         ]
     <|
-        [ installBox model.installBox
-        , installButton
+        [ E.row [ E.width E.fill, E.spacing 5 ]
+            [ installBox model.installBox
+            , installButton
+            ]
+        , E.el [ homeFont, homeFontSize ] <| E.text "List of installed apps:"
         ]
             ++ (case model.installErr of
                     Nothing ->
@@ -264,27 +250,27 @@ apps code model =
             [ badMetadata err ]
 
         Ok mds ->
-            goodMetadata code mds model.winWidth
+            goodMetadata code mds
 
 
-goodMetadata : String -> Dict.Dict String Metadata -> Int -> List (E.Element Msg)
-goodMetadata code mds width =
-    List.map (showMetadata code width) (Dict.toList mds)
+goodMetadata : String -> Dict.Dict String Metadata -> List (E.Element Msg)
+goodMetadata code mds =
+    List.map (showMetadata code) (Dict.toList mds)
 
 
-showMetadata : String -> Int -> ( String, Metadata ) -> E.Element Msg
-showMetadata code width ( appHash, md ) =
+showMetadata : String -> ( String, Metadata ) -> E.Element Msg
+showMetadata code ( appHash, md ) =
     Ei.button []
         { onPress = Just <| LaunchApp appHash
-        , label = showMetadataContent code ( appHash, md ) width
+        , label = showMetadataContent code ( appHash, md )
         }
 
 
-showMetadataContent : String -> ( String, Metadata ) -> Int -> E.Element Msg
-showMetadataContent code ( _, md ) width =
-    E.paragraph [ E.alignTop, E.alignLeft, E.width <| E.px <| Debug.log "width" width // 2 ]
+showMetadataContent : String -> ( String, Metadata ) -> E.Element Msg
+showMetadataContent code ( _, md ) =
+    E.paragraph [ E.alignTop, E.alignLeft, E.width E.fill, homeFont, homeFontSize ]
         [ E.el [ E.alignLeft ] <|
-            E.image [ E.width <| E.px 100 ]
+            E.image [ E.width <| E.px 130 ]
                 { src = "/icons/" ++ code ++ "/" ++ md.iconUrl
                 , description =
                     "Icon image for app \""
@@ -301,23 +287,44 @@ badMetadata err =
     E.text <| prettyHttpError err
 
 
+homeFont =
+    Font.family [ Font.typeface "Ubuntu", Font.sansSerif ]
+
+
+homeFontSize =
+    Font.size 30
+
+
 installButton : E.Element Msg
 installButton =
-    Ei.button []
+    Ei.button
+        [ Eb.color paleBlue
+        , Border.rounded 5
+        , E.padding 10
+        , E.height <| E.px 60
+        ]
         { onPress = Just PressInstallButton
-        , label = E.text "Install app"
+        , label =
+            E.el
+                [ homeFont
+                , homeFontSize
+                , Font.color <| E.rgb 1 1 1
+                ]
+            <|
+                E.text "Install"
         }
 
 
 installBox : String -> E.Element Msg
 installBox txt =
-    Ei.text []
+    Ei.text [ E.height <| E.px 60, homeFont, homeFontSize ]
         { onChange = InstallBox
         , text = txt
         , placeholder =
             Just <|
                 Ei.placeholder [] <|
-                    E.text "Enter address of app to install"
+                    E.el [ homeFont, homeFontSize ] <|
+                        E.text "Enter address of app to install"
         , label =
             Ei.labelHidden "Enter address of app to install:"
         }
