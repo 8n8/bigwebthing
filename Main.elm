@@ -2,12 +2,17 @@ module Main exposing (main)
 
 import Base64
 import Browser
+import Browser.Dom
+import Browser.Events
 import Browser.Navigation as Nav
+import Debug
+import Dict
 import Element as E
 import Element.Font as Font
 import Element.Input as Ei
 import Http
 import Json.Decode as Jd
+import Task
 import Time
 import Url
 import Url.Parser as Up exposing ((</>))
@@ -19,15 +24,25 @@ main =
         { init = init
         , view = view
         , update = update
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = subscriptions
         , onUrlRequest = \_ -> DoNothing
         , onUrlChange = \_ -> DoNothing
         }
 
 
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _ =
+    Browser.Events.onResize Viewport
+
+
 parseRoute : Up.Parser (String -> a) a
 parseRoute =
     Up.s "getapp" </> Up.string </> Up.s "index.html"
+
+
+winSize : Browser.Dom.Viewport -> Msg
+winSize vp =
+    Viewport (round vp.viewport.width) (round vp.scene.height)
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -37,7 +52,9 @@ init _ url key =
             ( { securityCode = Nothing
               , installBox = ""
               , installErr = Nothing
-              , metadata = Ok []
+              , metadata = Ok Dict.empty
+              , winWidth = 0
+              , winHeight = 0
               }
             , Cmd.none
             )
@@ -46,28 +63,49 @@ init _ url key =
             ( { securityCode = Just code
               , installBox = ""
               , installErr = Nothing
-              , metadata = Ok []
+              , metadata = Ok Dict.empty
+              , winWidth = 0
+              , winHeight = 0
               }
-            , getMetadata code
+            , Cmd.batch
+                [ getMetadata code
+                , Task.perform winSize Browser.Dom.getViewport
+                ]
             )
+
+
+initViewport : Browser.Dom.Viewport
+initViewport =
+    { scene =
+        { width = 0
+        , height = 0
+        }
+    , viewport =
+        { x = 0
+        , y = 0
+        , width = 0
+        , height = 0
+        }
+    }
 
 
 getMetadata : String -> Cmd.Cmd Msg
 getMetadata code =
     Http.get
         { url = "/metadata/" ++ code
-        , expect = Http.expectJson GotMetadata (Jd.list metadataDec)
+        , expect = Http.expectJson GotMetadata (Jd.dict metadataDec)
         }
 
 
 type Msg
     = LaunchApp String
+    | Viewport Int Int
     | AppLaunched (Result Http.Error ())
     | DoNothing
     | InstallBox String
     | PressInstallButton
     | Installed (Result Http.Error ())
-    | GotMetadata (Result Http.Error (List Metadata))
+    | GotMetadata (Result Http.Error (Dict.Dict String Metadata))
 
 
 type alias Metadata =
@@ -89,7 +127,9 @@ type alias Model =
     { securityCode : Maybe String
     , installBox : String
     , installErr : Maybe Http.Error
-    , metadata : Result Http.Error (List Metadata)
+    , metadata : Result Http.Error (Dict.Dict String Metadata)
+    , winWidth : Int
+    , winHeight : Int
     }
 
 
@@ -105,6 +145,9 @@ installApp code url =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        Viewport width height ->
+            ( { model | winWidth = width, winHeight = height }, Cmd.none )
+
         GotMetadata metadata ->
             ( { model | metadata = metadata }, Cmd.none )
 
@@ -141,7 +184,7 @@ update msg model =
                 Just code ->
                     ( model
                     , Http.get
-                        { url = "/makeapproute/" ++ code ++ "/" ++ str
+                        { url = "/makeapp/" ++ code ++ "/" ++ str
                         , expect = Http.expectWhatever AppLaunched
                         }
                     )
@@ -160,8 +203,8 @@ homePage model =
         Nothing ->
             badSecurityCode
 
-        Just _ ->
-            goodSecurityCode model
+        Just code ->
+            goodSecurityCode code model
 
 
 badSecurityCode : E.Element Msg
@@ -190,8 +233,8 @@ prettyHttpError err =
             "bad response body: " ++ str
 
 
-goodSecurityCode : Model -> E.Element Msg
-goodSecurityCode model =
+goodSecurityCode : String -> Model -> E.Element Msg
+goodSecurityCode code model =
     E.column
         [ E.width E.fill
         , E.padding 5
@@ -211,6 +254,51 @@ goodSecurityCode model =
                                 ++ prettyHttpError err
                         ]
                )
+            ++ apps code model
+
+
+apps : String -> Model -> List (E.Element Msg)
+apps code model =
+    case model.metadata of
+        Err err ->
+            [ badMetadata err ]
+
+        Ok mds ->
+            goodMetadata code mds model.winWidth
+
+
+goodMetadata : String -> Dict.Dict String Metadata -> Int -> List (E.Element Msg)
+goodMetadata code mds width =
+    List.map (showMetadata code width) (Dict.toList mds)
+
+
+showMetadata : String -> Int -> ( String, Metadata ) -> E.Element Msg
+showMetadata code width ( appHash, md ) =
+    Ei.button []
+        { onPress = Just <| LaunchApp appHash
+        , label = showMetadataContent code ( appHash, md ) width
+        }
+
+
+showMetadataContent : String -> ( String, Metadata ) -> Int -> E.Element Msg
+showMetadataContent code ( _, md ) width =
+    E.paragraph [ E.alignTop, E.alignLeft, E.width <| E.px <| Debug.log "width" width // 2 ]
+        [ E.el [ E.alignLeft ] <|
+            E.image [ E.width <| E.px 100 ]
+                { src = "/icons/" ++ code ++ "/" ++ md.iconUrl
+                , description =
+                    "Icon image for app \""
+                        ++ md.name
+                        ++ "\"."
+                }
+        , E.el [ Font.bold ] <| E.text md.name
+        , E.text md.description
+        ]
+
+
+badMetadata : Http.Error -> E.Element Msg
+badMetadata err =
+    E.text <| prettyHttpError err
 
 
 installButton : E.Element Msg

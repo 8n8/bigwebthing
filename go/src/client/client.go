@@ -65,9 +65,8 @@ func httpMakeAppErr(r *http.Request) (error, int) {
 	}
 	hash := sliceToHash(hashSlice)
 	hashStr := hashToStr(hash)
-	tmpPath := tmpDir() + hashStr
+	tmpPath := tmpDir() + "/" + hashStr
 	_, err = os.Stat(tmpPath)
-	appPath := dataDir + "/apps/" + hashStr
 	appCodesMux.Lock()
 	defer appCodesMux.Unlock()
 	if err == nil {
@@ -81,20 +80,44 @@ func httpMakeAppErr(r *http.Request) (error, int) {
 		}
 		return nil, 0
 	}
-	err = unpackTarArchive(appPath, tmpPath)
+	appPath := dataDir + "/apps/" + hashStr
+	fmt.Println("tmpPath", tmpPath)
+	err = unpackApp(appPath, tmpPath)
 	if err != nil {
+		fmt.Println("a")
 		return err, 500
 	}
 	newCode, err := genCode()
 	if err != nil {
 		return err, 500
 	}
+	appCodes[newCode] = hash
 	err = browser.OpenURL(appURL(newCode))
 	if err != nil {
 		return err, 500
 	}
-	appCodes[newCode] = hash
 	return nil, 0
+}
+
+func unpackApp(appPath, destPath string) error {
+	tmpName, err := genCode()
+	if err != nil {
+		fmt.Println("b")
+		return err
+	}
+	tmpPath := tmpDir() + "/" + tmpName
+	err = unpackTarArchive(appPath, tmpPath)
+	if err != nil {
+		fmt.Println("c")
+		return err
+	}
+	err = unpackTarArchive(tmpPath + "/app.tar", destPath)
+	if err != nil {
+		fmt.Println("d")
+		return err
+	}
+	err = os.RemoveAll(tmpPath)
+	return err
 }
 
 func hashToSlice(hash [32]byte) []byte {
@@ -405,7 +428,21 @@ func httpServer() {
 	mux.HandleFunc(pat.Get("/makeapp/:pass/:apphash"), h(httpMakeApp))
 	mux.HandleFunc(pat.Post("/install/:pass"), h(httpInstall))
 	mux.HandleFunc(pat.Get("/metadata/:pass"), h(httpGetMetadata))
+	mux.HandleFunc(pat.Get("/icons/:pass/:iconName"), h(httpGetIcon))
 	http.ListenAndServe(":"+port, mux)
+}
+
+func httpGetIcon(w http.ResponseWriter, r *http.Request) {
+	fileName := pat.Param(r, "iconName")
+	path := iconsPath() + "/" + fileName
+	fileHandle, err := os.Open(path)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+	}
+	_, err = io.Copy(w, fileHandle)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
 }
 
 func httpGetMetadata(w http.ResponseWriter, r *http.Request) {
@@ -671,6 +708,7 @@ func appURL(appCode string) string {
 func unpackTarArchive(source string, dest string) error {
 	fileHandle, err := os.Open(source)
 	if err != nil {
+		fmt.Println("e")
 		return err
 	}
 	err = unpackTarReader(fileHandle, dest)
@@ -678,8 +716,10 @@ func unpackTarArchive(source string, dest string) error {
 }
 
 func unpackTarReader(fileHandle io.Reader, dest string) error {
+	fmt.Println("Top of unpackTarReader")
 	err := os.Mkdir(dest, 0755)
 	if err != nil {
+		fmt.Println("f")
 		return err
 	}
 
@@ -693,12 +733,15 @@ func unpackTarReader(fileHandle io.Reader, dest string) error {
 			return err
 		}
 		sourcePath := dest + "/" + tarHeader.Name
+		fmt.Println("sourcePath", sourcePath)
 		sourceHandle, err := os.Create(sourcePath)
 		if err != nil {
+			fmt.Println("g")
 			return err
 		}
 		_, err = io.Copy(sourceHandle, tarReader)
 		if err != nil {
+			fmt.Println("h")
 			return err
 		}
 	}
