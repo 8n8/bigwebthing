@@ -429,7 +429,17 @@ func httpServer() {
 	mux.HandleFunc(pat.Post("/install/:pass"), h(httpInstall))
 	mux.HandleFunc(pat.Get("/metadata/:pass"), h(httpGetMetadata))
 	mux.HandleFunc(pat.Get("/icons/:pass/:iconName"), h(httpGetIcon))
+	mux.HandleFunc(pat.Post("/cspreport"), cspReport)
 	http.ListenAndServe(":"+port, mux)
+}
+
+func cspReport(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	fmt.Println(string(body))
 }
 
 func httpGetIcon(w http.ResponseWriter, r *http.Request) {
@@ -748,7 +758,12 @@ func unpackTarReader(fileHandle io.Reader, dest string) error {
 	return nil
 }
 
+const csp = "child-src 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-src 'none'; img-src 'self'; manifest-src 'none'; media-src 'self'; object-src 'none'; prefetch-src 'none'; script-src 'self'; style-src 'self'; worker-src 'none'; report-uri http://localhost:3000/cspreport;"
+
+// "default-src 'none'; font-src 'self'; img-src 'self'; script-src 'self'; media-src 'self'; style-src 'self' 'unsafe-inline'; report-uri http://localhost:3000/cspreport; content-src ;"
+
 func httpGetApp(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Security-Policy", csp)
 	err := httpGetAppErr(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
