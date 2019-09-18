@@ -11,7 +11,7 @@ It provides a sufficient but minimal solution to each of the problems caused by 
 
 # Storing
 
-A user's data consists of a set of immutable messages. Messages can be added to the set but not removed. Messages are stored:
+A user's data is a set of immutable messages. Messages can be added to the set but not removed. Messages are stored:
 
 1. in a local cache (indexedDB)
 2. on a cloud backup server
@@ -38,7 +38,7 @@ The actions that a program can do are:
 
 2. Add documents to its document set.
 
-3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to the document it is displaying, so that on any change its contents are fed to them. Program can also prompt users for a file upload from the local file system.
+3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to be notified of any changes to the text area. A program can also prompt users for a file upload from the local file system.
 
 4. Call other programs. A program is a function that takes a set of documents as its input, and produces another set of documents as its output. A program can call any other program by its hash and use it - a bit like Unix pipes, but can't access its document set.
 
@@ -52,4 +52,4 @@ By sending messages from one user to another.
 
 # Spam
 
-Each user has a whitelist of people they will accept messages from. Messages from anyone else are rejected unless they have a valid one-time code. To add a new user to the system, I send them an email or something with a one-time code in it, which they use the first time they message me. If I get a message from someone not on the whitelist who has a valid one-time code then I add them to my whitelist.
+Each user has a whitelist of people they will accept messages from. Messages from anyone else are rejected unless they have a valid one-time code. To start communicating with a new user, I send them a one-time code by an existing channel, such as email, which they use the first time they message me. If I get a message from someone not on the whitelist who has a valid one-time code then I add them to my whitelist.
