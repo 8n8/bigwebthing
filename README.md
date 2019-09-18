@@ -1,6 +1,4 @@
-BigWebThing Spec
-
-It provides a sufficient but minimal solution to each of the set of problems caused by data:
+It provides a sufficient but minimal solution to each of the problems caused by data:
 
 1. storing
 2. sharing
@@ -13,16 +11,16 @@ It provides a sufficient but minimal solution to each of the set of problems cau
 
 # Storing
 
-Data is stored:
+A user's data consists of a set of immutable messages. Messages can be added to the set but not removed. Messages are stored:
 
 1. in a local cache (indexedDB)
-2. on a backup server
+2. on a cloud backup server
 
 The cost of the server is met by customer subscriptions. It is free for anyone to use the server to communicate with a subscriber, but only subscribers can communicate with non-subscribers.
 
 ## Data format
 
-All a person's data is represented as a set of messages. A message can be either a document or a program. In Haskell syntax, a document is:
+A message can be either a document or a program. In Haskell syntax, a document is:
 
 ```
 data Document
@@ -34,19 +32,19 @@ data TxtWithLinks
     | UnicodeT Text
 ```
 
-The IO actions that a program can do are:
+The actions that a program can do are:
 
 1. Display a document.
 
-2. Read user input. Text documents are displayed as editible text areas. Programs can subscribe to the document, so that on any change its contents are fed to them. Program can also prompt users for a file upload from the local file system.
+2. Add documents to its document set.
 
-3. Call other programs. A program is a function that takes a set of documents as its input, and produces another set of documents as its output. A program can call any other program by its hash and use it - a bit like Unix pipes, but can't access its document set.
+3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to the document it is displaying, so that on any change its contents are fed to them. Program can also prompt users for a file upload from the local file system.
 
-4. Create other programs.
+4. Call other programs. A program is a function that takes a set of documents as its input, and produces another set of documents as its output. A program can call any other program by its hash and use it - a bit like Unix pipes, but can't access its document set.
 
-5. Send messages to other people. A message must be marked with the hash of the program it is being sent to, as well as the key of the person who is receiving it.
+5. Create other programs.
 
-5. Make HTTP requests.
+6. Send messages to other people. A document must be marked with the hash of the program it is being sent to, as well as the key of the person who is receiving it. A program can be sent to a specific program on another person's computer, or just to the person.
 
 # Sharing
 
