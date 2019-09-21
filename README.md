@@ -21,10 +21,27 @@ The cost of the server is met by customer subscriptions. It is free for anyone t
 
 ## Data format
 
-A message is a document and a program. In Haskell syntax, a document is:
-
+In Haskell syntax, a message is:
 ```
-data Document
+data Message = Message
+    { author :: Text
+    , recipient :: Text
+    -- If the recipient does not have you on their whitelist, this
+    -- field is set to code they gave you when they contacted you.
+    , youWantMeCode :: Maybe Text
+    , encryptedBody :: ByteString
+    , nonce :: ByteString
+    }
+```
+
+This is what is seen by the server, when the message has been encrypted. The 'encryptedBody' field must be exactly 16KB long. The encrypted field is an encrypted document. In Haskell syntax, a document is:
+```
+data Document = Document
+    { body :: DocumentBody
+    , programName :: Text -- The name of the program that can use this document.
+    }
+
+type DocumentBody
     = TextD [TextWithLinks]
     | BinaryD ByteString
 
@@ -36,6 +53,8 @@ data TextWithLinks
     | UnicodeT Text
 ```
 
+## Programs
+
 The actions that a program can do are:
 
 1. Display a document.
@@ -44,11 +63,7 @@ The actions that a program can do are:
 
 3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to be notified of any changes to the text area. A program can also prompt users for a file upload from the local file system.
 
-4. Call other programs. A program is a function that takes a set of documents as its input, and produces another set of documents as its output. A program can call any other program by its hash and use it - a bit like Unix pipes, but can't access its document set.
-
-5. Create other programs.
-
-6. Send messages to other people. A document must be marked with the hash of the program it is being sent to, as well as the key of the person who is receiving it. A program can be sent to a specific program on another person's computer, or just to the person.
+5. Send messages to other people. A document must be marked with the name of the program it is being sent to, as well as the name of the person who is receiving it, but programs are just sent to other people.
 
 # Sharing
 
@@ -62,9 +77,11 @@ Each user has a whitelist of people they will accept messages from. Messages fro
 
 1. Message-passing server. Messages are accepted if they are to or from subscribers. The server also keeps a copy of all messages.
 
-2. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
+2. Public key server. A public database containing usernames, public signing keys and public encryption keys. Anyone can upload a username + public signing key + public encryption key, and it will be accepted as long as the username is unique and is signed by the corresponding private signing key. A user can change their keys whenever they want, but the new key must be signed by the old one. Encryption keys should be changed often for forward secrecy.
 
-3. Public key server. A dead-simple public database containing usernames, public signing keys and public encryption keys. Anyone can upload a username + public signing key + public encryption key, and it will be accepted as long as the username is unique and is signed by the corresponding private signing key. There will probably be a fairly hefty proof of work required to upload, to discourage DDOS attacks. A user can change their keys whenever they want, but the new key must be signed by the old one. Encryption keys will get changed really often, to prevent compromise of a key leading to loads of old messages getting decrypted.
+3. Program name server. Another simple public lookup database that links program names to programs.
+
+4. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
 
 # Security
 
