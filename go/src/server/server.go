@@ -170,6 +170,25 @@ func readMembers() (map[[32]byte]dontCare, error) {
 	return result, nil
 }
 
+type publicSignKeyT [32]byte
+type hashT [32]byte
+
+type message struct {
+	Body []byte
+	Recipient publicSignKeyT
+	Author publicSignKeyT
+}
+
+type textWithLinks struct {
+	link *linkT
+	text string
+}
+
+type linkT struct {
+	displayName string
+	contentHash []byte
+}
+
 func main() {
 	// defer profile.Start().Stop()
 	gob.Register(*new(common.ClientToClient))

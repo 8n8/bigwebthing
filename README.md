@@ -1,4 +1,4 @@
-It provides a sufficient but minimal solution to each of the problems caused by data:
+It provides a sufficient but minimal solution to each of these problems caused by data:
 
 1. storing
 2. sharing
@@ -21,20 +21,51 @@ The cost of the server is met by customer subscriptions. It is free for anyone t
 
 ## Data format
 
-In Haskell syntax, a message is:
+There are four different message types:
+
+1. Document: a piece of user data, like a personal message.
+2. Program: a computer program for processing and sending documents.
+3. New public encryption key
+4. New public signing key
+
+Messages are encrypted and decrypted on users' machines, and can't be read by the server. To the server, all messages look like this (Haskell syntax):
+
 ```
-data Message = Message
-    { author :: Text
-    , recipient :: Text
-    -- If the recipient does not have you on their whitelist, this
-    -- field is set to code they gave you when they contacted you.
-    , youWantMeCode :: Maybe Text
-    , encryptedBody :: ByteString
-    , nonce :: ByteString
+data Message
+    = AcceptInvitation
+        { invitationCode :: Text
+        , publicEncryptionKey :: ByteString
+        , publicSigningKey :: ByteString
+        , signature :: ByteString
+        }
+    | Message
+        { author :: ByteString -- A public signing key.
+        , recipient :: ByteString
+        , encryptedBody :: ByteString
+        , nonce :: ByteString
+        }
+```
+
+he 'encryptedBody' field is an encrypted chunk or new public key, and must be no more than 16KB long. In Haskell syntax, it is:
+
+```
+data ChunkOrKey
+    = EncryptionKeyC ByteString -- The new public key.
+    | SigningKeyC ByteString
+    | ProgramChunkC Chunk -- Part of a program.
+    | DocumentChunkC Chunk
+
+
+data Chunk = Chunk
+    { hashOfWhole :: ByteString -- Cryptographic hash of whole document / program.
+    , offset :: Int -- 0 for the first chunk, 1 for the second, etc.
+    , finalChunk :: Bool -- True if this is the last chunk of the document / program.
+    , chunk :: ByteString
     }
 ```
 
-This is what is seen by the server, when the message has been encrypted. The 'encryptedBody' field must be exactly 16KB long. The encrypted field is an encrypted document. In Haskell syntax, a document is:
+A document is:
+
 ```
 data Document = Document
     { body :: DocumentBody
@@ -53,6 +84,18 @@ data TextWithLinks
     | UnicodeT Text
 ```
 
+A program is:
+
+```
+data Program = Program
+    { code :: Text
+    , name :: Text
+    , description :: Text
+    -- Increments with each new version. There are no major / minor versions, since
+    -- all versions are expected to be able to read data produced by previous versions.
+    , version :: Int
+    }
+
 ## Programs
 
 The actions that a program can do are:
@@ -63,11 +106,7 @@ The actions that a program can do are:
 
 3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to be notified of any changes to the text area. A program can also prompt users for a file upload from the local file system.
 
-5. Send messages to other people. A document must be marked with the name of the program it is being sent to, as well as the name of the person who is receiving it, but programs are just sent to other people.
-
-# Sharing
-
-By sending messages from one user to another.
+5. Send messages to other people.
 
 # Spam
 
@@ -77,12 +116,8 @@ Each user has a whitelist of people they will accept messages from. Messages fro
 
 1. Message-passing server. Messages are accepted if they are to or from subscribers. The server also keeps a copy of all messages.
 
-2. Public key server. A public database containing usernames, public signing keys and public encryption keys. Anyone can upload a username + public signing key + public encryption key, and it will be accepted as long as the username is unique and is signed by the corresponding private signing key. A user can change their keys whenever they want, but the new key must be signed by the old one. Encryption keys should be changed often for forward secrecy.
-
-3. Program name server. Another simple public lookup database that links program names to programs.
-
-4. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
+2. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
 
 # Security
 
-Each user has a pair of keys which are generated from a password only known by the user. This means that data is only accessible by the user, and is encrypted on the server.
+Each user has a pair of keys which are generated from a password only known by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password then their data is lost for ever.
