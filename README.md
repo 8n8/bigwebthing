@@ -1,4 +1,4 @@
-It provides a sufficient but minimal solution to each of these problems caused by data:
+It provides a sufficient but minimal solution to each of these data problems:
 
 1. storing
 2. sharing
@@ -6,108 +6,66 @@ It provides a sufficient but minimal solution to each of these problems caused b
 4. viewing
 5. searching
 6. automatic manipulation
-7. spam
+7. spam messages
 
 # Storing
 
-A user's data is a set of immutable messages. Messages can be added to the set but not removed. Messages are stored:
+A user's data is stored in a local cache, in IndexedDB in their browser.  There is also a storage server, so the data can be synchronised between machines and backed up.
 
-1. on a cloud server
-2. in a local cache (indexedDB)
+# Sharing
 
-If the two sets of messages are different then the local one is changed to match the cloud one.
+There is a message-passing server for sharing data between people. It stores messages till they are collected by the recipient.
 
-The cost of the server is met by customer subscriptions. It is free for anyone to use the server to communicate with a subscriber, but only subscribers can communicate with non-subscribers.
+The cost of the server is met by subscriptions. It is free to use the server to communicate with a subscriber, but only subscribers can communicate with non-subscribers.
 
-## Data format
+# Message formats
 
-There are four different message types:
+Messages are encrypted and decrypted on users' machines, and can't be read by the server. To the server, a message is either:
 
-1. Document: a piece of user data, like a personal message.
-2. Program: a computer program for processing and sending documents.
-3. New public encryption key
-4. New public signing key
++ a public signing key change message or
++ an encrypted blob and its nonce
 
-Messages are encrypted and decrypted on users' machines, and can't be read by the server. To the server, all messages look like this (Haskell syntax):
+Each message also contains the public keys of the recipient and sender. A public key change message must contain a cryptographic signature.
 
-```
-data Message = Message
-    { author :: PublicSigningKey
-    , recipient :: PublicSigningKey
-    , newKeyOrBody :: NewKeyOrBody
-    }
+The encrypted blob must be no more than 16KB long. Before encryption and encoding it is one of:
 
-data NewKeyOrBody
-    = SigningKeyN SigningKey Signature
-    | EncryptedBodyN EncryptedBody Nonce
+1. a new public encryption key
+2. a request to be whitelisted, using a one-time code
+3. a chunk of a program
+4. a chunk of a document
 
-newtype PublicSigningKey = SigningKey ByteString
-newtype Signature = Signature ByteString
-newtype EncryptedBody = EncryptedBody ByteString
-newtype Nonce = Nonce ByteString
-```
+A chunk of a program or document contains:
 
-The 'EncryptedBody' field is an encrypted chunk or new encryption key or whitelist request, and must be no more than 16KB long. In Haskell syntax, it is:
+1. the cryptographic hash of the whole document or program
+2. the offset: 0 for the first chunk, 1 for the second, and so on
+3. whether the chunk is the final one in the document or program
+4. the chunk body
 
-```
-data ChunkOrKey
-    = EncryptionKeyC ByteString -- The new public key.
-    | WhitelistMe Text -- A code sent by someone who invited me.
-    | ProgramChunkC Chunk -- Part of a program.
-    | DocumentChunkC Chunk
+A document contains:
 
-data Chunk = Chunk
-    { hashOfWhole :: Hash -- Cryptographic hash of whole document / program.
-    , offset :: Int -- 0 for the first chunk, 1 for the second, etc.
-    , finalChunk :: Bool -- True if this is the last chunk of the document / program.
-    , chunk :: ByteString
-    }
+1. a body and
+2. the name of the program that can open it.
 
-newtype Hash = Hash ByteString
-```
+The body of a document is either a binary blob or some text with links to other documents in it. A link is the cryptographic hash of the document linked to.
 
-A document is:
+A program contains:
 
-```
-data Document = Document
-    { body :: DocumentBody
-    , programName :: Text -- The name of the program that can use this document.
-    }
+1. the code
+2. its name
+3. a description
+4. a version number
 
-type DocumentBody
-    = TextD [TextWithLinks]
-    | BinaryD ByteString
+The version number is an integer, starting at 0. All versions must be able to read data created by previous versions.
 
-data TextWithLinks
-    -- The text is a friendly display name for the link,
-    -- and the ByteString is the 256-bit crytpographic
-    -- hash of the content linked to.
-    = LinkT Text ByteString
-    | UnicodeT Text
-```
-
-A program is:
-
-```
-data Program = Program
-    { code :: Text
-    , name :: Text
-    , description :: Text
-    -- Increments with each new version. There are no major / minor versions, since
-    -- all versions are expected to be able to read data produced by previous versions.
-    -- However it is OK for earlier versions not to be able to read data produces by
-    -- later versions.
-    , version :: Int
-    }
-```
-
-## Programs
+# Programs
 
 The actions that a program can do are:
 
 1. Display a document.
 
-2. Add documents to its document set.
+2. Access a local database.
+
+3. Read and delete messages sent to it from other people.
 
 3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to be notified of any changes to the text area. A program can also prompt users for a file upload from the local file system.
 
@@ -115,14 +73,18 @@ The actions that a program can do are:
 
 # Spam
 
-Each user has a whitelist of people they will accept messages from. Messages from anyone else are rejected unless they have a valid one-time code. To start communicating with a new user, I send them a one-time code by an existing channel, such as email, which they use the first time they message me. If I get a message from someone not on the whitelist who has a valid one-time code then I add them to my whitelist.
+Each user has a whitelist of people they will accept messages from. Messages from anyone else are rejected unless they have a valid one-time code. Connections are started by somone sending a one-time code to someone else, by some existing method of communication, such as email. This code is used to authenticate the first message.
 
 # Software components
 
-1. Message-passing server. Messages are accepted if they are to or from subscribers. The server also keeps a copy of all messages.
+1. Message-passing server. Messages are accepted if they are to or from subscribers. It deletes messages when they have been read.
 
 2. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
 
+3. Backup and synchronisation server.
+
 # Security
 
-Each user has a pair of keys which are generated from a password only known by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password then their data is lost for ever.
+Each user has a pair of keys for encryption and signing which are generated from a password only known by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password and their local data then they can't recover it.
+
+Key pairs are changed by sending the new keys to everyone on the whitelist, signed by the old signing key.

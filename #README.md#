@@ -1,0 +1,84 @@
+It provides a sufficient but minimal solution to each of these problems caused by data:
+
+1. storing
+2. sharing
+3. creating
+4. viewing
+5. searching
+6. automatic manipulation
+7. spam
+
+# Storing
+
+A user's data is stored in a local cache, in indexedDB in their browser.  There is also a server for storing data on, so that it can be synchronised between machines and backed up.
+
+# Sharing
+
+There is a message-passing server for sharing data between users. It stores messages until they are collected by the recipient.
+
+The cost of the server is met by customer subscriptions. It is free for anyone to use the server to communicate with a subscriber, but only subscribers can communicate with non-subscribers.
+
+# Message formats
+
+Messages are encrypted and decrypted on users' machines, and can't be read by the server. To the server, a message is either:
+
+1. a public signing key change or
+2. an encrypted blob and its nonce
+
+The encrypted blob must be no more than 16KB long. Before encryption and encoding it is one of:
+
+1. a new public encryption key
+2. a request to be whitelisted, using a one-time code
+3. a chunk of a program
+4. a chunk of a document
+
+A chunk of a program or document contains:
+
+1. the cryptographic hash of the whole document or program
+2. the offset: 0 for the first chunk, 1 for the second, and so on
+3. whether the chunk is the final one in the document / program
+4. the chunk body
+
+A document contains:
+
+1. a body and
+2. the name of the program that can open it.
+
+The body of a document is either a binary blob or a sequence of unicode strings and links to other documents. A link is the cryptographic hash of the document linked to.
+
+A program contains:
+
+1. the code
+2. its name
+3. a description
+4. a version number
+
+The version number is an integer, starting at 0. All versions are expected to be able to read data created by previous versions.
+
+## Programs
+
+The actions that a program can do are:
+
+1. Display a document.
+
+2. Add documents to its document set.
+
+3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to be notified of any changes to the text area. A program can also prompt users for a file upload from the local file system.
+
+5. Send messages to other people.
+
+# Spam
+
+Each user has a whitelist of people they will accept messages from. Messages from anyone else are rejected unless they have a valid one-time code. To start communicating with a new user, I send them a one-time code by an existing channel, such as email, which they use the first time they message me. If I get a message from someone not on the whitelist who has a valid one-time code then I add them to my whitelist.
+
+# Software components
+
+1. Message-passing server. Messages are accepted if they are to or from subscribers. It deletes messages when they have been read.
+
+2. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
+
+3. Backup and synchronisation server.
+
+# Security
+
+Each user has a pair of keys which are generated from a password only known by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password then their data is lost for ever.
