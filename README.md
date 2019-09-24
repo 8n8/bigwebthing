@@ -31,37 +31,39 @@ There are four different message types:
 Messages are encrypted and decrypted on users' machines, and can't be read by the server. To the server, all messages look like this (Haskell syntax):
 
 ```
-data Message
-    = AcceptInvitation
-        { invitationCode :: Text
-        , publicEncryptionKey :: ByteString
-        , publicSigningKey :: ByteString
-        , signature :: ByteString
-        }
-    | Message
-        { author :: ByteString -- A public signing key.
-        , recipient :: ByteString
-        , encryptedBody :: ByteString
-        , nonce :: ByteString
-        }
+data Message = Message
+    { author :: PublicSigningKey
+    , recipient :: PublicSigningKey
+    , newKeyOrBody :: NewKeyOrBody
+    }
+
+data NewKeyOrBody
+    = SigningKeyN SigningKey Signature
+    | EncryptedBodyN EncryptedBody Nonce
+
+newtype PublicSigningKey = SigningKey ByteString
+newtype Signature = Signature ByteString
+newtype EncryptedBody = EncryptedBody ByteString
+newtype Nonce = Nonce ByteString
 ```
 
-he 'encryptedBody' field is an encrypted chunk or new public key, and must be no more than 16KB long. In Haskell syntax, it is:
+The 'EncryptedBody' field is an encrypted chunk or new encryption key or whitelist request, and must be no more than 16KB long. In Haskell syntax, it is:
 
 ```
 data ChunkOrKey
     = EncryptionKeyC ByteString -- The new public key.
-    | SigningKeyC ByteString
+    | WhitelistMe Text -- A code sent by someone who invited me.
     | ProgramChunkC Chunk -- Part of a program.
     | DocumentChunkC Chunk
 
-
 data Chunk = Chunk
-    { hashOfWhole :: ByteString -- Cryptographic hash of whole document / program.
+    { hashOfWhole :: Hash -- Cryptographic hash of whole document / program.
     , offset :: Int -- 0 for the first chunk, 1 for the second, etc.
     , finalChunk :: Bool -- True if this is the last chunk of the document / program.
     , chunk :: ByteString
     }
+
+newtype Hash = Hash ByteString
 ```
 
 A document is:
@@ -93,8 +95,11 @@ data Program = Program
     , description :: Text
     -- Increments with each new version. There are no major / minor versions, since
     -- all versions are expected to be able to read data produced by previous versions.
+    -- However it is OK for earlier versions not to be able to read data produces by
+    -- later versions.
     , version :: Int
     }
+```
 
 ## Programs
 
