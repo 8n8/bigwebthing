@@ -14,7 +14,7 @@ A user's data is stored in a local cache, in IndexedDB in their browser.  There 
 
 # Sharing
 
-There is a message-passing server for sharing data between people. It stores messages till they are collected by the recipient.
+There is a message-passing server for sharing data between people. It stores messages till they are collected.
 
 The cost of the server is met by subscriptions. It is free to use the server to communicate with a subscriber, but only subscribers can communicate with non-subscribers.
 
@@ -25,7 +25,7 @@ Messages are encrypted and decrypted on users' machines, and can't be read by th
 + a public signing key change message or
 + an encrypted blob and its nonce
 
-Each message also contains the public keys of the recipient and sender. A public key change message must contain a cryptographic signature.
+Each message also contains the public signing keys of the recipient and sender. A public key change message must be signed by the old key.
 
 The encrypted blob must be no more than 16KB long. Before encryption and encoding it is one of:
 
@@ -36,9 +36,9 @@ The encrypted blob must be no more than 16KB long. Before encryption and encodin
 
 A chunk of a program or document contains:
 
-1. the cryptographic hash of the whole document or program
+1. the cryptographic hash of the whole
 2. the offset: 0 for the first chunk, 1 for the second, and so on
-3. whether the chunk is the final one in the document or program
+3. whether the chunk is the final one
 4. the chunk body
 
 A document contains:
@@ -59,7 +59,7 @@ The version number is an integer, starting at 0. All versions must be able to re
 
 # Programs
 
-The actions that a program can do are:
+A program can:
 
 1. Display a document.
 
@@ -85,6 +85,6 @@ Each user has a whitelist of people they will accept messages from. Messages fro
 
 # Security
 
-Each user has a pair of keys for encryption and signing which are generated from a password only known by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password and their local data then they can't recover it.
+Each user has a pair of keys for encryption and signing which are generated from a password known only by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password and their local data then they can't recover it.
 
 Key pairs are changed by sending the new keys to everyone on the whitelist, signed by the old signing key.
