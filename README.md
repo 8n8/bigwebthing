@@ -25,7 +25,7 @@ Messages are encrypted and decrypted on users' machines, and can't be read by th
 + a public signing key change message or
 + an encrypted blob and its nonce
 
-Each message also contains the public signing keys of the recipient and sender. A public key change message must be signed by the old key.
+Each message also contains the public signing keys of the recipient and sender, and a signature.
 
 The encrypted blob must be no more than 16KB long. Before encryption and encoding it is one of:
 

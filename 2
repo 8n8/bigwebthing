@@ -16,7 +16,7 @@ import (
 	"time"
 	"errors"
 	"net/http"
-	"sync"
+	// "github.com/pkg/profile"
 )
 
 type stateT struct {
@@ -211,12 +211,12 @@ var AUTHCODESMUX sync.Mutex
 
 // The signature in the address of a keyChangeMsg must sign the
 // blake2b hash of:
-//
+// 
 //     key of recipient + new key + authcode
-//
+// 
 // This ensures that the owner of the old key is the creator of this
 // new one.
-//
+// 
 // The signature of the new key just needs to sign the auth code
 // with the new key. This ensures that they own the new key and
 // are not stealing someone elses.
@@ -238,9 +238,17 @@ func (k keyChangeMsg) checkSignature() error {
 		}
 	}
 
-	err := validAuthCode(k.address.authCode)
-	if err != nil {
-		return err
+	AUTHCODESMUX.Lock()
+	createdTime, ok = AUTHCODES[k.address.authCode]
+	delete(AUTHCODES, k.address.authCode)
+	AUTHCODESMUX.Unlock()
+
+	if !ok {
+		return errors.New("could not find auth code")
+	}
+	const fiveMinutes = 5 * 60
+	if time.Now().Unix() - createdTime > fiveMinutes {
+		return errors.New("auth code out of date")
 	}
 
 	newKeyArr := [32]byte(k.newKey)
@@ -264,9 +272,9 @@ func (k keyChangeMsg) checkSignature() error {
 }
 
 // It is encoded as:
-//
+// 
 //     address + newKey + newKeySig
-//
+// 
 // It has length keyChangeMsgLen.
 //
 type keyChangeMsg struct {
@@ -277,7 +285,7 @@ type keyChangeMsg struct {
 const keyChangeMsgLen = addressLen + pubKeyLen + sigLen
 
 // It is encoded as:
-//
+// 
 //     address + nonce + blob
 //
 // It has length:
@@ -292,44 +300,14 @@ type blobMsg struct {
 
 
 // The signature is of the blake2b hash of:
-//
+// 
 //     key of recipient + blob + authcode
-//
+// 
+// This is to ensure that users can't impersonate each other, and
+// that messages can't be resent to others as if the original author
+// intended that.
 func (b blobMsg) checkSignature() error {
-	expected := blake2b.Sum256(append(
-		append(b.address.to[:], b.blob...),
-		b.address.authCode[:]...))
-	fromArr := [32]byte(b.address.from)
-	actual, ok := sign.Open(
-		make([]byte, 0),
-		b.address.sig[:],
-		&fromArr)
-	if !ok {
-		return errors.New("bad signature")
-	}
-	for i, e := range expected {
-		if actual[i] != e {
-			return errors.New("unexpected signature")
-		}
-	}
-
-	return validAuthCode(b.address.authCode)
-}
-
-func validAuthCode(authCode authCodeT) error {
-	AUTHCODESMUX.Lock()
-	createdTime, ok := AUTHCODES[authCode]
-	delete(AUTHCODES, authCode)
-	AUTHCODESMUX.Unlock()
-
-	if !ok {
-		return errors.New("could not find auth code")
-	}
-	const fiveMinutes = 5 * 60
-	if time.Now().Unix() - createdTime > fiveMinutes {
-		return errors.New("auth code out of date")
-	}
-	return nil
+	
 }
 
 func encodePubKey(p publicSigningKeyT) string {
@@ -442,36 +420,25 @@ func decodeAddress(body []byte) (addressT, error) {
 	return addressT{from, to, sig, authCode}, nil
 }
 
-func sendErr(w http.ResponseWriter, r *http.Request) (error, int) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return err, 500
-	}
-
-	msg, err := decodeMsg(body)
-	if err != nil {
-		return err, 400
-	}
-
-	err = msg.checkSignature()
-	if err != nil {
-		return err, 400
-	}
-
-	err = save(body, msg.to())
-	if err != nil {
-		return err, 500
-	}
-	return nil, 0
-}
-
 func main() {
 	http.HandleFunc(
 		"/send",
 		func(w http.ResponseWriter, r *http.Request) {
-			err, errCode := sendErr(w, r)
+			body, err := ioutil.ReadAll(r.Body)
 			if err != nil {
-				http.Error(w, err.Error(), errCode)
+				http.Error(w, "could not read request body", 500)
+				return
+			}
+
+			msg, err := decodeMsg(body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+
+			err = save(body, msg.to())
+			if err != nil {
+				http.Error(w, err.Error(), 500)
 				return
 			}
 		})
