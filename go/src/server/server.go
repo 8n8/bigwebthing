@@ -398,7 +398,11 @@ func decodeBlobMsg(body []byte) (Msg, error) {
 
 	var nonce nonceT
 	copy(nonce[:], body[addressLen:addressLen + nonceLen])
-	blob := make([]byte, 0)
+	blobLen := len(body) - addressLen - nonceLen
+	if blobLen > maxBlobLen {
+		return *new(blobMsg), errors.New("blob too long")
+	}
+	blob := make([]byte, blobLen)
 	copy(blob, body[addressLen + nonceLen :])
 	return blobMsg{address, nonce, blob}, nil
 }
@@ -442,11 +446,16 @@ func decodeAddress(body []byte) (addressT, error) {
 	return addressT{from, to, sig, authCode}, nil
 }
 
+const maxBlobLen = 16000
+const maxSendBodyLen = addressLen + nonceLen + maxBlobLen
+
 func sendErr(w http.ResponseWriter, r *http.Request) (error, int) {
-	body, err := ioutil.ReadAll(r.Body)
+	body := make([]byte, maxSendBodyLen)
+	n, err := r.Body.Read(body)
 	if err != nil {
 		return err, 500
 	}
+	body = body[:n]
 
 	msg, err := decodeMsg(body)
 	if err != nil {
