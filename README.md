@@ -10,7 +10,7 @@ It provides a sufficient but minimal solution to each of these data problems:
 
 # Storing
 
-A user's data is stored in a local cache, in IndexedDB in their browser.  There is also a storage server, so the data can be synchronised between machines and backed up.
+A user's data is stored in a local cache, in IndexedDB in their browser.
 
 # Sharing
 
@@ -80,8 +80,6 @@ Each user has a whitelist of people they will accept messages from. Messages fro
 1. Message-passing server. Messages are accepted if they are to or from subscribers. It deletes messages when they have been read.
 
 2. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
-
-3. Backup and synchronisation server.
 
 # Security
 
