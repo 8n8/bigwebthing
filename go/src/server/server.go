@@ -7,16 +7,15 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"common"
 	"crypto/rand"
-	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"golang.org/x/crypto/nacl/sign"
 	"io/ioutil"
-	"net"
 	"time"
 	"errors"
 	"net/http"
 	"sync"
+	"io"
 )
 
 type stateT struct {
@@ -492,8 +491,33 @@ func protectedErr(
 	switch meaning {
 	case 0:
 		return sendMsg(body, everythingElse[1:], sender, authCode)
+	case 1:
+		return receiveMsg(sender, w)
 	}
 	return errors.New("bad meaning code"), 400
+}
+
+func receiveMsg(
+	sender publicSigningKeyT, w http.ResponseWriter) (error, int) {
+
+	inboxPath := makeMsgPath(sender[:])
+	files, err := ioutil.ReadDir(inboxPath)
+	if err != nil {
+		return err, 500
+	}
+	if len(files) == 0 {
+		return nil, 0
+	}
+	msgPath := inboxPath + "/" + files[0].Name()
+	handle, err := os.Open(msgPath)
+	if err != nil {
+		return err, 500
+	}
+	_, err = io.Copy(w, handle)
+	if err != nil {
+		return err, 500
+	}
+	return nil, 0
 }
 
 func sendMsg(
@@ -511,7 +535,7 @@ func sendMsg(
 	to := body[1:pubKeyLen]
 	msgHash := blake2b.Sum256(original)
 	newFileName := base64.URLEncoding.EncodeToString(msgHash[:])
-	endPath := msgPath(to[:]) + "/" + newFileName
+	endPath := makeMsgPath(to[:]) + "/" + newFileName
 	if meaningByte == 0 {
 		keyChange, err := decodeKeyChangeMsg(body[1 + pubKeyLen:])
 		if err != nil {
@@ -533,8 +557,8 @@ func sendMsg(
 				return errors.New("unexpected signature"), 400
 			}
 		}
-		oldInboxPath := msgPath(sender[:])
-		newInboxPath := msgPath(keyChange.newKey[:])
+		oldInboxPath := makeMsgPath(sender[:])
+		newInboxPath := makeMsgPath(keyChange.newKey[:])
 		err = os.Rename(oldInboxPath, newInboxPath)
 		if err != nil {
 			return err, 500
@@ -547,7 +571,7 @@ func sendMsg(
 	return nil, 0
 }
 
-func msgPath(b []byte) string {
+func makeMsgPath(b []byte) string {
 	fileName := base64.URLEncoding.EncodeToString(b)
 	return inboxesPath + "/" + fileName
 }
@@ -632,23 +656,6 @@ func isMember(p publicSigningKeyT) (bool, error) {
 	return false, nil
 }
 
-// func decodeReceiveMsg(body [receiveMsgLen]byte) receiveMsg {
-// 	var authCode authCodeT
-// 	copy(authCode[:], body[:authCodeLen])
-// 	var myId publicSigningKeyT
-// 	copy(myId[:], body[authCodeLen:authCodeLen + pubKeyLen])
-// 	var signature authSigT
-// 	copy(signature[:], body[authCodeLen + pubKeyLen])
-// 	return receiveMsg{authCode, myId, signature}
-// }
-
-const receiveMsgLen = authCodeLen + pubKeyLen + authSigLen
-type receiveMsg struct {
-	authCode authCodeT
-	myId publicSigningKeyT
-	signature authSigT
-}
-
 func genAuthCode() ([common.AuthCodeLength]byte, error) {
 	authSlice := make([]byte, common.AuthCodeLength)
 	_, err := rand.Read(authSlice)
@@ -677,143 +684,4 @@ func (t tcpConnectionT) update(s *stateT) (stateT, outputT) {
 	newS := *s
 	newS.connectedUsers = newConnUsers
 	return newS, readChans(s)
-}
-
-func handleConn(
-	conn net.Conn,
-	newConnChan chan tcpConnectionT,
-	isMemberChan chan isMemberT,
-	errInChan chan errMsgT,
-	msgInChan chan common.ClientToClient) {
-
-	fmt.Println("Top of handleConn.")
-	conn.SetDeadline(time.Now().Add(time.Second * 30))
-	authCode, err := genAuthCode()
-	if err != nil {
-		fmt.Print(err)
-		conn.Close()
-		return
-	}
-	enc := gob.NewEncoder(conn)
-	dec := gob.NewDecoder(conn)
-	err = enc.Encode(authCode)
-	if err != nil {
-		fmt.Print(err)
-		conn.Close()
-		return
-	}
-	var authSig common.AuthSigT
-	err = dec.Decode(&authSig)
-	if err != nil {
-		fmt.Print(err)
-		conn.Close()
-		return
-	}
-	if !authOk(authSig, authCode) {
-		fmt.Print(err)
-		conn.Close()
-		return
-	}
-	memberOkCh := make(chan bool)
-	isMemberChan <- isMemberT{authSig.Author, memberOkCh}
-	isMember := <-memberOkCh
-	if !isMember {
-		conn.Close()
-		return
-	}
-	chs := tcpConnectionT{
-		out:    make(chan common.ClientToClient),
-		outErr: make(chan error),
-		id:     authSig.Author,
-	}
-	newConnChan <- chs
-	conn.SetDeadline(time.Now().Add(time.Minute * 30))
-	go func() {
-		for {
-			//var clientToClient common.ClientToClient
-			fmt.Println("C")
-			//err = dec.Decode(&clientToClient)
-			fmt.Println("B")
-			clientToClient, err := common.ReadClientToClient(conn)
-			fmt.Println("Just below reading in message from client.")
-			if err != nil {
-				fmt.Println("A")
-				fmt.Println(err)
-				errInChan <- errMsgT{authSig.Author, err}
-				chs.outErr <- err
-				fmt.Print(err)
-				conn.Close()
-				return
-			}
-			fmt.Println("XX")
-			fmt.Println(msgInChan)
-			fmt.Println("xx")
-			msgInChan <- clientToClient
-			fmt.Println("Y")
-		}
-	}()
-	for {
-		conn.SetDeadline(time.Now().Add(time.Minute * 30))
-		select {
-		case newMsg := <-chs.out:
-			fmt.Println("New message out.")
-			encoded, err := common.EncodeClientToClient(
-				newMsg)
-			if err != nil {
-				errInChan <- errMsgT{
-					authSig.Author,
-					err,
-					}
-				fmt.Print(err)
-				conn.Close()
-				return
-			}
-			fmt.Println("Correctly encoded.")
-			n, err := conn.Write(encoded)
-			if err != nil {
-				errInChan <- errMsgT{
-					authSig.Author,
-					err,
-				}
-				fmt.Println(err)
-				conn.Close()
-				return
-			}
-			if n != len(encoded) {
-				errInChan <- errMsgT{authSig.Author, errors.New("Didn't sent whole message.")}
-				fmt.Println("Did not send whole message.")
-				conn.Close()
-				return
-			}
-			fmt.Println("Message sent without errors.")
-			fmt.Println("Recipient: ")
-			fmt.Println(authSig.Author)
-			fmt.Println(">>>>>>>>")
-		case <-chs.outErr:
-			conn.Close()
-			return
-		}
-	}
-}
-
-func tcpServer(
-	newConnChan chan tcpConnectionT,
-	isMember chan isMemberT,
-	errInChan chan errMsgT,
-	msgInChan chan common.ClientToClient) {
-
-	ln, err := net.Listen("tcp", ":4000")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer ln.Close()
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		go handleConn(conn, newConnChan, isMember, errInChan, msgInChan)
-	}
 }
