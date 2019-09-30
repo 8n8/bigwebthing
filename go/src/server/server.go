@@ -312,6 +312,7 @@ type blobMsg struct {
 // 
 // 	return validAuthCode(b.address.authCode)
 // }
+const authTimeOut = 5 * 60
 
 func validAuthCode(authCode authCodeT) error {
 	AUTHCODESMUX.Lock()
@@ -322,8 +323,7 @@ func validAuthCode(authCode authCodeT) error {
 	if !ok {
 		return errors.New("could not find auth code")
 	}
-	const fiveMinutes = 5 * 60
-	if time.Now().Unix() - createdTime > fiveMinutes {
+	if time.Now().Unix() - createdTime > authTimeOut {
 		return errors.New("auth code out of date")
 	}
 	return nil
@@ -617,8 +617,16 @@ func main() {
 					return
 				}
 
+				now := time.Now().Unix()
+				newCodes := make(map[authCodeT]int64)
 				AUTHCODESMUX.Lock()
-				AUTHCODES[authCode] = time.Now().Unix()
+				for a, t := range AUTHCODES {
+					if t - now < authTimeOut {
+						newCodes[a] = t
+					}
+				}
+				newCodes[authCode] = now
+				AUTHCODES = newCodes
 				AUTHCODESMUX.Unlock()
 		})
 	// http.HandleFunc(
