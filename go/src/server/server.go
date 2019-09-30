@@ -198,70 +198,70 @@ type Msg interface {
 	checkSignature() error
 }
 
-func (k keyChangeMsg) to() publicSigningKeyT {
-	return k.address.to
-}
+// func (k keyChangeMsg) to() publicSigningKeyT {
+// 	return k.address.to
+// }
 
-func (b blobMsg) to() publicSigningKeyT {
-	return b.address.to
-}
+// func (b blobMsg) to() publicSigningKeyT {
+// 	return b.address.to
+// }
 
 var AUTHCODES = make(map[[16]byte]int64)
 var AUTHCODESMUX sync.Mutex
 
-// The signature in the address of a keyChangeMsg must sign the
-// blake2b hash of:
-//
-//     key of recipient + new key + authcode
-//
-// This ensures that the owner of the old key is the creator of this
-// new one.
-//
-// The signature of the new key just needs to sign the auth code
-// with the new key. This ensures that they own the new key and
-// are not stealing someone elses.
-func (k keyChangeMsg) checkSignature() error {
-	expected := blake2b.Sum256(append(
-		append(k.address.to[:], k.newKey[:]...),
-		k.address.authCode[:]...))
-	fromArr := [32]byte(k.address.from)
-	actual, ok := sign.Open(
-		make([]byte, 0),
-		k.address.sig[:],
-		&fromArr)
-	if !ok {
-		return errors.New("bad old key signature")
-	}
-	for i, e := range expected {
-		if actual[i] != e {
-			return errors.New("unexpected old key signature")
-		}
-	}
-
-	err := validAuthCode(k.address.authCode)
-	if err != nil {
-		return err
-	}
-
-	newKeyArr := [32]byte(k.newKey)
-	actual2, ok2 := sign.Open(
-		make([]byte, 0),
-		k.newKeySig[:],
-		&newKeyArr)
-	if !ok2 {
-		return errors.New("bad new key signature")
-	}
-	if len(actual2) != authCodeLen {
-		return errors.New("signed code wrong length")
-	}
-	for i, a := range actual2 {
-		if k.address.authCode[i] != a {
-			return errors.New("bad signed auth code")
-		}
-	}
-
-	return nil
-}
+// // The signature in the address of a keyChangeMsg must sign the
+// // blake2b hash of:
+// //
+// //     key of recipient + new key + authcode
+// //
+// // This ensures that the owner of the old key is the creator of this
+// // new one.
+// //
+// // The signature of the new key just needs to sign the auth code
+// // with the new key. This ensures that they own the new key and
+// // are not stealing someone elses.
+// func (k keyChangeMsg) checkSignature() error {
+// 	expected := blake2b.Sum256(append(
+// 		append(k.address.to[:], k.newKey[:]...),
+// 		k.address.authCode[:]...))
+// 	fromArr := [32]byte(k.address.from)
+// 	actual, ok := sign.Open(
+// 		make([]byte, 0),
+// 		k.address.sig[:],
+// 		&fromArr)
+// 	if !ok {
+// 		return errors.New("bad old key signature")
+// 	}
+// 	for i, e := range expected {
+// 		if actual[i] != e {
+// 			return errors.New("unexpected old key signature")
+// 		}
+// 	}
+// 
+// 	err := validAuthCode(k.address.authCode)
+// 	if err != nil {
+// 		return err
+// 	}
+// 
+// 	newKeyArr := [32]byte(k.newKey)
+// 	actual2, ok2 := sign.Open(
+// 		make([]byte, 0),
+// 		k.newKeySig[:],
+// 		&newKeyArr)
+// 	if !ok2 {
+// 		return errors.New("bad new key signature")
+// 	}
+// 	if len(actual2) != authCodeLen {
+// 		return errors.New("signed code wrong length")
+// 	}
+// 	for i, a := range actual2 {
+// 		if k.address.authCode[i] != a {
+// 			return errors.New("bad signed auth code")
+// 		}
+// 	}
+// 
+// 	return nil
+// }
 
 // It is encoded as:
 //
@@ -270,11 +270,10 @@ func (k keyChangeMsg) checkSignature() error {
 // It has length keyChangeMsgLen.
 //
 type keyChangeMsg struct {
-	address addressT
 	newKey publicSigningKeyT
-	newKeySig signatureT
+	newKeySig authSigT
 }
-const keyChangeMsgLen = addressLen + pubKeyLen + sigLen
+const keyChangeMsgLen = pubKeyLen + authSigLen
 
 // It is encoded as:
 //
@@ -285,7 +284,6 @@ const keyChangeMsgLen = addressLen + pubKeyLen + sigLen
 //     addressLen + nonceLen + (whatever the length of the blob is)
 //
 type blobMsg struct {
-	address addressT
 	nonce nonceT
 	blob []byte
 }
@@ -295,26 +293,26 @@ type blobMsg struct {
 //
 //     key of recipient + blob + authcode
 //
-func (b blobMsg) checkSignature() error {
-	expected := blake2b.Sum256(append(
-		append(b.address.to[:], b.blob...),
-		b.address.authCode[:]...))
-	fromArr := [32]byte(b.address.from)
-	actual, ok := sign.Open(
-		make([]byte, 0),
-		b.address.sig[:],
-		&fromArr)
-	if !ok {
-		return errors.New("bad signature")
-	}
-	for i, e := range expected {
-		if actual[i] != e {
-			return errors.New("unexpected signature")
-		}
-	}
-
-	return validAuthCode(b.address.authCode)
-}
+// func (b blobMsg) checkSignature() error {
+// 	expected := blake2b.Sum256(append(
+// 		append(b.address.to[:], b.blob...),
+// 		b.address.authCode[:]...))
+// 	fromArr := [32]byte(b.address.from)
+// 	actual, ok := sign.Open(
+// 		make([]byte, 0),
+// 		b.address.sig[:],
+// 		&fromArr)
+// 	if !ok {
+// 		return errors.New("bad signature")
+// 	}
+// 	for i, e := range expected {
+// 		if actual[i] != e {
+// 			return errors.New("unexpected signature")
+// 		}
+// 	}
+// 
+// 	return validAuthCode(b.address.authCode)
+// }
 
 func validAuthCode(authCode authCodeT) error {
 	AUTHCODESMUX.Lock()
@@ -338,20 +336,6 @@ func encodePubKey(p publicSigningKeyT) string {
 
 const nonceLen = 24
 type nonceT [nonceLen]byte
-
-// It is encoded as:
-//
-//     from + to + sig + authCode
-//
-// It has length addressLen.
-//
-type addressT struct {
-	from publicSigningKeyT
-	to publicSigningKeyT
-	sig signatureT
-	authCode authCodeT
-}
-const addressLen = 2 * pubKeyLen + sigLen + authCodeLen
 const authCodeLen = 16
 
 type authCodeT = [authCodeLen]byte
@@ -360,20 +344,21 @@ const pubKeyLen = 32
 
 type publicSigningKeyT [pubKeyLen]byte
 
-type signatureT [sigLen]byte
+const msgSigLen = sign.Overhead + 32
+type msgSigT = [msgSigLen]byte
+const authSigLen = sign.Overhead + authCodeLen
+type authSigT = [authSigLen]byte
 
-const sigLen = 96
-
-func decodeMsg(body []byte) (Msg, error) {
-	if body[0] == 0 {
-	    return decodeKeyChangeMsg(body[1:])
-	}
-	if body[0] == 1 {
-		return decodeBlobMsg(body[1:])
-	}
-	return *new(Msg), errors.New(
-		"first byte of message should be 0 or 1")
-}
+// func decodeMsg(body []byte) (Msg, error) {
+// 	if body[0] == 0 {
+// 	    return decodeKeyChangeMsg(body[1:])
+// 	}
+// 	if body[0] == 1 {
+// 		return decodeBlobMsg(body[1:])
+// 	}
+// 	return *new(Msg), errors.New(
+// 		"first byte of message should be 0 or 1")
+// }
 
 const inboxesPath = "inboxes"
 
@@ -390,105 +375,278 @@ func save(msg []byte, to publicSigningKeyT) error {
 	return ioutil.WriteFile(msgPath, msg, 0644)
 }
 
-func decodeBlobMsg(body []byte) (Msg, error) {
-	address, err := decodeAddress(body[:addressLen])
-	if err != nil {
-		return *new(blobMsg), err
-	}
-
-	var nonce nonceT
-	copy(nonce[:], body[addressLen:addressLen + nonceLen])
-	blobLen := len(body) - addressLen - nonceLen
-	if blobLen > maxBlobLen {
-		return *new(blobMsg), errors.New("blob too long")
-	}
-	blob := make([]byte, blobLen)
-	copy(blob, body[addressLen + nonceLen :])
-	return blobMsg{address, nonce, blob}, nil
-}
+// func decodeBlobMsg(body []byte) (Msg, error) {
+// 	address, err := decodeAddress(body[:addressLen])
+// 	if err != nil {
+// 		return *new(blobMsg), err
+// 	}
+// 
+// 	var nonce nonceT
+// 	copy(nonce[:], body[addressLen:addressLen + nonceLen])
+// 	blobLen := len(body) - addressLen - nonceLen
+// 	if blobLen > maxBlobLen {
+// 		return *new(blobMsg), errors.New("blob too long")
+// 	}
+// 	blob := make([]byte, blobLen)
+// 	copy(blob, body[addressLen + nonceLen :])
+// 	return blobMsg{address, nonce, blob}, nil
+// }
 
 func decodeKeyChangeMsg(body []byte) (keyChangeMsg, error) {
 	if len(body) != keyChangeMsgLen {
 		return *new(keyChangeMsg), errors.New(
 			"key change message wrong length")
 	}
-	address, err := decodeAddress(body[:addressLen])
-	if err != nil {
-		return *new(keyChangeMsg), err
-	}
 	var newKey publicSigningKeyT
-	copy(newKey[:], body[addressLen : addressLen + pubKeyLen])
-	var newKeySig signatureT
-	copy(newKeySig[:], body[addressLen + pubKeyLen:])
+	copy(newKey[:], body[:pubKeyLen])
+	var newKeySig authSigT
+	copy(newKeySig[:], body[pubKeyLen:])
 	var newKeyArr [32]byte
 	copy(newKeyArr[:], newKey[:])
-	return keyChangeMsg{address, newKey, newKeySig}, nil
+	return keyChangeMsg{newKey, newKeySig}, nil
 }
 
-func decodeAddress(body []byte) (addressT, error) {
-	if len(body) != addressLen {
-		return *new(addressT), errors.New(
-			"address message wrong length")
-	}
-
-	// The boundaries in the encoded address are:
-	const fromTo = pubKeyLen
-	const toSig = fromTo + pubKeyLen
-	const sigAuth = toSig + sigLen
-	var from publicSigningKeyT
-	copy(from[:], body[:fromTo])
-	var to publicSigningKeyT
-	copy(to[:], body[fromTo:toSig])
-	var sig signatureT
-	copy(sig[:], body[toSig : sigAuth])
-	var authCode authCodeT
-	copy(authCode[:], body[sigAuth:])
-	return addressT{from, to, sig, authCode}, nil
-}
+// func checkRequestSig(r receiveMsg) error {
+// 	idArr := [32]byte(r.myId)
+// 	signed, ok := sign.Open(make([]byte, 0), r.signature[:], &myId)
+// 	if !ok {
+// 		return errors.New("bad signature")
+// 	}
+// 	for i, s := range signed {
+// 		if r.authCode[i] != s {
+// 			return errors.New("unexpected signature")
+// 		}
+// 	}
+// 	return nil
+// }
 
 const maxBlobLen = 16000
-const maxSendBodyLen = addressLen + nonceLen + maxBlobLen
+const maxBodyLen = pubKeyLen + authCodeLen + msgSigLen + 1 +
+	maxBlobMsgLen
+const maxBlobMsgLen = pubKeyLen + nonceLen + maxBlobLen
 
-func sendErr(w http.ResponseWriter, r *http.Request) (error, int) {
-	body := make([]byte, maxSendBodyLen)
+
+
+// All messages that are restricted to members only have this
+// structure:
+//
+//     sender public key + auth code + signature + meaning byte +
+//         everything else
+//
+func protectedErr(
+		w http.ResponseWriter, r *http.Request) (error, int) {
+	body := make([]byte, maxBodyLen)
 	n, err := r.Body.Read(body)
 	if err != nil {
 		return err, 500
 	}
 	body = body[:n]
 
-	msg, err := decodeMsg(body)
+	// Check credentials.
+	const senderEnd = pubKeyLen
+	const authCodeEnd = senderEnd + authCodeLen
+	const sigEnd = authCodeEnd + msgSigLen
+	const meaningEnd = sigEnd + 1
+	var sender publicSigningKeyT
+	copy(sender[:], body[:senderEnd])
+	var authCode authCodeT
+	copy(authCode[:], body[senderEnd : authCodeEnd])
+	var signature msgSigT
+	copy(signature[:], body[authCodeEnd : sigEnd])
+	everythingElse := body[sigEnd:]
+	if len(everythingElse) == 0 {
+		return errors.New("no message body"), 400
+	}
+	expectedSigned := blake2b.Sum256(everythingElse)
+	fromArr := [32]byte(sender)
+	actualSigned, ok := sign.Open(
+		make([]byte, 0),
+		signature[:],
+		&fromArr)
+	if !ok {
+		return errors.New("bad signature"), 400
+	}
+	if err != nil {
+		return err, 400
+	}
+	for i, a := range actualSigned {
+		if a != expectedSigned[i] {
+			return errors.New("unexpected signature"), 400
+		}
+	}
+	err = validAuthCode(authCode)
 	if err != nil {
 		return err, 400
 	}
 
-	err = msg.checkSignature()
+	ok, err = isMember(sender)
 	if err != nil {
-		return err, 400
+		return err, 500
+	}
+	if !ok {
+		return errors.New("sender is not a member"), 400
 	}
 
-	err = save(body, msg.to())
+	meaning := everythingElse[0]
+
+	switch meaning {
+	case 0:
+		return sendMsg(body, everythingElse[1:], sender, authCode)
+	}
+	return errors.New("bad meaning code"), 400
+}
+
+func sendMsg(
+	original []byte,
+	body []byte,
+	sender publicSigningKeyT,
+	authCode authCodeT) (error, int) {
+
+	// This type of message can be a blobMsg or a keyChangeMsg. It
+	// is encoded as:
+	//
+	//     meaning byte + recipient public key + remainder
+	//
+	meaningByte := body[0]
+	to := body[1:pubKeyLen]
+	msgHash := blake2b.Sum256(original)
+	newFileName := base64.URLEncoding.EncodeToString(msgHash[:])
+	endPath := msgPath(to[:]) + "/" + newFileName
+	if meaningByte == 0 {
+		keyChange, err := decodeKeyChangeMsg(body[1 + pubKeyLen:])
+		if err != nil {
+			return err, 400
+		}
+		fromArr := [32]byte(keyChange.newKey)
+		signed, ok := sign.Open(
+			make([]byte, 0),
+			keyChange.newKeySig[:],
+			&fromArr)
+		if !ok {
+			return errors.New("bad signature"), 400
+		}
+		if len(signed) != authCodeLen {
+			return errors.New("signed message wrong length"), 400
+		}
+		for i, s := range signed {
+			if s != authCode[i] {
+				return errors.New("unexpected signature"), 400
+			}
+		}
+		oldInboxPath := msgPath(sender[:])
+		newInboxPath := msgPath(keyChange.newKey[:])
+		err = os.Rename(oldInboxPath, newInboxPath)
+		if err != nil {
+			return err, 500
+		}
+	}
+	err := ioutil.WriteFile(endPath, original, 0600)
 	if err != nil {
 		return err, 500
 	}
 	return nil, 0
 }
 
+func msgPath(b []byte) string {
+	fileName := base64.URLEncoding.EncodeToString(b)
+	return inboxesPath + "/" + fileName
+}
+
 func main() {
 	http.HandleFunc(
-		"/send",
+		"/protected",
 		func(w http.ResponseWriter, r *http.Request) {
-			err, errCode := sendErr(w, r)
+			err, errCode := protectedErr(w, r)
 			if err != nil {
 				http.Error(w, err.Error(), errCode)
 				return
 			}
 		})
-	http.HandleFunc(
-		"/receive",
-		func(w http.ResponseWriter, r *http.Request) {
-		})
+	// http.HandleFunc(
+	// 	"/receive",
+	// 	func(w http.ResponseWriter, r *http.Request) {
+	// 		err, errCode := receiveErr(w, r)
+	// 		if err != nil {
+	// 			http.Error(w, err.Error(), errCode)
+	// 			return
+	// 		}
+	// 	})
+	// http.HandleFunc(
+	// 	"/delete",
+	// 	func(w http.ResponseWriter, r *http.Request) {
+	// 		err, errCode := deleteErr(w, r)
+	// 		if err != nil {
+	// 			http.Error(w, err.Error(), errCode)
+	// 			return
+	// 		}
+	// 	})
 	fmt.Println(http.ListenAndServe(":3000", nil))
+}
+
+// func receiveErr(w http.ResponseWriter, r *http.Request) (error, int) {
+// 	var body [receiveMsgLen]byte
+// 	n, err := r.Body.Read(body[:])
+// 	if err != nil {
+// 		return err, 400
+// 	}
+// 	if n != receiveMsgLen {
+// 		return errors.New("message has wrong length"), 400
+// 	}
+// 	receive := decodeReceiveMsg(body)
+// 	err = checkRequestSig(receive)
+// 	if err != nil {
+// 		return err, 400
+// 	}
+// 	err = validAuthCode(receive.authCode)
+// 	if err != nil {
+// 		return err, 400
+// 	}
+// 	dirPath := base64.URLEncoding.EncodeToString(receive.myId)
+// 	msgs, err := ioutil.ReadDir(inboxesPath + "/" + dirPath)
+// 	if len(msgs) == 0 {
+// 		return nil, 0
+// 	}
+// 	filePath := inboxesDir + "/" + dirPath + "/" + msgs[0].Name()
+// 	msgHandle, err := os.Open(filePath)
+// 	if err != nil {
+// 		return err, 500
+// 	}
+// 	_, err = io.Copy(w, msgHandle)
+// 	if err != nil {
+// 		return err, 500
+// 	}
+// 	return nil, 0
+// }
+
+func isMember(p publicSigningKeyT) (bool, error) {
+	inboxes, err := ioutil.ReadDir(inboxesPath)
+	if err != nil {
+		return false, err
+	}
+	encodedKey := base64.URLEncoding.EncodeToString(p[:])
+	for _, inbox := range inboxes {
+		if inbox.Name() == encodedKey {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// func decodeReceiveMsg(body [receiveMsgLen]byte) receiveMsg {
+// 	var authCode authCodeT
+// 	copy(authCode[:], body[:authCodeLen])
+// 	var myId publicSigningKeyT
+// 	copy(myId[:], body[authCodeLen:authCodeLen + pubKeyLen])
+// 	var signature authSigT
+// 	copy(signature[:], body[authCodeLen + pubKeyLen])
+// 	return receiveMsg{authCode, myId, signature}
+// }
+
+const receiveMsgLen = authCodeLen + pubKeyLen + authSigLen
+type receiveMsg struct {
+	authCode authCodeT
+	myId publicSigningKeyT
+	signature authSigT
 }
 
 func genAuthCode() ([common.AuthCodeLength]byte, error) {
