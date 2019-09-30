@@ -602,6 +602,25 @@ func main() {
 				return
 			}
 		})
+	http.HandleFunc(
+		"/authcode",
+		func(w http.ResponseWriter, r *http.Request) {
+				authCode, err := genAuthCode()
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+
+				_, err = w.Write(authCode[:])
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+
+				AUTHCODESMUX.Lock()
+				AUTHCODES[authCode] = time.Now().Unix()
+				AUTHCODESMUX.Unlock()
+		})
 	// http.HandleFunc(
 	// 	"/receive",
 	// 	func(w http.ResponseWriter, r *http.Request) {
@@ -672,10 +691,10 @@ func isMember(p publicSigningKeyT) (bool, error) {
 	return false, nil
 }
 
-func genAuthCode() ([common.AuthCodeLength]byte, error) {
-	authSlice := make([]byte, common.AuthCodeLength)
+func genAuthCode() ([authCodeLen]byte, error) {
+	authSlice := make([]byte, authCodeLen)
 	_, err := rand.Read(authSlice)
-	var authCode [common.AuthCodeLength]byte
+	var authCode [authCodeLen]byte
 	if err != nil {
 		return authCode, err
 	}
