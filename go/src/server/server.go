@@ -488,19 +488,35 @@ func protectedErr(
 
 	meaning := everythingElse[0]
 
+	afterMeaning := everythingElse[1:]
 	switch meaning {
 	case 0:
-		return sendMsg(body, everythingElse[1:], sender, authCode)
+		return sendMsg(body, afterMeaning, sender, authCode)
 	case 1:
 		return receiveMsg(sender, w)
+	case 2:
+		return deleteMsg(sender, afterMeaning)
 	}
 	return errors.New("bad meaning code"), 400
+}
+
+func deleteMsg(sender publicSigningKeyT, body []byte) (error, int) {
+	if len(body) != 32 {
+		return errors.New("message hash must be 32 bytes"), 400
+	}
+	filename := base64.URLEncoding.EncodeToString(body)
+	path := makeInboxPath(sender[:]) + "/" + filename
+	err := os.Remove(path)
+	if err != nil {
+		return err, 400
+	}
+	return nil, 0
 }
 
 func receiveMsg(
 	sender publicSigningKeyT, w http.ResponseWriter) (error, int) {
 
-	inboxPath := makeMsgPath(sender[:])
+	inboxPath := makeInboxPath(sender[:])
 	files, err := ioutil.ReadDir(inboxPath)
 	if err != nil {
 		return err, 500
@@ -535,7 +551,7 @@ func sendMsg(
 	to := body[1:pubKeyLen]
 	msgHash := blake2b.Sum256(original)
 	newFileName := base64.URLEncoding.EncodeToString(msgHash[:])
-	endPath := makeMsgPath(to[:]) + "/" + newFileName
+	endPath := makeInboxPath(to[:]) + "/" + newFileName
 	if meaningByte == 0 {
 		keyChange, err := decodeKeyChangeMsg(body[1 + pubKeyLen:])
 		if err != nil {
@@ -557,8 +573,8 @@ func sendMsg(
 				return errors.New("unexpected signature"), 400
 			}
 		}
-		oldInboxPath := makeMsgPath(sender[:])
-		newInboxPath := makeMsgPath(keyChange.newKey[:])
+		oldInboxPath := makeInboxPath(sender[:])
+		newInboxPath := makeInboxPath(keyChange.newKey[:])
 		err = os.Rename(oldInboxPath, newInboxPath)
 		if err != nil {
 			return err, 500
@@ -571,9 +587,9 @@ func sendMsg(
 	return nil, 0
 }
 
-func makeMsgPath(b []byte) string {
-	fileName := base64.URLEncoding.EncodeToString(b)
-	return inboxesPath + "/" + fileName
+func makeInboxPath(b []byte) string {
+	dirName := base64.URLEncoding.EncodeToString(b)
+	return inboxesPath + "/" + dirName
 }
 
 func main() {
