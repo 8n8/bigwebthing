@@ -1,266 +1,22 @@
 package main
 
 import (
-	"bytes"
-	"encoding/base64"
-	"os"
-	"golang.org/x/crypto/blake2b"
-	"common"
 	"crypto/rand"
-	"encoding/json"
-	"fmt"
-	"golang.org/x/crypto/nacl/sign"
-	"io/ioutil"
-	"time"
+	"encoding/base64"
 	"errors"
-	"net/http"
-	"sync"
+	"fmt"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/nacl/sign"
 	"io"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"sync"
+	"time"
 )
-
-type stateT struct {
-	newConnChan    chan tcpConnectionT
-	errInChan chan errMsgT
-	msgInChan chan common.ClientToClient
-	connectedUsers map[[32]byte]tcpOutChansT
-	isMember       chan isMemberT
-	members        map[[32]byte]dontCare
-}
-
-func initState() (stateT, error) {
-	members, err := readMembers()
-	if err != nil {
-		return *new(stateT), err
-	}
-	if len(members) < 1 {
-		return *new(stateT), errors.New("No members.")
-	}
-	return stateT{
-		newConnChan: make(chan tcpConnectionT),
-		errInChan: make(chan errMsgT),
-		msgInChan: make(chan common.ClientToClient),
-		connectedUsers: make(map[[32]byte]tcpOutChansT),
-		isMember: make(chan isMemberT),
-		members: members,
-	}, nil
-}
-
-type errMsgT struct {
-	id [32]byte
-	err error
-}
-
-type tcpOutChansT struct {
-	err chan error
-	msg chan common.ClientToClient
-}
-
-type dontCare struct{}
-
-type isMemberT struct {
-	id         [32]byte
-	returnChan chan bool
-}
-
-type outputT interface {
-	send() inputT
-}
-
-type inputT interface {
-	update(*stateT) (stateT, outputT)
-}
-
-type readChansT struct {
-	isMember       chan isMemberT
-	errInChan chan errMsgT
-	msgInChan chan common.ClientToClient
-	newConnChan    chan tcpConnectionT
-	members map[[32]byte]dontCare
-	connectedUsers map[[32]byte]tcpOutChansT
-}
-
-type endConnT struct {
-	id [32]byte
-}
-
-func (e endConnT) update(s *stateT) (stateT, outputT) {
-	newConnUsers := make(map[[32]byte]tcpOutChansT)
-	for id, conn := range s.connectedUsers {
-		newConnUsers[id] = conn
-	}
-	delete(newConnUsers, e.id)
-	newState := *s
-	newState.connectedUsers = newConnUsers
-	return newState, readChans(s)
-}
-
-func authSigToSlice(sig [common.AuthSigSize]byte) []byte {
-	result := make([]byte, common.AuthSigSize)
-	for i := 0; i < common.AuthSigSize; i++ {
-		result[i] = sig[i]
-	}
-	return result
-}
-
-func authOk(
-	a common.AuthSigT,
-	code [common.AuthCodeLength]byte) bool {
-
-	givenCode, sigOk := sign.Open(
-		make([]byte, 0),
-		authSigToSlice(a.Sig),
-		&a.Author)
-	okAuth := bytes.Equal(givenCode, common.AuthCodeToSlice(code))
-	return sigOk && okAuth
-}
-
-func (r readChansT) send() inputT {
-	select {
-	case conn := <-r.newConnChan:
-		return conn
-	case isMember := <-r.isMember:
-		_, ok := r.members[isMember.id]
-		isMember.returnChan <- ok
-	case errIn := <-r.errInChan:
-		fmt.Println(errIn)
-		return endConnT{errIn.id}
-	case msgIn := <-r.msgInChan:
-		fmt.Println("New message reached main thread.")
-		fmt.Println(msgIn)
-		recipCh, ok := r.connectedUsers[msgIn.Recipient]
-		if !ok {
-			fmt.Println("recipient not connected")
-			return noInputT{}
-		}
-		fmt.Println("Found recipient.")
-		recipCh.msg <- msgIn
-		fmt.Println("Msg sent to recipient goroutine.")
-	}
-	return noInputT{}
-}
-
-type noInputT struct{}
-
-func readChans(s *stateT) readChansT {
-	return readChansT{
-		isMember:       s.isMember,
-		errInChan: s.errInChan,
-		msgInChan: s.msgInChan,
-		newConnChan:    s.newConnChan,
-		members: s.members,
-		connectedUsers: s.connectedUsers,
-	}
-}
-
-func (n noInputT) update(s *stateT) (stateT, outputT) {
-	return *s, readChans(s)
-}
-
-func readMembers() (map[[32]byte]dontCare, error) {
-	result := make(map[[32]byte]dontCare)
-	var members [][32]byte
-	contents, err := ioutil.ReadFile("serverData/members.txt")
-	if err != nil {
-		return result, err
-	}
-	err = json.Unmarshal(contents, &members)
-	if err != nil {
-		return result, err
-	}
-	for _, member := range members {
-		result[member] = dontCare{}
-	}
-	return result, nil
-}
-
-type publicSignKeyT [32]byte
-type hashT [32]byte
-
-type message struct {
-	Body []byte
-	Recipient publicSignKeyT
-	Author publicSignKeyT
-}
-
-type textWithLinks struct {
-	link *linkT
-	text string
-}
-
-type linkT struct {
-	displayName string
-	contentHash []byte
-}
-
-type Msg interface {
-	to() publicSigningKeyT
-	checkSignature() error
-}
-
-// func (k keyChangeMsg) to() publicSigningKeyT {
-// 	return k.address.to
-// }
-
-// func (b blobMsg) to() publicSigningKeyT {
-// 	return b.address.to
-// }
 
 var AUTHCODES = make(map[[16]byte]int64)
 var AUTHCODESMUX sync.Mutex
-
-// // The signature in the address of a keyChangeMsg must sign the
-// // blake2b hash of:
-// //
-// //     key of recipient + new key + authcode
-// //
-// // This ensures that the owner of the old key is the creator of this
-// // new one.
-// //
-// // The signature of the new key just needs to sign the auth code
-// // with the new key. This ensures that they own the new key and
-// // are not stealing someone elses.
-// func (k keyChangeMsg) checkSignature() error {
-// 	expected := blake2b.Sum256(append(
-// 		append(k.address.to[:], k.newKey[:]...),
-// 		k.address.authCode[:]...))
-// 	fromArr := [32]byte(k.address.from)
-// 	actual, ok := sign.Open(
-// 		make([]byte, 0),
-// 		k.address.sig[:],
-// 		&fromArr)
-// 	if !ok {
-// 		return errors.New("bad old key signature")
-// 	}
-// 	for i, e := range expected {
-// 		if actual[i] != e {
-// 			return errors.New("unexpected old key signature")
-// 		}
-// 	}
-// 
-// 	err := validAuthCode(k.address.authCode)
-// 	if err != nil {
-// 		return err
-// 	}
-// 
-// 	newKeyArr := [32]byte(k.newKey)
-// 	actual2, ok2 := sign.Open(
-// 		make([]byte, 0),
-// 		k.newKeySig[:],
-// 		&newKeyArr)
-// 	if !ok2 {
-// 		return errors.New("bad new key signature")
-// 	}
-// 	if len(actual2) != authCodeLen {
-// 		return errors.New("signed code wrong length")
-// 	}
-// 	for i, a := range actual2 {
-// 		if k.address.authCode[i] != a {
-// 			return errors.New("bad signed auth code")
-// 		}
-// 	}
-// 
-// 	return nil
-// }
 
 // It is encoded as:
 //
@@ -269,49 +25,12 @@ var AUTHCODESMUX sync.Mutex
 // It has length keyChangeMsgLen.
 //
 type keyChangeMsg struct {
-	newKey publicSigningKeyT
+	newKey    publicSigningKeyT
 	newKeySig authSigT
 }
+
 const keyChangeMsgLen = pubKeyLen + authSigLen
 
-// It is encoded as:
-//
-//     address + nonce + blob
-//
-// It has length:
-//
-//     addressLen + nonceLen + (whatever the length of the blob is)
-//
-type blobMsg struct {
-	nonce nonceT
-	blob []byte
-}
-
-
-// The signature is of the blake2b hash of:
-//
-//     key of recipient + blob + authcode
-//
-// func (b blobMsg) checkSignature() error {
-// 	expected := blake2b.Sum256(append(
-// 		append(b.address.to[:], b.blob...),
-// 		b.address.authCode[:]...))
-// 	fromArr := [32]byte(b.address.from)
-// 	actual, ok := sign.Open(
-// 		make([]byte, 0),
-// 		b.address.sig[:],
-// 		&fromArr)
-// 	if !ok {
-// 		return errors.New("bad signature")
-// 	}
-// 	for i, e := range expected {
-// 		if actual[i] != e {
-// 			return errors.New("unexpected signature")
-// 		}
-// 	}
-// 
-// 	return validAuthCode(b.address.authCode)
-// }
 const authTimeOut = 5 * 60
 
 func validAuthCode(authCode authCodeT) error {
@@ -323,18 +42,13 @@ func validAuthCode(authCode authCodeT) error {
 	if !ok {
 		return errors.New("could not find auth code")
 	}
-	if time.Now().Unix() - createdTime > authTimeOut {
+	if time.Now().Unix()-createdTime > authTimeOut {
 		return errors.New("auth code out of date")
 	}
 	return nil
 }
 
-func encodePubKey(p publicSigningKeyT) string {
-	return base64.URLEncoding.EncodeToString(p[:])
-}
-
 const nonceLen = 24
-type nonceT [nonceLen]byte
 const authCodeLen = 16
 
 type authCodeT = [authCodeLen]byte
@@ -344,52 +58,14 @@ const pubKeyLen = 32
 type publicSigningKeyT [pubKeyLen]byte
 
 const msgSigLen = sign.Overhead + 32
+
 type msgSigT = [msgSigLen]byte
+
 const authSigLen = sign.Overhead + authCodeLen
+
 type authSigT = [authSigLen]byte
 
-// func decodeMsg(body []byte) (Msg, error) {
-// 	if body[0] == 0 {
-// 	    return decodeKeyChangeMsg(body[1:])
-// 	}
-// 	if body[0] == 1 {
-// 		return decodeBlobMsg(body[1:])
-// 	}
-// 	return *new(Msg), errors.New(
-// 		"first byte of message should be 0 or 1")
-// }
-
 const inboxesPath = "inboxes"
-
-func save(msg []byte, to publicSigningKeyT) error {
-	dirPath := base64.URLEncoding.EncodeToString(to[:])
-	err := os.MkdirAll(inboxesPath + "/" + dirPath, os.ModeDir)
-	if err != nil {
-		return err
-	}
-
-	hash := blake2b.Sum256(msg)
-	filename := base64.URLEncoding.EncodeToString(hash[:])
-	msgPath := dirPath + "/" + filename
-	return ioutil.WriteFile(msgPath, msg, 0644)
-}
-
-// func decodeBlobMsg(body []byte) (Msg, error) {
-// 	address, err := decodeAddress(body[:addressLen])
-// 	if err != nil {
-// 		return *new(blobMsg), err
-// 	}
-// 
-// 	var nonce nonceT
-// 	copy(nonce[:], body[addressLen:addressLen + nonceLen])
-// 	blobLen := len(body) - addressLen - nonceLen
-// 	if blobLen > maxBlobLen {
-// 		return *new(blobMsg), errors.New("blob too long")
-// 	}
-// 	blob := make([]byte, blobLen)
-// 	copy(blob, body[addressLen + nonceLen :])
-// 	return blobMsg{address, nonce, blob}, nil
-// }
 
 func decodeKeyChangeMsg(body []byte) (keyChangeMsg, error) {
 	if len(body) != keyChangeMsgLen {
@@ -405,26 +81,10 @@ func decodeKeyChangeMsg(body []byte) (keyChangeMsg, error) {
 	return keyChangeMsg{newKey, newKeySig}, nil
 }
 
-// func checkRequestSig(r receiveMsg) error {
-// 	idArr := [32]byte(r.myId)
-// 	signed, ok := sign.Open(make([]byte, 0), r.signature[:], &myId)
-// 	if !ok {
-// 		return errors.New("bad signature")
-// 	}
-// 	for i, s := range signed {
-// 		if r.authCode[i] != s {
-// 			return errors.New("unexpected signature")
-// 		}
-// 	}
-// 	return nil
-// }
-
 const maxBlobLen = 16000
 const maxBodyLen = pubKeyLen + authCodeLen + msgSigLen + 1 +
 	maxBlobMsgLen
 const maxBlobMsgLen = pubKeyLen + nonceLen + maxBlobLen
-
-
 
 // All messages that are restricted to members only have this
 // structure:
@@ -433,7 +93,7 @@ const maxBlobMsgLen = pubKeyLen + nonceLen + maxBlobLen
 //         everything else
 //
 func protectedErr(
-		w http.ResponseWriter, r *http.Request) (error, int) {
+	w http.ResponseWriter, r *http.Request) (error, int) {
 	body := make([]byte, maxBodyLen)
 	n, err := r.Body.Read(body)
 	if err != nil {
@@ -449,9 +109,9 @@ func protectedErr(
 	var sender publicSigningKeyT
 	copy(sender[:], body[:senderEnd])
 	var authCode authCodeT
-	copy(authCode[:], body[senderEnd : authCodeEnd])
+	copy(authCode[:], body[senderEnd:authCodeEnd])
 	var signature msgSigT
-	copy(signature[:], body[authCodeEnd : sigEnd])
+	copy(signature[:], body[authCodeEnd:sigEnd])
 	everythingElse := body[sigEnd:]
 	if len(everythingElse) == 0 {
 		return errors.New("no message body"), 400
@@ -553,7 +213,7 @@ func sendMsg(
 	newFileName := base64.URLEncoding.EncodeToString(msgHash[:])
 	endPath := makeInboxPath(to[:]) + "/" + newFileName
 	if meaningByte == 0 {
-		keyChange, err := decodeKeyChangeMsg(body[1 + pubKeyLen:])
+		keyChange, err := decodeKeyChangeMsg(body[1+pubKeyLen:])
 		if err != nil {
 			return err, 400
 		}
@@ -605,85 +265,32 @@ func main() {
 	http.HandleFunc(
 		"/authcode",
 		func(w http.ResponseWriter, r *http.Request) {
-				authCode, err := genAuthCode()
-				if err != nil {
-					http.Error(w, err.Error(), 500)
-					return
-				}
+			authCode, err := genAuthCode()
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
 
-				_, err = w.Write(authCode[:])
-				if err != nil {
-					http.Error(w, err.Error(), 500)
-					return
-				}
+			_, err = w.Write(authCode[:])
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
 
-				now := time.Now().Unix()
-				newCodes := make(map[authCodeT]int64)
-				AUTHCODESMUX.Lock()
-				for a, t := range AUTHCODES {
-					if t - now < authTimeOut {
-						newCodes[a] = t
-					}
+			now := time.Now().Unix()
+			newCodes := make(map[authCodeT]int64)
+			newCodes[authCode] = now
+			AUTHCODESMUX.Lock()
+			for a, t := range AUTHCODES {
+				if t-now < authTimeOut {
+					newCodes[a] = t
 				}
-				newCodes[authCode] = now
-				AUTHCODES = newCodes
-				AUTHCODESMUX.Unlock()
+			}
+			AUTHCODES = newCodes
+			AUTHCODESMUX.Unlock()
 		})
-	// http.HandleFunc(
-	// 	"/receive",
-	// 	func(w http.ResponseWriter, r *http.Request) {
-	// 		err, errCode := receiveErr(w, r)
-	// 		if err != nil {
-	// 			http.Error(w, err.Error(), errCode)
-	// 			return
-	// 		}
-	// 	})
-	// http.HandleFunc(
-	// 	"/delete",
-	// 	func(w http.ResponseWriter, r *http.Request) {
-	// 		err, errCode := deleteErr(w, r)
-	// 		if err != nil {
-	// 			http.Error(w, err.Error(), errCode)
-	// 			return
-	// 		}
-	// 	})
 	fmt.Println(http.ListenAndServe(":3000", nil))
 }
-
-// func receiveErr(w http.ResponseWriter, r *http.Request) (error, int) {
-// 	var body [receiveMsgLen]byte
-// 	n, err := r.Body.Read(body[:])
-// 	if err != nil {
-// 		return err, 400
-// 	}
-// 	if n != receiveMsgLen {
-// 		return errors.New("message has wrong length"), 400
-// 	}
-// 	receive := decodeReceiveMsg(body)
-// 	err = checkRequestSig(receive)
-// 	if err != nil {
-// 		return err, 400
-// 	}
-// 	err = validAuthCode(receive.authCode)
-// 	if err != nil {
-// 		return err, 400
-// 	}
-// 	dirPath := base64.URLEncoding.EncodeToString(receive.myId)
-// 	msgs, err := ioutil.ReadDir(inboxesPath + "/" + dirPath)
-// 	if len(msgs) == 0 {
-// 		return nil, 0
-// 	}
-// 	filePath := inboxesDir + "/" + dirPath + "/" + msgs[0].Name()
-// 	msgHandle, err := os.Open(filePath)
-// 	if err != nil {
-// 		return err, 500
-// 	}
-// 	_, err = io.Copy(w, msgHandle)
-// 	if err != nil {
-// 		return err, 500
-// 	}
-// 	return nil, 0
-// }
 
 func isMember(p publicSigningKeyT) (bool, error) {
 	inboxes, err := ioutil.ReadDir(inboxesPath)
@@ -710,21 +317,4 @@ func genAuthCode() ([authCodeLen]byte, error) {
 		authCode[i] = b
 	}
 	return authCode, nil
-}
-
-type tcpConnectionT struct {
-	out    chan common.ClientToClient
-	outErr chan error
-	id     [32]byte
-}
-
-func (t tcpConnectionT) update(s *stateT) (stateT, outputT) {
-	newConnUsers := make(map[[32]byte]tcpOutChansT)
-	for k, v := range s.connectedUsers {
-		newConnUsers[k] = v
-	}
-	newConnUsers[t.id] = tcpOutChansT{t.outErr, t.out}
-	newS := *s
-	newS.connectedUsers = newConnUsers
-	return newS, readChans(s)
 }
