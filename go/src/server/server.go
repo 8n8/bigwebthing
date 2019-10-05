@@ -252,6 +252,13 @@ func makeInboxPath(b []byte) string {
 	return inboxesPath + "/" + dirName
 }
 
+const csp =
+	"default-src 'none'; " +
+	"script-src 'self'; " +
+	"style-src 'self'; " +
+	"img-src 'self'; " +
+	"report-uri http://localhost:3001/cspreport;"
+
 func main() {
 	http.HandleFunc(
 		"/protected",
@@ -289,7 +296,51 @@ func main() {
 			AUTHCODES = newCodes
 			AUTHCODESMUX.Unlock()
 		})
-	fmt.Println(http.ListenAndServe(":3000", nil))
+	http.HandleFunc(
+		"/",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Add("Content-Security-Policy", csp)
+			handle, err := os.Open("index.html")
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			_, err = io.Copy(w, handle)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+			}
+		})
+	http.HandleFunc(
+		"/cspreport",
+		func(w http.ResponseWriter, r *http.Request) {
+			body, _ := ioutil.ReadAll(r.Body)
+			fmt.Println(string(body))
+		})
+	serveFile("main.js", "application/javascript")
+	serveFile("localforage.min.js", "application/javascript")
+	fmt.Println(http.ListenAndServe(":3001", nil))
+}
+
+
+func serveFile(filename, contentType string) {
+	http.HandleFunc(
+		"/" + filename,
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Content-Type", contentType)
+			handle, err := os.Open(filename)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			_, err = io.Copy(w, handle)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+			}
+		})
 }
 
 func isMember(p publicSigningKeyT) (bool, error) {
