@@ -254,7 +254,7 @@ func makeInboxPath(b []byte) string {
 
 const csp =
 	"default-src 'none'; " +
-	"script-src 'self'; " +
+	"script-src 'self' 'unsafe-eval'; " +
 	"style-src 'self'; " +
 	"img-src 'self'; " +
 	"report-uri http://localhost:3001/cspreport;"

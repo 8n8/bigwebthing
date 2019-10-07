@@ -42,39 +42,36 @@
     return div
   }
 
-  const afterProgDivId = 'ProgramDiv'
-
-  function compile(name, code) {
-    const div = document.createElement('div')
-    const debugText = document.createTextNode(code)
-    div.appendChild(debugText)
-    return div
+  function compile (code) {
+    return (
+      "const div = document.createElement('div');\n" +
+      "const txt = document.createTextNode(\"" + code + "\");\n" +
+      "div.appendChild(txt);\n" +
+      "return div;")
   }
 
-  function runProgram (name, program) {
-    const progDiv = compile(program.name, program.code)
-    const parentDiv = document.getElementById(name + afterProgDivId)
-    parentDiv.appendChild(progDiv)
-  }
+  const divIdEnd = 'ProgramDiv'
 
   function makeProgramMenuItem (name, program) {
-    const button = document.createElement('BUTTON')
-    button.onclick = function () { runProgram(name, program) }
-    button.appendChild(makeProgramMenuDiv(name, program))
     const div = document.createElement('DIV')
+    const divClass = document.createAttribute('id')
+	const idName = name + divIdEnd
+    divClass.value = idName
+    div.setAttributeNode(divClass)
+    const button = document.createElement('BUTTON')
+    const compiled = compile(program.code)
+    const programDiv = (new Function(compiled))()
+    button.onclick = function () { document.getElementById(idName).appendChild(programDiv) }
+    button.appendChild(makeProgramMenuDiv(name, program))
     div.appendChild(button)
-    const divclass = document.createAttribute('id')
-    divclass.value = name + afterProgDivId
-    div.setAttributeNode(divclass)
     return div
-  }
-
-  function makeProgramMenu (programs) {
-    const div = document.createElement('div')
   }
 
   function afterRetrievingPrograms (programs) {
-    document.body.innerHTML = (makeProgramMenu(programs))
+    for (const [name, program] of Object.entries(programs)) {
+      const progButton = makeProgramMenuItem(name, program)
+      document.body.appendChild(progButton)
+    }
   }
 
   function main () {
