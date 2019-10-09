@@ -38,82 +38,58 @@
     return div;
   }
 
-  function parseString(code, elements, line, col, i) {
-  }
-
-  function parser(code) {
-    // let err = ""
-    // while true {
-    //     if (!parseString(s)) {continue}
-    //     
-    //     ir (s.code[parserState.i] === '"') {
-    //         s.col++
-    //         s.i++
-    //         const err = parseString(s)
-    //         if (err) {
-    //           return err
-    //         }
-    //     }
-    // }
-    for (const i = 0; i < codeLen; i++) {
-      // Increment position.
+  function parser(code, elements) {
+    let partialString = "";
+    let stringEscape = false;
+    let parsingString = false;
+    const codeLen = code.length;
+    for (let i = 0; i < codeLen; i++) {
       const c = code[i];
-      if (c === "\n") {
-        line += 1;
-      } else {
-        column += 1;
-      }
 
       // String parser
       if (parsingString) {
-          
-      }
-      if (stringEscape) {
-        partialString += c;
-        stringEscape = false;
-        continue;
+        if (stringEscape) {
+          partialString += c;
+          stringEscape = false;
+          continue;
+        }
+        if (c === '"') {
+          elements.push(function(s) { s.push(partialString) })
+          parsingString = false
+          partialString = ""
+          continue
+        }
+        if (c === "\\") {
+          stringEscape = true
+          continue
+        }
       }
       if (c === '"') {
-        if (parsingString) {
-          elements.push(function(s) {
-            s.append(partialString);
-          });
-          parsingString = false;
-          partialString = "";
-          continue;
-        }
-        parsingString = true;
-        continue;
-      }
-      if (parsingString) {
-        if (c === "\\") {
-          stringEscape = true;
-          continue;
-        }
-        partialString += c;
-        continue;
+        parsingString = true
+        continue
       }
 
+      // Function parser
+      if (c === 'd') {
+        if (code[i+1] === "e") {
+          if (code[i+2] === "f") {
+          }
+        }
+      }
 
     }
-    return elements;
   }
 
   function compile(code) {
-    const s = {
-      code: code,
-      elements: [],
-      line: 0,
-      col: 0,
-      i: 0}
-    const err = parser(s);
+    const elements = [];
+    const err = parser(code, elements);
     if (err) {
-      return prettyError(err, s.line, s.col)
-    } 
-    let stack = [];
-    const numElements = parserState.elements.length;
-    for (const i = 0; i < numStatements; i++) {
-      parserState.elements[i](stack);
+      return prettyError(err);
+    }
+    const stack = [];
+    const numElements = elements.length;
+    for (let i = 0; i < numElements; i++) {
+      elements[i](stack);
     }
     return stack[0];
     // for
