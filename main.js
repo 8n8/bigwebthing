@@ -18,6 +18,11 @@
         "Truelang is the built-in programming language of BigWebThing.",
       version: 0,
       code: "It doesn't exist yet."
+    },
+    FirstRealProgram: {
+      description: "A little tiny real program.",
+      version: 0,
+      code: '"hello world" print'
     }
   };
 
@@ -38,53 +43,347 @@
     return div;
   }
 
-  function parser(code, elements) {
-    let partialString = "";
-    let stringEscape = false;
-    let parsingString = false;
-    const codeLen = code.length;
-    for (let i = 0; i < codeLen; i++) {
+  const okFirstNameChar = new Set([
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "_"
+  ]);
+
+  const okNotFirstNameChars = new Set([
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "_"
+  ]);
+
+  function parseName(code, i, defs) {
+    if (!okFirstNameChar.has(code[i])) {
+      const errMsg =
+        "the first character of a name must be an English letter or an underscore";
+      return [i, errMsg, ""];
+    }
+    let newName = code[i];
+    i++;
+    while (true) {
       const c = code[i];
-
-      // String parser
-      if (parsingString) {
-        if (stringEscape) {
-          partialString += c;
-          stringEscape = false;
-          continue;
-        }
-        if (c === '"') {
-          elements.push(function(s) { s.push(partialString) })
-          parsingString = false
-          partialString = ""
-          continue
-        }
-        if (c === "\\") {
-          stringEscape = true
-          continue
-        }
+      if (c === " ") {
+        i++;
+        break;
       }
+      if (!okNotFirstNameChars.has(c)) {
+        const errMsg =
+          "characters after the first in a name must be an English letter, a number, or an underscore, and names must be followed by a space";
+        return [i, errMsg, ""];
+      }
+      newName += c;
+      i++;
+    }
+
+    if (reservedNames.has(newName)) {
+      const errMsg = 'name "' + newName + '" is reserved';
+      return [i, errMsg, ""];
+    }
+    return [i, "", newName];
+  }
+
+  function parseString(code, elements, p, defs) {
+    if (code[p.i] !== '"') {
+      p.done = false;
+      return;
+    }
+
+    let stringEscape = false;
+    let partialString = "";
+
+    while (true) {
+      const c = code[p.i];
+      if (stringEscape) {
+        partialString += c;
+        stringEscape = false;
+        p.i++;
+        continue;
+      }
+
       if (c === '"') {
-        parsingString = true
-        continue
-      }
-
-      // Function parser
-      if (c === 'd') {
-        if (code[i+1] === "e") {
-          if (code[i+2] === "f") {
-          }
+        elements.push(function(s) {
+          s.push(partialString);
+        });
+        p.i++;
+        if (code[p.i] !== " " && code[p.i] !== "\n") {
+          p.errMsg = "a string must be followed by a space or newline";
+          p.done = false;
+          return;
         }
       }
 
+      if (c === "\\") {
+        stringEscape = true;
+        p.i++;
+        continue;
+      }
+
+      partialString += c;
+      p.i++;
     }
   }
 
+  const reservedNames = new Set(["def"]);
+
+  function parseDef(code, elements, p, defs) {
+    if (code.slice(p.i, p.i + 4) !== "def ") {
+      p.done = false;
+      return;
+    }
+    p.i += 4;
+    const [newI, newErrMsg, newName] = parseName(code, p.i, defs);
+    p.i = newI;
+    if (newErrMsg) {
+      p.errMsg = newErrMsg;
+      p.done = false;
+      return;
+    }
+    if (newName in defs) {
+      p.errMsg = 'name "' + newName + '" has already been used';
+      p.done = false;
+      return;
+    }
+
+    if (code[p.i] !== "{") {
+      p.errMsg = 'expecting "{"';
+      p.done = false;
+      return;
+    }
+    p.i++;
+
+    while (true) {
+      p.i = parseZeroOrMoreSpaces(code, p.i);
+
+      parseString(code, elements, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      parseDef(code, elements, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      parseRetrieve(code, elements, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      if (code[p.i] === "}") {
+        p.i++;
+        return;
+      }
+
+      if (!p.done) {
+        p.errMsg = "expecting blah, blah or blah";
+        p.done = false;
+        return;
+      }
+    }
+  }
+
+  function parseRetrieve(code, elements, p, defs) {
+    const [newI, newErrMsg, name] = parseName(code, p.i, defs);
+    p.i = newI;
+    if (newErrMsg) {
+      p.errMsg = newErrMsg;
+      p.done = false;
+      return;
+    }
+    const lookedUpCode = defs[name];
+    if (!lookedUpCode) {
+      p.errMsg = 'could not find name "' + name + '"';
+      p.done = false;
+      return;
+    }
+    elements.concat(lookedUpCode);
+    if (code[p.i] !== " ") {
+      p.errMsg = "expecting space";
+      p.done = false;
+    }
+  }
+
+  function parseZeroOrMoreSpaces(code, i) {
+    while (true) {
+      if (code[i] === " " || code[i] === "\n") {
+        i++;
+        continue;
+      }
+      return i;
+    }
+  }
+
+  function parser(code, elements, p, defs) {
+    const codeLen = code.length;
+    while (p.i <= codeLen) {
+      p.i = parseZeroOrMoreSpaces(code, p.i);
+
+      parseString(code, elements, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      parseDef(code, elements, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      parseRetrieve(code, elements, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      if (!p.done) {
+        p.errMsg = "expecting blah, blah or blah";
+        return;
+      }
+    }
+  }
+
+  const standardLibrary = {
+    print: function(s) {
+      console.log(s[-1]);
+      s = s.slice(0, -1);
+    }
+  };
+
   function compile(code) {
     const elements = [];
-    const err = parser(code, elements);
+    const [, err] = parser(code, elements, 0, standardLibrary);
     if (err) {
-      return prettyError(err);
+      console.log(err);
+      return;
     }
     const stack = [];
     const numElements = elements.length;
@@ -92,11 +391,6 @@
       elements[i](stack);
     }
     return stack[0];
-    // for
-    //   const div = document.createElement('div')
-    //   const txt = document.createTextNode(code)
-    //   div.appendChild(txt)
-    //   return div
   }
 
   const divIdEnd = "ProgramDiv";
