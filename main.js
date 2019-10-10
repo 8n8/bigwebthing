@@ -1,28 +1,10 @@
 (function() {
   "use strict";
   const programsDebug = {
-    Clocker: {
-      description:
-        "A sample app for clocking times. It doesn't actually work: this is just a placeholder app for debugging.",
-      version: 1,
-      code: "Some code goes here but the language hasn't been invented yet."
-    },
-    Messenger: {
-      description:
-        "This app will be for sending text messages around, but remember that this is just a placeholder app.",
-      version: 0,
-      code: "A bit of code."
-    },
-    Truelang: {
-      description:
-        "Truelang is the built-in programming language of BigWebThing.",
-      version: 0,
-      code: "It doesn't exist yet."
-    },
     FirstRealProgram: {
       description: "A little tiny real program.",
       version: 0,
-      code: '"hello world" print'
+      code: '"hi" print'
     }
   };
 
@@ -173,11 +155,15 @@
     }
     let newName = code[i];
     i++;
+    const codeLen = code.length;
     while (true) {
       const c = code[i];
       if (c === " ") {
         i++;
         break;
+      }
+      if (codeLen === i) {
+        return [i, "", newName];
       }
       if (!okNotFirstNameChars.has(c)) {
         const errMsg =
@@ -200,6 +186,7 @@
       p.done = false;
       return;
     }
+    p.i++;
 
     let stringEscape = false;
     let partialString = "";
@@ -223,6 +210,7 @@
           p.done = false;
           return;
         }
+        return;
       }
 
       if (c === "\\") {
@@ -297,7 +285,7 @@
       }
 
       if (!p.done) {
-        p.errMsg = "expecting blah, blah or blah";
+        p.errMsg = "parseDef: expecting blah, blah or blah";
         p.done = false;
         return;
       }
@@ -307,6 +295,7 @@
   function parseRetrieve(code, elements, p, defs) {
     const [newI, newErrMsg, name] = parseName(code, p.i, defs);
     p.i = newI;
+    p.done = true;
     if (newErrMsg) {
       p.errMsg = newErrMsg;
       p.done = false;
@@ -318,8 +307,8 @@
       p.done = false;
       return;
     }
-    elements.concat(lookedUpCode);
-    if (code[p.i] !== " ") {
+    elements.push(...lookedUpCode);
+    if (code[p.i] !== " " && p.i !== code.length) {
       p.errMsg = "expecting space";
       p.done = false;
     }
@@ -337,7 +326,7 @@
 
   function parser(code, elements, p, defs) {
     const codeLen = code.length;
-    while (p.i <= codeLen) {
+    while (p.i < codeLen) {
       p.i = parseZeroOrMoreSpaces(code, p.i);
 
       parseString(code, elements, p, defs);
@@ -365,35 +354,58 @@
       }
 
       if (!p.done) {
-        p.errMsg = "expecting blah, blah or blah";
+        p.errMsg = "parser: expecting blah, blah or blah";
         return;
       }
     }
   }
 
-  const standardLibrary = {
-    print: function(s) {
-      console.log(s[-1]);
-      s = s.slice(0, -1);
-    }
-  };
+  function slPrint(progDivId) {
+    return function(s) {
+      const div = document.getElementById(progDivId);
+      div.innerHTML = "";
+      const txt = document.createTextNode(s.pop());
+      div.appendChild(txt);
+    };
+  }
 
-  function compile(code) {
+  function standardLibrary(progDivId) {
+    return { print: [slPrint(progDivId)] };
+  }
+
+  function prettyErr(code, err, i, progDivId) {
+    const div = document.getElementById(progDivId);
+    div.innerHTML = "";
+
+    const pcode = document.createElement("p");
+    const txtcode = document.createTextNode(code);
+    pcode.appendChild(txtcode);
+    div.appendChild(pcode);
+
+    const perr = document.createElement("p");
+    const txterr = document.createTextNode(`Error at ${i}: "${err}"`);
+    perr.appendChild(txterr);
+    div.appendChild(perr);
+
+    return div;
+  }
+
+  function compile(code, progDivId) {
     const elements = [];
-    const [, err] = parser(code, elements, 0, standardLibrary);
-    if (err) {
-      console.log(err);
-      return;
+    const p = { done: true, i: 0, errMsg: "" };
+    parser(code, elements, p, standardLibrary(progDivId));
+    if (p.errMsg) {
+      return prettyErr(code, p.errMsg, p.i, progDivId);
     }
     const stack = [];
     const numElements = elements.length;
     for (let i = 0; i < numElements; i++) {
       elements[i](stack);
     }
-    return stack[0];
   }
 
   const divIdEnd = "ProgramDiv";
+  const subDivEnd = "SubDiv";
 
   function makeProgramMenuItem(name, program) {
     const div = document.createElement("DIV");
@@ -402,17 +414,19 @@
     divId.value = idName;
     div.setAttributeNode(divId);
     const button = document.createElement("BUTTON");
-    const programDiv = compile(program.code);
-    const progDivClass = document.createAttribute("id");
-    progDivClass.value = name + "progDiv";
-    programDiv.setAttributeNode(progDivClass);
     button.onclick = function() {
-      const ref = name + "progDiv";
+      const ref = name + subDivEnd;
       const toRemove = document.getElementById(ref);
       if (toRemove) {
         toRemove.remove();
       } else {
+        const programDiv = document.createElement("div");
+        const progDivId = document.createAttribute("id");
+        const progIdName = name + subDivEnd;
+        progDivId.value = progIdName;
+        programDiv.setAttributeNode(progDivId);
         document.getElementById(idName).appendChild(programDiv);
+        compile(program.code, progIdName);
       }
     };
     button.appendChild(makeProgramMenuDiv(name, program));
