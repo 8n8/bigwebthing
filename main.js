@@ -4,10 +4,10 @@
     FirstRealProgram: {
       description: "A little tiny real program.",
       version: 0,
-      code: '"hi" print'
+      code: 'def hello { "h" print } hello'
     }
   };
-
+ 
   function makeProgramMenuDiv(programName, program) {
     const div = document.createElement("DIV");
     const name = document.createElement("H2");
@@ -227,6 +227,7 @@
   const reservedNames = new Set(["def"]);
 
   function parseDef(code, elements, p, defs) {
+    p.done = true;
     if (code.slice(p.i, p.i + 4) !== "def ") {
       p.done = false;
       return;
@@ -252,35 +253,37 @@
     }
     p.i++;
 
+    const defContents = [];
     while (true) {
       p.i = parseZeroOrMoreSpaces(code, p.i);
-
-      parseString(code, elements, p, defs);
-      if (p.done) {
-        continue;
-      }
-      if (p.errMsg) {
-        return;
-      }
-
-      parseDef(code, elements, p, defs);
-      if (p.done) {
-        continue;
-      }
-      if (p.errMsg) {
-        return;
-      }
-
-      parseRetrieve(code, elements, p, defs);
-      if (p.done) {
-        continue;
-      }
-      if (p.errMsg) {
-        return;
-      }
-
       if (code[p.i] === "}") {
         p.i++;
+        defs[newName] = defContents;
+        p.done = true;
+        return;
+      }
+
+      parseString(code, defContents, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      parseDef(code, defContents, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      parseRetrieve(code, defContents, p, defs);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
         return;
       }
 
@@ -308,10 +311,6 @@
       return;
     }
     elements.push(...lookedUpCode);
-    if (code[p.i] !== " " && p.i !== code.length) {
-      p.errMsg = "expecting space";
-      p.done = false;
-    }
   }
 
   function parseZeroOrMoreSpaces(code, i) {
