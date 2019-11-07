@@ -247,6 +247,33 @@
     });
   }
 
+  function parseDet(code, ns, elts, p) {
+    p.done = true;
+    if (code.slice(p.i, p.i + 4) !== "det ") {
+      p.done = false;
+      return;
+    }
+    p.i += 4;
+    const [newI, newErrMsg, newName] = parseName(code, p.i);
+    p.i = newI;
+    if (newErrMsg) {
+      p.errMsg = newErrMsg;
+      p.done = false;
+      return;
+    }
+    const fullName = ns + "." + newName;
+    elts.push(function(dets, created, typeStack) {
+      if (typeStack.length === 0) {
+          return 'you need to put a type block on the stack ' +
+              'before a det'
+      } 
+      if (dets[fullName]) {
+          return 'multiple definitions of name "' + newName + '"';
+      }
+      dets[fullName] = typeStack.pop();
+    });
+  }
+
   function eltOpDef(ns, newName) {
     return function(dets, created, typeStack) {
       const fullName = ns + "." + newName;
@@ -255,12 +282,13 @@
         return "there is no type defined for \"" + newName + "\"";
       }
       if (typeStack.length === 0) {
-          return 'you need to put a block on the stack before a "def"';
+          return 'you need to put a block on the stack before a ' +
+              '"def"';
       }
       if (created.has(fullName)) {
           return 'multiple definitions of name "' + newName + '"';
       }
-        const topType = typeStack.pop();
+      const topType = typeStack.pop();
       if (funType !== topType) {
         return ("type mismatch: the type of the top item on the " +
           "stack is\n" + topType + "\n, but the type defined for \"" +
@@ -322,6 +350,8 @@
 
     parseDef(code, ns, elfs, elts, p)
     if (p.done || p.errMsg) { return; }
+
+    parseDet(code, ns, elts, p)
 
     parseProgramBlock(code, ns, elfs, elts, p)
     if (p.done || p.errMsg) { return; }
