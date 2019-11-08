@@ -1,10 +1,12 @@
 (function() {
   "use strict";
+
   const programsDebug = {
     FirstRealProgram: {
       description: "A little tiny real program.",
       version: 0,
-      code: 'def hello { "h" print } hello'
+      code: '{ "h" print } def hello hello',
+      types: '() def hello'
     }
   };
 
@@ -183,7 +185,8 @@
     return [i, "", newName];
   }
 
-  function parseString(code, elfs, elts, p) {
+  function parseStringHelper(code, p) {
+    p.done = true;
     if (code[p.i] !== '"') {
       p.done = false;
       return;
@@ -203,14 +206,8 @@
       }
 
       if (c === '"') {
-        elts.push(function(dets, created, typeStack) {
-          typeStack.push(stringType); 
-        });
-        elfs.push(function(defs, progStack, progDivId) {
-          progStack.push(partialString);
-        });
         p.i++;
-        return;
+        return partialString;
       }
 
       if (c === "\\") {
@@ -222,6 +219,19 @@
       partialString += c;
       p.i++;
     }
+  }
+
+  function parseString(code, elfs, elts, p) {
+    str = parseStringHelper(code, p);
+    if (!p.done) {
+      return;
+    }
+    elts.push(function(dets, created, typeStack) {
+      typeStack.push(stringType); 
+    });
+    elfs.push(function(defs, progStack, progDivId) {
+      progStack.push(str);
+    });
   }
 
   const reservedNames = new Set(["def"]);
@@ -282,7 +292,7 @@
         return "there is no type defined for \"" + newName + "\"";
       }
       if (typeStack.length === 0) {
-          return 'you need to put a block on the stack before a ' +
+          return 'you need to put something on the stack before a ' +
               '"def"';
       }
       if (created.has(fullName)) {
@@ -352,6 +362,7 @@
     if (p.done || p.errMsg) { return; }
 
     parseDet(code, ns, elts, p)
+    if (p.done || p.errMsg) { return; }
 
     parseProgramBlock(code, ns, elfs, elts, p)
     if (p.done || p.errMsg) { return; }
@@ -362,21 +373,28 @@
   }
 
   function parseRetrieve(code, ns, elfs, elts, p) {
-    const [newI, newErrMsg, name] = parseName(code, p.i, defs);
-    p.i = newI;
-    p.done = true;
+    const [newI, newErrMsg, name] = parseName(code, p.i);
     if (newErrMsg) {
       p.errMsg = newErrMsg;
       p.done = false;
       return;
     }
-    const lookedUpCode = defs[name];
-    if (!lookedUpCode) {
-      p.errMsg = 'could not find name "' + name + '"';
-      p.done = false;
-      return;
-    }
-    elements.push(...lookedUpCode);
+    p.done = true;
+    p.i = newI;
+    const fullName = ns + "." + name;
+    elts.push(function(dets, created, typestack) {
+      if (!created.has(fullName)) {
+        return 'no definition "' + name + '"';
+      }
+      const lookedUpTypes = dets[fullName]
+      if (!lookedUpTypes) {
+        return 'could not find types for name "' + name + '"';
+      }
+      typestack.push(lookedUpTypes);
+    })
+    elfs.push(function(defs, progStack, progDivId) {
+      progStack.push(defs[fullName]);
+    })
   }
 
   function parseZeroOrMoreSpaces(code, i) {
@@ -389,11 +407,25 @@
     }
   }
 
-  function parser(code, elts, elfs, p) {
+  function parseTypes(code, elts) {
+    const p = { done: true, i: 0, errMsg: "" };
     const codeLen = code.length;
     while (p.i < codeLen) {
       p.i = parseZeroOrMoreSpaces(code, p.i);
-      parseProgramElement(code, ns, elfs, elts, p)
+      parseTypeElement(code, "", elts, p)
+      if (p.done) {
+        continue;
+      }
+      return;
+    }
+  }
+
+  function parser(code, types, elts, elfs) {
+    const p = { done: true, i: 0, errMsg: "" };
+    const codeLen = code.length;
+    while (p.i < codeLen) {
+      p.i = parseZeroOrMoreSpaces(code, p.i);
+      parseProgramElement(code, "", elfs, elts, p)
       if (p.done) {
           continue;
       }
@@ -428,11 +460,122 @@
     div.appendChild(pcode);
   }
 
-  function compile(code, progDivId) {
+  function parseTypeString(code, elts, p) {
+    str = parseStringHelper(code, p);
+    if (!p.done) {
+      return;
+    }
+    elts.push(function(dets, created, typestack) {
+      typestack.push(str);
+    });
+  }
+
+  function parseDet(code, ns, elts, p) {
+    p.done = true;
+    if (code.slice(p.i, p.i + 4) !== "def ") {
+      p.done = false;
+      return;
+    }
+    p.i += 4;
+    const [newI, newErrMsg, newName] = parseName(code, p.i);
+    p.i = newI;
+    if (newErrMsg) {
+      p.errMsg = newErrMsg;
+      p.done = false;
+      return;
+    }
+    const fullName = ns + "." + newName;
+    elts.push(function(dets, created, typestack) {
+      if (dets[fullName) {
+        return 'multiple definitions of name "' + newName + '"';
+      }
+      if (typestack.length === 0) {
+        return 'you need to put something on the stack before a ' +
+            '"det"';
+      }
+    });
+  }
+
+  function parseTypeBlock(code, ns, elts, p) {
+    p.done = true;
+    if (code[p.i] !== "{") {
+      p.done = false;
+      return;
+    }
+    p.i++;
+
+    let blockElts = [];
+  
+    while (true) {
+      p.i = parseZeroOrMoreSpaces(code, p.i);]
+      if (code[p.i] === "}") {
+        p.i++;
+        p.done = true;
+
+        elts.push(function(dets, created, typestack) {
+          typestack.push(blockElts);
+        })
+        return;
+      }
+
+      parseTypeElement(code, ns, elts, p);
+      if (p.done) {
+        continue;
+      }
+      if (p.errMsg) {
+        return;
+      }
+
+      if (!p.done) {
+        p.errMsg = "error in type block: expecting blah or blah";
+        p.done = false;
+        return;
+      }
+    }
+  }
+
+  function parseTypeElement(code, ns, elts, p) {
+    parseTypeRetrieve(code, ns, elts, p)
+    if (p.done || p.errMsg) {return;}
+
+    parseTypeString(code, elts, p);
+    if (p.done || p.errMsg) {return;}
+
+    parseDet(code, ns, elts, p);
+    if (p.done || p.errMsg) {return;}
+
+    parseTypeBlock(code, ns, elts, p);
+    if (p.done || p.errMsg) {return;}
+
+    if (!p.done) {
+      p.errMsg = "parseTypeElement: expecting blah blah blah"
+    }
+  }
+
+  function parseTypeRetrieve(code, ns, elts, p) {
+    const [newI, newErrMsg, name] = parseName(code, p.i);
+    if (newErrMsg) {
+      p.errMsg = newErrMsg;
+      p.done = false;
+      return;
+    }
+    p.done = true;
+    p.i = newI;
+    const fullName = ns + "." + name;
+    elts.push(function(dets, created, typestack) {
+      const lookedUpTypes = dets[fullName];
+      if (!lookedUpTypes) {
+        return 'could not find type definition "' + name + '"';
+      }
+      typestack.push(lookedUpTypes);
+    })
+  }
+
+  function compile(code, types, progDivId) {
     let elts = []
     let elfs = []
-    const p = { done: true, i: 0, errMsg: "" };
-    parser(code, elts, elfs, p);
+    parseTypes(types, elts)
+    parser(code, types, elts, elfs);
     
     errMsg = runTypeCheck(elts)
     if (errMsg !== "") {
@@ -458,7 +601,7 @@
     const numElts = elts.length;
     for (let i = 0; i < numElts; i++) {
       let errMsg = elts[i](dets, created, typeStack);
-      if (errMsg !== "") {
+      if (errMsg) {
         return errMsg;
       }
     }
@@ -486,7 +629,7 @@
         progDivId.value = progIdName;
         programDiv.setAttributeNode(progDivId);
         document.getElementById(idName).appendChild(programDiv);
-        compile(program.code, progIdName);
+        compile(program.code, program.types, progIdName);
       }
     };
     button.appendChild(makeProgramMenuDiv(name, program));
