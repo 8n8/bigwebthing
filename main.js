@@ -5,7 +5,7 @@
     FirstRealProgram: {
       description: "A little tiny real program.",
       version: 0,
-      code: 'print !',
+      code: '"hamish" print !',
     }
   };
 
@@ -46,9 +46,9 @@
       const err = runTypeCheck(blockCandidate, dets, typestack)
       return err
     })
-    elfs.push(function(defs, progStack, progDivId) {
+    elfs.push(function(defs, progStack) {
       const blockCandidate = progStack.pop();
-      runProgram(blockCandidate, defs, progStack, progDivId)
+      runProgram(blockCandidate, defs, progStack)
     })
   }
 
@@ -252,7 +252,7 @@
     elts.push(function(dets, typeStack) {
       typeStack.push(stringTypeConst); 
     });
-    elfs.push(function(defs, progStack, progDivId) {
+    elfs.push(function(defs, progStack) {
       progStack.push(str);
     });
   }
@@ -275,22 +275,22 @@
     }
     const fullName = makeFullName(ns, newName);
     elts.push(eltOpDef(ns, newName));
-    elfs.push(function(defs, stack, progDivId) {
-      defs[fullName] = stack.pop();
+    elfs.push(function(defs, stack) {
+      defs[fullname] = stack.pop();
     });
   }
 
-  function eltOpDef(ns, newName) {
-    return function(dets, typeStack) {
-      const fullName = makeFullName(ns, newName);
-      if (typeStack.length === 0) {
+  function eltopdef(ns, newname) {
+    return function(dets, typestack) {
+      const fullname = makefullname(ns, newname);
+      if (typestack.length === 0) {
           return 'you need to put something on the stack before a ' +
               '"def"';
       }
-      if (dets[fullName]) {
-          return 'multiple definitions of name "' + newName + '"';
+      if (dets[fullname]) {
+          return 'multiple definitions of name "' + newname + '"';
       }
-      dets[fullName] = typeStack.pop()
+      dets[fullname] = typestack.pop()
       return "";
     };
   }
@@ -303,19 +303,19 @@
     }
     p.i++;
 
-    let blockElts = [];
-    let blockElfs = [];
+    let blockelts = [];
+    let blockelfs = [];
 
     while (true) {
-      p.i = parseZeroOrMoreSpaces(code, p.i);
+      p.i = parsezeroormorespaces(code, p.i);
       if (code[p.i] === "}") {
         p.i++;
         p.done = true;
 
-        elts.push(function(dets, typeStack) {
-          typeStack.push(blockElts);
+        elts.push(function(dets, typestack) {
+          typestack.push(blockelts);
         });
-        elfs.push(function(defs, progStack, progDivId) {
+        elfs.push(function(defs, progstack) {
           progStack.push(blockElfs);
         });
         return;
@@ -378,7 +378,7 @@
       }
       typestack.push(lookedUpTypes);
     })
-    elfs.push(function(defs, progStack, progDivId) {
+    elfs.push(function(defs, progStack) {
       progStack.push(defs[fullName]);
     })
   }
@@ -414,7 +414,7 @@
   }
 
   function slPrint(progDivId) {
-    return function(dontCare1, progStack, dontCare2) {
+    return function(dontCare1, progStack) {
       const div = document.getElementById(progDivId);
       div.innerHTML = "";
       const txt = document.createTextNode(progStack.pop());
@@ -456,12 +456,12 @@
 
     const defs = standardLibrary(progDivId)
     let progStack = []
-    runProgram(elfs, defs, progStack, progDivId);
+    runProgram(elfs, defs, progStack);
   }
   
-  function runProgram(elfs, defs, progStack, progDivId) {
+  function runProgram(elfs, defs, progStack) {
     for (let i = 0; i < elfs.length; i++) {
-      elfs[i](defs, progStack, progDivId);
+      elfs[i](defs, progStack);
     }
   }
 
