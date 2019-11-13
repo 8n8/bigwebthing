@@ -6,6 +6,7 @@
       description: "A little tiny real program.",
       version: 0,
       code: '{ "h" print } def hello hello !',
+      types: '[] { str pop } det hello'
     }
   };
 
@@ -445,6 +446,19 @@
     }
   }
 
+  function parseTypes(code, elts) {
+    const p = { done: true, i: 0, errMsg: "" };
+    const codeLen = code.length;
+    while (p.i < codeLen) {
+      p.i = parseZeroOrMoreSpaces(code, p.i);
+      parseTypeElement(code, "", elts, p)
+      if (p.done) {
+        continue;
+      }
+      return;
+    }
+  }
+
   function parser(code, types, elts, elfs) {
     const p = { done: true, i: 0, errMsg: "" };
     const codeLen = code.length;
@@ -568,6 +582,9 @@
     parseTypeBlock(code, ns, elts, p);
     if (p.done || p.errMsg) {return;}
 
+    parseTypeList(code, ns, elts, p);
+    if (p.done || p.errMsg) {return;}
+
     parseTypeRetrieve(code, ns, elts, p)
     if (p.done || p.errMsg) {return;}
 
@@ -595,10 +612,16 @@
     })
   }
 
-  function compile(code, progDivId) {
+  function parseTypeList(code, ns, elts, p) {
+    
+  }
+
+  function compile(code, types, progDivId) {
+    debugger;
     let elts = []
     let elfs = []
-    parser(code, elts, elfs);
+    parseTypes(types, elts)
+    parser(code, types, elts, elfs);
     console.log(elts)
     debugger
     
@@ -683,7 +706,7 @@
         progDivId.value = progIdName;
         programDiv.setAttributeNode(progDivId);
         document.getElementById(idName).appendChild(programDiv);
-        compile(program.code, progIdName);
+        compile(program.code, program.types, progIdName);
       }
     };
     button.appendChild(makeProgramMenuDiv(name, program));
