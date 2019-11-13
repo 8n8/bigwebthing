@@ -5,7 +5,7 @@
     FirstRealProgram: {
       description: "A little tiny real program.",
       version: 0,
-      code: '{ "gar!" print ! } def hello hello',
+      code: 'print !',
     }
   };
 
@@ -280,38 +280,6 @@
     });
   }
 
-  function parseDet(code, ns, elts, p) {
-    p.done = true;
-    if (code.slice(p.i, p.i + 4) !== "det ") {
-      p.done = false;
-      return;
-    }
-    p.i += 4;
-    const [newI, newErrMsg, newName] = parseName(code, p.i);
-    p.i = newI;
-    if (newErrMsg) {
-      p.errMsg = newErrMsg;
-      p.done = false;
-      return;
-    }
-    const fullName = makeFullName(ns, newName);
-    elts.push(function(dets, typeStack) {
-      if (typeStack.length < 2) {
-          return 'you need to put a stack spec and a type block ' +
-              'on the stack before a det'
-      } 
-      if (dets[fullName]) {
-          return 'multiple definitions of name "' + newName + '"';
-      }
-      const block = typeStack.pop()
-      const typeSpec = typeStack.pop()
-      dets[fullName] = {
-          fun: block,
-          type: typeSpec,
-      }
-    });
-  }
-
   function eltOpDef(ns, newName) {
     return function(dets, typeStack) {
       const fullName = makeFullName(ns, newName);
@@ -432,19 +400,6 @@
     }
   }
 
-  function parseTypes(code, elts) {
-    const p = { done: true, i: 0, errMsg: "" };
-    const codeLen = code.length;
-    while (p.i < codeLen) {
-      p.i = parseZeroOrMoreSpaces(code, p.i);
-      parseTypeElement(code, "", elts, p)
-      if (p.done) {
-        continue;
-      }
-      return;
-    }
-  }
-
   function parser(code, elts, elfs) {
     const p = { done: true, i: 0, errMsg: "" };
     const codeLen = code.length;
@@ -481,125 +436,6 @@
     const txtcode = document.createTextNode(errMsg);
     pcode.appendChild(txtcode);
     div.appendChild(pcode);
-  }
-
-  function parseTypeString(code, elts, p) {
-    const str = parseStringHelper(code, p);
-    if (!p.done) {
-      return;
-    }
-    elts.push(function(dets, typestack) {
-      typestack.push(str);
-    });
-  }
-
-  function parseDet(code, ns, elts, p) {
-    p.done = true;
-    if (code.slice(p.i, p.i + 4) !== "det ") {
-      p.done = false;
-      return;
-    }
-    p.i += 4;
-    const [newI, newErrMsg, newName] = parseName(code, p.i);
-    p.i = newI;
-    if (newErrMsg) {
-      p.errMsg = newErrMsg;
-      p.done = false;
-      return;
-    }
-    const fullName = makeFullName(ns, newName);
-    elts.push(function(dets, typestack) {
-      if (dets[fullName]) {
-        return 'multiple definitions of name "' + newName + '"';
-      }
-      if (typestack.length === 0) {
-        return 'you need to put something on the stack before a ' +
-            '"det"';
-      }
-      dets[fullName] = typestack.pop();
-    });
-  }
-
-  function parseTypeBlock(code, ns, elts, p) {
-    p.done = true;
-    if (code[p.i] !== "{") {
-      p.done = false;
-      return;
-    }
-    p.i++;
-
-    let blockElts = [];
-  
-    while (true) {
-      p.i = parseZeroOrMoreSpaces(code, p.i);
-      if (code[p.i] === "}") {
-        p.i++;
-        p.done = true;
-
-        elts.push(function(dets, typestack) {
-          typestack.push(blockElts);
-        })
-        return;
-      }
-
-      parseTypeElement(code, ns, elts, p);
-      if (p.done) {
-        continue;
-      }
-      if (p.errMsg) {
-        return;
-      }
-
-      if (!p.done) {
-        p.errMsg = "error in type block: expecting blah or blah";
-        p.done = false;
-        return;
-      }
-    }
-  }
-
-  function parseTypeElement(code, ns, elts, p) {
-    parseTypeString(code, elts, p);
-    if (p.done || p.errMsg) {return;}
-
-    parseDet(code, ns, elts, p);
-    if (p.done || p.errMsg) {return;}
-
-    parseTypeBlock(code, ns, elts, p);
-    if (p.done || p.errMsg) {return;}
-
-    parseTypeList(code, ns, elts, p);
-    if (p.done || p.errMsg) {return;}
-
-    parseTypeRetrieve(code, ns, elts, p)
-    if (p.done || p.errMsg) {return;}
-
-    if (!p.done) {
-      p.errMsg = "parseTypeElement: expecting blah blah blah"
-    }
-  }
-
-  function parseTypeRetrieve(code, ns, elts, p) {
-    const [newI, newErrMsg, name] = parseName(code, p.i);
-    if (newErrMsg) {
-      p.errMsg = newErrMsg;
-      p.done = false;
-      return;
-    }
-    p.done = true;
-    p.i = newI;
-    const fullName = makeFullName(ns, name);
-    elts.push(function(dets, typestack) {
-      const lookedUpTypes = dets[fullName];
-      if (!lookedUpTypes) {
-        return 'could not find type definition "' + name + '"';
-      }
-      typestack.push(lookedUpTypes);
-    })
-  }
-
-  function parseTypeList(code, ns, elts, p) {
-    
   }
 
   function compile(code, progDivId) {
