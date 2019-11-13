@@ -5,7 +5,7 @@
     FirstRealProgram: {
       description: "A little tiny real program.",
       version: 0,
-      code: '"hamish" print !',
+      code: '{ "hello world!" Print ! } def Hello hello !',
     }
   };
 
@@ -190,7 +190,7 @@
         break;
       }
       if (codeLen === i) {
-        return [i, "", newName];
+        return [i, "", newName.toLowerCase()];
       }
       if (!okNotFirstNameChars.has(c)) {
         const errMsg =
@@ -205,7 +205,7 @@
       const errMsg = 'name "' + newName + '" is reserved';
       return [i, errMsg, ""];
     }
-    return [i, "", newName];
+    return [i, "", newName.toLowerCase()];
   }
 
   function parseStringHelper(code, p) {
@@ -276,13 +276,13 @@
     const fullName = makeFullName(ns, newName);
     elts.push(eltOpDef(ns, newName));
     elfs.push(function(defs, stack) {
-      defs[fullname] = stack.pop();
+      defs[fullName] = stack.pop();
     });
   }
 
-  function eltopdef(ns, newname) {
+  function eltOpDef(ns, newname) {
     return function(dets, typestack) {
-      const fullname = makefullname(ns, newname);
+      const fullname = makeFullName(ns, newname);
       if (typestack.length === 0) {
           return 'you need to put something on the stack before a ' +
               '"def"';
@@ -303,19 +303,19 @@
     }
     p.i++;
 
-    let blockelts = [];
-    let blockelfs = [];
+    let blockElts = [];
+    let blockElfs = [];
 
     while (true) {
-      p.i = parsezeroormorespaces(code, p.i);
+      p.i = parseZeroOrMoreSpaces(code, p.i);
       if (code[p.i] === "}") {
         p.i++;
         p.done = true;
 
         elts.push(function(dets, typestack) {
-          typestack.push(blockelts);
+          typestack.push(blockElts);
         });
-        elfs.push(function(defs, progstack) {
+        elfs.push(function(defs, progStack) {
           progStack.push(blockElfs);
         });
         return;
