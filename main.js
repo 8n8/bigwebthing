@@ -507,24 +507,6 @@
   const divIdEnd = "ProgramDiv";
   const subDivEnd = "SubDiv";
 
-  // The 'gui' parameter is a description of the current view in
-  // the GUI. It is an object, and always has a 'page' field, which
-  // is 'choose' for the program chooser page or 'run' for the
-  // program running page.
-  function render(gui) {
-    if (gui.page === "choose") {
-      renderChoose(gui)
-    }
-    if (gui.page === "run") {
-      renderRun(gui)
-    }
-  }
-
-  function runtime() {
-    while (true) {
-    }
-  }
-
   function makeProgramMenuItem(name, program) {
     const div = document.createElement("DIV");
     const divId = document.createAttribute("id");
