@@ -525,26 +525,29 @@
     }
   }
 
+  function makeProgramDiv(childId, parentId, program) {
+    const programDiv = document.createElement("div");
+    const progDivId = document.createAttribute("id");
+    progDivId.value = childId;
+    programDiv.setAttributeNode(progDivId);
+    document.getElementById(parentId).appendChild(programDiv);
+    compile(program.code, childId);
+  }
+
   function makeProgramMenuItem(name, program) {
     const div = document.createElement("DIV");
     const divId = document.createAttribute("id");
-    const idName = name + divIdEnd;
-    divId.value = idName;
+    const parentId = name + divIdEnd;
+    divId.value = parentId;
     div.setAttributeNode(divId);
     const button = document.createElement("BUTTON");
     button.onclick = function() {
-      const ref = name + subDivEnd;
-      const toRemove = document.getElementById(ref);
+      const programId = name + subDivEnd;
+      const toRemove = document.getElementById(programId);
       if (toRemove) {
         toRemove.remove();
       } else {
-        const programDiv = document.createElement("div");
-        const progDivId = document.createAttribute("id");
-        const progIdName = name + subDivEnd;
-        progDivId.value = progIdName;
-        programDiv.setAttributeNode(progDivId);
-        document.getElementById(idName).appendChild(programDiv);
-        compile(program.code, progIdName);
+        makeProgramDiv(programId, parentId, program)
       }
     };
     button.appendChild(makeProgramMenuDiv(name, program));
