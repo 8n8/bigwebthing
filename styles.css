@@ -1,0 +1,7 @@
+.programDiv {
+    display: flex;
+}
+
+.programDiv > div {
+    flex: 1;
+}

@@ -322,6 +322,7 @@ func main() {
 		})
 	serveFile("main.js", "application/javascript")
 	serveFile("localforage.min.js", "application/javascript")
+	serveFile("styles.css", "text/css")
 	fmt.Println(http.ListenAndServe(":3001", nil))
 }
 

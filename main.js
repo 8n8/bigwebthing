@@ -1,13 +1,16 @@
 (function() {
   "use strict";
 
-  const programsDebug = {
-    FirstRealProgram: {
-      description: "A little tiny real program.",
-      version: 0,
-      code: '{ "hello world!" Print ! } def Hello hello !',
-    }
-  };
+  // const programsDebug = {
+  //   FirstRealProgram: {
+  //     description: "A little tiny real program.",
+  //     version: 0,
+  //     code: '{ "hello world!" Print ! } def Hello hello !',
+  //     homeDoc: '{
+  //   }
+  // };
+
+  let idCounter = 0
 
   function makeProgramMenuDiv(programName, program) {
     const div = document.createElement("DIV");
@@ -27,6 +30,13 @@
     div.appendChild(description);
     return div;
   }
+ 
+  function displayLeftTxt(text, parentId) {
+    const id = parentId + idCounter;
+    idCounter++;
+    const textBox = textBoxHelp(id);
+    
+  }   
 
   function parseRunBlock(code, ns, elfs, elts, p) {
     if (code[p.i] !== "!") {
@@ -526,12 +536,146 @@
   }
 
   function makeProgramDiv(childId, parentId, program) {
+    const leftId = childId + "left"
+    const rightId = childId + "right"
     const programDiv = document.createElement("div");
+    document.createAttribute("class").value = "programDiv";
     const progDivId = document.createAttribute("id");
     progDivId.value = childId;
     programDiv.setAttributeNode(progDivId);
     document.getElementById(parentId).appendChild(programDiv);
-    compile(program.code, childId);
+    displayLeftDoc(program.homedoc, leftId);
+    const rightDoc = compile(program);
+    updateRightDoc(rightDoc, rightId);
+  }
+
+  const UTF16 = 0;
+  const IMAGE = 1;
+  const VIDEO = 2;
+
+  function displayLeftDoc(leftDocHash, parentId) {
+    const div = document.createElement("div");
+    const divIdAttr = document.createAttribute("id");
+    const divId = parentId + "left";
+    divIdAttr.value = divId;
+    div.setAttributeNode(divIdAttr);
+    document.getElementById(parentId).appendChild(div);
+    if (!leftDocHash) {
+      newDocPartMaker(divId);
+    }
+    // It extracts the blob from the database.
+    const [docOrBlob, mime, tooBig] = buildBlob(leftDocHash);
+    if (tooBig) {
+      const button = document.createElement("button");
+      button.onclick = function () {
+        download(leftDocHash);
+      }
+      button.appendChild(downloadButtonP())
+    }
+    if (Array.isArray(docOrBlob)) {
+      for (i = 0; i < docOrBlob.length; i++) {
+          displayLeftDoc(docOrBlob[i], divId);
+      }
+      return;
+    }
+    if (mimetype === UTF16) {
+      displayLeftTxt(docOrBlob, divId, leftDoc);
+      return;
+    }
+
+    // if (mimetype === IMAGE) {
+    //   displayLeftImage(docOrBlob, divId);
+    //   return;
+    // }
+
+    // if (mimetype === VIDEO) {
+    //   displayLeftVideo(docOrBlob, divId);
+    //   return;
+    // }
+
+    displayLeftBin(docOrBlob, divId);
+    
+    // localforage.getItem(leftDocHash).then(function(leftDoc) {
+    //   displayLeftDocHelp(leftDoc, divId);
+    // })
+  }
+
+  const tooBigButtonMsg = "The file was too big to display. Click here to download it."
+
+  function newDocPartMaker(divId) {
+    newTextDocMaker(divId);
+    newFileDocMaker(divId);
+  }
+
+  function textBoxHelp(id) {
+    const textBox = document.createElement('textarea');
+
+    const idAttr = document.createAttribute('id');
+    idAttr.value = id
+    textBox.setAttributeNode(idAttr);
+    
+    const rowsAttr = document.createAttribute("rows");
+    rowsAttr.value = "10";
+    textBox.setAttributeNode(rowsAttr);
+
+    const colsAttr = document.createAttribute("cols");
+    colsAttr.value = "50";
+    textBox.setAttributeNode(colsAttr);
+
+    return textBox;
+  }
+
+  function newTextDocMaker(parentId) {
+    const parent = document.getElementById(parentId);
+    const textBoxId = parentId + "textBox"
+    parent.appendChild(textBoxHelp(textBoxId));
+    const saveButton = document.createElement('button');
+    saveButton.onclick = function() {
+      
+    }
+  }
+
+  function downloadButtonP() {
+    const p = document.createElement("p");
+    const txt = document.createTextNode(tooBigButtonMsg);
+    p.appendChild(txt);
+  }
+
+  // const DOC = 1;
+  // const FIRST = 2;
+  // const LAST = 4;
+
+  // function bodyStart(blobCode) {
+  //   if (blobCode & LAST) {
+  //     return 2;
+  //   }
+  //   return 34;
+  // }
+
+  // function displayLeftDocHelp(leftDoc, parentId) {
+  //   blob = buildBlob(leftDoc)
+  // }
+  //   const blobCode = leftDoc[0];
+  //   const mimeCode = leftDoc[1];
+  //   const body = leftDoc[bodyStart(blobCode):];
+
+  function newDocPartMaker(parentId) {
+    const div = document.createElement("div");
+    const divId = parendId + "makeNewPart";
+    const divIdAttr = document.createAttribute("id");
+    divIdAttr.value = divId;
+    div.setAttributeNode(divIdAttr);
+    // Needs UI for inserting a sequence of items. A single item
+    // is a plain blob, but two or more becomes a list of hashes.
+    // So I need a textarea and a drag-and-drop / browse button for
+    // uploading files. It should be fairly easy to add folder
+    // uploads at some stage, but don't bother yet.
+    const newFolderButton = document.createElement("button");
+    
+  }
+
+  function updateRightDoc(rightDoc, leftRightParentId) {
+
   }
 
   function makeProgramMenuItem(name, program) {
@@ -547,7 +691,7 @@
       if (toRemove) {
         toRemove.remove();
       } else {
-        makeProgramDiv(programId, parentId, program)
+        makeProgramDiv(programId, parentId, program);
       }
     };
     button.appendChild(makeProgramMenuDiv(name, program));
@@ -566,5 +710,5 @@
     localforage.getItem("programs").then(afterRetrievingPrograms);
   }
 
-  localforage.setItem("programs", programsDebug).then(main);
+  //localforage.setItem("programs", programsDebug).then(main);
 })();
