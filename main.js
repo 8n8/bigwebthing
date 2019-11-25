@@ -10,7 +10,8 @@
   //   }
   // };
 
-  let idCounter = 0
+  let domIdIota = 0
+  let blobIdIotaGlobal = 0
 
   function makeProgramMenuDiv(programName, program) {
     const div = document.createElement("DIV");
@@ -31,11 +32,23 @@
     return div;
   }
  
-  function displayLeftTxt(text, parentId) {
-    const id = parentId + idCounter;
-    idCounter++;
+  function displayLeftText(docName, doc, parentId) {
+    const parent = getElementById(parentId);
+ 
+    const id = parentId + domIdIota;
+    domIdIota++;
     const textBox = textBoxHelp(id);
-    
+    parent.appendChild(textBox);
+    localforage.getItem(docName).then(function (contents) {
+      textBox.value = contents;
+    })
+
+    const button = document.createElement('button'); 
+    button.onclick = function() {
+      localforage.setItem(docName, textBox.value)
+    }
+    button.appendChild("Save");
+    parent.appendChild(button);
   }   
 
   function parseRunBlock(code, ns, elfs, elts, p) {
@@ -535,105 +548,87 @@
     }
   }
 
+  function blobIdIota() {
+    const now = Date.now();
+    const id = now * 1000 + blobIdIotaGlobal;
+    blobIdIotaGlobal++;
+    return id;
+  }
+
   function makeProgramDiv(childId, parentId, program) {
-    const leftId = childId + "left"
-    const rightId = childId + "right"
     const programDiv = document.createElement("div");
     document.createAttribute("class").value = "programDiv";
     const progDivId = document.createAttribute("id");
     progDivId.value = childId;
     programDiv.setAttributeNode(progDivId);
     document.getElementById(parentId).appendChild(programDiv);
-    displayLeftDoc(program.homedoc, leftId);
+    // if (!program.homedoc) {
+    //   program['homedoc'] = blobIdIota();
+    // }
+    const leftDiv = document.createElement('div');
+    debugger;
+    if (!program.homedoc) {
+      program.homedoc = blobIdIota();
+      newDocPartMaker(parentId, program.homedoc);
+      return;
+    }
+    displayLeftDoc(program.homedoc, parentId);
     const rightDoc = compile(program);
-    updateRightDoc(rightDoc, rightId);
+    updateRightDoc(rightDoc, parentId);
   }
 
   const UTF16 = 0;
   const IMAGE = 1;
   const VIDEO = 2;
 
-  function displayLeftDoc(leftDocHash, parentId) {
-    const div = document.createElement("div");
-    const divIdAttr = document.createAttribute("id");
-    const divId = parentId + "left";
-    divIdAttr.value = divId;
-    div.setAttributeNode(divIdAttr);
+  function domId() {
+    const id = domIdIota;
+    domIdIota++;
+    return id.toString();
+  }
+
+  function displayLeftDoc(leftDocName, parentId) {
+    const div = document.createElement('div');
+    const divId = domId();
+    div.id = divId;
     document.getElementById(parentId).appendChild(div);
-    if (!leftDocHash) {
-      newDocPartMaker(divId);
-    }
-    // It extracts the blob from the database.
-    const [docOrBlob, mime, tooBig] = buildBlob(leftDocHash);
-    if (tooBig) {
-      const button = document.createElement("button");
-      button.onclick = function () {
-        download(leftDocHash);
+    localforage.getItem(leftDocName).then(function(leftDoc) {
+      if (Array.isArray(leftDoc)) {
+        for (i = 0; i < leftDoc.length; i++) {
+            displayLeftDoc(leftDoc[i], divId);
+        }
+        return;
       }
-      button.appendChild(downloadButtonP())
-    }
-    if (Array.isArray(docOrBlob)) {
-      for (i = 0; i < docOrBlob.length; i++) {
-          displayLeftDoc(docOrBlob[i], divId);
+      const mimetype = leftDoc[0];
+      if (mimetype === UTF16) {
+        displayLeftText(leftDocName, leftDoc, divId);
+        return;
       }
-      return;
-    }
-    if (mimetype === UTF16) {
-      displayLeftTxt(docOrBlob, divId, leftDoc);
-      return;
-    }
-
-    // if (mimetype === IMAGE) {
-    //   displayLeftImage(docOrBlob, divId);
-    //   return;
-    // }
-
-    // if (mimetype === VIDEO) {
-    //   displayLeftVideo(docOrBlob, divId);
-    //   return;
-    // }
-
-    displayLeftBin(docOrBlob, divId);
-    
-    // localforage.getItem(leftDocHash).then(function(leftDoc) {
-    //   displayLeftDocHelp(leftDoc, divId);
-    // })
+    })
   }
 
-  const tooBigButtonMsg = "The file was too big to display. Click here to download it."
-
-  function newDocPartMaker(divId) {
-    newTextDocMaker(divId);
-    newFileDocMaker(divId);
-  }
+  // function newDocPartMaker(divId) {
+  //   newTextDocMaker(divId);
+  //   newFileDocMaker(divId);
+  // }
 
   function textBoxHelp(id) {
     const textBox = document.createElement('textarea');
-
-    const idAttr = document.createAttribute('id');
-    idAttr.value = id
-    textBox.setAttributeNode(idAttr);
-    
-    const rowsAttr = document.createAttribute("rows");
-    rowsAttr.value = "10";
-    textBox.setAttributeNode(rowsAttr);
-
-    const colsAttr = document.createAttribute("cols");
-    colsAttr.value = "50";
-    textBox.setAttributeNode(colsAttr);
-
+    textBox.id = id;
+    textBox.rows = "10";
+    textBox.cols = "50";
     return textBox;
   }
 
-  function newTextDocMaker(parentId) {
-    const parent = document.getElementById(parentId);
-    const textBoxId = parentId + "textBox"
-    parent.appendChild(textBoxHelp(textBoxId));
-    const saveButton = document.createElement('button');
-    saveButton.onclick = function() {
-      
-    }
-  }
+  // function newTextDocMaker(parentId) {
+  //   const parent = document.getElementById(parentId);
+  //   const textBoxId = parentId + "textBox"
+  //   parent.appendChild(textBoxHelp(textBoxId));
+  //   const saveButton = document.createElement('button');
+  //   saveButton.onclick = function() {
+  //     
+  //   }
+  // }
 
   function downloadButtonP() {
     const p = document.createElement("p");
@@ -659,19 +654,45 @@
   //   const mimeCode = leftDoc[1];
   //   const body = leftDoc[bodyStart(blobCode):];
 
-  function newDocPartMaker(parentId) {
+  function newDocPartMaker(parentId, blobName) {
     const div = document.createElement("div");
-    const divId = parendId + "makeNewPart";
-    const divIdAttr = document.createAttribute("id");
-    divIdAttr.value = divId;
-    div.setAttributeNode(divIdAttr);
-    // Needs UI for inserting a sequence of items. A single item
-    // is a plain blob, but two or more becomes a list of hashes.
-    // So I need a textarea and a drag-and-drop / browse button for
-    // uploading files. It should be fairly easy to add folder
-    // uploads at some stage, but don't bother yet.
-    const newFolderButton = document.createElement("button");
-    
+    const divId = parentId + "makeNewPart";
+    div.id = divId;
+
+    const uploadFile = document.createElement('input');
+    uploadFile.type = 'file';
+    uploadFile.onchange = function(event) {
+      const filename = blobIdIota();
+      const fileContent = event.target.files[0];
+      localforage.setItem(filename, fileContent);
+      localforage.getItem(blobName).then(function(program) {
+        program.homedoc = filename;
+        localforage.setItem(programName, program).then(function() {
+          div.remove();
+          displayLeftDoc(fileContent, parentId);
+        });
+      });
+    }
+    div.appendChild(uploadFile);
+
+    const textBoxId = domId();
+    const textBox = textBoxHelp(textBoxId);
+    const saveButton = document.createElement('button');
+    saveButton.onclick() {
+      const value = textBox.value;
+      if (!value) {
+        return;
+      }
+      const blobId = blobIdIota()
+      localforage.setItem(blobId, value);
+ 
+    const button = document.createElement('button'); 
+    button.onclick = function() {
+      const textBlobName = blobIdIota();
+      const textBoxId = domId();
+      const textBox = textBoxHelp(textBoxId);
+      textBox.onchange
+    }
   }
 
   function updateRightDoc(rightDoc, leftRightParentId) {
@@ -699,16 +720,79 @@
     return div;
   }
 
+  function noProgramsMsg() {
+    const p = document.createElement('p');
+    p.innerHTML = 'No programs found.'
+    return p
+  }
+
+  function getById(id) {
+    return document.getElementById(id);
+  }
+
+  const uploaderHtml = `
+<p>Add a new program:<p>
+<p>Name: <input type="text" id="nameUpload"></p>
+<p>Description: <input type="text" id="descriptionUpload"></p>
+<p>Version: <input type="number" id="versionUpload" min="0"></p>`
+//<p>Choose a file of code: <input type="file" id="codeUpload"></p>`
+
+//  onchange="readCodeUpload(event)"></p>
+// `
+
+  function readCodeUpload(event) {
+    localforage.getItem("programs").then(function(programs) {
+      if (!programs) {
+        programs = {};
+      }
+      const code = event.target.files[0];
+      const name = getById("nameUpload").value;
+      const description = getById("descriptionUpload").value;
+      const version = getById("versionUpload").value;
+      programs[name] = {
+        "description": description,
+        "version": version,
+        "code": code};
+      localforage.setItem('programs', programs).then(afterRetrievingPrograms(programs));
+    });
+  }
+
+  function programUploader() {
+    const form = document.createElement('form');
+    form.innerHTML = uploaderHtml;
+    const uploadFile = document.createElement('input');
+    uploadFile.type = 'file';
+    uploadFile.onchange = readCodeUpload;
+    form.appendChild(uploadFile);
+    return form;
+  }
+
+  const programMenuId = "programMenu";
+
   function afterRetrievingPrograms(programs) {
+    if (document.getElementById(programMenuId)) {
+      oldDiv.remove();
+    }
+    
+    const div = document.createElement('div');
+    div.id = programMenuId
+    if (!programs) {
+      div.appendChild(noProgramsMsg());
+      return;
+    }
     for (const [name, program] of Object.entries(programs)) {
       const progButton = makeProgramMenuItem(name, program);
-      document.body.appendChild(progButton);
+      div.appendChild(progButton);
     }
+    document.body.appendChild(div);
   }
 
   function main() {
+    document.body.appendChild(programUploader());
     localforage.getItem("programs").then(afterRetrievingPrograms);
   }
+
+  main();
 
   //localforage.setItem("programs", programsDebug).then(main);
 })();
