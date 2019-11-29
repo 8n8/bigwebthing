@@ -590,7 +590,7 @@
     document.getElementById(parentId).appendChild(div);
     localforage.getItem(leftDocName).then(function(leftDoc) {
       if (!leftDoc) {
-        topNodeMaker(divId, leftDocName);
+        blobMaker(divId, leftDocName);
         return;
       }
       if (Array.isArray(leftDoc)) {
@@ -650,7 +650,7 @@
   //   const mimeCode = leftDoc[1];
   //   const body = leftDoc[bodyStart(blobCode):];
 
-  function topNodeMaker(parentId, blobName) {
+  function blobMaker(parentId, blobName) {
     const div = document.createElement("div");
     const divId = parentId + "makeNewPart";
     div.id = divId;
