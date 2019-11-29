@@ -33,21 +33,18 @@
   }
  
   function displayLeftText(docName, doc, parentId) {
-    const parent = getElementById(parentId);
+    const parent = document.getElementById(parentId);
  
-    const id = parentId + domIdIota;
-    domIdIota++;
+    const id = domId();
     const textBox = textBoxHelp(id);
     parent.appendChild(textBox);
-    localforage.getItem(docName).then(function (contents) {
-      textBox.value = contents;
-    })
+    textBox.value = doc;
 
     const button = document.createElement('button'); 
     button.onclick = function() {
       localforage.setItem(docName, textBox.value)
     }
-    button.appendChild("Save");
+    button.innerHTML = 'Save';
     parent.appendChild(button);
   }   
 
@@ -528,7 +525,6 @@
   }
 
   const divIdEnd = "ProgramDiv";
-  const subDivEnd = "SubDiv";
 
   // The 'gui' parameter is a description of the current view in
   // the GUI. It is an object, and always has a 'page' field, which
@@ -551,28 +547,28 @@
   function blobIdIota() {
     const now = Date.now();
     const id = now * 1000 + blobIdIotaGlobal;
-    blobIdIotaGlobal++;
-    return id;
+    if (blobIdIotaGlobal > 998) {
+      blobIdIotaGlobal = 0;
+    } else {
+      blobIdIotaGlobal++;
+    }
+    return '' + id;
   }
 
-  function makeProgramDiv(childId, parentId, program) {
+  function makeProgramDiv(name, childId, parentId, program) {
     const programDiv = document.createElement("div");
-    document.createAttribute("class").value = "programDiv";
-    const progDivId = document.createAttribute("id");
-    progDivId.value = childId;
-    programDiv.setAttributeNode(progDivId);
+    programDiv.class = "programDiv";
+    programDiv.id = childId;
     document.getElementById(parentId).appendChild(programDiv);
-    // if (!program.homedoc) {
-    //   program['homedoc'] = blobIdIota();
-    // }
     const leftDiv = document.createElement('div');
-    debugger;
     if (!program.homedoc) {
-      program.homedoc = blobIdIota();
-      newDocPartMaker(parentId, program.homedoc);
-      return;
+      program['homedoc'] = blobIdIota();
+      localforage.getItem('programs').then(function(programs) {
+        programs[name] = program;
+        localforage.setItem('programs', programs);
+      })
     }
-    displayLeftDoc(program.homedoc, parentId);
+    displayLeftDoc(program.homedoc, childId);
     const rightDoc = compile(program);
     updateRightDoc(rightDoc, parentId);
   }
@@ -593,17 +589,17 @@
     div.id = divId;
     document.getElementById(parentId).appendChild(div);
     localforage.getItem(leftDocName).then(function(leftDoc) {
+      if (!leftDoc) {
+        topNodeMaker(divId, leftDocName);
+        return;
+      }
       if (Array.isArray(leftDoc)) {
         for (i = 0; i < leftDoc.length; i++) {
             displayLeftDoc(leftDoc[i], divId);
         }
         return;
       }
-      const mimetype = leftDoc[0];
-      if (mimetype === UTF16) {
-        displayLeftText(leftDocName, leftDoc, divId);
-        return;
-      }
+      displayLeftText(leftDocName, leftDoc, divId);
     })
   }
 
@@ -654,45 +650,40 @@
   //   const mimeCode = leftDoc[1];
   //   const body = leftDoc[bodyStart(blobCode):];
 
-  function newDocPartMaker(parentId, blobName) {
+  function topNodeMaker(parentId, blobName) {
     const div = document.createElement("div");
     const divId = parentId + "makeNewPart";
     div.id = divId;
 
+    function set(newBlob) {
+      localforage.setItem(blobName, newBlob).then(function () {
+        div.remove();
+        displayLeftDoc(blobName, parentId);
+      })
+    }
+
     const uploadFile = document.createElement('input');
     uploadFile.type = 'file';
     uploadFile.onchange = function(event) {
-      const filename = blobIdIota();
-      const fileContent = event.target.files[0];
-      localforage.setItem(filename, fileContent);
-      localforage.getItem(blobName).then(function(program) {
-        program.homedoc = filename;
-        localforage.setItem(programName, program).then(function() {
-          div.remove();
-          displayLeftDoc(fileContent, parentId);
-        });
-      });
+      set(event.target.files[0]);
     }
     div.appendChild(uploadFile);
 
     const textBoxId = domId();
     const textBox = textBoxHelp(textBoxId);
+    div.appendChild(textBox);
+    
     const saveButton = document.createElement('button');
-    saveButton.onclick() {
-      const value = textBox.value;
-      if (!value) {
+    saveButton.innerHTML = 'Save';
+    saveButton.onclick = function() {
+      const newText = textBox.value;
+      if (!newText) {
         return;
       }
-      const blobId = blobIdIota()
-      localforage.setItem(blobId, value);
- 
-    const button = document.createElement('button'); 
-    button.onclick = function() {
-      const textBlobName = blobIdIota();
-      const textBoxId = domId();
-      const textBox = textBoxHelp(textBoxId);
-      textBox.onchange
+      set(newText);
     }
+    div.appendChild(saveButton);
+    document.getElementById(parentId).appendChild(div);
   }
 
   function updateRightDoc(rightDoc, leftRightParentId) {
@@ -701,18 +692,16 @@
 
   function makeProgramMenuItem(name, program) {
     const div = document.createElement("DIV");
-    const divId = document.createAttribute("id");
     const parentId = name + divIdEnd;
-    divId.value = parentId;
-    div.setAttributeNode(divId);
+    div.id = parentId;
     const button = document.createElement("BUTTON");
+    const programId = domId();
     button.onclick = function() {
-      const programId = name + subDivEnd;
       const toRemove = document.getElementById(programId);
       if (toRemove) {
         toRemove.remove();
       } else {
-        makeProgramDiv(programId, parentId, program);
+        makeProgramDiv(name, programId, parentId, program);
       }
     };
     button.appendChild(makeProgramMenuDiv(name, program));
@@ -745,15 +734,23 @@
       if (!programs) {
         programs = {};
       }
-      const code = event.target.files[0];
       const name = getById("nameUpload").value;
       const description = getById("descriptionUpload").value;
       const version = getById("versionUpload").value;
-      programs[name] = {
-        "description": description,
-        "version": version,
-        "code": code};
-      localforage.setItem('programs', programs).then(afterRetrievingPrograms(programs));
+
+      const fileHandle = event.target.files[0];
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        programs[name] = {
+          "description": description,
+          "version": version,
+          "code": event.target.result};
+        localforage.setItem('programs', programs)
+          .then(afterRetrievingPrograms(programs));
+      }
+
+      reader.onerror = error => reject(error);
+      reader.readAsText(fileHandle);
     });
   }
 
@@ -770,29 +767,48 @@
   const programMenuId = "programMenu";
 
   function afterRetrievingPrograms(programs) {
-    if (document.getElementById(programMenuId)) {
-      oldDiv.remove();
+    const oldProgramDiv = document.getElementById(programMenuId);
+    if (oldProgramDiv) {
+      oldProgramDiv.remove();
     }
     
     const div = document.createElement('div');
     div.id = programMenuId
     if (!programs) {
       div.appendChild(noProgramsMsg());
-      return;
-    }
-    for (const [name, program] of Object.entries(programs)) {
-      const progButton = makeProgramMenuItem(name, program);
-      div.appendChild(progButton);
+    } else {
+      for (const [name, program] of Object.entries(programs)) {
+        const progButton = makeProgramMenuItem(name, program);
+        div.appendChild(progButton);
+      }
     }
     document.body.appendChild(div);
   }
 
   function main() {
     document.body.appendChild(programUploader());
-    localforage.getItem("programs").then(afterRetrievingPrograms);
+    localforage.getItem('programs').then(afterRetrievingPrograms);
   }
 
   main();
+
+  // function main() {
+  //   let s = {fatal: ""}
+  //   let o = {};
+  //   let i = {};
+  //   while (!s.fatal) {
+  //     i = io(o);
+  //     o = update(s, i);
+  //   }
+  // }
+
+  // function io(o) {
+  //   kk
+  // }
+
+  // function update(s, i) {
+  // }
+
 
   //localforage.setItem("programs", programsDebug).then(main);
 })();
