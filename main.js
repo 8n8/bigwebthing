@@ -792,46 +792,23 @@
 
   main();
 
-  function main() {
-    let s = {
-      fatal: ""}
-    let o = {
-      label: OgetItem,
-      name: 'programs',
-      msg: (v) => {label: Mprograms, value: v}};
-    let i = {};
-    while (!s.fatal) {
-      io(o).then(function(i) {
-        [s, o] = update(s, i)
-      });
-    }
-  }
+  // function main() {
+  //   let s = {fatal: ""}
+  //   let o = {};
+  //   let i = {};
+  //   while (!s.fatal) {
+  //     i = io(o);
+  //     o = update(s, i);
+  //   }
+  // }
 
-  const OsetItem = 0;
-  const OgetItem = 1;
+  // function io(o) {
+  //   kk
+  // }
 
-  async function io(o) {
-    switch (o.label) {  
-      case OsetItem:
-        localforage.setItem(o.name, o.value).then(function () {
-          return o.value;
-        });
+  // function update(s, i) {
+  // }
 
-      case OgetItem:
-        localforage.getItem(o.name).then(function(val) {
-          return o.msg(val);
-        });
-    }
-  }
-
-  const Mprograms = 0;
-
-  function update(s, i) {
-    switch (i.label) {
-      case Mprograms:
-        return afterRetrievingPrograms(i.value);
-    }
-  }
 
   //localforage.setItem("programs", programsDebug).then(main);
 })();
