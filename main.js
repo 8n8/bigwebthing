@@ -23,20 +23,22 @@
     return div;
   }
  
-  function displayLeftText(docName, doc, parentId) {
+  function displayLeftText(docName, parentId) {
     const parent = document.getElementById(parentId);
  
-    const id = domId();
-    const textBox = textBoxHelp(id);
-    parent.appendChild(textBox);
-    textBox.value = doc;
+    localforage.getItem(docName).then(function (doc) {
+      const id = domId();
+      const textBox = textBoxHelp(id);
+      parent.appendChild(textBox);
+      textBox.value = doc;
 
-    const button = document.createElement('button'); 
-    button.onclick = function() {
-      localforage.setItem(docName, textBox.value)
-    }
-    button.innerHTML = 'Save';
-    parent.appendChild(button);
+      const button = document.createElement('button'); 
+      button.onclick = function() {
+        localforage.setItem(docName, textBox.value)
+      }
+      button.innerHTML = 'Save';
+      parent.appendChild(button);
+    })
   }   
 
   function parseRunBlock(code, ns, elfs, elts, p) {
@@ -547,28 +549,14 @@
   }
 
   function makeProgramDiv(name, childId, parentId, program) {
-    debugger;
     const programDiv = document.createElement("div");
     programDiv.class = "programDiv";
     programDiv.id = childId;
     document.getElementById(parentId).appendChild(programDiv);
     const leftDiv = document.createElement('div');
-    function display() {
-      displayLeftDoc(program.homedoc, childId);
-      const rightDoc = compile(program);
-      updateRightDoc(rightDoc, parentId);
-    }
-    if (!program.homedoc) {
-      const blobId = blobIdIota();
-      program['homedoc'] = blobId;
-      localforage.setItem(blobId, []).then(function() {
-        localforage.getItem('programs').then(function(programs) {
-          programs[name] = program;
-          localforage.setItem('programs', programs).then(display);
-        })
-      })
-    }
-    display();
+    displayLeftDoc(program.homedoc, childId);
+    const rightDoc = compile(program);
+    updateRightDoc(rightDoc, parentId);
   }
 
   const UTF16 = 0;
@@ -586,20 +574,17 @@
     const divId = domId();
     div.id = divId;
     document.getElementById(parentId).appendChild(div);
-    localforage.getItem(leftDocName).then(function(leftDoc) {
-      // if (!leftDoc) {
-      //   blobMaker(divId, leftDocName);
-      //   return;
-      // }
-      if (Array.isArray(leftDoc)) {
-        for (let i = 0; i < leftDoc.length; i++) {
-            displayLeftDoc(leftDoc[i], divId);
-        }
-        blobMaker(divId, leftDoc, leftDocName);
-        return;
-      }
-      displayLeftText(leftDocName, leftDoc, divId);
-    })
+    displayLeftText(leftDocName, divId);
+    // localforage.getItem(leftDocName).then(function(leftDoc) {
+    //   if (Array.isArray(leftDoc)) {
+    //     for (let i = 0; i < leftDoc.length; i++) {
+    //         displayLeftDoc(leftDoc[i], divId);
+    //     }
+    //     blobMaker(divId, leftDoc, leftDocName);
+    //     return;
+    //   }
+    //   displayLeftText(leftDocName, leftDoc, divId);
+    // })
   }
 
   function textBoxHelp(id) {
@@ -713,13 +698,16 @@
 
       const fileHandle = event.target.files[0];
       const reader = new FileReader();
+      const homeBlobId = blobId();
       reader.onload = function(event) {
         programs[name] = {
           "description": description,
           "version": version,
-          "code": event.target.result};
+          "code": event.target.result,
+          "homedoc": homeBlobId};
         localforage.setItem('programs', programs)
-          .then(afterRetrievingPrograms(programs));
+          .then(localforage.setItem(homeBlobId, '')
+          .then(afterRetrievingPrograms(programs)));
       }
 
       reader.onerror = error => reject(error);
