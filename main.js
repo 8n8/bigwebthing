@@ -1,15 +1,6 @@
 (function() {
   "use strict";
 
-  // const programsDebug = {
-  //   FirstRealProgram: {
-  //     description: "A little tiny real program.",
-  //     version: 0,
-  //     code: '{ "hello world!" Print ! } def Hello hello !',
-  //     homeDoc: '{
-  //   }
-  // };
-
   let domIdIota = 0
   let blobIdIotaGlobal = 0
 
@@ -556,21 +547,28 @@
   }
 
   function makeProgramDiv(name, childId, parentId, program) {
+    debugger;
     const programDiv = document.createElement("div");
     programDiv.class = "programDiv";
     programDiv.id = childId;
     document.getElementById(parentId).appendChild(programDiv);
     const leftDiv = document.createElement('div');
+    function display() {
+      displayLeftDoc(program.homedoc, childId);
+      const rightDoc = compile(program);
+      updateRightDoc(rightDoc, parentId);
+    }
     if (!program.homedoc) {
-      program['homedoc'] = blobIdIota();
-      localforage.getItem('programs').then(function(programs) {
-        programs[name] = program;
-        localforage.setItem('programs', programs);
+      const blobId = blobIdIota();
+      program['homedoc'] = blobId;
+      localforage.setItem(blobId, []).then(function() {
+        localforage.getItem('programs').then(function(programs) {
+          programs[name] = program;
+          localforage.setItem('programs', programs).then(display);
+        })
       })
     }
-    displayLeftDoc(program.homedoc, childId);
-    const rightDoc = compile(program);
-    updateRightDoc(rightDoc, parentId);
+    display();
   }
 
   const UTF16 = 0;
@@ -589,24 +587,20 @@
     div.id = divId;
     document.getElementById(parentId).appendChild(div);
     localforage.getItem(leftDocName).then(function(leftDoc) {
-      if (!leftDoc) {
-        blobMaker(divId, leftDocName);
-        return;
-      }
+      // if (!leftDoc) {
+      //   blobMaker(divId, leftDocName);
+      //   return;
+      // }
       if (Array.isArray(leftDoc)) {
-        for (i = 0; i < leftDoc.length; i++) {
+        for (let i = 0; i < leftDoc.length; i++) {
             displayLeftDoc(leftDoc[i], divId);
         }
+        blobMaker(divId, leftDoc, leftDocName);
         return;
       }
       displayLeftText(leftDocName, leftDoc, divId);
     })
   }
-
-  // function newDocPartMaker(divId) {
-  //   newTextDocMaker(divId);
-  //   newFileDocMaker(divId);
-  // }
 
   function textBoxHelp(id) {
     const textBox = document.createElement('textarea');
@@ -616,58 +610,33 @@
     return textBox;
   }
 
-  // function newTextDocMaker(parentId) {
-  //   const parent = document.getElementById(parentId);
-  //   const textBoxId = parentId + "textBox"
-  //   parent.appendChild(textBoxHelp(textBoxId));
-  //   const saveButton = document.createElement('button');
-  //   saveButton.onclick = function() {
-  //     
-  //   }
-  // }
-
   function downloadButtonP() {
     const p = document.createElement("p");
     const txt = document.createTextNode(tooBigButtonMsg);
     p.appendChild(txt);
   }
 
-  // const DOC = 1;
-  // const FIRST = 2;
-  // const LAST = 4;
-
-  // function bodyStart(blobCode) {
-  //   if (blobCode & LAST) {
-  //     return 2;
-  //   }
-  //   return 34;
-  // }
-
-  // function displayLeftDocHelp(leftDoc, parentId) {
-  //   blob = buildBlob(leftDoc)
-  // }
-  //   const blobCode = leftDoc[0];
-  //   const mimeCode = leftDoc[1];
-  //   const body = leftDoc[bodyStart(blobCode):];
-
-  function blobMaker(parentId, blobName) {
+  function blobMaker(parentId, parentFolder, parentFolderName) {
     const div = document.createElement("div");
     const divId = parentId + "makeNewPart";
     div.id = divId;
 
     function set(newBlob) {
+      const blobName = blobIdIota();
+      parentFolder.push(blobName);
+      localforage.setItem(parentFolderName, parentFolder);
       localforage.setItem(blobName, newBlob).then(function () {
         div.remove();
         displayLeftDoc(blobName, parentId);
       })
     }
 
-    const uploadFile = document.createElement('input');
-    uploadFile.type = 'file';
-    uploadFile.onchange = function(event) {
-      set(event.target.files[0]);
-    }
-    div.appendChild(uploadFile);
+    // const uploadFile = document.createElement('input');
+    // uploadFile.type = 'file';
+    // uploadFile.onchange = function(event) {
+    //   set(event.target.files[0]);
+    // }
+    // div.appendChild(uploadFile);
 
     const textBoxId = domId();
     const textBox = textBoxHelp(textBoxId);
@@ -683,6 +652,14 @@
       set(newText);
     }
     div.appendChild(saveButton);
+
+    const makeFolderButton = document.createElement('button'); 
+    makeFolderButton.innerHTML = 'New folder';
+    makeFolderButton.onclick = function() {
+      set([]);      
+    }
+    div.appendChild(makeFolderButton);
+
     document.getElementById(parentId).appendChild(div);
   }
 
@@ -724,10 +701,6 @@
 <p>Name: <input type="text" id="nameUpload"></p>
 <p>Description: <input type="text" id="descriptionUpload"></p>
 <p>Version: <input type="number" id="versionUpload" min="0"></p>`
-//<p>Choose a file of code: <input type="file" id="codeUpload"></p>`
-
-//  onchange="readCodeUpload(event)"></p>
-// `
 
   function readCodeUpload(event) {
     localforage.getItem("programs").then(function(programs) {
@@ -791,24 +764,4 @@
   }
 
   main();
-
-  // function main() {
-  //   let s = {fatal: ""}
-  //   let o = {};
-  //   let i = {};
-  //   while (!s.fatal) {
-  //     i = io(o);
-  //     o = update(s, i);
-  //   }
-  // }
-
-  // function io(o) {
-  //   kk
-  // }
-
-  // function update(s, i) {
-  // }
-
-
-  //localforage.setItem("programs", programsDebug).then(main);
 })();
