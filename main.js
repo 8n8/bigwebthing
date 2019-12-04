@@ -4,7 +4,7 @@
   let domIdIota = 0
   let blobIdIotaGlobal = 0
 
-  function makeProgramMenuDiv(programName, program) {
+  function makeProgramStartButtonContents(programName, program) {
     const div = document.createElement("DIV");
     const name = document.createElement("H2");
     const nameText = document.createTextNode(programName);
@@ -23,21 +23,21 @@
     return div;
   }
  
-  function displayLeftText(docName, parentId) {
-    const parent = document.getElementById(parentId);
- 
+  function displayLeftText(docName, parentDiv) {
     localforage.getItem(docName).then(function (doc) {
       const id = domId();
       const textBox = textBoxHelp(id);
-      parent.appendChild(textBox);
+      parentDiv.appendChild(textBox);
       textBox.value = doc;
+      parentDiv.appendChild(textBox);
 
       const button = document.createElement('button'); 
       button.onclick = function() {
         localforage.setItem(docName, textBox.value)
       }
       button.innerHTML = 'Save';
-      parent.appendChild(button);
+      button.className = 'saveButton';
+      parentDiv.appendChild(button);
     })
   }   
 
@@ -198,7 +198,7 @@
     const codeLen = code.length;
     while (true) {
       const c = code[i];
-      if (c === " ") {
+      if (c === " " || c === "\n") {
         i++;
         break;
       }
@@ -413,11 +413,13 @@
     }
   }
 
-  function parser(code, elts, elfs) {
-    const p = { done: true, i: 0, errMsg: "" };
+  function parser(code, elts, elfs, p) {
     const codeLen = code.length;
     while (p.i < codeLen) {
       p.i = parseZeroOrMoreSpaces(code, p.i);
+      if (p.i == codeLen) {
+        return
+      }
       parseProgramElement(code, "", elfs, elts, p)
       if (p.done) {
           continue;
@@ -426,17 +428,14 @@
     }
   }
 
-  function slPrint(progDivId) {
+  function slPrint(io) {
     return function(dontCare1, progStack) {
-      const div = document.getElementById(progDivId);
-      div.innerHTML = "";
-      const txt = document.createTextNode(progStack.pop());
-      div.appendChild(txt);
+      io.rightDoc += progStack.pop();
     };
   }
 
-  function standardLibrary(progDivId) {
-    return { print: [slPrint(progDivId)] };
+  function standardLibrary(io) {
+    return { print: [slPrint(io)] };
   }
 
   const stringTypeConst = 0
@@ -451,25 +450,53 @@
     div.appendChild(pcode);
   }
 
-  function compile(code, progDivId) {
-    let elts = []
-    let elfs = []
-    parser(code, elts, elfs);
+  const internalErrPreamble = 'Internal type error:\n';
+
+  const nonEmptyTypeStackErr = "the type stack should be empty at the end of the program, but it has this left in it:\n"
+
+  function lineCol(code, i) {
+    let line = 1;
+    let col = 1;
+    for (let j = 0; j <= i; j++) {
+      let c = code[j];
+      if (c === '\n') {
+        line++;
+        col = 0;
+      } else {
+        col++;
+      }
+    }
+    return [line, col];
+  }
     
+
+  function compile(program) {
+    let elts = [];
+    let elfs = [];
+    const p = { done: true, i: 0, errMsg: "" };
+    parser(program.code, elts, elfs, p);
+    
+    if (p.errMsg) {
+      const [line, col] = lineCol(program.code, p.i);
+      return {rightDoc: internalErrPreamble + "line " + line + "\ncol  " + col + "\n" + p.errMsg, messages: []};
+    }
     const dets = standardTypes();
     let typeStack = [];
     const errMsg = runTypeCheck(elts, dets, typeStack)
     if (errMsg) {
-      prettyErr(errMsg, progDivId);
-      return;
+      return {rightDoc: internalErrPreamble + errMsg, messages: []};
     }
     if (typeStack.length !== 0) {
-      prettyErr("the type stack should be empty at the end of the program, but it has this left in it:\n" + typeStack, progDivId)
+      const msg = internalErrPreamble + nonEmptyTypeStackErr +
+        typeStack;
+      return {messages: [], rightDoc: msg};
     }
 
-    const defs = standardLibrary(progDivId)
+    const io = {messages: [], rightDoc: ''};
+    const defs = standardLibrary(io)
     let progStack = []
     runProgram(elfs, defs, progStack);
+    return io;
   }
   
   function runProgram(elfs, defs, progStack) {
@@ -548,20 +575,24 @@
     return '' + id;
   }
 
-  function makeProgramDiv(name, childId, parentId, program) {
-    const programDiv = document.createElement("div");
-    programDiv.class = "programDiv";
-    programDiv.id = childId;
-    document.getElementById(parentId).appendChild(programDiv);
-    const leftDiv = document.createElement('div');
-    displayLeftDoc(program.homedoc, childId);
-    const rightDoc = compile(program);
-    updateRightDoc(rightDoc, parentId);
-  }
+  function makeShowProgramDiv(name, program) {
+    const topDiv = document.createElement("div");
+    topDiv.className = "programDiv";
 
-  const UTF16 = 0;
-  const IMAGE = 1;
-  const VIDEO = 2;
+    const leftDiv = document.createElement('div');
+    leftDiv.className = 'leftDiv';
+    displayLeftText(program.homedoc, leftDiv);
+    topDiv.appendChild(leftDiv);
+
+    const io = compile(program);
+    topDiv.appendChild(makeRightDoc(io.rightDoc));
+
+    for (let i = 0; i < io.messages.length; i++) {
+      sendMsg(io.messages[i]);
+    }
+
+    return topDiv;
+  }
 
   function domId() {
     const id = domIdIota;
@@ -569,29 +600,19 @@
     return id.toString();
   }
 
-  function displayLeftDoc(leftDocName, parentId) {
+  function displayLeftDoc(leftDocName) {
     const div = document.createElement('div');
     const divId = domId();
     div.id = divId;
     document.getElementById(parentId).appendChild(div);
     displayLeftText(leftDocName, divId);
-    // localforage.getItem(leftDocName).then(function(leftDoc) {
-    //   if (Array.isArray(leftDoc)) {
-    //     for (let i = 0; i < leftDoc.length; i++) {
-    //         displayLeftDoc(leftDoc[i], divId);
-    //     }
-    //     blobMaker(divId, leftDoc, leftDocName);
-    //     return;
-    //   }
-    //   displayLeftText(leftDocName, leftDoc, divId);
-    // })
   }
 
   function textBoxHelp(id) {
     const textBox = document.createElement('textarea');
     textBox.id = id;
-    textBox.rows = "10";
-    textBox.cols = "50";
+    textBox.className = "leftTextBox";
+    textBox.rows = "25";
     return textBox;
   }
 
@@ -615,13 +636,6 @@
         displayLeftDoc(blobName, parentId);
       })
     }
-
-    // const uploadFile = document.createElement('input');
-    // uploadFile.type = 'file';
-    // uploadFile.onchange = function(event) {
-    //   set(event.target.files[0]);
-    // }
-    // div.appendChild(uploadFile);
 
     const textBoxId = domId();
     const textBox = textBoxHelp(textBoxId);
@@ -663,12 +677,20 @@
       if (toRemove) {
         toRemove.remove();
       } else {
-        makeProgramDiv(name, programId, parentId, program);
+        const progDiv = makeShowProgramDiv(name, program);
+        progDiv.id = programId;
+        div.appendChild(progDiv);
       }
     };
-    button.appendChild(makeProgramMenuDiv(name, program));
+    button.appendChild(makeProgramStartButtonContents(name, program));
     div.appendChild(button);
     return div;
+  }
+
+  function makeRightDoc(rightDoc) {
+    const code = document.createElement('code');
+    code.textContent = rightDoc;
+    return code;
   }
 
   function noProgramsMsg() {
@@ -698,12 +720,13 @@
 
       const fileHandle = event.target.files[0];
       const reader = new FileReader();
-      const homeBlobId = blobId();
+      const homeBlobId = blobIdIota();
       reader.onload = function(event) {
         programs[name] = {
           "description": description,
           "version": version,
           "code": event.target.result,
+          "inbox": [],
           "homedoc": homeBlobId};
         localforage.setItem('programs', programs)
           .then(localforage.setItem(homeBlobId, '')

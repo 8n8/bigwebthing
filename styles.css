@@ -5,3 +5,22 @@
 .programDiv > div {
     flex: 1;
 }
+
+.leftTextBox {
+    white-space: pre;
+    width: 50vw;
+    resize: none;
+}
+
+code {
+    white-space: pre;
+}
+
+.leftDiv {
+    display: flex;
+    flex-direction: column;
+}
+
+.saveButton {
+    width: 6em;
+}
