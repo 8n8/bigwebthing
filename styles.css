@@ -13,7 +13,9 @@
 }
 
 code {
+    margin-top: 2px;
     white-space: pre;
+    width: 50vw;
 }
 
 .leftDiv {

@@ -350,6 +350,40 @@
     }
   }
 
+  function parseLineComment(code, p) {
+    if (code.slice(p.i, p.i+2) !== '//') {
+      p.done = false;
+      return;
+    }
+    p.i = p.i + 2;
+    const codeLen = code.length;
+    while (p.i < codeLen) {
+      if (code[p.i] === '\n') {
+        p.i++;
+        p.done = true;
+        return;
+      }
+      p.i++;
+    }
+  }
+
+  function parseBlockComment(code, p) {
+    if (code.slice(p.i, p.i+2) !== '/*') {
+      p.done = false
+      return;
+    }
+    p.i = p.i + 2;
+    const codeLen = code.length;
+    while (p.i < codeLen) {
+      if (code.slice(p.i, p.i+2) === '*/') {
+        p.i = p.i + 2;
+        p.done = true;
+        return;
+      }
+      p.i++;
+    }
+  }
+
   function parseProgramElement(code, ns, elfs, elts, p) {
     parseRunBlock(code, ns, elfs, elts, p);
     if (p.done || p.errMsg) {return;}
@@ -361,6 +395,12 @@
     if (p.done || p.errMsg) { return; }
 
     parseProgramBlock(code, ns, elfs, elts, p)
+    if (p.done || p.errMsg) { return; }
+
+    parseLineComment(code, p)
+    if (p.done || p.errMsg) { return; }
+
+    parseBlockComment(code, p)
     if (p.done || p.errMsg) { return; }
 
     parseRetrieve(code, ns, elfs, elts, p);
