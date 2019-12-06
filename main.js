@@ -521,7 +521,6 @@
     let elts = [];
     let elfs = [];
     const p = { done: true, i: 0, errMsg: "" };
-    debugger;
     parser(program.code, elts, elfs, p);
     
     if (p.errMsg) {
@@ -724,13 +723,6 @@
     document.getElementById(parentId).appendChild(div);
   }
 
-  function editorButtonText(editorOpen) {
-    if (editorOpen) {
-      return "Close editor";
-    }
-    return "Edit program";
-  }
-
   function makeEditProgDiv(programName) {
     const topDiv = document.createElement('div');
     
@@ -769,6 +761,20 @@
           localforage.setItem('programs', programs);
         }
       })
+    }
+    
+    const deleteButton = document.createElement('button');
+    deleteButton.innerHTML = "Delete program";
+    topDiv.appendChild(deleteButton);
+    const confirmMsg = "Are you sure you want to delete " + programName + "?";
+    deleteButton.onclick = function() {
+      if (confirm(confirmMsg)) {
+        localforage.getItem('programs').then(function(programs) {
+          delete programs[programName];
+          localforage.setItem('programs', programs)
+            .then(afterRetrievingPrograms(programs));
+        })
+      }
     }
     return topDiv;
   }
