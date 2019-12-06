@@ -26,3 +26,12 @@ code {
 .saveButton {
     width: 6em;
 }
+
+.runButton {
+    width: 6em;
+}
+
+.codeEditorBox {
+    width: 96vw;
+    resize: none;
+}

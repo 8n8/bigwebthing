@@ -23,7 +23,7 @@
     return div;
   }
  
-  function displayLeftText(docName, parentDiv) {
+  function displayLeftText(name, docName, parentDiv, rightId) {
     localforage.getItem(docName).then(function (doc) {
       const id = domId();
       const textBox = textBoxHelp(id);
@@ -31,13 +31,25 @@
       textBox.value = doc;
       parentDiv.appendChild(textBox);
 
-      const button = document.createElement('button'); 
-      button.onclick = function() {
+      const saveButton = document.createElement('button'); 
+      saveButton.innerHTML = 'Save';
+      saveButton.className = 'saveButton';
+      parentDiv.appendChild(saveButton);
+
+      saveButton.onclick = function() {
         localforage.setItem(docName, textBox.value)
       }
-      button.innerHTML = 'Save';
-      button.className = 'saveButton';
-      parentDiv.appendChild(button);
+
+      const runButton = document.createElement('button');
+      runButton.onclick = function() {
+        localforage.getItem('programs').then(function(programs) {
+          const program = programs[name];
+          updateRightDoc(program, rightId);
+        })
+      }
+      runButton.innerHTML = 'Run';
+      runButton.className = 'runButton';
+      parentDiv.appendChild(runButton);
     })
   }   
 
@@ -300,7 +312,7 @@
           return 'you need to put something on the stack before a ' +
               '"def"';
       }
-      if (dets[fullname]) {
+      if (fullname in dets) {
           return 'multiple definitions of name "' + newname + '"';
       }
       dets[fullname] = typestack.pop()
@@ -422,14 +434,10 @@
     p.i = newI;
     const fullName = makeFullName(ns, name);
     elts.push(function(dets, typestack) {
-      if (!dets[fullName]) {
+      if (!(fullName in dets)) {
         return 'no definition "' + name + '"';
       }
-      const lookedUpTypes = dets[fullName]
-      if (!lookedUpTypes) {
-        return 'could not find types for name "' + name + '"';
-      }
-      typestack.push(lookedUpTypes);
+      typestack.push(dets[fullName]);
     })
     elfs.push(function(defs, progStack) {
       progStack.push(defs[fullName]);
@@ -509,11 +517,11 @@
     return [line, col];
   }
     
-
   function compile(program) {
     let elts = [];
     let elfs = [];
     const p = { done: true, i: 0, errMsg: "" };
+    debugger;
     parser(program.code, elts, elfs, p);
     
     if (p.errMsg) {
@@ -615,23 +623,37 @@
     return '' + id;
   }
 
-  function makeShowProgramDiv(name, program) {
-    const topDiv = document.createElement("div");
-    topDiv.className = "programDiv";
+  function makeShowProgramDiv(name, program, parent, programId) {
+    const topDiv = document.createElement('div');
+    topDiv.appendChild(makeEditProgDiv(name));
+    topDiv.id = programId;
+    parent.appendChild(topDiv);
+
+    const leftRightDiv = document.createElement("div");
+    topDiv.appendChild(leftRightDiv);
+
+
+    leftRightDiv.className = "programDiv";
 
     const leftDiv = document.createElement('div');
     leftDiv.className = 'leftDiv';
-    displayLeftText(program.homedoc, leftDiv);
-    topDiv.appendChild(leftDiv);
+    const rightId = domId();
+    displayLeftText(name, program.homedoc, leftDiv, rightId);
+    leftRightDiv.appendChild(leftDiv);
+
+    leftRightDiv.appendChild(makeRightDoc(rightId));
+    updateRightDoc(program, rightId);
+  }
+
+  function updateRightDoc(program, rightId) {
+    const right = document.getElementById(rightId);
 
     const io = compile(program);
-    topDiv.appendChild(makeRightDoc(io.rightDoc));
-
+    right.textContent = io.rightDoc;
+    
     for (let i = 0; i < io.messages.length; i++) {
       sendMsg(io.messages[i]);
     }
-
-    return topDiv;
   }
 
   function domId() {
@@ -702,8 +724,53 @@
     document.getElementById(parentId).appendChild(div);
   }
 
-  function updateRightDoc(rightDoc, leftRightParentId) {
+  function editorButtonText(editorOpen) {
+    if (editorOpen) {
+      return "Close editor";
+    }
+    return "Edit program";
+  }
 
+  function makeEditProgDiv(programName) {
+    const topDiv = document.createElement('div');
+    
+    const editorDivId = domId();
+
+    const button = document.createElement('button');
+    topDiv.appendChild(button);
+    button.innerHTML = 'Edit program';
+    button.onclick = function() {
+      let editorDiv = document.getElementById(editorDivId);
+      if (editorDiv) {
+        editorDiv.remove();
+        button.innerHTML = 'Edit program';
+        return;
+      }
+
+      localforage.getItem('programs').then(function (programs) {
+        let program = programs[programName];
+        editorDiv = document.createElement('div');
+        editorDiv.id = editorDivId;
+        topDiv.appendChild(editorDiv);
+        button.innerHTML = 'Close editor';
+
+        const textBox = document.createElement('textarea');
+        textBox.className = 'codeEditorBox';
+        textBox.rows = '25';
+        editorDiv.appendChild(textBox);
+        textBox.value = program.code;
+        
+        const saveButton = document.createElement('button');
+        editorDiv.appendChild(saveButton);
+        saveButton.innerHTML = 'Save';
+        saveButton.onclick = function () {
+          program.code = textBox.value;
+          programs[programName] = program;
+          localforage.setItem('programs', programs);
+        }
+      })
+    }
+    return topDiv;
   }
 
   function makeProgramMenuItem(name, program) {
@@ -717,9 +784,7 @@
       if (toRemove) {
         toRemove.remove();
       } else {
-        const progDiv = makeShowProgramDiv(name, program);
-        progDiv.id = programId;
-        div.appendChild(progDiv);
+        makeShowProgramDiv(name, program, div, programId);
       }
     };
     button.appendChild(makeProgramStartButtonContents(name, program));
@@ -727,9 +792,9 @@
     return div;
   }
 
-  function makeRightDoc(rightDoc) {
+  function makeRightDoc(id) {
     const code = document.createElement('code');
-    code.textContent = rightDoc;
+    code.id = id;
     return code;
   }
 
