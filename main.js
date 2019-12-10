@@ -22,6 +22,72 @@
     div.appendChild(description);
     return div;
   }
+
+  function parseTypeCheck(code, ns, elfs, elts, p) {
+    p.done = true;
+    if (code[p.i] !== '<') {
+      p.done = false;
+      return;
+    }
+    p.i++;
+    let types = [];
+    while (true) {
+      if (code[p.i] === '>') {
+        elts.push(function(dets, typestack) {
+          if (types !== typestack) {
+            return 'typestack does not match type declaration:\n' +
+              'expecting ' + types + '\n' +
+              'but got ' + typestack;
+          }
+          return '';
+        })
+        p.i++;
+        return;
+      }
+      if (code.slice(p.i, p.i + 4) === '..>') {
+        elts.push(function(dets, typestack) {
+          if (types.length > typestack.length) {
+            return 'typestack does not match type declaration:\n' +
+              'expecting ' + types + '\n' +
+              'but got ' + typestack;
+          }
+          const topTypeStack = typestack.slice(0, types.length);
+          if (types !== topTypeStack) {
+            return 'typestack does not match type declaration:\n' +
+              'expecting ' + types + '\n' +
+              'but got ' + topTypeStack;
+          }
+          return '';
+        })
+        p.i++;
+        return;
+      }
+      const type = parseType(code, p);
+      if (!p.done || p.errMsg) { return; }
+
+      types.push(type);
+
+      p.i = parseZeroOrMoreSpaces(code, p.i);
+      if (code[p.i] !== ',') {
+        p.done = false;
+        p.errMsg = 'All elements in type declaration must end ' +
+          'with a comma.';
+        return;
+      }
+      p.i++;
+    }
+  }
+
+  function parseType(code, p) {
+    p.done = true;
+    if (code.slice(p.i, p.i + 3) === 'str') {
+      p.i = p.i + 3;
+      return STRTYPE;
+    }
+
+    p.done = false;
+    p.errMsg = 'no matching type';
+  }
  
   function displayLeftText(name, docName, parentDiv, rightId) {
     localforage.getItem(docName).then(function (doc) {
@@ -275,7 +341,7 @@
       return;
     }
     elts.push(function(dets, typeStack) {
-      typeStack.push(stringTypeConst); 
+      typeStack.push(STRTYPE); 
     });
     elfs.push(function(defs, progStack) {
       progStack.push(str);
@@ -415,6 +481,9 @@
     parseBlockComment(code, p)
     if (p.done || p.errMsg) { return; }
 
+    parseTypeCheck(code, ns, elfs, elts, p)
+    if (p.done || p.errMsg) { return; }
+
     parseRetrieve(code, ns, elfs, elts, p);
     if (p.done || p.errMsg) { return; }
 
@@ -486,7 +555,7 @@
     return { print: [slPrint(io)] };
   }
 
-  const stringTypeConst = 0
+  const STRTYPE = 0
 
   function prettyErr(errMsg, progDivId) {
     const div = document.getElementById(progDivId);
@@ -578,7 +647,7 @@
   }
 
   function stringType(dets, typestack) {
-    typestack.push(stringTypeConst)
+    typestack.push(STRTYPE)
   }
 
   function printType(dets, typestack) {
@@ -586,7 +655,7 @@
       return '"print" needs something on the stack to print'
     }
     const top = typestack.pop()
-    if (top !== stringTypeConst) {
+    if (top !== STRTYPE) {
         return '"print" requires the top of the stack to be a string'
     }
   }
