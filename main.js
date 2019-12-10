@@ -23,6 +23,19 @@
     return div;
   }
 
+  function arrayEq(a, b) {
+    const lena = a.length;
+    if (lena !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < lena; i++) {
+      if (a[i] !== b[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function parseTypeCheck(code, ns, elfs, elts, p) {
     p.done = true;
     if (code[p.i] !== '<') {
@@ -32,9 +45,10 @@
     p.i++;
     let types = [];
     while (true) {
+      p.i = parseZeroOrMoreSpaces(code, p.i);
       if (code[p.i] === '>') {
         elts.push(function(dets, typestack) {
-          if (types !== typestack) {
+          if (!arrayEq(types, typestack)) {
             return 'typestack does not match type declaration:\n' +
               'expecting ' + types + '\n' +
               'but got ' + typestack;
@@ -44,7 +58,7 @@
         p.i++;
         return;
       }
-      if (code.slice(p.i, p.i + 4) === '..>') {
+      if (code.slice(p.i, p.i + 3) === '..>') {
         elts.push(function(dets, typestack) {
           if (types.length > typestack.length) {
             return 'typestack does not match type declaration:\n' +
@@ -52,14 +66,14 @@
               'but got ' + typestack;
           }
           const topTypeStack = typestack.slice(0, types.length);
-          if (types !== topTypeStack) {
+          if (!arrayEq(types, topTypeStack)) {
             return 'typestack does not match type declaration:\n' +
               'expecting ' + types + '\n' +
               'but got ' + topTypeStack;
           }
           return '';
         })
-        p.i++;
+        p.i = p.i + 3;
         return;
       }
       const type = parseType(code, p);
