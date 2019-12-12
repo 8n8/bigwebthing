@@ -23,17 +23,46 @@
     return div;
   }
 
-  function arrayEq(a, b) {
+  function typeArrayEq(a, b) {
     const lena = a.length;
     if (lena !== b.length) {
       return false;
     }
     for (let i = 0; i < lena; i++) {
-      if (a[i] !== b[i]) {
+       
+      if (!typeEq(a[i], b[i])) {
         return false;
       }
     }
     return true;
+  }
+
+  function typeEq(a, b) {
+    console.log('typeEq')
+    console.log('a: ' + a)
+    console.log('b: ' + b)
+    console.log('typeof a: ' + (typeof a))
+    console.log('typeof b: ' + (typeof b))
+    if (typeof a === 'object') {
+      console.log('a is object')
+      if (typeof b !== 'object') {
+        return false;
+      }
+      if (a.container !== b.container) {
+        return false;
+      }
+      if (!typeEq(a.inside, b.inside)) {
+        return false;
+      }
+      return true
+    }
+    if (typeof a === 'function') {
+      return b === BLOCKTYPE;
+    }
+    if (typeof b === 'function') {
+      return a === BLOCKTYPE;
+    }
+    return a === b;
   }
 
   function parseTypeCheck(code, ns, elfs, elts, p) {
@@ -43,37 +72,36 @@
       return;
     }
     p.i++;
+    let partial = false;
+    if (code.slice(p.i, p.i+2) === '..') {
+      partial = true;
+      p.i = p.i + 2;
+    }
     let types = [];
     while (true) {
       p.i = parseZeroOrMoreSpaces(code, p.i);
       if (code[p.i] === '>') {
+        const i = p.i;
         elts.push(function(dets, typestack) {
-          if (!arrayEq(types, typestack)) {
-            return 'typestack does not match type declaration:\n' +
+          const [line, col] = lineCol(code, i);
+          let toCompare = typestack;
+          if (partial) {
+            toCompare = typestack.slice(
+              typestack.length - types.length,
+              typestack.length);
+          }
+          console.log('types[0]: ' + typeof(types[1]))
+          console.log('toCompare[0]: ' + typeof(toCompare[1]))
+          if (!typeArrayEq(types, toCompare)) {
+            return (
+              prettyPos(i, code) + '\n' +
+              'typestack does not match type declaration:\n' +
               'expecting ' + types + '\n' +
-              'but got ' + typestack;
+              'but got ' + typestack);
           }
           return '';
         })
         p.i++;
-        return;
-      }
-      if (code.slice(p.i, p.i + 3) === '..>') {
-        elts.push(function(dets, typestack) {
-          if (types.length > typestack.length) {
-            return 'typestack does not match type declaration:\n' +
-              'expecting ' + types + '\n' +
-              'but got ' + typestack;
-          }
-          const topTypeStack = typestack.slice(0, types.length);
-          if (!arrayEq(types, topTypeStack)) {
-            return 'typestack does not match type declaration:\n' +
-              'expecting ' + types + '\n' +
-              'but got ' + topTypeStack;
-          }
-          return '';
-        })
-        p.i = p.i + 3;
         return;
       }
       const type = parseType(code, p);
@@ -97,6 +125,17 @@
     if (code.slice(p.i, p.i + 3) === 'str') {
       p.i = p.i + 3;
       return STRTYPE;
+    }
+
+    if (code.slice(p.i, p.i + 5) === 'block') {
+      p.i = p.i + 5;
+      return BLOCKTYPE;
+    }
+
+    if (code.slice(p.i, p.i + 2) === '[]') {
+      p.i = p.i + 2;
+      const type = parseType(code, p);
+      return {container: LISTTYPE, inside: type};
     }
 
     p.done = false;
@@ -213,7 +252,7 @@
     "_"
   ]);
 
-  const okNotFirstNameChars = new Set([
+  const okNonFirstNameChars = new Set([
     "a",
     "b",
     "c",
@@ -279,7 +318,16 @@
     "_"
   ]);
 
-  function parseName(code, i) {
+  function parseRetrieveName(code, i) {
+    return parseNameHelp(
+      code, i, (new Set(okNonFirstNameChars)).add('.'));
+  }
+
+  function parseMakeName(code, i) {
+    return parseNameHelp(code, i, okNonFirstNameChars);
+  }
+
+  function parseNameHelp(code, i, okNonFirstChars) {
     if (!okFirstNameChar.has(code[i])) {
       const errMsg =
         "the first character of a name must be an English letter or an underscore";
@@ -297,7 +345,7 @@
       if (codeLen === i) {
         return [i, "", newName.toLowerCase()];
       }
-      if (!okNotFirstNameChars.has(c)) {
+      if (!okNonFirstChars.has(c)) {
         const errMsg =
           "characters after the first in a name must be an English letter, a number, or an underscore, and names must be followed by a space";
         return [i, errMsg, ""];
@@ -371,7 +419,7 @@
       return;
     }
     p.i += 4;
-    const [newI, newErrMsg, newName] = parseName(code, p.i);
+    const [newI, newErrMsg, newName] = parseMakeName(code, p.i);
     p.i = newI;
     if (newErrMsg) {
       p.errMsg = newErrMsg;
@@ -507,7 +555,7 @@
   }
 
   function parseRetrieve(code, ns, elfs, elts, p) {
-    const [newI, newErrMsg, name] = parseName(code, p.i);
+    const [newI, newErrMsg, name] = parseRetrieveName(code, p.i);
     if (newErrMsg) {
       p.errMsg = newErrMsg;
       p.done = false;
@@ -516,15 +564,25 @@
     p.done = true;
     p.i = newI;
     const fullName = makeFullName(ns, name);
+    const i = p.i;
     elts.push(function(dets, typestack) {
       if (!(fullName in dets)) {
-        return 'no definition "' + name + '"';
+        return (
+          prettyPos(i, code) + '\n' +
+          'no definition "' + name + '"');
       }
       typestack.push(dets[fullName]);
     })
     elfs.push(function(defs, progStack) {
       progStack.push(defs[fullName]);
     })
+  }
+
+  function prettyPos(i, code) {
+    const [line, col] = lineCol(code, i);
+    return (
+      'line ' + line + '\n' +
+      'col  ' + col)
   }
 
   function makeFullName(ns, name) {
@@ -565,11 +623,47 @@
     };
   }
 
-  function standardLibrary(io) {
-    return { print: [slPrint(io)] };
+  function slIoGetContacts(io) {
+    return function(dontCare1, progStack) {
+      if (io.contacts === null) {
+        progStack.push([]);
+        return;
+      }
+      progStack.push(io.contacts.keys());
+    }
   }
 
-  const STRTYPE = 0
+  function slStrUnlines(io) {
+    return function(dontCare1, progStack) {
+      const lines = progStack.pop();
+      let unlines = '';
+      for (let i = 0; i < lines.length; i++) {
+        unlines += '\n' + lines[i];
+      }
+      progStack.push(unlines);
+    }
+  }
+
+  function slStrCat(io) {
+    return function(dontCare1, progStack) {
+      const str2 = progStack.pop();
+      const str1 = progStack.pop();
+      progStack.push(str1 + str2);
+    }
+  }
+
+  function standardLibrary(io) {
+    return {
+      print: [slPrint(io)],
+      'io.getcontacts': [slIoGetContacts(io)],
+      'str.unlines': [slStrUnlines(io)],
+      'str.cat': [slStrCat(io)],
+    };
+  }
+
+  const STRTYPE = 0;
+  const LISTTYPE = 1;
+  const BLOCKTYPE = 2;
 
   function prettyErr(errMsg, progDivId) {
     const div = document.getElementById(progDivId);
@@ -600,7 +694,7 @@
     return [line, col];
   }
     
-  function compile(program) {
+  function compile(program, contacts) {
     let elts = [];
     let elfs = [];
     const p = { done: true, i: 0, errMsg: "" };
@@ -622,9 +716,9 @@
       return {messages: [], rightDoc: msg};
     }
 
-    const io = {messages: [], rightDoc: ''};
+    const io = {messages: [], rightDoc: '', 'contacts': contacts};
     const defs = standardLibrary(io)
-    let progStack = []
+    let progStack = [];
     runProgram(elfs, defs, progStack);
     return io;
   }
@@ -650,7 +744,44 @@
       str: stringType,
       print: [printType],
       pop: [popType],
+      'io.getcontacts': [ioGetContactsType],
+      'str.unlines': [strUnlinesType],
+      'str.cat': [strCatType],
     }
+  }
+
+  function strCatType(dets, typestack) {
+    const stackLen = typestack.length;
+    if (stackLen < 2) {
+      return '"cat" failed because there were only ' + stackLen +
+        ' items on stack, but it needs 2';
+    }
+    const top = typestack.pop();
+    if (top !== STRTYPE) {
+      return '"cat" needs the top item on the stack to be a ' +
+        'string, but it is a ' + top 
+    }
+    const next = typestack.pop();
+    if (next !== STRTYPE) {
+      return '"cat" needs the second item on the stack to be a ' +
+        'string, but it is a ' + next;
+    }
+    typestack.push(STRTYPE);
+  }
+ 
+  function strUnlinesType(dets, typestack) {
+    const expected = {container: LISTTYPE, inside: STRTYPE};
+    if (typestack.length === 0) {
+      return '"unlines" failed because there was nothing on the stack';
+    } 
+    if (!typeEq(typestack.pop(), expected)) {
+      return '"unlines" needs a list of strings on the stack'
+    }
+    typestack.push(STRTYPE);
+  }
+
+  function ioGetContactsType(dets, typestack) {
+    typestack.push({container: LISTTYPE, inside: STRTYPE});
   }
 
   function popType(dets, typestack) {
@@ -728,14 +859,16 @@
   }
 
   function updateRightDoc(program, rightId) {
-    const right = document.getElementById(rightId);
+    localforage.getItem('contacts').then(function(contacts) {
+      const right = document.getElementById(rightId);
 
-    const io = compile(program);
-    right.textContent = io.rightDoc;
-    
-    for (let i = 0; i < io.messages.length; i++) {
-      sendMsg(io.messages[i]);
-    }
+      const io = compile(program, contacts);
+      right.textContent = io.rightDoc;
+      
+      for (let i = 0; i < io.messages.length; i++) {
+        sendMsg(io.messages[i]);
+      }
+    })
   }
 
   function domId() {
