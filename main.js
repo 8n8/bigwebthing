@@ -38,13 +38,13 @@
   }
 
   function typeEq(a, b) {
-    console.log('typeEq')
-    console.log('a: ' + a)
-    console.log('b: ' + b)
-    console.log('typeof a: ' + (typeof a))
-    console.log('typeof b: ' + (typeof b))
+    if (Array.isArray(a)) {
+      return b === BLOCKTYPE;
+    }
+    if (Array.isArray(b)) {
+      return a === BLOCKTYPE;
+    }
     if (typeof a === 'object') {
-      console.log('a is object')
       if (typeof b !== 'object') {
         return false;
       }
@@ -90,8 +90,6 @@
               typestack.length - types.length,
               typestack.length);
           }
-          console.log('types[0]: ' + typeof(types[1]))
-          console.log('toCompare[0]: ' + typeof(toCompare[1]))
           if (!typeArrayEq(types, toCompare)) {
             return (
               prettyPos(i, code) + '\n' +
