@@ -324,6 +324,7 @@ func main() {
 	serveFile("localforage.min.js", "application/javascript")
 	serveFile("styles.css", "text/css")
         serveFile("favicon.ico", "image/ico")
+        serveFile("elm.js", "application/javascript")
 	fmt.Println(http.ListenAndServe(":3001", nil))
 }
 

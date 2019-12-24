@@ -12,3 +12,5 @@ msg.tl
 dataFormat
 sjcl.js
 *.tl
+elm-stuff/
+main.js
