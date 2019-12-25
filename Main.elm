@@ -1,17 +1,31 @@
 port module Main exposing (main)
 
+import Base64
 import Browser
+import Bytes
+import Bytes.Decode as D
+import Bytes.Encode as E
 import Element
 import Html
-import Json.Decode
-import Json.Encode
 import Set
 
 
-port request : Json.Encode.Value -> Cmd a
+port requestHome : () -> Cmd msg
 
 
-port retrieved : (Json.Encode.Value -> msg) -> Sub msg
+port retrievedHome : (String -> msg) -> Sub msg
+
+
+port requestHash : String -> Cmd msg
+
+
+port retrievedHash : (String -> msg) -> Sub msg
+
+
+port cacheHome : String -> Cmd msg
+
+
+port cacheHash : String -> Cmd msg
 
 
 main : Platform.Program () Model Msg
@@ -25,19 +39,23 @@ main =
 
 
 type Msg
-    = Retrieve Json.Encode.Value
+    = RetrievedHome String
+    | RetrievedHash String
 
 
 type alias Model =
-    { programs : Result Json.Decode.Error (List Program)
-    , badDbRead : Maybe String
+    { home : Home
+    }
+
+
+type alias Home =
+    { programs : List Program
     }
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { programs = Ok []
-      , badDbRead = Nothing
+    ( { home = { programs = [] }
       }
     , Cmd.none
     )
@@ -56,139 +74,135 @@ viewHelp model =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        Retrieve json ->
-            decodeRetrieve model json
+        RetrievedHome rawHome ->
+            case Base64.toBytes rawHome of
+                Just bytes ->
+                    case D.decode decodeHome bytes of
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                        Just home ->
+                            ( { model | home = home }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RetrievedHash raw ->
+            ( model, Cmd.none )
 
 
-decodeRetrieve : Model -> Json.Encode.Value -> ( Model, Cmd Msg )
-decodeRetrieve model raw =
-    case Json.Decode.decodeValue decodeKvString raw of
-        Ok [ ( "programs", rawprog ) ] ->
-            ( { model | programs = decodePrograms rawprog }
-            , Cmd.none
-            )
-
-        Ok _ ->
-            ( { model
-                | badDbRead =
-                    Just <|
-                        "bad DB response"
-              }
-            , Cmd.none
-            )
-
-        Err err ->
-            ( { model
-                | badDbRead =
-                    Just <|
-                        "bad DB response:\n"
-                            ++ "parsing error:\n"
-                            ++ Json.Decode.errorToString err
-              }
-            , Cmd.none
-            )
+decodeHome : D.Decoder Home
+decodeHome =
+    D.map Home (list decodeProgram)
 
 
-decodePrograms : String -> Result Json.Decode.Error (List Program)
-decodePrograms raw =
-    Json.Decode.decodeString (Json.Decode.list decodeProgram) raw
+list : D.Decoder a -> D.Decoder (List a)
+list decoder =
+    D.unsignedInt32 Bytes.BE
+        |> D.andThen
+            (\len -> D.loop ( len, [] ) (listStep decoder))
 
 
-decodeProgram : Json.Decode.Decoder Program
+listStep :
+    D.Decoder a
+    -> ( Int, List a )
+    -> D.Decoder (D.Step ( Int, List a ) (List a))
+listStep decoder ( n, xs ) =
+    if n <= 0 then
+        D.succeed (D.Done xs)
+
+    else
+        D.map (\x -> D.Loop ( n - 1, x :: xs )) decoder
+
+
+sizedString : D.Decoder String
+sizedString =
+    D.unsignedInt32 Bytes.BE
+        |> D.andThen D.string
+
+
+decodeProgram : D.Decoder Program
 decodeProgram =
-    Json.Decode.map4 Program
-        (Json.Decode.field "code" Json.Decode.string)
-        (Json.Decode.field "description" Json.Decode.string)
-        (Json.Decode.field "inbox" decodeInbox)
-        (Json.Decode.field "input" decodeInput)
+    D.map4 Program
+        sizedString
+        sizedString
+        (list decodeDocument)
+        decodeUserInput
 
 
-decodeInput : Json.Decode.Decoder UserInput
-decodeInput =
-    Json.Decode.map2 UserInput
-        (Json.Decode.field "typedin" Json.Decode.string)
-        (Json.Decode.field "blobs" <| Json.Decode.list decodeBlob)
+decodeUserInput : D.Decoder UserInput
+decodeUserInput =
+    D.map2 UserInput (list decodeBlob) sizedString
 
 
-decodeInbox : Json.Decode.Decoder (List Document)
-decodeInbox =
-    Json.Decode.list decodeDocument
-
-
-decodeDocument : Json.Decode.Decoder Document
+decodeDocument : D.Decoder Document
 decodeDocument =
-    Json.Decode.andThen
-        decodeDocHelp
-        (Json.Decode.field "type" Json.Decode.string)
+    D.andThen decodeDocumentHelp D.unsignedInt8
 
 
-decodeDocHelp : String -> Json.Decode.Decoder Document
-decodeDocHelp docType =
-    case docType of
-        "anon" ->
-            Json.Decode.map Anon decodeBlob
+decodeDocumentHelp : Int -> D.Decoder Document
+decodeDocumentHelp typeNum =
+    case typeNum of
+        0 ->
+            decodeAnon
 
-        "named" ->
+        1 ->
             decodeNamed
 
-        "ordering" ->
+        2 ->
             decodeOrdering
 
         _ ->
-            Json.Decode.fail <|
-                "Trying to decode document, but type \""
-                    ++ docType
-                    ++ "\" is not supported."
+            D.fail
 
 
-decodeOrdering : Json.Decode.Decoder Document
-decodeOrdering =
-    Json.Decode.map Ordering <| Json.Decode.list decodeDocument
-
-
-decodeNamed : Json.Decode.Decoder Document
+decodeNamed : D.Decoder Document
 decodeNamed =
-    Json.Decode.map2 Named
-        (Json.Decode.field "name" Json.Decode.string)
-        (Json.Decode.field "blob" decodeBlob)
+    D.map2 Named sizedString decodeBlob
 
 
-decodeHash : Json.Decode.Decoder Hash
+decodeAnon : D.Decoder Document
+decodeAnon =
+    D.map Anon decodeBlob
+
+
+decodeHash : D.Decoder Hash
 decodeHash =
-    Json.Decode.map Hash Json.Decode.string
+    D.map Hash sizedString
 
 
-decodeBlob : Json.Decode.Decoder Blob
+decodeBlob : D.Decoder Blob
 decodeBlob =
-    Json.Decode.map2 Blob
-        (Json.Decode.field "mime" decodeMime)
-        (Json.Decode.field "hashes" <| Json.Decode.list decodeHash)
+    D.map2 Blob decodeMime (list decodeHash)
 
 
-decodeMime : Json.Decode.Decoder Mime
+decodeMime : D.Decoder Mime
 decodeMime =
-    Json.Decode.andThen
-        decodeMimeHelp
-        Json.Decode.string
+    D.andThen decodeMimeHelp D.unsignedInt8
 
 
-decodeMimeHelp : String -> Json.Decode.Decoder Mime
-decodeMimeHelp raw =
-    case raw of
-        "video" ->
-            Json.Decode.succeed Video
+decodeMimeHelp : Int -> D.Decoder Mime
+decodeMimeHelp i =
+    case i of
+        0 ->
+            D.succeed Video
 
-        "audio" ->
-            Json.Decode.succeed Audio
+        1 ->
+            D.succeed Audio
 
-        "image" ->
-            Json.Decode.succeed Image
+        2 ->
+            D.succeed Image
 
-        "text" ->
-            Json.Decode.succeed Text
+        3 ->
+            D.succeed Text
 
         _ ->
-            Json.Decode.fail <| "Bad mime: " ++ raw
+            D.fail
+
+
+decodeOrdering : D.Decoder Document
+decodeOrdering =
+    D.map Ordering (list decodeDocument)
 
 
 type alias Program =
@@ -200,8 +214,8 @@ type alias Program =
 
 
 type alias UserInput =
-    { typedIn : String
-    , blobs : List Blob
+    { blobs : List Blob
+    , typedIn : String
     }
 
 
@@ -226,11 +240,9 @@ type Hash
     = Hash String
 
 
-decodeKvString : Json.Decode.Decoder (List ( String, String ))
-decodeKvString =
-    Json.Decode.keyValuePairs Json.Decode.string
-
-
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.none
+    Sub.batch
+        [ retrievedHome RetrievedHome
+        , retrievedHash RetrievedHash
+        ]

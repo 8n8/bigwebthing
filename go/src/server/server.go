@@ -325,7 +325,8 @@ func main() {
 	serveFile("styles.css", "text/css")
         serveFile("favicon.ico", "image/ico")
         serveFile("elm.js", "application/javascript")
-        serveFile("ports.js", "application/javascript")
+        serveFile("base64js.min.js", "application/javascript")
+        serveFile("nacl-fast.min.js", "application/javascript")
 	fmt.Println(http.ListenAndServe(":3001", nil))
 }
 
