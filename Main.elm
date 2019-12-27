@@ -5,8 +5,11 @@ import Browser
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
+import Dict
 import Element
+import Element.Input
 import Html
+import List.Nonempty as N
 import Set
 
 
@@ -41,23 +44,37 @@ main =
 type Msg
     = RetrievedHome String
     | RetrievedHash String
+    | UpdatedLeft String
+    | UpdatedEditor String
+    | LookupRaw (N.Nonempty String)
+    | LaunchProgram String
 
 
 type alias Model =
     { home : Home
+    , openProgram : Maybe Program
+    , lookedUpBlob : Maybe ( Bytes.Bytes, Set.Set String )
+    , rightDoc : Maybe Document
+    , toLookUp : List String
+    , accumBlob : Maybe Bytes.Bytes
     }
 
 
 type alias Home =
-    { programs : List Program
+    { programs : Dict.Dict String Program
     }
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { home = { programs = [] }
+    ( { home = { programs = Dict.empty }
+      , openProgram = Nothing
+      , lookedUpBlob = Nothing
+      , rightDoc = Nothing
+      , toLookUp = []
+      , accumBlob = Nothing
       }
-    , Cmd.none
+    , requestHome ()
     )
 
 
@@ -68,12 +85,165 @@ view model =
 
 viewHelp : Model -> Element.Element Msg
 viewHelp model =
-    Element.text "Hello, you stylish developer!"
+    Element.column []
+        [ homeButton
+        , leftRight model
+        , editor model
+        ]
+
+
+editor : Model -> Element.Element Msg
+editor model =
+    case model.openProgram of
+        Nothing ->
+            Element.text <| "internal err: can't find program"
+
+        Just program ->
+            Element.Input.multiline []
+                { onChange = UpdatedEditor
+                , text = program.code
+                , placeholder =
+                    Just <|
+                        Element.Input.placeholder [] <|
+                            Element.text "Type program here"
+                , label =
+                    Element.Input.labelAbove [] <|
+                        Element.text "Type program here"
+                , spellcheck = False
+                }
+
+
+homeButton : Element.Element Msg
+homeButton =
+    Element.Input.button []
+        { onPress = Just <| LaunchProgram "home"
+        , label = Element.text "Home"
+        }
+
+
+leftRight : Model -> Element.Element Msg
+leftRight model =
+    Element.row []
+        [ leftInput model
+        , rightDoc model
+        ]
+
+
+leftInput : Model -> Element.Element Msg
+leftInput model =
+    Element.Input.multiline []
+        { onChange = UpdatedLeft
+        , text = leftText model
+        , placeholder =
+            Just <|
+                Element.Input.placeholder [] <|
+                    Element.text "Type stuff here"
+        , label =
+            Element.Input.labelAbove [] <|
+                Element.text <|
+                    "Type here, using instructions on right."
+        , spellcheck = True
+        }
+
+
+leftText : Model -> String
+leftText model =
+    case model.openProgram of
+        Nothing ->
+            "internal error: can't find program"
+
+        Just program ->
+            program.typedIn
+
+
+rightDoc : Model -> Element.Element Msg
+rightDoc model =
+    case model.openProgram of
+        Nothing ->
+            Element.text <| "internal error: can't find program"
+
+        Just program ->
+            case model.rightDoc of
+                Nothing ->
+                    Element.text <| "internal error: no right doc"
+
+                Just doc ->
+                    displayDoc model.lookedUpBlob doc
+
+
+displayDoc :
+    Maybe ( Bytes.Bytes, Set.Set String )
+    -> Document
+    -> Element.Element Msg
+displayDoc lookedUpBlob doc =
+    case doc of
+        Anon blob ->
+            displayBlob "•" blob lookedUpBlob
+
+        Named name blob ->
+            displayBlob name blob lookedUpBlob
+
+        Ordering docs ->
+            Element.column [] <|
+                List.map (displayDoc lookedUpBlob) docs
+
+
+displayBlob :
+    String
+    -> Blob
+    -> Maybe ( Bytes.Bytes, Set.Set String )
+    -> Element.Element Msg
+displayBlob name (Blob mime hashes) lookedUpBlob =
+    case lookedUpBlob of
+        Nothing ->
+            Element.Input.button []
+                { onPress = Just <| LookupRaw hashes
+                , label = Element.text name
+                }
+
+        Just ( bytes, lookedUpHashes ) ->
+            if
+                lookedUpHashes
+                    /= (Set.fromList <| N.toList hashes)
+            then
+                Element.Input.button []
+                    { onPress = Just <| LookupRaw hashes
+                    , label = Element.text name
+                    }
+
+            else
+                case mime of
+                    Text ->
+                        Element.text <|
+                            case decodeString bytes of
+                                Nothing ->
+                                    "internal error: corrupted text"
+
+                                Just text ->
+                                    text
+
+
+decodeString : Bytes.Bytes -> Maybe String
+decodeString bytes =
+    D.decode (D.string (Bytes.width bytes)) bytes
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        LaunchProgram programName ->
+            ( { model
+                | openProgram =
+                    Dict.get programName model.home.programs
+              }
+            , Cmd.none
+            )
+
+        LookupRaw hashes ->
+            ( { model | toLookUp = N.toList hashes }
+            , Cmd.batch <| List.map requestHash <| N.toList hashes
+            )
+
         RetrievedHome rawHome ->
             case Base64.toBytes rawHome of
                 Just bytes ->
@@ -90,12 +260,47 @@ update msg model =
         RetrievedHash raw ->
             ( model, Cmd.none )
 
+        UpdatedLeft newLeftText ->
+            case model.openProgram of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just program ->
+                    ( { model
+                        | openProgram =
+                            Just
+                                { program | typedIn = newLeftText }
+                      }
+                    , Cmd.none
+                    )
+
+        UpdatedEditor newCode ->
+            case model.openProgram of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just program ->
+                    ( { model
+                        | openProgram =
+                            Just
+                                { program | code = newCode }
+                      }
+                    , Cmd.none
+                    )
+
 
 decodeHome : D.Decoder Home
 decodeHome =
-    D.map Home (list decodeProgram)
+    D.map (Home << programsToDict) (list decodeProgram)
 
 
+programsToDict : List Program -> Dict.Dict String Program
+programsToDict programs =
+    Dict.fromList <| List.map (\p -> ( p.name, p )) programs
+
+
+{-| Pinched from the Bytes documentation.
+-}
 list : D.Decoder a -> D.Decoder (List a)
 list decoder =
     D.unsignedInt32 Bytes.BE
@@ -103,6 +308,8 @@ list decoder =
             (\len -> D.loop ( len, [] ) (listStep decoder))
 
 
+{-| Pinched from the Bytes documentation.
+-}
 listStep :
     D.Decoder a
     -> ( Int, List a )
@@ -123,16 +330,35 @@ sizedString =
 
 decodeProgram : D.Decoder Program
 decodeProgram =
-    D.map4 Program
+    map6 Program
+        sizedString
         sizedString
         sizedString
         (list decodeDocument)
-        decodeUserInput
+        (list decodeBlob)
+        sizedString
 
 
-decodeUserInput : D.Decoder UserInput
-decodeUserInput =
-    D.map2 UserInput (list decodeBlob) sizedString
+map6 :
+    (a -> b -> c -> d -> e -> f -> result)
+    -> D.Decoder a
+    -> D.Decoder b
+    -> D.Decoder c
+    -> D.Decoder d
+    -> D.Decoder e
+    -> D.Decoder f
+    -> D.Decoder result
+map6 func decoderA decoderB decoderC decoderD decoderE decoderF =
+    D.map func decoderA
+        |> D.andThen (dmap decoderB)
+        |> D.andThen (dmap decoderC)
+        |> D.andThen (dmap decoderD)
+        |> D.andThen (dmap decoderE)
+        |> D.andThen (dmap decoderF)
+
+
+dmap a b =
+    D.map b a
 
 
 decodeDocument : D.Decoder Document
@@ -166,14 +392,23 @@ decodeAnon =
     D.map Anon decodeBlob
 
 
-decodeHash : D.Decoder Hash
-decodeHash =
-    D.map Hash sizedString
-
-
 decodeBlob : D.Decoder Blob
 decodeBlob =
-    D.map2 Blob decodeMime (list decodeHash)
+    D.map2 Blob decodeMime (decodeNonEmpty sizedString)
+
+
+decodeNonEmpty : D.Decoder a -> D.Decoder (N.Nonempty a)
+decodeNonEmpty decoder =
+    D.andThen
+        (\a ->
+            case a of
+                [] ->
+                    D.fail
+
+                x :: xs ->
+                    D.succeed <| N.Nonempty x xs
+        )
+        (list decoder)
 
 
 decodeMime : D.Decoder Mime
@@ -185,15 +420,6 @@ decodeMimeHelp : Int -> D.Decoder Mime
 decodeMimeHelp i =
     case i of
         0 ->
-            D.succeed Video
-
-        1 ->
-            D.succeed Audio
-
-        2 ->
-            D.succeed Image
-
-        3 ->
             D.succeed Text
 
         _ ->
@@ -207,14 +433,10 @@ decodeOrdering =
 
 type alias Program =
     { code : String
+    , name : String
     , description : String
     , inbox : List Document
-    , userInput : UserInput
-    }
-
-
-type alias UserInput =
-    { blobs : List Blob
+    , blobs : List Blob
     , typedIn : String
     }
 
@@ -226,18 +448,11 @@ type Document
 
 
 type Blob
-    = Blob Mime (List Hash)
+    = Blob Mime (N.Nonempty String)
 
 
 type Mime
-    = Video
-    | Audio
-    | Image
-    | Text
-
-
-type Hash
-    = Hash String
+    = Text
 
 
 subscriptions : Model -> Sub Msg
