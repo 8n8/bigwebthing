@@ -1,29 +1,29 @@
-var app = Elm.Main.init({'node': document.getElementById('main')});
-
-app.ports.request.subscribe(function(key) {
-  localforage.getItem(key).then(function(val) {
-    app.ports.retrieved.send(JSON.Stringify({key: val}));
-  });
-});
+var app = Elm.Main.init({node: document.getElementById('main')});
 
 app.ports.requestHome.subscribe(function() {
   localforage.getItem('home').then(function(homeBytes) {
-    app.ports.retrievedHome.send(fromByteArray(homeBytes));
+    if (homeBytes === null) {
+      return;
+    }
+    app.ports.retrievedHome.send(base64js.fromByteArray(homeBytes));
   });
 });
 
 app.ports.requestHash.subscribe(function(base64hash) {
   localforage.getItem(base64hash).then(function(binaryBlob){
-    app.ports.retrievedHash.send(fromByteArray(binaryBlob));
+    if (binaryBlob === null) {
+      return;
+    }
+    app.ports.retrievedHash.send(base64js.fromByteArray(binaryBlob));
   });
 });
 
 app.ports.cacheHome.subscribe(function(base64str) {
-  localforage.setItem('home', toByteArray(base64str));
+  localforage.setItem('home', base64js.toByteArray(base64str));
 });
 
-app.ports.cacheHash.subscribe(function(base64str) {
-  const bytes = toByteArray(base64str);
-  hash = nacl.hash(bytes);
-  localforage.setItem(fromByteArray(hash.slice(0, 32)), bytes);
-});
+// app.ports.cacheHash.subscribe(function(base64str) {
+//   const bytes = base64js.toByteArray(base64str);
+//   const hash = nacl.hash(bytes);
+//   localforage.setItem(base64js.fromByteArray(hash.slice(0, 32)), bytes);
+// });

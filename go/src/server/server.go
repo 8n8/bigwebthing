@@ -254,8 +254,8 @@ func makeInboxPath(b []byte) string {
 
 const csp =
 	"default-src 'none'; " +
-	"script-src 'self' 'unsafe-eval'; " +
-	"style-src 'self'; " +
+	"script-src 'self'; " +
+	"style-src 'unsafe-inline'; " +
 	"img-src 'self'; " +
 	"report-uri http://localhost:3001/cspreport;"
 
@@ -335,7 +335,6 @@ func serveFile(filename, contentType string) {
 	http.HandleFunc(
 		"/" + filename,
 		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Add("Content-Type", contentType)
 			handle, err := os.Open(filename)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
@@ -344,6 +343,8 @@ func serveFile(filename, contentType string) {
 			_, err = io.Copy(w, handle)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
+			} else {
+				w.Header().Add("Content-Type", contentType)
 			}
 		})
 }
