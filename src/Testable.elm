@@ -1,10 +1,10 @@
-port module Main exposing (main)
+module Testable exposing (..)
 
 import Base64
-import Browser
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
+import Debug exposing (log)
 import Dict
 import Element
 import Element.Input
@@ -14,44 +14,10 @@ import Json.Encode as Je
 import List.Nonempty as N
 import Parser as P exposing ((|.), (|=))
 import Set
-import Debug exposing (log)
 
 
-port requestHome : () -> Cmd msg
-
-
-port retrievedHome : (String -> msg) -> Sub msg
-
-
-port requestHash : String -> Cmd msg
-
-
-port retrievedHash : (String -> msg) -> Sub msg
-
-
-port cacheHome : String -> Cmd msg
-
-
-port cacheHash : String -> Cmd msg
-
-
-port sendMsg : Je.Value -> Cmd msg
-
-
-port gotSecretKeys : (Je.Value -> msg) -> Sub msg
-
-
-port getSecretKeys : () -> Cmd msg
-
-
-main : Platform.Program () Model Msg
-main =
-    Browser.element
-        { init = init
-        , view = view
-        , update = update
-        , subscriptions = subscriptions
-        }
+plus : Int -> Int
+plus i = i + 5
 
 
 type Msg
@@ -93,38 +59,6 @@ type alias PubKeys =
     { encrypt : Bytes.Bytes
     , sign : Bytes.Bytes
     }
-
-
-init : () -> ( Model, Cmd Msg )
-init _ =
-    let
-        ( newProgram, rightDoc, outMsgs ) =
-            runProgram defaultHome
-    in
-    ( { home = initHome
-      , openProgram = Just ( defaultHome, rightDoc )
-      , lookedUpBlob = Nothing
-      , toLookUp = []
-      , accumBlob = Nothing
-      , internalErr = Nothing
-      }
-    , requestHome ()
-    )
-
-
-cacheBlobs : List Blob -> Cmd msg
-cacheBlobs blobs =
-    Cmd.batch <| List.map cacheBlobHelp blobs
-
-
-cacheBlobHelp : Blob -> Cmd msg
-cacheBlobHelp blob =
-    case serializeBlob blob of
-        Nothing ->
-            Cmd.none
-
-        Just blobStr ->
-            cacheHash blobStr
 
 
 serializeBlob : Blob -> Maybe String
@@ -771,7 +705,7 @@ runElfs program elfs progStack =
             , internalError = Nothing
             }
     in
-        runElfsHelp elfs oldP
+    runElfsHelp elfs oldP
 
 
 type alias ProgramState =
@@ -840,14 +774,16 @@ printElf p =
 
         stack ->
             { p
-                | internalError = Just <| String.concat
-                    [ "runtime error:\n"
-                    , "\"print\" expects the top of the stack to "
-                    , "be a string"
-                    ]
+                | internalError =
+                    Just <|
+                        String.concat
+                            [ "runtime error:\n"
+                            , "\"print\" expects the top of the stack to "
+                            , "be a string"
+                            ]
             }
 
-         
+
 print : Document -> String -> Document
 print doc s =
     case doc of
@@ -871,11 +807,12 @@ printElt dets stack =
             Ok ( dets, tack )
 
         s ->
-            Err <| String.concat
-                [ "\"print\" needs there to be a string on the stack"
-                , " but the stack is "
-                , showTypeStack s
-                ]
+            Err <|
+                String.concat
+                    [ "\"print\" needs there to be a string on the stack"
+                    , " but the stack is "
+                    , showTypeStack s
+                    ]
 
 
 runTypeChecks : List Elt -> Maybe String
@@ -896,11 +833,12 @@ runTypeChecksHelp elts dets typeStack =
                     Nothing
 
                 x ->
-                    Just <| String.concat
-                        [ "typestack should be empty at end of "
-                        , "program, but got "
-                        , showTypeStack x
-                        ]
+                    Just <|
+                        String.concat
+                            [ "typestack should be empty at end of "
+                            , "program, but got "
+                            , showTypeStack x
+                            ]
 
         e :: lts ->
             case e dets (log "typestack (elts full)" typeStack) of
@@ -1036,21 +974,6 @@ displayBlob name (Blob mime hashes) lookedUpBlob =
 decodeString : Bytes.Bytes -> Maybe String
 decodeString bytes =
     D.decode (D.string (Bytes.width bytes)) bytes
-
-
-cacheHomeHelp : Home -> Cmd msg
-cacheHomeHelp home =
-    case Base64.fromBytes <| E.encode <| encodeHome home of
-        Nothing ->
-            Cmd.none
-
-        Just base64str ->
-            cacheHome base64str
-
-
-sendMsgs : List Je.Value -> Cmd Msg
-sendMsgs msgs =
-    Cmd.batch <| List.map sendMsg msgs
 
 
 jsonHumanMsg :
@@ -1189,149 +1112,6 @@ decodeKeyHelp k =
 
         Just bs ->
             Jd.succeed bs
-
-
-reRunProgram : Model -> Program -> ( Model, Cmd Msg )
-reRunProgram model program =
-    let
-        ( p, doc, msgs ) =
-            runProgram program
-
-        oldHome =
-            model.home
-
-        newOutbox =
-            model.home.outbox ++ msgs
-    in
-    case model.home.myKeys of
-        Nothing ->
-            ( { model | home = { oldHome | outbox = newOutbox }, openProgram = Just ( p, doc ) }
-            , getSecretKeys ()
-            )
-
-        Just myKeys ->
-            case
-                encodeMsgs
-                    { msgs = newOutbox
-                    , pubKeys = model.home.pubKeys
-                    , myKeys = myKeys
-                    , nonceBase = model.home.biggestNonceBase
-                    }
-            of
-                Err err ->
-                    ( { model
-                        | internalErr = Just <| "error encoding messages: " ++ err
-                        , home = { oldHome | outbox = newOutbox }
-                      }
-                    , Cmd.none
-                    )
-
-                Ok encodedMsgs ->
-                    let
-                        newHome =
-                            { oldHome
-                                | outbox = newOutbox
-                                , biggestNonceBase = oldHome.biggestNonceBase + List.length msgs
-                                , programs =
-                                    Dict.insert
-                                        program.name
-                                        p
-                                        oldHome.programs
-                            }
-                    in
-                    ( { model
-                        | home = newHome
-                        , openProgram = Just ( p, doc )
-                      }
-                    , Cmd.batch
-                        [ sendMsgs encodedMsgs
-                        , cacheHomeHelp newHome
-                        ]
-                    )
-
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        LaunchProgram programName ->
-            case Dict.get programName model.home.programs of
-                Nothing ->
-                    ( { model | openProgram = Nothing }, Cmd.none )
-
-                Just program ->
-                    reRunProgram model program
-
-        LookupRaw hashes ->
-            ( { model | toLookUp = N.toList hashes }
-            , Cmd.batch <| List.map requestHash <| N.toList hashes
-            )
-
-        NewRawKeys rawKeys ->
-            case Jd.decodeValue decodeSecretKeys rawKeys of
-                Err err ->
-                    ( { model
-                        | internalErr = Just <| Jd.errorToString err
-                      }
-                    , Cmd.none
-                    )
-
-                Ok keys ->
-                    let
-                        oldHome =
-                            model.home
-
-                        newHome =
-                            { oldHome | myKeys = Just keys }
-
-                        newModel =
-                            { model | home = newHome }
-                    in
-                    case model.openProgram of
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                        Just ( program, _ ) ->
-                            reRunProgram newModel program
-
-        RetrievedHome rawHome ->
-            case Base64.toBytes rawHome of
-                Just bytes ->
-                    case D.decode decodeHome bytes of
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                        Just home ->
-                            ( { model | home = home }, Cmd.none )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        RetrievedHash raw ->
-            ( model, Cmd.none )
-
-        UpdatedLeft newLeftText ->
-            case model.openProgram of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just ( program, _ ) ->
-                    let
-                        newProg =
-                            { program | typedIn = newLeftText }
-                    in
-                    reRunProgram model newProg
-
-        UpdatedEditor newCode ->
-            case model.openProgram of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just ( program, _ ) ->
-                    let
-                        newProg =
-                            { program | code = newCode }
-                    in
-                    reRunProgram model newProg
 
 
 decodeHome : D.Decoder Home
@@ -1671,12 +1451,3 @@ type Blob
 
 type Mime
     = Text
-
-
-subscriptions : Model -> Sub Msg
-subscriptions model =
-    Sub.batch
-        [ retrievedHome RetrievedHome
-        , retrievedHash RetrievedHash
-        , gotSecretKeys NewRawKeys
-        ]
