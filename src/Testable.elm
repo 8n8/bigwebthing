@@ -88,7 +88,7 @@ defaultHome =
 
 
 defaultHomeCode =
-    """"Hello, this is the placeholder home app." print"""
+    """"Hello, this is the placeholder home app." print !"""
 
 
 view : Model -> Html.Html Msg
@@ -427,10 +427,10 @@ runBlockElt dets typeStack =
 
         (Tblock block) :: xs ->
             case runTypeChecksHelp block dets xs of
-                Nothing ->
-                    Ok ( dets, xs )
+                Ok newStack ->
+                    Ok ( dets, newStack )
 
-                Just errMsg ->
+                Err errMsg ->
                     Err errMsg
 
         x :: _ ->
@@ -817,33 +817,36 @@ printElt dets stack =
 
 runTypeChecks : List Elt -> Maybe String
 runTypeChecks elts =
-    runTypeChecksHelp elts standardTypes []
+    case runTypeChecksHelp elts standardTypes [] of
+        Ok [] ->
+            Nothing
+
+        Ok ts ->
+            Just <| String.concat
+                [ "typestack should be empty at end of program, but "
+                , "got "
+                , showTypeStack ts
+                ]
+
+        Err err ->
+            Just err
+            
 
 
 runTypeChecksHelp :
     List Elt
     -> Dict.Dict String TypeVal
     -> List TypeVal
-    -> Maybe String
+    -> Result String (List TypeVal)
 runTypeChecksHelp elts dets typeStack =
     case elts of
         [] ->
-            case log "typestack: (elts empty)" typeStack of
-                [] ->
-                    Nothing
-
-                x ->
-                    Just <|
-                        String.concat
-                            [ "typestack should be empty at end of "
-                            , "program, but got "
-                            , showTypeStack x
-                            ]
+            Ok typeStack
 
         e :: lts ->
             case e dets (log "typestack (elts full)" typeStack) of
                 Err errMsg ->
-                    Just errMsg
+                    Err errMsg
 
                 Ok ( newDets, newTypeStack ) ->
                     runTypeChecksHelp lts newDets newTypeStack
