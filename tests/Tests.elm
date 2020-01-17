@@ -92,4 +92,7 @@ defPT =
         , test "simple" <|
             \_ ->
                 Expect.ok <| P.run defP "= ff"
+        , test "spaces between = and name" <|
+            \_ ->
+                Expect.ok <| P.run defP "=ff"
         ]

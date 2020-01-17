@@ -335,7 +335,7 @@ isUninteresting char =
 defP : P.Parser ( List Elf, List Elt )
 defP =
     P.succeed (\var -> ( [ defElf var ], [ defElt var ] ))
-        |. P.keyword "="
+        |. P.token "="
         |. whiteSpaceP
         |= variable
 
