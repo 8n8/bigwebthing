@@ -4,7 +4,6 @@ import Base64
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
-import Debug exposing (log)
 import Dict
 import Element
 import Element.Input
@@ -32,7 +31,7 @@ type Msg
 
 type alias Model =
     { home : Home
-    , openProgram : Maybe ( Program, Document )
+    , openProgram : Maybe ( Program, Maybe Document )
     , lookedUpBlob : Maybe ( Bytes.Bytes, Set.Set String )
     , toLookUp : List String
     , accumBlob : Maybe Bytes.Bytes
@@ -142,19 +141,19 @@ leftRight model =
         ]
 
 
-runProgram : Program -> ( Program, Document, List HumanMsg )
+runProgram : Program -> ( Program, Maybe Document, List HumanMsg )
 runProgram program =
     case P.run programP program.code of
         Err deadEnds ->
             ( program
-            , SmallString <| deadEndsToString deadEnds
+            , Just <| SmallString <| deadEndsToString deadEnds
             , []
             )
 
         Ok ( elfs, elts ) ->
             case runTypeChecks elts of
                 Just errMsg ->
-                    ( program, SmallString errMsg, [] )
+                    ( program, Just <| SmallString errMsg, [] )
 
                 Nothing ->
                     runElfs program elfs []
@@ -238,6 +237,7 @@ programHelpP ( oldElfs, oldElts ) =
         [ P.succeed (\( elfs, elts ) -> P.Loop ( oldElfs ++ elfs, oldElts ++ elts ))
             |. whiteSpaceP
             |= elementP
+            |. whiteSpaceP
         , P.succeed () |> P.map (\_ -> P.Done ( oldElfs, oldElts ))
         ]
 
@@ -277,8 +277,29 @@ stringP : P.Parser String
 stringP =
     P.succeed identity
         |. P.token "\""
-        |= P.loop [] stringHelp
+        |= P.loop ([], 0) stringHelp2
+        |. P.token "\""
 
+
+stringHelp2 : (List String, Int) -> P.Parser (P.Step (List String, Int) String)
+stringHelp2 (revChunks, offset) =
+    P.succeed (stepHelp offset)
+        |= stringHelp revChunks
+        |= P.getOffset
+
+
+stepHelp : Int -> (P.Step (List String) String) -> Int -> P.Step (List String, Int) String
+stepHelp oldOffset step newOffset =
+    case step of
+        P.Done str ->
+            P.Done str
+
+        P.Loop revChunks ->
+            if newOffset > oldOffset then
+                P.Loop (revChunks, newOffset)
+            else
+                P.Done <| String.join "" <| List.reverse revChunks
+    
 
 stringHelp : List String -> P.Parser (P.Step (List String) String)
 stringHelp revChunks =
@@ -288,10 +309,8 @@ stringHelp revChunks =
             |= P.oneOf
                 [ P.map (\_ -> "\n") (P.token "n")
                 , P.map (\_ -> "\t") (P.token "t")
-                , P.map (\_ -> "\u{000D}") (P.token "r")
+                , P.map (\_ -> "\r") (P.token "r")
                 ]
-        , P.token "\""
-            |> P.map (\_ -> P.Done (String.join "" (List.reverse revChunks)))
         , P.chompWhile isUninteresting
             |> P.getChompedString
             |> P.map (\chunk -> P.Loop (chunk :: revChunks))
@@ -317,6 +336,7 @@ defP : P.Parser ( List Elf, List Elt )
 defP =
     P.succeed (\var -> ( [ defElf var ], [ defElt var ] ))
         |. P.keyword "="
+        |. whiteSpaceP
         |= variable
 
 
@@ -380,10 +400,20 @@ runBlockP =
 
 programBlockP : P.Parser ( List Elf, List Elt )
 programBlockP =
-    P.succeed identity
+    P.succeed (\(elfs, elts) -> ([blockElf elfs], [blockElt elts]))
         |. P.keyword "{"
         |= programP
         |. P.keyword "}"
+
+
+blockElf : List Elf -> ProgramState -> ProgramState
+blockElf elfs p =
+    { p | stack = (Pblock elfs) :: p.stack }
+
+
+blockElt : List Elt -> Dict.Dict String TypeVal -> List TypeVal -> Result String (Dict.Dict String TypeVal, List TypeVal)
+blockElt elts dets stack =
+    Ok (dets, (Tblock elts) :: stack)
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -395,7 +425,7 @@ runBlockElf s =
         (Pblock block) :: xs ->
             let
                 ( newP, rightDoc, msgs ) =
-                    runElfs s.program block s.stack
+                    runElfsHelp block {s | stack = xs}
             in
             { s
                 | program = newP
@@ -454,18 +484,18 @@ showTypeVal typeVal =
 showTypeStack : List TypeVal -> String
 showTypeStack typestack =
     String.concat
-        [ "< "
+        [ "<"
         , String.join ", " <| List.map showTypeVal typestack
-        , " >"
+        , ">"
         ]
 
 
 showTypeCheck : List TypeLiteral -> String
 showTypeCheck typeCheck =
     String.concat
-        [ "< "
+        [ "<"
         , String.join ", " <| List.map showTypeLit typeCheck
-        , " >"
+        , ">"
         ]
 
 
@@ -518,6 +548,7 @@ makeRetrieveElt var dets typestack =
 fullTypeCheckP : P.Parser ( List Elf, List Elt )
 fullTypeCheckP =
     P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
+        P.map List.reverse <|
         P.sequence
             { start = "<"
             , separator = ","
@@ -544,10 +575,10 @@ typeCheckErr expected got =
 makeFullTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
 makeFullTypeCheck typeVals dets typeStack =
     if equalT typeVals typeStack then
-        Err <| typeCheckErr typeVals typeStack
+        Ok ( dets, typeStack )
 
     else
-        Ok ( dets, typeStack )
+        Err <| typeCheckErr typeVals typeStack
 
 
 equalT : List TypeLiteral -> List TypeVal -> Bool
@@ -645,6 +676,7 @@ stringTypeP =
 partialTypeCheckP : P.Parser ( List Elf, List Elt )
 partialTypeCheckP =
     P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
+        P.map List.reverse <|
         P.sequence
             { start = "<.."
             , separator = ","
@@ -692,14 +724,14 @@ runElfs :
     Program
     -> List Elf
     -> List ProgVal
-    -> ( Program, Document, List HumanMsg )
+    -> ( Program, Maybe Document, List HumanMsg )
 runElfs program elfs progStack =
     let
         oldP =
             { program = program
             , defs = standardLibrary
             , stack = progStack
-            , rightDoc = initDoc
+            , rightDoc = Nothing
             , outbox = []
             , blobs = []
             , internalError = Nothing
@@ -712,7 +744,7 @@ type alias ProgramState =
     { program : Program
     , defs : Dict.Dict String ProgVal
     , stack : List ProgVal
-    , rightDoc : Document
+    , rightDoc : Maybe Document
     , outbox : List HumanMsg
     , blobs : List Blob
     , internalError : Maybe String
@@ -726,7 +758,7 @@ type alias Elf =
 runElfsHelp :
     List Elf
     -> ProgramState
-    -> ( Program, Document, List HumanMsg )
+    -> ( Program, Maybe Document, List HumanMsg )
 runElfsHelp elfs s =
     case elfs of
         [] ->
@@ -734,8 +766,7 @@ runElfsHelp elfs s =
 
         e :: lfs ->
             let
-                newS =
-                    e s
+                newS = e s
             in
             runElfsHelp lfs newS
 
@@ -768,7 +799,7 @@ printElf p =
     case p.stack of
         (Pstring s) :: tack ->
             { p
-                | rightDoc = print p.rightDoc s
+                | rightDoc = Just <| print p.rightDoc s
                 , stack = tack
             }
 
@@ -784,20 +815,23 @@ printElf p =
             }
 
 
-print : Document -> String -> Document
+print : Maybe Document -> String -> Document
 print doc s =
     case doc of
-        Ordering ds ->
+        Just (Ordering ds) ->
             Ordering <| ds ++ [ SmallString s ]
 
-        SmallString oldS ->
+        Just (SmallString oldS) ->
             Ordering [ SmallString oldS, SmallString s ]
 
-        Named n b ->
+        Just (Named n b) ->
             Ordering [ Named n b, SmallString s ]
 
-        Anon b ->
+        Just (Anon b) ->
             Ordering [ Anon b, SmallString s ]
+
+        Nothing ->
+            SmallString s
 
 
 printElt : Elt
@@ -844,7 +878,7 @@ runTypeChecksHelp elts dets typeStack =
             Ok typeStack
 
         e :: lts ->
-            case e dets (log "typestack (elts full)" typeStack) of
+            case e dets typeStack of
                 Err errMsg ->
                     Err errMsg
 
@@ -921,22 +955,25 @@ showRightDoc model =
 
 displayDoc :
     Maybe ( Bytes.Bytes, Set.Set String )
-    -> Document
+    -> Maybe Document
     -> Element.Element Msg
 displayDoc lookedUpBlob doc =
     case doc of
-        Anon blob ->
+        Just (Anon blob) ->
             displayBlob "•" blob lookedUpBlob
 
-        Named name blob ->
+        Just (Named name blob) ->
             displayBlob name blob lookedUpBlob
 
-        Ordering docs ->
+        Just (Ordering docs) ->
             Element.column [] <|
-                List.map (displayDoc lookedUpBlob) docs
+                List.map (displayDoc lookedUpBlob) (List.map Just docs)
 
-        SmallString s ->
+        Just (SmallString s) ->
             Element.text s
+
+        Nothing ->
+            Element.text "this program produces no output"
 
 
 displayBlob :
