@@ -142,9 +142,16 @@ leftRight model =
         ]
 
 
+topProgramP : P.Parser (List Elf, List Elt)
+topProgramP =
+    P.succeed identity
+        |= programP
+        |. P.end
+
+
 runProgram : Program -> ( Program, Maybe Document, List HumanMsg )
 runProgram program =
-    case P.run programP program.code of
+    case P.run topProgramP program.code of
         Err deadEnds ->
             ( program
             , Just <| SmallString <| deadEndsToString deadEnds
@@ -321,12 +328,11 @@ stringHelp revChunks =
 
 variable : P.Parser String
 variable =
-    P.map (String.map Char.toLower) <|
-        P.variable
-            { start = Char.isAlpha
-            , inner = \c -> Char.isAlphaNum c || c == '_'
-            , reserved = Set.empty
-            }
+    P.variable
+        { start = Char.isAlpha
+        , inner = \c -> Char.isAlphaNum c || c == '_'
+        , reserved = Set.empty
+        }
 
 
 isUninteresting : Char -> Bool
