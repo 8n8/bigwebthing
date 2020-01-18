@@ -318,7 +318,8 @@ stringHelp revChunks =
             |= P.oneOf
                 [ P.map (\_ -> "\n") (P.token "n")
                 , P.map (\_ -> "\t") (P.token "t")
-                , P.map (\_ -> "\u{000D}") (P.token "r")
+                , P.map (\_ -> "\r") (P.token "r")
+                , P.map (\_ -> "\"") (P.token "\"")
                 ]
         , P.chompWhile isUninteresting
             |> P.getChompedString
