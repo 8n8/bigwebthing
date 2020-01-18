@@ -423,16 +423,7 @@ runBlockElf s =
             { s | internalError = Just "! but empty stack" }
 
         (Pblock block) :: xs ->
-            let
-                ( newP, rightDoc, msgs ) =
-                    runElfsHelp block {s | stack = xs}
-            in
-            { s
-                | program = newP
-                , stack = xs
-                , outbox = s.outbox ++ msgs
-                , rightDoc = rightDoc
-            }
+            runElfsHelp block {s | stack = xs}
 
         x :: _ ->
             { s
@@ -736,8 +727,9 @@ runElfs program elfs progStack =
             , blobs = []
             , internalError = Nothing
             }
+        newP = runElfsHelp elfs oldP
     in
-    runElfsHelp elfs oldP
+        (newP.program, newP.rightDoc, newP.outbox)
 
 
 type alias ProgramState =
@@ -758,11 +750,11 @@ type alias Elf =
 runElfsHelp :
     List Elf
     -> ProgramState
-    -> ( Program, Maybe Document, List HumanMsg )
+    -> ProgramState
 runElfsHelp elfs s =
     case elfs of
         [] ->
-            ( s.program, s.rightDoc, s.outbox )
+            s
 
         e :: lfs ->
             let

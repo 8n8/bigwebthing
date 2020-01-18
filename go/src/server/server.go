@@ -340,12 +340,8 @@ func serveFile(filename, contentType string) {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			_, err = io.Copy(w, handle)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-			} else {
-				w.Header().Add("Content-Type", contentType)
-			}
+			io.Copy(w, handle)
+			w.Header().Add("Content-Type", contentType)
 		})
 }
 
