@@ -16,7 +16,8 @@ import Set
 
 
 plus : Int -> Int
-plus i = i + 5
+plus i =
+    i + 5
 
 
 type Msg
@@ -277,18 +278,18 @@ stringP : P.Parser String
 stringP =
     P.succeed identity
         |. P.token "\""
-        |= P.loop ([], 0) stringHelp2
+        |= P.loop ( [], 0 ) stringHelp2
         |. P.token "\""
 
 
-stringHelp2 : (List String, Int) -> P.Parser (P.Step (List String, Int) String)
-stringHelp2 (revChunks, offset) =
+stringHelp2 : ( List String, Int ) -> P.Parser (P.Step ( List String, Int ) String)
+stringHelp2 ( revChunks, offset ) =
     P.succeed (stepHelp offset)
         |= stringHelp revChunks
         |= P.getOffset
 
 
-stepHelp : Int -> (P.Step (List String) String) -> Int -> P.Step (List String, Int) String
+stepHelp : Int -> P.Step (List String) String -> Int -> P.Step ( List String, Int ) String
 stepHelp oldOffset step newOffset =
     case step of
         P.Done str ->
@@ -296,10 +297,11 @@ stepHelp oldOffset step newOffset =
 
         P.Loop revChunks ->
             if newOffset > oldOffset then
-                P.Loop (revChunks, newOffset)
+                P.Loop ( revChunks, newOffset )
+
             else
                 P.Done <| String.join "" <| List.reverse revChunks
-    
+
 
 stringHelp : List String -> P.Parser (P.Step (List String) String)
 stringHelp revChunks =
@@ -309,7 +311,7 @@ stringHelp revChunks =
             |= P.oneOf
                 [ P.map (\_ -> "\n") (P.token "n")
                 , P.map (\_ -> "\t") (P.token "t")
-                , P.map (\_ -> "\r") (P.token "r")
+                , P.map (\_ -> "\u{000D}") (P.token "r")
                 ]
         , P.chompWhile isUninteresting
             |> P.getChompedString
@@ -400,7 +402,7 @@ runBlockP =
 
 programBlockP : P.Parser ( List Elf, List Elt )
 programBlockP =
-    P.succeed (\(elfs, elts) -> ([blockElf elfs], [blockElt elts]))
+    P.succeed (\( elfs, elts ) -> ( [ blockElf elfs ], [ blockElt elts ] ))
         |. P.keyword "{"
         |= programP
         |. P.keyword "}"
@@ -408,12 +410,12 @@ programBlockP =
 
 blockElf : List Elf -> ProgramState -> ProgramState
 blockElf elfs p =
-    { p | stack = (Pblock elfs) :: p.stack }
+    { p | stack = Pblock elfs :: p.stack }
 
 
-blockElt : List Elt -> Dict.Dict String TypeVal -> List TypeVal -> Result String (Dict.Dict String TypeVal, List TypeVal)
+blockElt : List Elt -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
 blockElt elts dets stack =
-    Ok (dets, (Tblock elts) :: stack)
+    Ok ( dets, Tblock elts :: stack )
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -423,7 +425,7 @@ runBlockElf s =
             { s | internalError = Just "! but empty stack" }
 
         (Pblock block) :: xs ->
-            runElfsHelp block {s | stack = xs}
+            runElfsHelp block { s | stack = xs }
 
         x :: _ ->
             { s
@@ -540,14 +542,14 @@ fullTypeCheckP : P.Parser ( List Elf, List Elt )
 fullTypeCheckP =
     P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
         P.map List.reverse <|
-        P.sequence
-            { start = "<"
-            , separator = ","
-            , end = ">"
-            , spaces = whiteSpaceP
-            , item = typeLiteralP
-            , trailing = P.Optional
-            }
+            P.sequence
+                { start = "<"
+                , separator = ","
+                , end = ">"
+                , spaces = whiteSpaceP
+                , item = typeLiteralP
+                , trailing = P.Optional
+                }
 
 
 typeCheckErr : List TypeLiteral -> List TypeVal -> String
@@ -555,10 +557,10 @@ typeCheckErr expected got =
     String.concat
         [ "type stack does not match type declaration:\n"
         , "expecting "
-        , showTypeCheck expected
+        , showTypeCheck <| List.reverse expected
         , "\n"
         , "but got "
-        , showTypeStack got
+        , showTypeStack <| List.reverse got
         , "\n"
         ]
 
@@ -633,12 +635,6 @@ blockTypeP =
         |. P.keyword "block"
 
 
-
--- typeP : P.Parser TypeVal
--- typeP =
---     P.oneOf [ stringTypeP, blockTypeP ]
-
-
 type TypeLiteral
     = Tlstring
     | Tlblock
@@ -647,35 +643,21 @@ type TypeLiteral
 stringTypeP : P.Parser TypeLiteral
 stringTypeP =
     P.succeed Tlstring
-        |. P.keyword "str"
-
-
-
--- blockTypeP : P.Parser TypeVal
--- blockTypeP =
---     P.map Tblock <|
---         P.sequence
---             { start = "["
---             , separator = ","
---             , end = "]"
---             , spaces = whiteSpaceP
---             , item = (\() -> typeP) ()
---             , trailing = P.Optional
---             }
+        |. P.keyword "string"
 
 
 partialTypeCheckP : P.Parser ( List Elf, List Elt )
 partialTypeCheckP =
     P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
         P.map List.reverse <|
-        P.sequence
-            { start = "<.."
-            , separator = ","
-            , end = ">"
-            , spaces = whiteSpaceP
-            , item = typeLiteralP
-            , trailing = P.Optional
-            }
+            P.sequence
+                { start = "<.."
+                , separator = ","
+                , end = ">"
+                , spaces = whiteSpaceP
+                , item = typeLiteralP
+                , trailing = P.Optional
+                }
 
 
 whiteSpaceP : P.Parser ()
@@ -727,9 +709,11 @@ runElfs program elfs progStack =
             , blobs = []
             , internalError = Nothing
             }
-        newP = runElfsHelp elfs oldP
+
+        newP =
+            runElfsHelp elfs oldP
     in
-        (newP.program, newP.rightDoc, newP.outbox)
+    ( newP.program, newP.rightDoc, newP.outbox )
 
 
 type alias ProgramState =
@@ -758,7 +742,8 @@ runElfsHelp elfs s =
 
         e :: lfs ->
             let
-                newS = e s
+                newS =
+                    e s
             in
             runElfsHelp lfs newS
 
@@ -848,15 +833,15 @@ runTypeChecks elts =
             Nothing
 
         Ok ts ->
-            Just <| String.concat
-                [ "typestack should be empty at end of program, but "
-                , "got "
-                , showTypeStack ts
-                ]
+            Just <|
+                String.concat
+                    [ "typestack should be empty at end of program, but "
+                    , "got "
+                    , showTypeStack ts
+                    ]
 
         Err err ->
             Just err
-            
 
 
 runTypeChecksHelp :
