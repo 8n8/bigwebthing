@@ -14,6 +14,4 @@ sjcl.js
 *.tl
 elm-stuff/
 main.js
-base64js.min.js
-nacl-fast.min.js
 code

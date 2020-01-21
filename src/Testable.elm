@@ -6,8 +6,12 @@ import Bytes.Decode as D
 import Bytes.Encode as E
 import Dict
 import Element
+import Element.Background as Background
+import Element.Border as Border
+import Element.Font as Font
 import Element.Input
 import Html
+import Html.Attributes
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
@@ -28,6 +32,7 @@ type Msg
     | LookupRaw (N.Nonempty String)
     | LaunchProgram String
     | NewRawKeys Je.Value
+    | ShowProgramCheckBox Bool
 
 
 type alias Model =
@@ -37,6 +42,7 @@ type alias Model =
     , toLookUp : List String
     , accumBlob : Maybe Bytes.Bytes
     , internalErr : Maybe String
+    , editProgram : Bool
     }
 
 
@@ -98,13 +104,34 @@ view model =
 
 viewHelp : Model -> Element.Element Msg
 viewHelp model =
-    Element.column []
+    Element.column
+        [ Element.width <| Element.fill
+        , Element.padding 6
+        , Element.spacing 20
+        , sansSerif
+        , Font.size 25
+        ]
         [ homeButton
-        , leftRight model
+        , leftInput model
+        , Element.text "The program output goes here:"
+        , showRightDoc model
+        , Element.text "End of program output."
+        , editorCheckbox model.editProgram
         , editor model
         ]
 
 
+css : String -> String -> Element.Attribute Msg
+css key value =
+    Element.htmlAttribute <| Html.Attributes.style key value
+
+
+sansSerif = Font.family [ Font.typeface "Ubuntu" ]
+monospace = Font.family [ Font.typeface "Ubuntu Mono" ]
+
+
+-- The wrapping is still not working nicely. See this Ellie for
+-- an example: https://ellie-app.com/7PscK58sWRba1
 editor : Model -> Element.Element Msg
 editor model =
     case model.openProgram of
@@ -112,7 +139,9 @@ editor model =
             Element.text <| "internal err: can't find program"
 
         Just ( program, _ ) ->
-            Element.Input.multiline []
+            Element.Input.multiline
+                [ monospace
+                ]
                 { onChange = UpdatedEditor
                 , text = program.code
                 , placeholder =
@@ -120,26 +149,29 @@ editor model =
                         Element.Input.placeholder [] <|
                             Element.text "Type program here"
                 , label =
-                    Element.Input.labelAbove [] <|
-                        Element.text "Type program here"
+                    Element.Input.labelAbove [sansSerif] <|
+                        Element.text "This box contains the program:"
                 , spellcheck = False
                 }
 
 
-homeButton : Element.Element Msg
-homeButton =
-    Element.Input.button []
-        { onPress = Just <| LaunchProgram "home"
-        , label = Element.text "Home"
+editorCheckbox : Bool -> Element.Element Msg
+editorCheckbox checked =
+    Element.Input.checkbox []
+        { onChange = ShowProgramCheckBox
+        , icon = Element.Input.defaultCheckbox
+        , checked = checked
+        , label = Element.Input.labelRight [] <|
+            Element.text "Tick this box if you're sure you want to edit the program."
         }
 
 
-leftRight : Model -> Element.Element Msg
-leftRight model =
-    Element.row []
-        [ leftInput model
-        , showRightDoc model
-        ]
+homeButton : Element.Element Msg
+homeButton =
+    Element.Input.button [ Element.padding 10, Border.width 1, Border.color <| Element.rgb255 0 0 0 ]
+        { onPress = Just <| LaunchProgram "home"
+        , label = Element.text "Launch home app"
+        }
 
 
 topProgramP : P.Parser (List Elf, List Elt)
@@ -260,7 +292,48 @@ elementP =
         , partialTypeCheckP
         , fullTypeCheckP
         , retrieveP
+        , switchP
         ]
+
+
+switchP : P.Parser ( List Elf, List Elt )
+switchP =
+    P.map makeSwitchElfsElts <|
+        P.sequence
+            { start = "switch"
+            , separator = ","
+            , end = "endswitch"
+            , spaces = whiteSpaceP
+            , item = switchPartP
+            , trailing = P.Mandatory
+            }
+
+
+makeSwitchElfsElts = Debug.todo "todo"
+
+
+type alias SwitchPart =
+    { pattern : Pattern
+    , block : (List Elf, List Elt)
+    }
+
+
+type Pattern
+    = PString String
+    | PVariable 
+
+
+switchPartP : P.Parser SwitchPart
+switchPartP =
+    P.succeed SwitchPart
+        |= patternP
+        |. whiteSpaceP
+        |. P.token "->"
+        |. whiteSpaceP
+        |= programBlockP
+
+
+patternP = Debug.todo ""
 
 
 stringPWrap : P.Parser ( List Elf, List Elt )
@@ -555,7 +628,7 @@ fullTypeCheckP =
                 , end = ">"
                 , spaces = whiteSpaceP
                 , item = typeLiteralP
-                , trailing = P.Optional
+                , trailing = P.Mandatory
                 }
 
 
@@ -897,17 +970,17 @@ showProgVal p =
 
 leftInput : Model -> Element.Element Msg
 leftInput model =
-    Element.Input.multiline []
+    Element.Input.multiline [monospace]
         { onChange = UpdatedLeft
         , text = leftText model
         , placeholder =
             Just <|
                 Element.Input.placeholder [] <|
-                    Element.text "Type stuff here"
+                    Element.text "Type here"
         , label =
-            Element.Input.labelAbove [] <|
+            Element.Input.labelAbove [sansSerif] <|
                 Element.text <|
-                    "Type here, using instructions on right."
+                    "Your input goes here:"
         , spellcheck = True
         }
 
@@ -924,17 +997,13 @@ leftText model =
 
 showRightDoc : Model -> Element.Element Msg
 showRightDoc model =
+    Element.el [monospace] <|
     case model.openProgram of
         Nothing ->
             Element.text <| "internal error: can't find program"
 
-        Just program ->
-            case model.openProgram of
-                Nothing ->
-                    Element.text <| "internal error: no open program"
-
-                Just ( _, doc ) ->
-                    displayDoc model.lookedUpBlob doc
+        Just (_, doc) ->
+            displayDoc model.lookedUpBlob doc
 
 
 displayDoc :

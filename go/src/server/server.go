@@ -303,7 +303,7 @@ func main() {
 				http.NotFound(w, r)
 				return
 			}
-			w.Header().Add("Content-Security-Policy", csp)
+			// w.Header().Add("Content-Security-Policy", csp)
 			handle, err := os.Open("index.html")
 			if err != nil {
 				http.Error(w, err.Error(), 500)
@@ -320,13 +320,8 @@ func main() {
 			body, _ := ioutil.ReadAll(r.Body)
 			fmt.Println(string(body))
 		})
-	serveFile("main.js", "application/javascript")
-	serveFile("localforage.min.js", "application/javascript")
-	serveFile("styles.css", "text/css")
+        http.Handle("/static/", http.FileServer(http.Dir("")))
         serveFile("favicon.ico", "image/ico")
-        serveFile("elm.js", "application/javascript")
-        serveFile("base64js.min.js", "application/javascript")
-        serveFile("nacl-fast.min.js", "application/javascript")
 	fmt.Println(http.ListenAndServe(":3001", nil))
 }
 

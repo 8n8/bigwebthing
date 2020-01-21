@@ -66,6 +66,8 @@ main =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        ShowProgramCheckBox check ->
+            ( { model | editProgram = check }, Cmd.none )
         LaunchProgram programName ->
             case Dict.get programName model.home.programs of
                 Nothing ->
@@ -135,16 +137,19 @@ update msg model =
                     reRunProgram model newProg
 
         UpdatedEditor newCode ->
-            case model.openProgram of
-                Nothing ->
-                    ( model, Cmd.none )
+            if model.editProgram then
+                case model.openProgram of
+                    Nothing ->
+                        ( model, Cmd.none )
 
-                Just ( program, _ ) ->
-                    let
-                        newProg =
-                            { program | code = newCode }
-                    in
-                    reRunProgram model newProg
+                    Just ( program, _ ) ->
+                        let
+                            newProg =
+                                { program | code = newCode }
+                        in
+                        reRunProgram model newProg
+            else
+                (model, Cmd.none)
 
 
 init : () -> ( Model, Cmd Msg )
@@ -159,6 +164,7 @@ init _ =
       , toLookUp = []
       , accumBlob = Nothing
       , internalErr = Nothing
+      , editProgram = False
       }
     , requestHome ()
     )
