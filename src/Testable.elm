@@ -338,7 +338,7 @@ patternP = Debug.todo ""
 
 stringPWrap : P.Parser ( List Elf, List Elt )
 stringPWrap =
-    P.succeed (\s -> ( [ stringElf s ], [ stringElt ] ))
+    P.succeed (\s -> ( [ stringElf s ], [ stringElt s ] ))
         |= stringP
 
 
@@ -347,9 +347,9 @@ stringElf s p =
     { p | stack = Pstring s :: p.stack }
 
 
-stringElt : Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
-stringElt dets stack =
-    Ok ( dets, Tstring :: stack )
+stringElt : String -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
+stringElt s dets stack =
+    Ok ( dets, {custom = [Pstring s], standard = []} :: stack )
 
 
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
@@ -453,9 +453,9 @@ defElf var p =
 
 defElt :
     String
-    -> Dict.Dict String TypeVal
-    -> List TypeVal
-    -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+    -> Dict.Dict String TypeT
+    -> List TypeT
+    -> Result String ( Dict.Dict String TypeT, List TypeT )
 defElt var dets typestack =
     case typestack of
         [] ->
@@ -493,9 +493,9 @@ blockElf elfs p =
     { p | stack = Pblock elfs :: p.stack }
 
 
-blockElt : List Elt -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+blockElt : List Elt -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
 blockElt elts dets stack =
-    Ok ( dets, Tblock elts :: stack )
+    Ok ( dets, {custom = [], standard = [Sblock elts]} :: stack )
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -520,15 +520,15 @@ runBlockElf s =
 
 
 runBlockElt :
-    Dict.Dict String TypeVal
-    -> List TypeVal
-    -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+    Dict.Dict String TypeT
+    -> List TypeT
+    -> Result String ( Dict.Dict String TypeT, List TypeT )
 runBlockElt dets typeStack =
     case typeStack of
         [] ->
             Err "empty stack"
 
-        (Tblock block) :: xs ->
+        (TypeT [] (Sblock block)) :: xs ->
             case runTypeChecksHelp block dets xs of
                 Ok newStack ->
                     Ok ( dets, newStack )
@@ -544,17 +544,76 @@ runBlockElt dets typeStack =
                     ]
 
 
-showTypeVal : TypeVal -> String
-showTypeVal typeVal =
-    case typeVal of
-        Tstring ->
+showString : String -> String
+showString s =
+    String.reverse <| String.foldr showStringHelp "" s
+
+
+showStringHelp : Char -> String -> String
+showStringHelp char accumulator =
+    case char of
+        '\"' ->
+            "\"\\" ++ accumulator
+
+        '\n' ->
+            "n\\" ++ accumulator
+
+        '\t' ->
+            "t\\" ++ accumulator
+
+        '\r' ->
+            "r\\" ++ accumulator
+
+        c ->
+            String.cons c accumulator
+
+
+showTypeVal : TypeT -> String
+showTypeVal typet =
+    case typet of
+        TypeT [] [] ->
+            "empty"
+
+        TypeT [] (standard :: []) ->
+            showStandardType standard
+
+        TypeT [] standards ->
+            String.concat
+                [ "{"
+                , String.join ", " <|
+                    List.map showStandardType standards
+                , "}"
+                ]
+
+        TypeT customs [] ->
+            String.concat
+                [ "{"
+                , String.join ", " <| List.map showProgVal customs
+                , "}"
+                ]
+
+        TypeT customs standards ->
+            String.concat
+                [ "{"
+                , String.join ", " <|
+                    List.map showStandardType standards
+                , ", "
+                , String.join ", " <| List.map showProgVal customs
+                , "}"
+                ]
+
+
+showStandardType : StandardType -> String
+showStandardType standard =
+    case standard of
+        Sstring ->
             "string"
 
-        Tblock atoms ->
+        Sblock _ ->
             "block"
 
 
-showTypeStack : List TypeVal -> String
+showTypeStack : List TypeT -> String
 showTypeStack typestack =
     String.concat
         [ "<"
@@ -563,23 +622,23 @@ showTypeStack typestack =
         ]
 
 
-showTypeCheck : List TypeLiteral -> String
-showTypeCheck typeCheck =
-    String.concat
-        [ "<"
-        , String.join ", " <| List.map showTypeLit typeCheck
-        , ">"
-        ]
+-- showTypeCheck : List TypeLiteral -> String
+-- showTypeCheck typeCheck =
+--     String.concat
+--         [ "<"
+--         , String.join ", " <| List.map showTypeLit typeCheck
+--         , ">"
+--         ]
 
 
-showTypeLit : TypeLiteral -> String
-showTypeLit typeLit =
-    case typeLit of
-        Tlstring ->
-            "string"
-
-        Tlblock ->
-            "block"
+-- showTypeLit : TypeLiteral -> String
+-- showTypeLit typeLit =
+--     case typeLit of
+--         Tlstring ->
+--             "string"
+-- 
+--         Tlblock ->
+--             "block"
 
 
 retrieveP : P.Parser ( List Elf, List Elt )
@@ -608,7 +667,7 @@ makeRetrieveElf var p =
             { p | stack = f :: p.stack }
 
 
-makeRetrieveElt : String -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makeRetrieveElt : String -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
 makeRetrieveElt var dets typestack =
     case Dict.get var dets of
         Nothing ->
@@ -632,29 +691,29 @@ fullTypeCheckP =
                 }
 
 
-typeCheckErr : List TypeLiteral -> List TypeVal -> String
-typeCheckErr expected got =
-    String.concat
-        [ "type stack does not match type declaration:\n"
-        , "expecting "
-        , showTypeCheck <| List.reverse expected
-        , "\n"
-        , "but got "
-        , showTypeStack <| List.reverse got
-        , "\n"
-        ]
+-- typeCheckErr : List TypeLiteral -> List TypeT -> String
+-- typeCheckErr expected got =
+--     String.concat
+--         [ "type stack does not match type declaration:\n"
+--         , "expecting "
+--         , showTypeCheck <| List.reverse expected
+--         , "\n"
+--         , "but got "
+--         , showTypeStack <| List.reverse got
+--         , "\n"
+--         ]
 
 
-makeFullTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
-makeFullTypeCheck typeVals dets typeStack =
-    if equalT typeVals typeStack then
-        Ok ( dets, typeStack )
+-- makeFullTypeCheck : List TypeLiteral -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
+-- makeFullTypeCheck typeVals dets typeStack =
+--     if equalT typeVals typeStack then
+--         Ok ( dets, typeStack )
+-- 
+--     else
+--         Err <| typeCheckErr typeVals typeStack
 
-    else
-        Err <| typeCheckErr typeVals typeStack
 
-
-equalT : List TypeLiteral -> List TypeVal -> Bool
+equalT : List TypeLiteral -> List TypeT -> Bool
 equalT lits vals =
     if List.length lits /= List.length vals then
         False
@@ -663,20 +722,38 @@ equalT lits vals =
         List.all identity <| List.map2 equalThelp lits vals
 
 
-equalThelp : TypeLiteral -> TypeVal -> Bool
-equalThelp lit val =
-    case ( lit, val ) of
-        ( Tlstring, Tstring ) ->
+isSubTypeOfLit : List ProgVal -> TypeLiteral -> Bool
+isSubTypeOfLit values lit =
+    List.all (isSubTypeOfHelp lit) values
+
+
+isSubTypeOfHelp : TypeLiteral -> ProgVal -> Bool
+isSubTypeOfHelp lit value =
+    case (lit, value) of
+        (Tlstring, Pstring _) ->
             True
 
-        ( Tlblock, Tblock _ ) ->
+        (Tlblock, Pblock _) ->
             True
 
         _ ->
             False
 
 
-makePartialTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+equalThelp : TypeLiteral -> TypeT -> Bool
+equalThelp lit val =
+    case ( lit, val ) of
+        ( Tlstring, Tcustom ts ) ->
+            isSubTypeOfLit ts Tlstring
+
+        ( Tlblock, Tstandard (Sblock _ )) ->
+            True
+
+        _ ->
+            False
+
+
+makePartialTypeCheck : List TypeLiteral -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
 makePartialTypeCheck typeVals dets typeStack =
     let
         lenExpected =
@@ -704,20 +781,41 @@ makePartialTypeCheck typeVals dets typeStack =
         Err <| typeCheckErr typeVals candidate
 
 
-typeLiteralP : P.Parser TypeLiteral
+{-|
+Some examples of type literals:
+
+1)
+    string
+
+2)
+    block
+
+3)
+    { "hello", "hi", "hey" }
+
+4)
+    { "aa" } + block
+
+5)
+    block + string
+
+6)
+    string - { "a very bad string", "a terrible string" }
+
+7)
+    {}
+
+-}
+typeLiteralP : P.Parser TypeT
 typeLiteralP =
-    P.oneOf [ stringTypeP, blockTypeP ]
+    P.oneOf [simpleStandard, 
+    -- P.oneOf [ stringTypeP, blockTypeP ]
 
 
 blockTypeP : P.Parser TypeLiteral
 blockTypeP =
     P.succeed Tlblock
         |. P.keyword "block"
-
-
-type TypeLiteral
-    = Tlstring
-    | Tlblock
 
 
 stringTypeP : P.Parser TypeLiteral
@@ -828,19 +926,22 @@ runElfsHelp elfs s =
             runElfsHelp lfs newS
 
 
-type TypeVal
-    = Tstring
-    | Tblock (List Elt)
+type TypeT = TypeT (List ProgVal) (List StandardType)
+
+
+type StandardType
+    = Sstring
+    | Sblock (List Elt)
 
 
 type alias Elt =
-    Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+    Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
 
 
-standardTypes : Dict.Dict String TypeVal
+standardTypes : Dict.Dict String TypeT
 standardTypes =
     Dict.fromList
-        [ ( "print", Tblock [ printElt ] )
+        [ ( "print", Tstandard (Sblock [ printElt ]) )
         ]
 
 
@@ -891,19 +992,153 @@ print doc s =
             SmallString s
 
 
+printNeeds = "\"print\" needs there to be a string on the stack, but it is "
+
+
+isSubTypeOf : TypeT -> TypeT -> Bool
+isSubTypeOf subset bigset =
+    customMatches subset.custom bigset &&
+    standardMatches subset.standard bigset
+
+
+standardMatches : List StandardType -> TypeT -> Bool
+standardMatches standard bigset =
+    List.all (standardMatchesHelp bigset) standard
+
+
+standardMatchesHelp : TypeT -> StandardType -> Bool
+standardMatchesHelp bigset standard =
+    List.any ((==) standard) bigset.standard
+
+
+customMatches : List ProgVal -> TypeT -> Bool
+customMatches custom bigset =
+    isSubList custom bigset.custom ||
+    valsMatchType custom bigset.standard
+
+        
+        -- (Tcustom subValues, Tcustom bigValues) ->
+        --     isSubList subValues bigValues
+
+        -- (Tcustom subValues, Tstandard Sstring) ->
+        --     List.all isProgString subValues
+
+        -- (Tcustom subValues, Tstandard (Sblock _)) ->
+        --     List.all isProgBlock subValues
+
+        -- (Tstandard Sstring, Tcustom _) ->
+        --     False
+
+        -- (Tstandard Sstring, Tstandard Sstring) ->
+        --     True
+
+        -- (Tstandard Sstring, Tstandard (Sblock _)) ->
+        --     False
+
+        -- (Tstandard Sstring, Tcombined _ standards) ->
+        --     List.any ((==) Sstring) standards
+
+        -- (Tcombined _ (_::_), Tcustom _) ->
+        --     False
+
+        -- (Tcombined subCustom [], Tcustom bigCustom) ->
+        --     isSubList subCustom bigCustom
+
+        -- (Tcustom subCustom, Tcombined bigCustom bigStandards) ->
+        --     List.any identity
+        --         [ isSubList subCustom bigCustom
+        --         , List.any (valsMatchType subCustom) bigStandards
+        --         ]
+
+        -- (Tstandard (Sblock _), Tcustom bigCustom) ->
+        --     List.any isProgBlock bigCustom
+
+        -- (Tstandard (Sblock _), Tstandard (Sblock _)) ->
+        --     True
+
+        -- (Tstandard (Sblock _), Tcombined bigCustom bigStandard) ->
+        --     List.any identity
+        --         [ List.any isProgBlock bigCustom
+        --         , List.any isStandardBlock bigStandard
+        --         ]
+
+        -- (Tstandard (Sblock _), Tstandard Sstring) ->
+        --     False
+
+        -- (Tcombined _ [], Tstandard _) ->
+        --     False
+
+        -- (Tcombined subValues [], Tcombined bigValues []) ->
+        --     isSubList subValues bigValues
+
+            
+
+
+isStandardBlock : StandardType -> Bool
+isStandardBlock s =
+    case s of
+        Sblock _ ->
+            True
+
+        _ ->
+            False
+
+
+valsMatchType : List ProgVal -> StandardType -> Bool
+valsMatchType values t =
+    List.all (valMatchesType t) values
+
+
+valMatchesType : StandardType -> ProgVal -> Bool
+valMatchesType t value =
+    case (t, value) of
+        (Sstring, Pstring _) ->
+            True
+
+        (Sblock _, Pblock _) ->
+            True
+
+        _ ->
+            False
+
+
+isProgBlock : ProgVal -> Bool
+isProgBlock t =
+    case t of
+        Pblock _ ->
+            True
+
+        _ ->
+            False
+
+
+isProgString : ProgVal -> Bool
+isProgString t =
+    case t of
+        Pstring _ ->
+            True
+
+        _ ->
+            False
+        
+
+isSubList : List ProgVal -> List ProgVal -> Bool
+isSubList sub big =
+    List.all (\s -> List.member s big) sub
+
+
 printElt : Elt
 printElt dets stack =
     case stack of
-        Tstring :: tack ->
-            Ok ( dets, tack )
+        [] ->
+            Err <| printNeeds ++ "empty"
 
-        s ->
-            Err <|
-                String.concat
-                    [ "\"print\" needs there to be a string on the stack"
-                    , " but the stack is "
-                    , showTypeStack s
-                    ]
+        s::tack ->
+            if isSubTypeOf s (Tstandard Sstring) then
+                Ok (dets, tack)
+
+            else
+                Err <| printNeeds ++ showTypeStack stack
 
 
 runTypeChecks : List Elt -> Maybe String
@@ -926,9 +1161,9 @@ runTypeChecks elts =
 
 runTypeChecksHelp :
     List Elt
-    -> Dict.Dict String TypeVal
-    -> List TypeVal
-    -> Result String (List TypeVal)
+    -> Dict.Dict String TypeT
+    -> List TypeT
+    -> Result String (List TypeT)
 runTypeChecksHelp elts dets typeStack =
     case elts of
         [] ->
