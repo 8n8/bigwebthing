@@ -289,27 +289,27 @@ elementP =
         , stringPWrap
         , defP
         , programBlockP
-        , partialTypeCheckP
-        , fullTypeCheckP
+        -- , partialTypeCheckP
+        -- , fullTypeCheckP
         , retrieveP
-        , switchP
+        -- , switchP
         ]
 
 
-switchP : P.Parser ( List Elf, List Elt )
-switchP =
-    P.map makeSwitchElfsElts <|
-        P.sequence
-            { start = "switch"
-            , separator = ","
-            , end = "endswitch"
-            , spaces = whiteSpaceP
-            , item = switchPartP
-            , trailing = P.Mandatory
-            }
-
-
-makeSwitchElfsElts = Debug.todo "todo"
+-- switchP : P.Parser ( List Elf, List Elt )
+-- switchP =
+--     P.map makeSwitchElfsElts <|
+--         P.sequence
+--             { start = "switch"
+--             , separator = ","
+--             , end = "endswitch"
+--             , spaces = whiteSpaceP
+--             , item = switchPartP
+--             , trailing = P.Mandatory
+--             }
+-- 
+-- 
+-- makeSwitchElfsElts = Debug.todo "todo"
 
 
 type alias SwitchPart =
@@ -527,30 +527,127 @@ runBlockElt dets typeStack =
     case typeStack of
         [] ->
             Err "empty stack"
+    
+        t :: xs ->
+            case getBlock t.standard of
+                Nothing ->
+                    Err <|
+                        String.concat
+                            [ "bad stack: expecting block, but got "
+                            , showTypeVal t
+                            ]
+                Just block ->
+                    case runTypeChecksHelp block dets xs of
+                        Ok newStack ->
+                            Ok ( dets, newStack )
 
-        (Tblock block) :: xs ->
-            case runTypeChecksHelp block dets xs of
-                Ok newStack ->
-                    Ok ( dets, newStack )
+                        Err errMsg ->
+                            Err errMsg
 
-                Err errMsg ->
-                    Err errMsg
 
-        x :: _ ->
-            Err <|
-                String.concat
-                    [ "bad stack: expecting block, but got "
-                    , showTypeVal x
-                    ]
+justs : List (Maybe a) -> List a
+justs maybes =
+    List.foldr justsHelp [] maybes
+
+
+justsHelp : Maybe a -> List a -> List a
+justsHelp maybe accum =
+    case maybe of
+        Just a ->
+            a :: accum
+
+        Nothing ->
+            accum
+
+
+getBlock : List StandardType -> Maybe (List Elt)
+getBlock standards =
+    List.head <| justs <| List.map getBlockHelp standards
+
+
+getBlockHelp : StandardType -> Maybe (List Elt)
+getBlockHelp s =
+    case s of
+        Sblock b ->
+            Just b
+
+        _ ->
+            Nothing
+
+
+showTypeAtom : TypeAtom -> String
+showTypeAtom t =
+    case t of
+        Astring s ->
+            "string: \"" ++ showString s ++ "\""
+
+
+showString : String -> String
+showString s =
+    String.reverse <| String.foldr showStringHelp "" s
+
+
+showStringHelp : Char -> String -> String
+showStringHelp char accumulator =
+    case char of
+        '"' ->
+            "\"\\" ++ accumulator
+
+        '\n' ->
+            "n\\" ++ accumulator
+
+        '\t' ->
+            "t\\" ++ accumulator
+
+        '\u{000D}' ->
+            "r\\" ++ accumulator
+
+        c ->
+            String.cons c accumulator
 
 
 showTypeVal : Type -> String
-showTypeVal typeVal =
-    case typeVal of
-        Tstring ->
+showTypeVal { custom, standard } =
+    case ( custom, standard ) of
+        ( [], [] ) ->
+            "empty"
+
+        ( [], b :: [] ) ->
+            showStandardType b
+
+        ( [], bs ) ->
+            String.concat
+                [ "{"
+                , String.join ", " <|
+                    List.map showStandardType bs
+                , "}"
+                ]
+
+        ( cs, [] ) ->
+            String.concat
+                [ "{"
+                , String.join ", " <| List.map showTypeAtom cs
+                , "}"
+                ]
+
+        ( cs, bs ) ->
+            String.concat
+                [ "{"
+                , String.join ", " <|
+                    List.map showStandardType bs
+                , ", "
+                , String.join ", " <| List.map showTypeAtom cs
+                , "}"
+                ]
+
+
+showStandardType : StandardType -> String
+showStandardType standard =
+    case standard of
+        Sstring ->
             "string"
 
-        Tblock atoms ->
+        Sblock _ ->
             "block"
 
 
@@ -618,18 +715,18 @@ makeRetrieveElt var dets typestack =
             Ok ( dets, t :: typestack )
 
 
-fullTypeCheckP : P.Parser ( List Elf, List Elt )
-fullTypeCheckP =
-    P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
-        P.map List.reverse <|
-            P.sequence
-                { start = "<"
-                , separator = ","
-                , end = ">"
-                , spaces = whiteSpaceP
-                , item = typeLiteralP
-                , trailing = P.Mandatory
-                }
+-- fullTypeCheckP : P.Parser ( List Elf, List Elt )
+-- fullTypeCheckP =
+--     P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
+--         P.map List.reverse <|
+--             P.sequence
+--                 { start = "<"
+--                 , separator = ","
+--                 , end = ">"
+--                 , spaces = whiteSpaceP
+--                 , item = typeLiteralP
+--                 , trailing = P.Mandatory
+--                 }
 
 
 typeCheckErr : List TypeLiteral -> List Type -> String
@@ -645,63 +742,63 @@ typeCheckErr expected got =
         ]
 
 
-makeFullTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-makeFullTypeCheck typeVals dets typeStack =
-    if equalT typeVals typeStack then
-        Ok ( dets, typeStack )
-
-    else
-        Err <| typeCheckErr typeVals typeStack
-
-
-equalT : List TypeLiteral -> List Type -> Bool
-equalT lits vals =
-    if List.length lits /= List.length vals then
-        False
-
-    else
-        List.all identity <| List.map2 equalThelp lits vals
+-- makeFullTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
+-- makeFullTypeCheck typeVals dets typeStack =
+--     if equalT typeVals typeStack then
+--         Ok ( dets, typeStack )
+-- 
+--     else
+--         Err <| typeCheckErr typeVals typeStack
 
 
-equalThelp : TypeLiteral -> Type -> Bool
-equalThelp lit val =
-    case ( lit, val ) of
-        ( Tlstring, Tstring ) ->
-            True
+-- equalT : List TypeLiteral -> List Type -> Bool
+-- equalT lits vals =
+--     if List.length lits /= List.length vals then
+--         False
+-- 
+--     else
+--         List.all identity <| List.map2 equalThelp lits vals
+-- 
+-- 
+-- equalThelp : TypeLiteral -> Type -> Bool
+-- equalThelp lit val =
+--     case ( lit, val ) of
+--         ( Tlstring, Tstring ) ->
+--             True
+-- 
+--         ( Tlblock, Tblock _ ) ->
+--             True
+-- 
+--         _ ->
+--             False
 
-        ( Tlblock, Tblock _ ) ->
-            True
 
-        _ ->
-            False
-
-
-makePartialTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-makePartialTypeCheck typeVals dets typeStack =
-    let
-        lenExpected =
-            List.length typeVals
-
-        lenActual =
-            List.length typeStack
-
-        candidate =
-            List.take lenExpected typeStack
-    in
-    if lenActual < lenExpected then
-        Err <|
-            String.concat
-                [ "expecting "
-                , String.fromInt lenExpected
-                , " items on the stack, but only got "
-                , String.fromInt lenActual
-                ]
-
-    else if equalT typeVals candidate then
-        Ok ( dets, typeStack )
-
-    else
-        Err <| typeCheckErr typeVals candidate
+-- makePartialTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
+-- makePartialTypeCheck typeVals dets typeStack =
+--     let
+--         lenExpected =
+--             List.length typeVals
+-- 
+--         lenActual =
+--             List.length typeStack
+-- 
+--         candidate =
+--             List.take lenExpected typeStack
+--     in
+--     if lenActual < lenExpected then
+--         Err <|
+--             String.concat
+--                 [ "expecting "
+--                 , String.fromInt lenExpected
+--                 , " items on the stack, but only got "
+--                 , String.fromInt lenActual
+--                 ]
+-- 
+--     else if equalT typeVals candidate then
+--         Ok ( dets, typeStack )
+-- 
+--     else
+--         Err <| typeCheckErr typeVals candidate
 
 
 typeLiteralP : P.Parser TypeLiteral
@@ -726,18 +823,18 @@ stringTypeP =
         |. P.keyword "string"
 
 
-partialTypeCheckP : P.Parser ( List Elf, List Elt )
-partialTypeCheckP =
-    P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
-        P.map List.reverse <|
-            P.sequence
-                { start = "<.."
-                , separator = ","
-                , end = ">"
-                , spaces = whiteSpaceP
-                , item = typeLiteralP
-                , trailing = P.Optional
-                }
+-- partialTypeCheckP : P.Parser ( List Elf, List Elt )
+-- partialTypeCheckP =
+--     P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
+--         P.map List.reverse <|
+--             P.sequence
+--                 { start = "<.."
+--                 , separator = ","
+--                 , end = ">"
+--                 , spaces = whiteSpaceP
+--                 , item = typeLiteralP
+--                 , trailing = P.Optional
+--                 }
 
 
 whiteSpaceP : P.Parser ()
@@ -850,7 +947,7 @@ type alias Elt =
 standardTypes : Dict.Dict String Type
 standardTypes =
     Dict.fromList
-        [ ( "print", Tblock [ printElt ] )
+        [ ( "print", { standard = [Sblock [ printElt ]], custom = []} )
         ]
 
 
@@ -904,16 +1001,66 @@ print doc s =
 printElt : Elt
 printElt dets stack =
     case stack of
-        Tstring :: tack ->
-            Ok ( dets, tack )
+        [] ->
+            Err <| String.concat
+                [ "\"print\" needs there to be a something on the "
+                , "stack, but it is empty"
+                ]
+        s :: tack ->
+            if isSubType s ({standard = [Sstring], custom = []}) then
+                Ok ( dets, tack )
+            else
+                Err <|
+                    String.concat
+                        [ "\"print\" needs the top value on the "
+                        , "stack to be a string, but it is "
+                        , showTypeVal s
+                        ]
 
-        s ->
-            Err <|
-                String.concat
-                    [ "\"print\" needs there to be a string on the stack"
-                    , " but the stack is "
-                    , showTypeStack s
-                    ]
+
+isSubType : Type -> Type -> Bool
+isSubType sub master =
+    List.any identity
+        [ sub == master
+        , List.all identity
+            [ List.any identity
+                [ customOfCustom sub.custom master.custom
+                , customOfStandard sub.custom master.standard
+                ]
+            , List.any identity
+                [ standardOfCustom sub.standard master.custom
+                , standardOfStandard sub.standard master.standard
+                ]
+            ]
+        ]
+
+
+standardOfCustom : List StandardType -> List TypeAtom -> Bool
+standardOfCustom sub master =
+    False
+
+
+standardOfStandard : List StandardType -> List StandardType -> Bool
+standardOfStandard sub master =
+    List.all (\s -> List.member s master) sub
+
+
+customOfCustom : List TypeAtom -> List TypeAtom -> Bool
+customOfCustom sub master =
+    List.all (\s -> List.member s master) sub
+
+
+customOfStandard : List TypeAtom -> List StandardType -> Bool
+customOfStandard sub master =
+    List.all (customOfStandardHelp master) sub
+
+
+customOfStandardHelp : List StandardType -> TypeAtom -> Bool
+customOfStandardHelp bs t =
+    case t of
+        Astring _ ->
+            List.member Sstring bs
+
 
 
 runTypeChecks : List Elt -> Maybe String
