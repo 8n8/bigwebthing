@@ -347,9 +347,9 @@ stringElf s p =
     { p | stack = Pstring s :: p.stack }
 
 
-stringElt : Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+stringElt : Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 stringElt dets stack =
-    Ok ( dets, Tstring :: stack )
+    Ok ( dets, {standard = [Sstring], custom = []}  :: stack )
 
 
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
@@ -453,9 +453,9 @@ defElf var p =
 
 defElt :
     String
-    -> Dict.Dict String TypeVal
-    -> List TypeVal
-    -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+    -> Dict.Dict String Type
+    -> List Type
+    -> Result String ( Dict.Dict String Type, List Type )
 defElt var dets typestack =
     case typestack of
         [] ->
@@ -493,9 +493,9 @@ blockElf elfs p =
     { p | stack = Pblock elfs :: p.stack }
 
 
-blockElt : List Elt -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+blockElt : List Elt -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 blockElt elts dets stack =
-    Ok ( dets, Tblock elts :: stack )
+    Ok ( dets, {standard = [Sblock elts], custom = []} :: stack )
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -520,9 +520,9 @@ runBlockElf s =
 
 
 runBlockElt :
-    Dict.Dict String TypeVal
-    -> List TypeVal
-    -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+    Dict.Dict String Type
+    -> List Type
+    -> Result String ( Dict.Dict String Type, List Type )
 runBlockElt dets typeStack =
     case typeStack of
         [] ->
@@ -544,7 +544,7 @@ runBlockElt dets typeStack =
                     ]
 
 
-showTypeVal : TypeVal -> String
+showTypeVal : Type -> String
 showTypeVal typeVal =
     case typeVal of
         Tstring ->
@@ -554,7 +554,7 @@ showTypeVal typeVal =
             "block"
 
 
-showTypeStack : List TypeVal -> String
+showTypeStack : List Type -> String
 showTypeStack typestack =
     String.concat
         [ "<"
@@ -608,7 +608,7 @@ makeRetrieveElf var p =
             { p | stack = f :: p.stack }
 
 
-makeRetrieveElt : String -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makeRetrieveElt : String -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 makeRetrieveElt var dets typestack =
     case Dict.get var dets of
         Nothing ->
@@ -632,7 +632,7 @@ fullTypeCheckP =
                 }
 
 
-typeCheckErr : List TypeLiteral -> List TypeVal -> String
+typeCheckErr : List TypeLiteral -> List Type -> String
 typeCheckErr expected got =
     String.concat
         [ "type stack does not match type declaration:\n"
@@ -645,7 +645,7 @@ typeCheckErr expected got =
         ]
 
 
-makeFullTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makeFullTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 makeFullTypeCheck typeVals dets typeStack =
     if equalT typeVals typeStack then
         Ok ( dets, typeStack )
@@ -654,7 +654,7 @@ makeFullTypeCheck typeVals dets typeStack =
         Err <| typeCheckErr typeVals typeStack
 
 
-equalT : List TypeLiteral -> List TypeVal -> Bool
+equalT : List TypeLiteral -> List Type -> Bool
 equalT lits vals =
     if List.length lits /= List.length vals then
         False
@@ -663,7 +663,7 @@ equalT lits vals =
         List.all identity <| List.map2 equalThelp lits vals
 
 
-equalThelp : TypeLiteral -> TypeVal -> Bool
+equalThelp : TypeLiteral -> Type -> Bool
 equalThelp lit val =
     case ( lit, val ) of
         ( Tlstring, Tstring ) ->
@@ -676,7 +676,7 @@ equalThelp lit val =
             False
 
 
-makePartialTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makePartialTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 makePartialTypeCheck typeVals dets typeStack =
     let
         lenExpected =
@@ -828,16 +828,26 @@ runElfsHelp elfs s =
             runElfsHelp lfs newS
 
 
-type TypeVal
-    = Tstring
-    | Tblock (List Elt)
+type alias Type =
+    { standard : List StandardType
+    , custom : List TypeAtom
+    }
+
+
+type TypeAtom
+    = Astring String
+
+
+type StandardType
+    = Sblock (List Elt)
+    | Sstring
 
 
 type alias Elt =
-    Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+    Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 
 
-standardTypes : Dict.Dict String TypeVal
+standardTypes : Dict.Dict String Type
 standardTypes =
     Dict.fromList
         [ ( "print", Tblock [ printElt ] )
@@ -926,9 +936,9 @@ runTypeChecks elts =
 
 runTypeChecksHelp :
     List Elt
-    -> Dict.Dict String TypeVal
-    -> List TypeVal
-    -> Result String (List TypeVal)
+    -> Dict.Dict String Type
+    -> List Type
+    -> Result String (List Type)
 runTypeChecksHelp elts dets typeStack =
     case elts of
         [] ->
