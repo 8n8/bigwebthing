@@ -126,14 +126,12 @@ css key value =
     Element.htmlAttribute <| Html.Attributes.style key value
 
 
-sansSerif =
-    Font.family [ Font.typeface "Ubuntu" ]
+sansSerif = Font.family [ Font.typeface "Ubuntu" ]
+monospace = Font.family [ Font.typeface "Ubuntu Mono" ]
 
 
-monospace =
-    Font.family [ Font.typeface "Ubuntu Mono" ]
-
-
+-- The wrapping is still not working nicely. See this Ellie for
+-- an example: https://ellie-app.com/7PscK58sWRba1
 editor : Model -> Element.Element Msg
 editor model =
     case model.openProgram of
@@ -151,7 +149,7 @@ editor model =
                         Element.Input.placeholder [] <|
                             Element.text "Type program here"
                 , label =
-                    Element.Input.labelAbove [ sansSerif ] <|
+                    Element.Input.labelAbove [sansSerif] <|
                         Element.text "This box contains the program:"
                 , spellcheck = False
                 }
@@ -163,9 +161,8 @@ editorCheckbox checked =
         { onChange = ShowProgramCheckBox
         , icon = Element.Input.defaultCheckbox
         , checked = checked
-        , label =
-            Element.Input.labelRight [] <|
-                Element.text "Tick this box if you're sure you want to edit the program."
+        , label = Element.Input.labelRight [] <|
+            Element.text "Tick this box if you're sure you want to edit the program."
         }
 
 
@@ -177,57 +174,10 @@ homeButton =
         }
 
 
-type alias ParserState =
-    { mirror : MirrorState
-    , types : TypeProgramState
-    }
-
-
-type alias MirrorState =
-    { defs : Dict.Dict String TypeT
-    , stack : List TypeT
-    }
-
-
-type alias TypeProgramState =
-    { defs : Dict.Dict String TypeProgramValue
-    , stack : List TypeProgramValue
-    }
-
-
-type TypeProgramValue
-    = TType TypeT
-    | TString String
-    | Tblock (List (TypeProgramState -> TypeProgramState))
-    | Tlist (List TypeT)
-
-
-type BuiltInType
-    = Bstring
-    | Bblock (List (MirrorState -> Result String MirrorState))
-
-
-type alias BuiltInTypeComp =
-    Int
-
-
-initParserState : ParserState
-initParserState =
-    { mirror =
-        { defs = standardMirrorDefs
-        , stack = []
-        }
-    , types =
-        { defs = standardTypeDefs
-        , stack = []
-        }
-    }
-
-
-topProgramP : P.Parser Actions
+topProgramP : P.Parser (List Elf, List Elt)
 topProgramP =
-    P.succeed Tuple.second
-        |= programP initParserState
+    P.succeed identity
+        |= programP
         |. P.end
 
 
@@ -240,8 +190,13 @@ runProgram program =
             , []
             )
 
-        Ok actions ->
-            runElfs program actions []
+        Ok ( elfs, elts ) ->
+            case runTypeChecks elts of
+                Just errMsg ->
+                    ( program, Just <| SmallString errMsg, [] )
+
+                Nothing ->
+                    runElfs program elfs []
 
 
 deadEndsToString : List P.DeadEnd -> String
@@ -309,239 +264,92 @@ problemToString problem =
             "bad repeat"
 
 
-programP : ParserState -> P.Parser ( ParserState, Actions )
-programP p =
-    P.loop ( p, [] ) programHelpP
+programP : P.Parser ( List Elf, List Elt )
+programP =
+    P.loop ( [], [] ) programHelpP
 
 
 programHelpP :
-    ( ParserState, Actions )
-    -> P.Parser (P.Step ( ParserState, Actions ) ( ParserState, Actions ))
-programHelpP ( oldState, oldActions ) =
+    ( List Elf, List Elt )
+    -> P.Parser (P.Step ( List Elf, List Elt ) ( List Elf, List Elt ))
+programHelpP ( oldElfs, oldElts ) =
     P.oneOf
-        [ P.succeed (\( p, a ) -> P.Loop ( p, a ++ oldActions ))
+        [ P.succeed (\( elfs, elts ) -> P.Loop ( oldElfs ++ elfs, oldElts ++ elts ))
             |. whiteSpaceP
-            |= elementP oldState
+            |= elementP
             |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done ( oldState, oldActions ))
+        , P.succeed () |> P.map (\_ -> P.Done ( oldElfs, oldElts ))
         ]
 
 
-elementP : ParserState -> P.Parser ( ParserState, Actions )
-elementP p =
+elementP : P.Parser ( List Elf, List Elt )
+elementP =
     P.oneOf
-        [ runBlockP p
-        , stringPWrap p
-        , defP p
-        , programBlockP p
-        -- , partialTypeCheckP p
-        -- , fullTypeCheckP p
-        , retrieveP p
-        -- , switchP p
-        , typeLangP p
+        [ runBlockP
+        , stringPWrap
+        , defP
+        , programBlockP
+        , partialTypeCheckP
+        , fullTypeCheckP
+        , retrieveP
+        , switchP
         ]
 
 
-typeLangP : ParserState -> P.Parser (ParserState, Actions)
-typeLangP oldP =
-    P.succeed (\p -> (p, []))
-        |. P.token "<"
-        |= typeLangHelpP oldP
-        |. whiteSpaceP
-        |. P.token ">"
-    
-
-typeLangHelpP : ParserState -> P.Parser ParserState
-typeLangHelpP p =
-    P.loop p typeLangStepP
-
-
-typeLangStepP : ParserState -> P.Parser (P.Step ParserState ParserState)
-typeLangStepP oldP =
-    P.oneOf
-        [ P.succeed P.Loop
-            |. whiteSpaceP
-            |= typeElementP oldP
-            |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done oldP)
-        ]
+switchP : P.Parser ( List Elf, List Elt )
+switchP =
+    P.map makeSwitchElfsElts <|
+        P.sequence
+            { start = "switch"
+            , separator = ","
+            , end = "endswitch"
+            , spaces = whiteSpaceP
+            , item = switchPartP
+            , trailing = P.Mandatory
+            }
 
 
-typeElementP : ParserState -> P.Parser ParserState
-typeElementP p =
-    P.oneOf
-        [ typeRunBlock p
-        , typeStringP p
-        , typeDefP p
-        , typeBlockP p
-        , typeRetrieveP p
-        , partialTypeCheckP p
-        , fullTypeCheckP p
-        ]
+makeSwitchElfsElts = Debug.todo "todo"
 
 
-typeBlockP : ParserState -> P.Parser ParserState
-typeBlockP oldP =
-    P.succeed (\newP -> addTypeBlock newP)
-        |. P.keyword "{"
-        |= typeLangHelpP oldP
-        |. P.keyword "}"
-
-
-addTypeBlock : ParserState -> ParserState
-addTypeBlock oldP =
-    let
-        oldTypes = oldP.types
-        newTypes = { oldTypes | stack = 
-
-
-typeRetrieveP : ParserState -> P.Parser ParserState
-typeRetrieveP p =
-    P.andThen (typeRetrievePHelp p) variable
-
-
-typeRetrievePHelp : ParserState -> String -> P.Parser ParserState
-typeRetrievePHelp p var =
-    case Dict.get var p.types.defs of
-        Nothing ->
-            P.problem <| "no definition \"" ++ var ++ "\""
-
-        Just lookedUp ->
-            let
-                oldTypeState = p.types
-                newStack = lookedUp :: oldTypeState.stack
-                newTypeState = {newTypeState | stack = newStack}
-            in
-                P.succeed {p | types = newTypeState}
-
-
-partialTypeCheckP : ParserState -> P.Parser ParserState
-partialTypeCheckP oldP =
-    P.succeed identity
-        |. P.keyword "partial"
-        |= partialTypeCheckHelpP oldP
-
-
-partialTypeCheckHelpP : ParserState -> P.Parser ParserState
-partialTypeCheckHelpP p =
-    case p.mirror.stack of
-        [] ->
-            P.problem <| String.concat
-                [ "you can't do a partial type check with nothing "
-                , "on the type stack"
-                ]
-
-        (Tlist []) :: _ ->
-            P.problem <| String.concat
-                [ "there's no point in doing a partial type check "
-                , "with nothing in it"
-                ]
-
-        (Tlist t) :: tack ->
-            let
-                oldMirror = p.mirror
-                newMirror = { oldMirror | stack = tack }
-            in if partialEqualTypeStacks t p.mirror.stack then
-                P.succeed {p | mirror = newMirror}
-
-            else
-                P.problem <| failedPartialMessage t p.mirror.stack
-
-        x :: _ ->
-            P.problem <| String.concat
-                [ "cannot carry out partial type check:\n"
-                , "the top item on the stack must be a list of "
-                , "types, but it is "
-                , showType x
-                ]
-            
-
-
-failedPartialMessage : List TypeT -> List TypeT -> String
-failedPartialMessage expected actual =
-    String.concat
-        [ "failed partial type check:\n"
-        , "expecting: "
-        , showTypeStack expected
-        , "\n"
-        , "but got: "
-        , showTypeStack actual
-        ]
-    
-
-
--- switchP : ParserState -> P.Parser ParserState
--- switchP =
---     P.map makeSwitchElfsElts <|
---         P.sequence
---             { start = "switch"
---             , separator = ","
---             , end = "endswitch"
---             , spaces = whiteSpaceP
---             , item = switchPartP
---             , trailing = P.Mandatory
---             }
--- makeSwitchElfsElts = Debug.todo "todo"
--- type alias SwitchPart =
---     { pattern : Pattern
---     , block : (List Elf, List Elt)
---     }
+type alias SwitchPart =
+    { pattern : Pattern
+    , block : (List Elf, List Elt)
+    }
 
 
 type Pattern
     = PString String
-    | PVariable
+    | PVariable 
 
 
-
--- switchPartP : P.Parser SwitchPart
--- switchPartP =
---     P.succeed SwitchPart
---         |= patternP
---         |. whiteSpaceP
---         |. P.token "->"
---         |. whiteSpaceP
---         |= programBlockP
-
-
-patternP =
-    Debug.todo ""
+switchPartP : P.Parser SwitchPart
+switchPartP =
+    P.succeed SwitchPart
+        |= patternP
+        |. whiteSpaceP
+        |. P.token "->"
+        |. whiteSpaceP
+        |= programBlockP
 
 
-type alias Actions =
-    List (ProgramState -> ProgramState)
+patternP = Debug.todo ""
 
 
-stringPWrap : ParserState -> P.Parser ( ParserState, Actions )
-stringPWrap p =
-    P.succeed (stringPWrapHelp p)
+stringPWrap : P.Parser ( List Elf, List Elt )
+stringPWrap =
+    P.succeed (\s -> ( [ stringElf s ], [ stringElt ] ))
         |= stringP
 
 
-stringPWrapHelp : ParserState -> String -> ( ParserState, Actions )
-stringPWrapHelp oldP s =
-    let
-        oldMirror =
-            oldP.mirror
-
-        newT =
-            { builtIn = [], custom = [ Astring s ] }
-
-        newMirror =
-            { oldMirror | stack = newT :: oldMirror.stack }
-    in
-    ( { oldP | mirror = newMirror }, [ stringAction s ] )
-
-
-stringAction : String -> ProgramState -> ProgramState
-stringAction s p =
+stringElf : String -> ProgramState -> ProgramState
+stringElf s p =
     { p | stack = Pstring s :: p.stack }
 
 
-
--- stringElt : String -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
--- stringElt s dets stack =
---     Ok ( dets, {custom = [Pstring s], standard = []} :: stack )
+stringElt : Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+stringElt dets stack =
+    Ok ( dets, Tstring :: stack )
 
 
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
@@ -583,7 +391,7 @@ stringHelp revChunks =
             |= P.oneOf
                 [ P.map (\_ -> "\n") (P.token "n")
                 , P.map (\_ -> "\t") (P.token "t")
-                , P.map (\_ -> "\u{000D}") (P.token "r")
+                , P.map (\_ -> "\r") (P.token "r")
                 , P.map (\_ -> "\"") (P.token "\"")
                 ]
         , P.chompWhile isUninteresting
@@ -606,45 +414,12 @@ isUninteresting char =
     char /= '\\' && char /= '"'
 
 
-defP : ParserState -> P.Parser ( ParserState, Actions )
-defP p =
-    -- P.succeed (\var -> ( [ defElf var ], [ defElt var ] ))
-    P.succeed identity
+defP : P.Parser ( List Elf, List Elt )
+defP =
+    P.succeed (\var -> ( [ defElf var ], [ defElt var ] ))
         |. P.token "="
         |. whiteSpaceP
         |= variable
-        |> P.andThen (defPHelp p)
-
-
-defPHelp : ParserState -> String -> P.Parser ( ParserState, Actions )
-defPHelp p var =
-    case p.mirror.stack of
-        [] ->
-            P.problem "a definition requires something on the stack"
-
-        s :: tack ->
-            if Dict.member var p.mirror.defs then
-                P.problem <|
-                    "multiple definitions of \""
-                        ++ var
-                        ++ "\""
-
-            else
-                let
-                    oldMirror =
-                        p.mirror
-
-                    newDefs =
-                        Dict.insert var s oldMirror.defs
-
-                    newMirror =
-                        { oldMirror
-                            | defs = newDefs
-                            , stack = tack
-                        }
-                in
-                P.succeed
-                    ( { p | mirror = newMirror }, [ defElf var ] )
 
 
 defElf : String -> ProgramState -> ProgramState
@@ -678,9 +453,9 @@ defElf var p =
 
 defElt :
     String
-    -> Dict.Dict String TypeT
-    -> List TypeT
-    -> Result String ( Dict.Dict String TypeT, List TypeT )
+    -> Dict.Dict String TypeVal
+    -> List TypeVal
+    -> Result String ( Dict.Dict String TypeVal, List TypeVal )
 defElt var dets typestack =
     case typestack of
         [] ->
@@ -699,107 +474,28 @@ defElt var dets typestack =
                 Ok ( Dict.insert var s dets, tack )
 
 
-runBlockP : ParserState -> P.Parser ( ParserState, Actions )
-runBlockP oldP =
-    -- P.succeed ( [ runBlockElf ], [ runBlockElt ] )
-    P.andThen (runBlockPHelp oldP) (P.keyword "!")
+runBlockP : P.Parser ( List Elf, List Elt )
+runBlockP =
+    P.succeed ( [ runBlockElf ], [ runBlockElt ] )
+        |. P.keyword "!"
 
 
-runBlockPHelp : ParserState -> () -> P.Parser ( ParserState, Actions )
-runBlockPHelp oldP _ =
-    case oldP.mirror.stack of
-        [] ->
-            P.problem "got \"!\" but the stack is empty"
-
-        topType :: remainingTypes ->
-            if isSubType topType { builtIn = [ Bblock [] ], custom = [] } then
-                P.succeed ( oldP, [] )
-
-            else
-                P.problem <|
-                    String.concat
-                        [ "got \"!\": the stack should have a string "
-                        , "on the top but it was a "
-                        , showType topType
-                        ]
-
-
-showType : TypeT -> String
-showType { custom, builtIn } =
-    case ( custom, builtIn ) of
-        ( [], [] ) ->
-            "empty"
-
-        ( [], bs ) ->
-            String.concat
-                [ "built in: "
-                , String.join " + " <| List.map showBuiltIn bs
-                ]
-
-        ( cs, [] ) ->
-            String.concat
-                [ "custom: {"
-                , String.join ", " <| List.map showCustom cs
-                , "}"
-                ]
-
-        ( cs, bs ) ->
-            String.concat
-                [ "custom: {"
-                , String.join ", " <| List.map showCustom cs
-                , "} + "
-                , "built in: "
-                , String.join " + " <| List.map showBuiltIn bs
-                ]
-
-
-showCustom : TypeAtom -> String
-showCustom t =
-    case t of
-        Astring s ->
-            "string: \"" ++ showString s ++ "\""
-
-
-showBuiltIn : BuiltInType -> String
-showBuiltIn b =
-    case b of
-        Bstring ->
-            "string"
-
-        Bblock _ ->
-            "block"
-
-
-programBlockP : ParserState -> P.Parser ( ParserState, Actions )
-programBlockP oldP =
-    P.succeed (\( newP, actions ) -> ( blockUpdate newP, actions ))
+programBlockP : P.Parser ( List Elf, List Elt )
+programBlockP =
+    P.succeed (\( elfs, elts ) -> ( [ blockElf elfs ], [ blockElt elts ] ))
         |. P.keyword "{"
-        |= programP oldP
+        |= programP
         |. P.keyword "}"
 
 
-blockUpdate : ParserState -> ParserState
-blockUpdate oldP =
-    let
-        oldMirror =
-            oldP.mirror
-
-        newMirror =
-            { oldMirror
-                | stack = { builtIn = [ Bblock [] ], custom = [] } :: oldMirror.stack
-            }
-    in
-    { oldP | mirror = newMirror }
+blockElf : List Elf -> ProgramState -> ProgramState
+blockElf elfs p =
+    { p | stack = Pblock elfs :: p.stack }
 
 
-
--- (\( elfs, elts ) -> ( [ blockElf elfs ], [ blockElt elts ] ))
--- blockElf : List Elf -> ProgramState -> ProgramState
--- blockElf elfs p =
---     { p | stack = Pblock elfs :: p.stack }
--- blockElt : List Elt -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
--- blockElt elts dets stack =
---     Ok ( dets, {custom = [], standard = [Sblock elts]} :: stack )
+blockElt : List Elt -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+blockElt elts dets stack =
+    Ok ( dets, Tblock elts :: stack )
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -823,214 +519,77 @@ runBlockElf s =
             }
 
 
-
--- runBlockElt :
---     Dict.Dict String TypeT
---     -> List TypeT
---     -> Result String ( Dict.Dict String TypeT, List TypeT )
--- runBlockElt dets typeStack =
---     case typeStack of
---         [] ->
---             Err "empty stack"
---
---         (TypeT [] (Sblock block)) :: xs ->
---             case runTypeChecksHelp block dets xs of
---                 Ok newStack ->
---                     Ok ( dets, newStack )
---
---                 Err errMsg ->
---                     Err errMsg
---
---         x :: _ ->
---             Err <|
---                 String.concat
---                     [ "bad stack: expecting block, but got "
---                     , showTypeVal x
---                     ]
-
-
-showString : String -> String
-showString s =
-    String.reverse <| String.foldr showStringHelp "" s
-
-
-showStringHelp : Char -> String -> String
-showStringHelp char accumulator =
-    case char of
-        '"' ->
-            "\"\\" ++ accumulator
-
-        '\n' ->
-            "n\\" ++ accumulator
-
-        '\t' ->
-            "t\\" ++ accumulator
-
-        '\u{000D}' ->
-            "r\\" ++ accumulator
-
-        c ->
-            String.cons c accumulator
-
-
-showTypeVal : TypeT -> String
-showTypeVal { custom, builtIn } =
-    case ( custom, builtIn ) of
-        ( [], [] ) ->
-            "empty"
-
-        ( [], b :: [] ) ->
-            showBuiltInType b
-
-        ( [], bs ) ->
-            String.concat
-                [ "{"
-                , String.join ", " <|
-                    List.map showBuiltInType bs
-                , "}"
-                ]
-
-        ( cs, [] ) ->
-            String.concat
-                [ "{"
-                , String.join ", " <| List.map showTypeAtom cs
-                , "}"
-                ]
-
-        ( cs, bs ) ->
-            String.concat
-                [ "{"
-                , String.join ", " <|
-                    List.map showBuiltInType bs
-                , ", "
-                , String.join ", " <| List.map showTypeAtom cs
-                , "}"
-                ]
-
-
-fullTypeCheckP : ParserState -> P.Parser ParserState
-fullTypeCheckP oldP =
-    P.succeed identity
-        |. P.keyword "full"
-        |= fullTypeCheckHelpP oldP
-
-
-fullTypeCheckHelpP : ParserState -> P.Parser ParserState
-fullTypeCheckHelpP p =
-    case p.mirror.stack of
+runBlockElt :
+    Dict.Dict String TypeVal
+    -> List TypeVal
+    -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+runBlockElt dets typeStack =
+    case typeStack of
         [] ->
-            P.problem <| String.concat
-                [ "you can't do a type check with nothing on the "
-                , "type stack"
-                ]
+            Err "empty stack"
 
-        (Tlist t) :: tack ->
-            let
-                oldMirror = p.mirror
-                newMirror = { oldMirror | stack = tack }
-            in if equalTypeStacks t p.mirror.stack then
-                P.succeed {p | mirror = newMirror}
-            else
-                P.problem failedFullMessage t p.mirror.stack
+        (Tblock block) :: xs ->
+            case runTypeChecksHelp block dets xs of
+                Ok newStack ->
+                    Ok ( dets, newStack )
+
+                Err errMsg ->
+                    Err errMsg
 
         x :: _ ->
-            P.problem <| String.concat
-                [ "cannot carry out full type check:\n"
-                , "the top item on the stack must be a list of "
-                , "types, but it is "
-                , showType x
-                ]
+            Err <|
+                String.concat
+                    [ "bad stack: expecting block, but got "
+                    , showTypeVal x
+                    ]
 
 
-equalTypeStacks : List TypeT -> List TypeT -> Bool
-equalTypeStacks t1 t2 =
-    List.all identity <| List.map2 equalType t1 t2
-
-
-equalType : TypeT -> TypeT -> Bool
-equalType t1 t2 =
-    equalBuiltIns t1.builtIn t2.builtIn &&
-    equalCustoms t1.custom t2.custom
-        
-
-equalCustoms : List TypeAtom -> List TypeAtom -> Bool
-equalCustoms t1 t2 =
-    List.all identity <| List.map2 equalCustom t1 t2
-
-
-equalCustom : TypeAtom -> TypeAtom -> Bool
-equalCustom t1 t2 =
-    t1 == t2
-
-
-equalBuiltIns : List BuiltInType -> List BuiltInType -> Bool
-equalBuiltIns b1 b2 =
-    List.all identity <| List.map2 equalBuiltIn b1 b2
-
-
-equalBuiltIn : BuiltInType -> BuiltInType -> Bool
-equalBuiltIn b1 b2 =
-    case (b1, b2) of
-        (Bstring, Bstring) ->
-            True
-
-        (Bblock _, Bblock _) ->
-            True
-
-        _ ->
-            False
-
-
-showBuiltInType : BuiltInType -> String
-showBuiltInType builtIn =
-    case builtIn of
-        Bstring ->
+showTypeVal : TypeVal -> String
+showTypeVal typeVal =
+    case typeVal of
+        Tstring ->
             "string"
 
-        Bblock _ ->
+        Tblock atoms ->
             "block"
 
 
-showPartialTypeStack : List TypeT -> String
-showPartialTypeStack typestack =
-    String.concat
-
-
-showTypeStack : List TypeT -> String
+showTypeStack : List TypeVal -> String
 showTypeStack typestack =
-    String.join ", " <| List.map showTypeVal typestack
+    String.concat
+        [ "<"
+        , String.join ", " <| List.map showTypeVal typestack
+        , ">"
+        ]
 
 
--- showTypeCheck : List TypeLiteral -> String
--- showTypeCheck typeCheck =
---     String.concat
---         [ "<"
---         , String.join ", " <| List.map showTypeLit typeCheck
---         , ">"
---         ]
--- showTypeLit : TypeLiteral -> String
--- showTypeLit typeLit =
---     case typeLit of
---         Tlstring ->
---             "string"
---
---         Tlblock ->
---             "block"
+showTypeCheck : List TypeLiteral -> String
+showTypeCheck typeCheck =
+    String.concat
+        [ "<"
+        , String.join ", " <| List.map showTypeLit typeCheck
+        , ">"
+        ]
 
 
-retrieveP : ParserState -> P.Parser ( ParserState, Actions )
-retrieveP p =
-    P.andThen (retrievePHelp p) variable
+showTypeLit : TypeLiteral -> String
+showTypeLit typeLit =
+    case typeLit of
+        Tlstring ->
+            "string"
+
+        Tlblock ->
+            "block"
 
 
-retrievePHelp : ParserState -> String -> P.Parser ( ParserState, Actions )
-retrievePHelp p var =
-    case Dict.get var p.mirror.defs of
-        Nothing ->
-            P.problem <| "no definition \"" ++ var ++ "\""
+retrieveP : P.Parser ( List Elf, List Elt )
+retrieveP =
+    P.succeed retrievePhelp |= variable
 
-        Just lookedUp ->
-            P.succeed ( p, [ makeRetrieveElf var ] )
+
+retrievePhelp : String -> ( List Elf, List Elt )
+retrievePhelp var =
+    ( [ makeRetrieveElf var ], [ makeRetrieveElt var ] )
 
 
 makeRetrieveElf : String -> ProgramState -> ProgramState
@@ -1049,218 +608,136 @@ makeRetrieveElf var p =
             { p | stack = f :: p.stack }
 
 
+makeRetrieveElt : String -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makeRetrieveElt var dets typestack =
+    case Dict.get var dets of
+        Nothing ->
+            Err <| String.concat [ "no definition \"", var, "\"" ]
 
--- makeRetrieveElt : String -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
--- makeRetrieveElt var dets typestack =
---     case Dict.get var dets of
---         Nothing ->
---             Err <| String.concat [ "no definition \"", var, "\"" ]
---
---         Just t ->
---             Ok ( dets, t :: typestack )
--- fullTypeCheckP : P.Parser ( List Elf, List Elt )
--- fullTypeCheckP =
---     P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
---         P.map List.reverse <|
---             P.sequence
---                 { start = "<"
---                 , separator = ","
---                 , end = ">"
---                 , spaces = whiteSpaceP
---                 , item = typeLiteralP
---                 , trailing = P.Mandatory
---                 }
--- typeCheckErr : List TypeLiteral -> List TypeT -> String
--- typeCheckErr expected got =
---     String.concat
---         [ "type stack does not match type declaration:\n"
---         , "expecting "
---         , showTypeCheck <| List.reverse expected
---         , "\n"
---         , "but got "
---         , showTypeStack <| List.reverse got
---         , "\n"
---         ]
--- makeFullTypeCheck : List TypeLiteral -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
--- makeFullTypeCheck typeVals dets typeStack =
---     if equalT typeVals typeStack then
---         Ok ( dets, typeStack )
---
---     else
---         Err <| typeCheckErr typeVals typeStack
--- equalT : List TypeLiteral -> List TypeT -> Bool
--- equalT lits vals =
---     if List.length lits /= List.length vals then
---         False
---
---     else
---         List.all identity <| List.map2 equalThelp lits vals
--- isSubTypeOfLit : List ProgVal -> TypeLiteral -> Bool
--- isSubTypeOfLit values lit =
---     List.all (isSubTypeOfHelp lit) values
+        Just t ->
+            Ok ( dets, t :: typestack )
 
 
-isSubType : TypeT -> TypeT -> Bool
-isSubType sub master =
-    List.any identity
-        [ sub == master
-        , List.all identity
-            [ List.any identity
-                [ customOfCustom sub.custom master.custom
-                , customOfBuiltIn sub.custom master.builtIn
-                ]
-            , List.any identity
-                [ builtInOfCustom sub.builtIn master.custom
-                , builtInOfBuiltIn sub.builtIn master.builtIn
-                ]
-            ]
+fullTypeCheckP : P.Parser ( List Elf, List Elt )
+fullTypeCheckP =
+    P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
+        P.map List.reverse <|
+            P.sequence
+                { start = "<"
+                , separator = ","
+                , end = ">"
+                , spaces = whiteSpaceP
+                , item = typeLiteralP
+                , trailing = P.Mandatory
+                }
+
+
+typeCheckErr : List TypeLiteral -> List TypeVal -> String
+typeCheckErr expected got =
+    String.concat
+        [ "type stack does not match type declaration:\n"
+        , "expecting "
+        , showTypeCheck <| List.reverse expected
+        , "\n"
+        , "but got "
+        , showTypeStack <| List.reverse got
+        , "\n"
         ]
 
 
-builtInOfCustom : List BuiltInType -> List TypeAtom -> Bool
-builtInOfCustom sub master =
-    False
+makeFullTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makeFullTypeCheck typeVals dets typeStack =
+    if equalT typeVals typeStack then
+        Ok ( dets, typeStack )
+
+    else
+        Err <| typeCheckErr typeVals typeStack
 
 
-builtInOfBuiltIn : List BuiltInType -> List BuiltInType -> Bool
-builtInOfBuiltIn sub master =
-    List.all (\s -> List.member s master) sub
+equalT : List TypeLiteral -> List TypeVal -> Bool
+equalT lits vals =
+    if List.length lits /= List.length vals then
+        False
+
+    else
+        List.all identity <| List.map2 equalThelp lits vals
 
 
-customOfCustom : List TypeAtom -> List TypeAtom -> Bool
-customOfCustom sub master =
-    List.all (\s -> List.member s master) sub
+equalThelp : TypeLiteral -> TypeVal -> Bool
+equalThelp lit val =
+    case ( lit, val ) of
+        ( Tlstring, Tstring ) ->
+            True
+
+        ( Tlblock, Tblock _ ) ->
+            True
+
+        _ ->
+            False
 
 
-customOfBuiltIn : List TypeAtom -> List BuiltInType -> Bool
-customOfBuiltIn sub master =
-    List.all (customOfBuiltInHelp master) sub
+makePartialTypeCheck : List TypeLiteral -> Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
+makePartialTypeCheck typeVals dets typeStack =
+    let
+        lenExpected =
+            List.length typeVals
+
+        lenActual =
+            List.length typeStack
+
+        candidate =
+            List.take lenExpected typeStack
+    in
+    if lenActual < lenExpected then
+        Err <|
+            String.concat
+                [ "expecting "
+                , String.fromInt lenExpected
+                , " items on the stack, but only got "
+                , String.fromInt lenActual
+                ]
+
+    else if equalT typeVals candidate then
+        Ok ( dets, typeStack )
+
+    else
+        Err <| typeCheckErr typeVals candidate
 
 
-customOfBuiltInHelp : List BuiltInType -> TypeAtom -> Bool
-customOfBuiltInHelp bs t =
-    case t of
-        Astring _ ->
-            List.member Bstring bs
+typeLiteralP : P.Parser TypeLiteral
+typeLiteralP =
+    P.oneOf [ stringTypeP, blockTypeP ]
 
 
-
--- atomOfBuiltIn : BuiltInTypeSet -> TypeAtom -> Bool
--- atomOfBuiltIn master t =
---     case t of
---         Astring _ ->
---             containsString master
--- containsString : List BuiltInType -> Bool
--- containsString bs =
---     Set.map isString bs == Set.singleton True
+blockTypeP : P.Parser TypeLiteral
+blockTypeP =
+    P.succeed Tlblock
+        |. P.keyword "block"
 
 
-isString : BuiltInType -> Bool
-isString b =
-    b == Bstring
+type TypeLiteral
+    = Tlstring
+    | Tlblock
 
 
-
--- isSubTypeOfHelp : TypeLiteral -> ProgVal -> Bool
--- isSubTypeOfHelp lit value =
---     case (lit, value) of
---         (Tlstring, Pstring _) ->
---             True
---
---         (Tlblock, Pblock _) ->
---             True
---
---         _ ->
---             False
---
---
--- equalThelp : TypeLiteral -> TypeT -> Bool
--- equalThelp lit val =
---     case ( lit, val ) of
---         ( Tlstring, Tcustom ts ) ->
---             isSubTypeOfLit ts Tlstring
---
---         ( Tlblock, Tstandard (Sblock _ )) ->
---             True
---
---         _ ->
---             False
---
---
--- makePartialTypeCheck : List TypeLiteral -> Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
--- makePartialTypeCheck typeVals dets typeStack =
---     let
---         lenExpected =
---             List.length typeVals
---
---         lenActual =
---             List.length typeStack
---
---         candidate =
---             List.take lenExpected typeStack
---     in
---     if lenActual < lenExpected then
---         Err <|
---             String.concat
---                 [ "expecting "
---                 , String.fromInt lenExpected
---                 , " items on the stack, but only got "
---                 , String.fromInt lenActual
---                 ]
---
---     else if equalT typeVals candidate then
---         Ok ( dets, typeStack )
---
---     else
---         Err <| typeCheckErr typeVals candidate
+stringTypeP : P.Parser TypeLiteral
+stringTypeP =
+    P.succeed Tlstring
+        |. P.keyword "string"
 
 
-{-| Some examples of type literals:
-
-1.  string
-
-2.  block
-
-3.  { "hello", "hi", "hey" }
-
-4.  { "aa" } + block
-
-5.  block + string
-
-6.  string - { "a very bad string", "a terrible string" }
-
-7.  {}
-
--}
-
-
-
--- typeLiteralP : P.Parser TypeT
--- typeLiteralP =
---     P.oneOf [simpleStandard,
---     -- P.oneOf [ stringTypeP, blockTypeP ]
--- blockTypeP : P.Parser TypeLiteral
--- blockTypeP =
---     P.succeed Tlblock
---         |. P.keyword "block"
---
---
--- stringTypeP : P.Parser TypeLiteral
--- stringTypeP =
---     P.succeed Tlstring
---         |. P.keyword "string"
--- partialTypeCheckP : P.Parser ( List Elf, List Elt )
--- partialTypeCheckP =
---     P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
---         P.map List.reverse <|
---             P.sequence
---                 { start = "<.."
---                 , separator = ","
---                 , end = ">"
---                 , spaces = whiteSpaceP
---                 , item = typeLiteralP
---                 , trailing = P.Optional
---                 }
+partialTypeCheckP : P.Parser ( List Elf, List Elt )
+partialTypeCheckP =
+    P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
+        P.map List.reverse <|
+            P.sequence
+                { start = "<.."
+                , separator = ","
+                , end = ">"
+                , spaces = whiteSpaceP
+                , item = typeLiteralP
+                , trailing = P.Optional
+                }
 
 
 whiteSpaceP : P.Parser ()
@@ -1298,7 +775,7 @@ initDoc =
 
 runElfs :
     Program
-    -> Actions
+    -> List Elf
     -> List ProgVal
     -> ( Program, Maybe Document, List HumanMsg )
 runElfs program elfs progStack =
@@ -1330,13 +807,12 @@ type alias ProgramState =
     }
 
 
-
--- type alias Elf =
---     ProgramState -> ProgramState
+type alias Elf =
+    ProgramState -> ProgramState
 
 
 runElfsHelp :
-    Actions
+    List Elf
     -> ProgramState
     -> ProgramState
 runElfsHelp elfs s =
@@ -1352,42 +828,19 @@ runElfsHelp elfs s =
             runElfsHelp lfs newS
 
 
-type alias TypeT =
-    { builtIn : List BuiltInType
-    , custom : List TypeAtom
-    }
+type TypeVal
+    = Tstring
+    | Tblock (List Elt)
 
 
-type TypeAtom
-    = Astring String
+type alias Elt =
+    Dict.Dict String TypeVal -> List TypeVal -> Result String ( Dict.Dict String TypeVal, List TypeVal )
 
 
-showTypeAtom : TypeAtom -> String
-showTypeAtom t =
-    case t of
-        Astring s ->
-            "string: \"" ++ showString s ++ "\""
-
-
-
--- type alias Elt =
---     Dict.Dict String TypeT -> List TypeT -> Result String ( Dict.Dict String TypeT, List TypeT )
-
-
-standardTypeDefs : Dict.Dict String TypeProgramValue
-standardTypeDefs =
+standardTypes : Dict.Dict String TypeVal
+standardTypes =
     Dict.fromList
-        []
-
-
-standardMirrorDefs : Dict.Dict String TypeT
-standardMirrorDefs =
-    Dict.fromList
-        [ ( "print"
-          , { builtIn = [ Bblock [ printMirror ] ]
-            , custom = []
-            }
-          )
+        [ ( "print", Tblock [ printElt ] )
         ]
 
 
@@ -1438,166 +891,56 @@ print doc s =
             SmallString s
 
 
-printNeeds =
-    "\"print\" needs there to be a string on the stack, but it is "
-
-
-
--- isSubTypeOf : TypeT -> TypeT -> Bool
--- isSubTypeOf subset bigset =
---     customMatches subset.custom bigset &&
---     standardMatches subset.standard bigset
---
---
--- standardMatches : List StandardType -> TypeT -> Bool
--- standardMatches standard bigset =
---     List.all (standardMatchesHelp bigset) standard
---
---
--- standardMatchesHelp : TypeT -> StandardType -> Bool
--- standardMatchesHelp bigset standard =
---     List.any ((==) standard) bigset.standard
--- customMatches : List ProgVal -> TypeT -> Bool
--- customMatches custom bigset =
---     isSubList custom bigset.custom ||
---     valsMatchType custom bigset.standard
--- (Tcustom subValues, Tcustom bigValues) ->
---     isSubList subValues bigValues
--- (Tcustom subValues, Tstandard Sstring) ->
---     List.all isProgString subValues
--- (Tcustom subValues, Tstandard (Sblock _)) ->
---     List.all isProgBlock subValues
--- (Tstandard Sstring, Tcustom _) ->
---     False
--- (Tstandard Sstring, Tstandard Sstring) ->
---     True
--- (Tstandard Sstring, Tstandard (Sblock _)) ->
---     False
--- (Tstandard Sstring, Tcombined _ standards) ->
---     List.any ((==) Sstring) standards
--- (Tcombined _ (_::_), Tcustom _) ->
---     False
--- (Tcombined subCustom [], Tcustom bigCustom) ->
---     isSubList subCustom bigCustom
--- (Tcustom subCustom, Tcombined bigCustom bigStandards) ->
---     List.any identity
---         [ isSubList subCustom bigCustom
---         , List.any (valsMatchType subCustom) bigStandards
---         ]
--- (Tstandard (Sblock _), Tcustom bigCustom) ->
---     List.any isProgBlock bigCustom
--- (Tstandard (Sblock _), Tstandard (Sblock _)) ->
---     True
--- (Tstandard (Sblock _), Tcombined bigCustom bigStandard) ->
---     List.any identity
---         [ List.any isProgBlock bigCustom
---         , List.any isStandardBlock bigStandard
---         ]
--- (Tstandard (Sblock _), Tstandard Sstring) ->
---     False
--- (Tcombined _ [], Tstandard _) ->
---     False
--- (Tcombined subValues [], Tcombined bigValues []) ->
---     isSubList subValues bigValues
--- isStandardBlock : StandardType -> Bool
--- isStandardBlock s =
---     case s of
---         Sblock _ ->
---             True
---
---         _ ->
---             False
--- valsMatchType : List ProgVal -> StandardType -> Bool
--- valsMatchType values t =
---     List.all (valMatchesType t) values
---
---
--- valMatchesType : StandardType -> ProgVal -> Bool
--- valMatchesType t value =
---     case (t, value) of
---         (Sstring, Pstring _) ->
---             True
---
---         (Sblock _, Pblock _) ->
---             True
---
---         _ ->
---             False
---
---
--- isProgBlock : ProgVal -> Bool
--- isProgBlock t =
---     case t of
---         Pblock _ ->
---             True
---
---         _ ->
---             False
---
---
--- isProgString : ProgVal -> Bool
--- isProgString t =
---     case t of
---         Pstring _ ->
---             True
---
---         _ ->
---             False
---
---
--- isSubList : List ProgVal -> List ProgVal -> Bool
--- isSubList sub big =
---     List.all (\s -> List.member s big) sub
-
-
-printMirror : MirrorState -> Result String MirrorState
-printMirror { defs, stack } =
+printElt : Elt
+printElt dets stack =
     case stack of
+        Tstring :: tack ->
+            Ok ( dets, tack )
+
+        s ->
+            Err <|
+                String.concat
+                    [ "\"print\" needs there to be a string on the stack"
+                    , " but the stack is "
+                    , showTypeStack s
+                    ]
+
+
+runTypeChecks : List Elt -> Maybe String
+runTypeChecks elts =
+    case runTypeChecksHelp elts standardTypes [] of
+        Ok [] ->
+            Nothing
+
+        Ok ts ->
+            Just <|
+                String.concat
+                    [ "typestack should be empty at end of program, but "
+                    , "got "
+                    , showTypeStack ts
+                    ]
+
+        Err err ->
+            Just err
+
+
+runTypeChecksHelp :
+    List Elt
+    -> Dict.Dict String TypeVal
+    -> List TypeVal
+    -> Result String (List TypeVal)
+runTypeChecksHelp elts dets typeStack =
+    case elts of
         [] ->
-            Err <| printNeeds ++ "empty"
+            Ok typeStack
 
-        s :: tack ->
-            if isSubType s { builtIn = [ Bstring ], custom = [] } then
-                Ok { defs = defs, stack = tack }
+        e :: lts ->
+            case e dets typeStack of
+                Err errMsg ->
+                    Err errMsg
 
-            else
-                Err <| printNeeds ++ showTypeStack stack
-
-
-
--- runTypeChecks : List Elt -> Maybe String
--- runTypeChecks elts =
---     case runTypeChecksHelp elts standardTypes [] of
---         Ok [] ->
---             Nothing
---
---         Ok ts ->
---             Just <|
---                 String.concat
---                     [ "typestack should be empty at end of program, but "
---                     , "got "
---                     , showTypeStack ts
---                     ]
---
---         Err err ->
---             Just err
--- runTypeChecksHelp :
---     List Elt
---     -> Dict.Dict String TypeT
---     -> List TypeT
---     -> Result String (List TypeT)
--- runTypeChecksHelp elts dets typeStack =
---     case elts of
---         [] ->
---             Ok typeStack
---
---         e :: lts ->
---             case e dets typeStack of
---                 Err errMsg ->
---                     Err errMsg
---
---                 Ok ( newDets, newTypeStack ) ->
---                     runTypeChecksHelp lts newDets newTypeStack
+                Ok ( newDets, newTypeStack ) ->
+                    runTypeChecksHelp lts newDets newTypeStack
 
 
 type alias HumanMsg =
@@ -1609,7 +952,7 @@ type alias HumanMsg =
 
 type ProgVal
     = Pstring String
-    | Pblock (List (ProgramState -> ProgramState))
+    | Pblock (List Elf)
 
 
 showProgVal : ProgVal -> String
@@ -1627,7 +970,7 @@ showProgVal p =
 
 leftInput : Model -> Element.Element Msg
 leftInput model =
-    Element.Input.multiline [ monospace ]
+    Element.Input.multiline [monospace]
         { onChange = UpdatedLeft
         , text = leftText model
         , placeholder =
@@ -1635,7 +978,7 @@ leftInput model =
                 Element.Input.placeholder [] <|
                     Element.text "Type here"
         , label =
-            Element.Input.labelAbove [ sansSerif ] <|
+            Element.Input.labelAbove [sansSerif] <|
                 Element.text <|
                     "Your input goes here:"
         , spellcheck = True
@@ -1654,13 +997,13 @@ leftText model =
 
 showRightDoc : Model -> Element.Element Msg
 showRightDoc model =
-    Element.el [ monospace ] <|
-        case model.openProgram of
-            Nothing ->
-                Element.text <| "internal error: can't find program"
+    Element.el [monospace] <|
+    case model.openProgram of
+        Nothing ->
+            Element.text <| "internal error: can't find program"
 
-            Just ( _, doc ) ->
-                displayDoc model.lookedUpBlob doc
+        Just (_, doc) ->
+            displayDoc model.lookedUpBlob doc
 
 
 displayDoc :
