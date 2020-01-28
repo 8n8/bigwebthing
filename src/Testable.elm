@@ -134,11 +134,6 @@ monospace =
     Font.family [ Font.typeface "Ubuntu Mono" ]
 
 
-
--- The wrapping is still not working nicely. See this Ellie for
--- an example: https://ellie-app.com/7PscK58sWRba1
-
-
 editor : Model -> Element.Element Msg
 editor model =
     case model.openProgram of
@@ -204,6 +199,7 @@ type TypeProgramValue
     = TType TypeT
     | TString String
     | Tblock (List (TypeProgramState -> TypeProgramState))
+    | Tlist (List TypeT)
 
 
 type BuiltInType
@@ -338,14 +334,140 @@ elementP p =
         , stringPWrap p
         , defP p
         , programBlockP p
-
         -- , partialTypeCheckP p
         -- , fullTypeCheckP p
         , retrieveP p
-
         -- , switchP p
+        , typeLangP p
         ]
 
+
+typeLangP : ParserState -> P.Parser (ParserState, Actions)
+typeLangP oldP =
+    P.succeed (\p -> (p, []))
+        |. P.token "<"
+        |= typeLangHelpP oldP
+        |. whiteSpaceP
+        |. P.token ">"
+    
+
+typeLangHelpP : ParserState -> P.Parser ParserState
+typeLangHelpP p =
+    P.loop p typeLangStepP
+
+
+typeLangStepP : ParserState -> P.Parser (P.Step ParserState ParserState)
+typeLangStepP oldP =
+    P.oneOf
+        [ P.succeed P.Loop
+            |. whiteSpaceP
+            |= typeElementP oldP
+            |. whiteSpaceP
+        , P.succeed () |> P.map (\_ -> P.Done oldP)
+        ]
+
+
+typeElementP : ParserState -> P.Parser ParserState
+typeElementP p =
+    P.oneOf
+        [ typeRunBlock p
+        , typeStringP p
+        , typeDefP p
+        , typeBlockP p
+        , typeRetrieveP p
+        , partialTypeCheckP p
+        , fullTypeCheckP p
+        ]
+
+
+typeBlockP : ParserState -> P.Parser ParserState
+typeBlockP oldP =
+    P.succeed (\newP -> addTypeBlock newP)
+        |. P.keyword "{"
+        |= typeLangHelpP oldP
+        |. P.keyword "}"
+
+
+addTypeBlock : ParserState -> ParserState
+addTypeBlock oldP =
+    let
+        oldTypes = oldP.types
+        newTypes = { oldTypes | stack = 
+
+
+typeRetrieveP : ParserState -> P.Parser ParserState
+typeRetrieveP p =
+    P.andThen (typeRetrievePHelp p) variable
+
+
+typeRetrievePHelp : ParserState -> String -> P.Parser ParserState
+typeRetrievePHelp p var =
+    case Dict.get var p.types.defs of
+        Nothing ->
+            P.problem <| "no definition \"" ++ var ++ "\""
+
+        Just lookedUp ->
+            let
+                oldTypeState = p.types
+                newStack = lookedUp :: oldTypeState.stack
+                newTypeState = {newTypeState | stack = newStack}
+            in
+                P.succeed {p | types = newTypeState}
+
+
+partialTypeCheckP : ParserState -> P.Parser ParserState
+partialTypeCheckP oldP =
+    P.succeed identity
+        |. P.keyword "partial"
+        |= partialTypeCheckHelpP oldP
+
+
+partialTypeCheckHelpP : ParserState -> P.Parser ParserState
+partialTypeCheckHelpP p =
+    case p.mirror.stack of
+        [] ->
+            P.problem <| String.concat
+                [ "you can't do a partial type check with nothing "
+                , "on the type stack"
+                ]
+
+        (Tlist []) :: _ ->
+            P.problem <| String.concat
+                [ "there's no point in doing a partial type check "
+                , "with nothing in it"
+                ]
+
+        (Tlist t) :: tack ->
+            let
+                oldMirror = p.mirror
+                newMirror = { oldMirror | stack = tack }
+            in if partialEqualTypeStacks t p.mirror.stack then
+                P.succeed {p | mirror = newMirror}
+
+            else
+                P.problem <| failedPartialMessage t p.mirror.stack
+
+        x :: _ ->
+            P.problem <| String.concat
+                [ "cannot carry out partial type check:\n"
+                , "the top item on the stack must be a list of "
+                , "types, but it is "
+                , showType x
+                ]
+            
+
+
+failedPartialMessage : List TypeT -> List TypeT -> String
+failedPartialMessage expected actual =
+    String.concat
+        [ "failed partial type check:\n"
+        , "expecting: "
+        , showTypeStack expected
+        , "\n"
+        , "but got: "
+        , showTypeStack actual
+        ]
+    
 
 
 -- switchP : ParserState -> P.Parser ParserState
@@ -786,6 +908,79 @@ showTypeVal { custom, builtIn } =
                 ]
 
 
+fullTypeCheckP : ParserState -> P.Parser ParserState
+fullTypeCheckP oldP =
+    P.succeed identity
+        |. P.keyword "full"
+        |= fullTypeCheckHelpP oldP
+
+
+fullTypeCheckHelpP : ParserState -> P.Parser ParserState
+fullTypeCheckHelpP p =
+    case p.mirror.stack of
+        [] ->
+            P.problem <| String.concat
+                [ "you can't do a type check with nothing on the "
+                , "type stack"
+                ]
+
+        (Tlist t) :: tack ->
+            let
+                oldMirror = p.mirror
+                newMirror = { oldMirror | stack = tack }
+            in if equalTypeStacks t p.mirror.stack then
+                P.succeed {p | mirror = newMirror}
+            else
+                P.problem failedFullMessage t p.mirror.stack
+
+        x :: _ ->
+            P.problem <| String.concat
+                [ "cannot carry out full type check:\n"
+                , "the top item on the stack must be a list of "
+                , "types, but it is "
+                , showType x
+                ]
+
+
+equalTypeStacks : List TypeT -> List TypeT -> Bool
+equalTypeStacks t1 t2 =
+    List.all identity <| List.map2 equalType t1 t2
+
+
+equalType : TypeT -> TypeT -> Bool
+equalType t1 t2 =
+    equalBuiltIns t1.builtIn t2.builtIn &&
+    equalCustoms t1.custom t2.custom
+        
+
+equalCustoms : List TypeAtom -> List TypeAtom -> Bool
+equalCustoms t1 t2 =
+    List.all identity <| List.map2 equalCustom t1 t2
+
+
+equalCustom : TypeAtom -> TypeAtom -> Bool
+equalCustom t1 t2 =
+    t1 == t2
+
+
+equalBuiltIns : List BuiltInType -> List BuiltInType -> Bool
+equalBuiltIns b1 b2 =
+    List.all identity <| List.map2 equalBuiltIn b1 b2
+
+
+equalBuiltIn : BuiltInType -> BuiltInType -> Bool
+equalBuiltIn b1 b2 =
+    case (b1, b2) of
+        (Bstring, Bstring) ->
+            True
+
+        (Bblock _, Bblock _) ->
+            True
+
+        _ ->
+            False
+
+
 showBuiltInType : BuiltInType -> String
 showBuiltInType builtIn =
     case builtIn of
@@ -796,14 +991,14 @@ showBuiltInType builtIn =
             "block"
 
 
+showPartialTypeStack : List TypeT -> String
+showPartialTypeStack typestack =
+    String.concat
+
+
 showTypeStack : List TypeT -> String
 showTypeStack typestack =
-    String.concat
-        [ "<"
-        , String.join ", " <| List.map showTypeVal typestack
-        , ">"
-        ]
-
+    String.join ", " <| List.map showTypeVal typestack
 
 
 -- showTypeCheck : List TypeLiteral -> String

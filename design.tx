@@ -1,0 +1,8 @@
+title { `Truelang design` }
+date { `28 January 2020` }
+body {
+`This document is the design for the Truelang interpreter. Truelang is a programming language that is run inside the BigWebThing. BigWebThing is a web app for editing, running and exchanging Truelang programs, and passing messages between Truelang programs over the internet.`
+header 1 { `Input and output` }
+header 2 { `Inputs` }
+
+}
