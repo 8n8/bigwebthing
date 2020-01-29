@@ -321,30 +321,33 @@ elementP t =
 
 typeLangP : TypeState -> P.Parser ParserOut
 typeLangP typeState =
-    P.succeed (\t -> { typeState = t, elfs = [], elts = typeLangElts t})
+    P.succeed (\(t, e) -> { typeState = t, elfs = [], elts = e})
         |. P.token "<"
-        |= P.loop typeState typeLangHelpP
+        |= P.loop (typeState, []) typeLangHelpP 
         |. P.token ">"
 
 
-typeLangElts : TypeState -> List Elt
-typeLangElts t = Debug.todo "typeLangElts"
-    
-
-
-typeLangHelpP : TypeState -> P.Parser (P.Step TypeState TypeState)
-typeLangHelpP t =
+typeLangHelpP : (TypeState, List Elt) -> P.Parser (P.Step (TypeState, List Elt) (TypeState, List Elt))
+typeLangHelpP (oldT, oldE) =
     P.oneOf
-        [ P.succeed P.Loop
+        [ P.succeed (\(t, e) -> P.Loop (t, oldE ++ e))
             |. whiteSpaceP
-            |= typeElementP t
+            |= typeElementP oldT
             |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done t)
+        , P.succeed () |> P.map (\_ -> P.Done (oldT, oldE))
         ]
 
 
-typeElementP : TypeState -> P.Parser TypeState
-typeElementP t = Debug.todo "typeElementP"
+typeElementP : TypeState -> P.Parser (TypeState, List Elt)
+typeElementP t =
+    P.oneOf
+        [ typeRunBlockP t
+        ]
+
+
+typeRunBlockP : TypeState -> P.Parser (TypeState, List Elt)
+typeRunBlockP t =
+    P.succeed ( [ typeRunBlockElf ], [ typeRunBlockElt ] )
 
 
 -- switchP : P.Parser ( List Elf, List Elt )
@@ -384,7 +387,7 @@ type Pattern
 --         |= programBlockP
 
 
-patternP = Debug.todo ""
+-- patternP = Debug.todo ""
 
 
 stringPWrap : P.Parser ( List Elf, List Elt )
