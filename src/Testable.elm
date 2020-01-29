@@ -313,9 +313,72 @@ elementP t =
             , programBlockP t
             -- , partialTypeCheckP
             -- , fullTypeCheckP
+            , typeLangP t
             , w retrieveP
             -- , switchP
             ]
+
+
+topTypeLangP : TypeState -> P.Parser ParserOut
+topTypeLangP t =
+    P.succeed identity
+        |. P.token "<"
+        |= typeLangP t
+        |. P.token ">"
+
+
+typeLangP : TypeState -> P.Parser ParserOut
+typeLangP t =
+    P.loop {typeState = t, elfs = [], elts = []} typeLangHelpP
+
+
+typeLangHelpP : ParserOut -> P.Parser (P.Step ParserOut ParserOut)
+typeLangHelpP p =
+    P.oneOf
+        [ P.succeed (\{ typeState, elfs, elts } -> P.Loop {elfs=p.elfs ++ elfs, elts = p.elts ++ elts, typeState = typeState})
+            |. whiteSpaceP
+            |= typeElementP p.typeState
+            |. whiteSpaceP
+        , P.succeed () |> P.map (\_ -> P.Done p)
+        ]
+
+
+typeElementP : TypeState -> P.Parser ParserOut
+typeElementP t =
+    P.oneOf
+        [ typeRunBlockP t
+        ]
+
+
+typeRunBlockP : TypeState -> P.Parser ParserOut
+typeRunBlockP t =
+    case t.stack of
+        [] ->
+            P.problem "got \"!\" but stack is empty"
+
+        (Tblock b) :: _ ->
+            P.succeed <| { typeState = runTypeBlockHelp t b, elfs = [], elts = []}
+
+        top :: _ ->
+            P.problem <| String.concat
+                [ "expecting a block on top of the stack, but got "
+                , showTypeProgramValue top
+                ]
+
+            
+
+runTypeBlockHelp :
+    TypeState
+    -> List (TypeState -> TypeState)
+    -> TypeState
+runTypeBlockHelp t block =
+    case block of
+        [] ->
+            t
+
+        b :: lock ->
+            runTypeBlockHelp (b t) lock
+
 
 
 -- switchP : P.Parser ( List Elf, List Elt )
@@ -958,6 +1021,26 @@ type TypeProgramValue
     | Tstring String
     | Tblock (List (TypeState -> TypeState))
     | Tlist (List TypeProgramValue)
+
+
+showTypeProgramValue : TypeProgramValue -> String
+showTypeProgramValue typeProgramValue =
+    case typeProgramValue of
+        Ttype t ->
+            showTypeVal t
+
+        Tstring s ->
+            s
+
+        Tblock _ ->
+            "block"
+
+        Tlist ts ->
+            String.concat
+                [ "list: ["
+                , String.join ", " <| List.map showTypeProgramValue ts
+                , "]"
+                ]
 
 
 type alias Type =
