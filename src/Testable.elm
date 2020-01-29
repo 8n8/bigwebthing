@@ -311,43 +311,11 @@ elementP t =
             , w stringPWrap
             , w defP
             , programBlockP t
-            , typeLangP t
             -- , partialTypeCheckP
             -- , fullTypeCheckP
             , w retrieveP
             -- , switchP
             ]
-
-
-typeLangP : TypeState -> P.Parser ParserOut
-typeLangP typeState =
-    P.succeed (\(t, e) -> { typeState = t, elfs = [], elts = e})
-        |. P.token "<"
-        |= P.loop (typeState, []) typeLangHelpP 
-        |. P.token ">"
-
-
-typeLangHelpP : (TypeState, List Elt) -> P.Parser (P.Step (TypeState, List Elt) (TypeState, List Elt))
-typeLangHelpP (oldT, oldE) =
-    P.oneOf
-        [ P.succeed (\(t, e) -> P.Loop (t, oldE ++ e))
-            |. whiteSpaceP
-            |= typeElementP oldT
-            |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done (oldT, oldE))
-        ]
-
-
-typeElementP : TypeState -> P.Parser (TypeState, List Elt)
-typeElementP t =
-    P.oneOf
-        [ typeRunBlockP t
-        ]
-
-
-typeRunBlockP : TypeState -> P.Parser (TypeState, List Elt)
-typeRunBlockP t =
-    P.succeed ( [ typeRunBlockElf ], [ typeRunBlockElt ] )
 
 
 -- switchP : P.Parser ( List Elf, List Elt )
@@ -387,7 +355,7 @@ type Pattern
 --         |= programBlockP
 
 
--- patternP = Debug.todo ""
+patternP = Debug.todo ""
 
 
 stringPWrap : P.Parser ( List Elf, List Elt )
@@ -401,9 +369,9 @@ stringElf s p =
     { p | stack = Pstring s :: p.stack }
 
 
-stringElt : Elt
-stringElt s =
-    Ok { s | mirror = { defs = s.mirror.defs, stack = {standard = [Sstring], custom = []}  :: s.mirror.stack } }
+stringElt : Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
+stringElt dets stack =
+    Ok ( dets, {standard = [Sstring], custom = []}  :: stack )
 
 
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
@@ -505,14 +473,18 @@ defElf var p =
                 }
 
 
-defElt : String -> EltState -> Result String EltState
-defElt var state =
-    case state.mirror.stack of
+defElt :
+    String
+    -> Dict.Dict String Type
+    -> List Type
+    -> Result String ( Dict.Dict String Type, List Type )
+defElt var dets typestack =
+    case typestack of
         [] ->
             Err "you need to put something on the stack before a definition"
 
         s :: tack ->
-            if Dict.member var state.mirror.defs then
+            if Dict.member var dets then
                 Err <|
                     String.concat
                         [ "mutiple definitions of \""
@@ -521,11 +493,7 @@ defElt var state =
                         ]
 
             else
-                Ok { state | mirror =
-                        { defs = Dict.insert var s state.mirror.defs
-                        , stack = tack
-                        }
-                   }
+                Ok ( Dict.insert var s dets, tack )
 
 
 runBlockP : P.Parser ( List Elf, List Elt )
@@ -547,13 +515,9 @@ blockElf elfs p =
     { p | stack = Pblock elfs :: p.stack }
 
 
-blockElt : List Elt -> EltState -> Result String EltState
-blockElt elts s =
-    let
-        newT = {standard = [Sblock elts], custom = []}
-        stack = newT :: s.mirror.stack
-    in
-        Ok { s | mirror = { defs = s.mirror.defs, stack = stack } }
+blockElt : List Elt -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
+blockElt elts dets stack =
+    Ok ( dets, {standard = [Sblock elts], custom = []} :: stack )
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -577,9 +541,12 @@ runBlockElf s =
             }
 
 
-runBlockElt : EltState -> Result String EltState
-runBlockElt s =
-    case s.mirror.stack of
+runBlockElt :
+    Dict.Dict String Type
+    -> List Type
+    -> Result String ( Dict.Dict String Type, List Type )
+runBlockElt dets typeStack =
+    case typeStack of
         [] ->
             Err "empty stack"
     
@@ -592,9 +559,12 @@ runBlockElt s =
                             , showTypeVal t
                             ]
                 Just block ->
-                    runTypeChecksHelp
-                        block
-                        { s | mirror = { defs = s.mirror.defs , stack = xs } }
+                    case runTypeChecksHelp block dets xs of
+                        Ok newStack ->
+                            Ok ( dets, newStack )
+
+                        Err errMsg ->
+                            Err errMsg
 
 
 justs : List (Maybe a) -> List a
@@ -757,14 +727,14 @@ makeRetrieveElf var p =
             { p | stack = f :: p.stack }
 
 
-makeRetrieveElt : String -> EltState -> Result String EltState
-makeRetrieveElt var s =
-    case Dict.get var s.mirror.defs of
+makeRetrieveElt : String -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
+makeRetrieveElt var dets typestack =
+    case Dict.get var dets of
         Nothing ->
             Err <| String.concat [ "no definition \"", var, "\"" ]
 
         Just t ->
-            Ok { s | mirror = { defs = s.mirror.defs, stack = t :: s.mirror.stack } }
+            Ok ( dets, t :: typestack )
 
 
 -- fullTypeCheckP : P.Parser ( List Elf, List Elt )
@@ -1005,20 +975,8 @@ type StandardType
     | Sstring
 
 
-type alias EltState =
-    { mirror : MirrorState
-    , types : TypeState
-    }
-
-
-type alias MirrorState =
-    { defs : Dict.Dict String Type
-    , stack : List Type
-    }
-
-
 type alias Elt =
-    EltState -> Result String EltState
+    Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 
 
 standardTypes : Dict.Dict String Type
@@ -1076,8 +1034,8 @@ print doc s =
 
 
 printElt : Elt
-printElt e =
-    case e.mirror.stack of
+printElt dets stack =
+    case stack of
         [] ->
             Err <| String.concat
                 [ "\"print\" needs there to be a something on the "
@@ -1085,7 +1043,7 @@ printElt e =
                 ]
         s :: tack ->
             if isSubType s ({standard = [Sstring], custom = []}) then
-                Ok { e | mirror = { defs = e.mirror.defs, stack = tack } }
+                Ok ( dets, tack )
             else
                 Err <|
                     String.concat
@@ -1140,28 +1098,19 @@ customOfStandardHelp bs t =
 
 
 
-initEltState : EltState
-initEltState =
-    { mirror = { defs = standardTypes, stack = [] }
-    , types = initTypeProgramState
-    }
-
-
 runTypeChecks : List Elt -> Maybe String
 runTypeChecks elts =
-    case runTypeChecksHelp elts initEltState of
-        Ok endState ->
-            case endState.mirror.stack of
-                [] ->
-                    Nothing
+    case runTypeChecksHelp elts standardTypes [] of
+        Ok [] ->
+            Nothing
 
-                ts ->
-                    Just <|
-                        String.concat
-                            [ "typestack should be empty at end of "
-                            , "program, but got "
-                            , showTypeStack ts
-                            ]
+        Ok ts ->
+            Just <|
+                String.concat
+                    [ "typestack should be empty at end of program, but "
+                    , "got "
+                    , showTypeStack ts
+                    ]
 
         Err err ->
             Just err
@@ -1169,20 +1118,21 @@ runTypeChecks elts =
 
 runTypeChecksHelp :
     List Elt
-    -> EltState
-    -> Result String EltState
-runTypeChecksHelp elts eltState =
+    -> Dict.Dict String Type
+    -> List Type
+    -> Result String (List Type)
+runTypeChecksHelp elts dets typeStack =
     case elts of
         [] ->
-            Ok eltState
+            Ok typeStack
 
         e :: lts ->
-            case e eltState of
+            case e dets typeStack of
                 Err errMsg ->
                     Err errMsg
 
-                Ok newEltState ->
-                    runTypeChecksHelp lts newEltState
+                Ok ( newDets, newTypeStack ) ->
+                    runTypeChecksHelp lts newDets newTypeStack
 
 
 type alias HumanMsg =
