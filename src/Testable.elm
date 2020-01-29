@@ -174,10 +174,24 @@ homeButton =
         }
 
 
-topProgramP : P.Parser (List Elf, List Elt)
+standardTypeProgramDefs : Dict.Dict String TypeProgramValue
+standardTypeProgramDefs =
+    Dict.fromList
+        [
+        ]
+
+
+initTypeProgramState : TypeState
+initTypeProgramState =
+    { defs = standardTypeProgramDefs
+    , stack = []
+    }
+
+
+topProgramP : P.Parser ParserOut
 topProgramP =
     P.succeed identity
-        |= programP
+        |= programP initTypeProgramState
         |. P.end
 
 
@@ -190,7 +204,7 @@ runProgram program =
             , []
             )
 
-        Ok ( elfs, elts ) ->
+        Ok {elfs, elts} ->
             case runTypeChecks elts of
                 Just errMsg ->
                     ( program, Just <| SmallString errMsg, [] )
@@ -264,36 +278,44 @@ problemToString problem =
             "bad repeat"
 
 
-programP : P.Parser ( List Elf, List Elt )
-programP =
-    P.loop ( [], [] ) programHelpP
+type alias ParserOut =
+    { typeState : TypeState
+    , elfs : List Elf
+    , elts : List Elt
+    }
 
 
-programHelpP :
-    ( List Elf, List Elt )
-    -> P.Parser (P.Step ( List Elf, List Elt ) ( List Elf, List Elt ))
-programHelpP ( oldElfs, oldElts ) =
+programP : TypeState -> P.Parser ParserOut
+programP t =
+    P.loop {typeState = t, elfs = [], elts = []} programHelpP
+
+
+programHelpP : ParserOut -> P.Parser (P.Step ParserOut ParserOut)
+programHelpP p =
     P.oneOf
-        [ P.succeed (\( elfs, elts ) -> P.Loop ( oldElfs ++ elfs, oldElts ++ elts ))
+        [ P.succeed (\{ typeState, elfs, elts } -> P.Loop { elfs = p.elfs ++ elfs, elts = p.elts ++ elts, typeState = typeState })
             |. whiteSpaceP
-            |= elementP
+            |= elementP p.typeState
             |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done ( oldElfs, oldElts ))
+        , P.succeed () |> P.map (\_ -> P.Done p)
         ]
 
 
-elementP : P.Parser ( List Elf, List Elt )
-elementP =
-    P.oneOf
-        [ runBlockP
-        , stringPWrap
-        , defP
-        , programBlockP
-        -- , partialTypeCheckP
-        -- , fullTypeCheckP
-        , retrieveP
-        -- , switchP
-        ]
+elementP : TypeState -> P.Parser ParserOut
+elementP t =
+    let
+        w p = P.map (\(elfs, elts) -> {elfs = elfs, elts = elts, typeState = t}) p
+    in
+        P.oneOf
+            [ w runBlockP
+            , w stringPWrap
+            , w defP
+            , programBlockP t
+            -- , partialTypeCheckP
+            -- , fullTypeCheckP
+            , w retrieveP
+            -- , switchP
+            ]
 
 
 -- switchP : P.Parser ( List Elf, List Elt )
@@ -323,14 +345,14 @@ type Pattern
     | PVariable 
 
 
-switchPartP : P.Parser SwitchPart
-switchPartP =
-    P.succeed SwitchPart
-        |= patternP
-        |. whiteSpaceP
-        |. P.token "->"
-        |. whiteSpaceP
-        |= programBlockP
+-- switchPartP : P.Parser SwitchPart
+-- switchPartP =
+--     P.succeed SwitchPart
+--         |= patternP
+--         |. whiteSpaceP
+--         |. P.token "->"
+--         |. whiteSpaceP
+--         |= programBlockP
 
 
 patternP = Debug.todo ""
@@ -480,11 +502,11 @@ runBlockP =
         |. P.keyword "!"
 
 
-programBlockP : P.Parser ( List Elf, List Elt )
-programBlockP =
-    P.succeed (\( elfs, elts ) -> ( [ blockElf elfs ], [ blockElt elts ] ))
+programBlockP : TypeState -> P.Parser ParserOut
+programBlockP t =
+    P.succeed (\{elfs, elts, typeState} -> {elfs = [ blockElf elfs ], elts = [ blockElt elts ], typeState = typeState })
         |. P.keyword "{"
-        |= programP
+        |= programP t
         |. P.keyword "}"
 
 
@@ -923,6 +945,19 @@ runElfsHelp elfs s =
                     e s
             in
             runElfsHelp lfs newS
+
+
+type alias TypeState =
+    { defs : Dict.Dict String TypeProgramValue
+    , stack : List TypeProgramValue
+    }
+
+
+type TypeProgramValue
+    = Ttype Type
+    | Tstring String
+    | Tblock (List (TypeState -> TypeState))
+    | Tlist (List TypeProgramValue)
 
 
 type alias Type =
