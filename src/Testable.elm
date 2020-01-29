@@ -347,7 +347,25 @@ typeElementP : TypeState -> P.Parser ParserOut
 typeElementP t =
     P.oneOf
         [ typeRunBlockP t
+        , typeStringP t
         ]
+
+
+typeStringP : TypeState -> P.Parser ParserOut
+typeStringP t =
+    P.succeed (typeStringPHelp t)
+        |= stringP
+
+
+typeStringPHelp : TypeState -> String -> ParserOut
+typeStringPHelp {defs, stack} s =
+    let
+        newStack = Tstring s :: stack
+    in
+        { typeState = {stack = newStack, defs = defs }
+        , elfs = []
+        , elts = []
+        }
 
 
 typeRunBlockP : TypeState -> P.Parser ParserOut
@@ -364,7 +382,6 @@ typeRunBlockP t =
                 [ "expecting a block on top of the stack, but got "
                 , showTypeProgramValue top
                 ]
-
             
 
 runTypeBlockHelp :
