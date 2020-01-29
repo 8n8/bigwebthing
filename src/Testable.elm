@@ -345,37 +345,36 @@ typeLangHelpP p =
 
 typeElementP : TypeState -> P.Parser ParserOut
 typeElementP t =
-    P.oneOf
-        [ typeRunBlockP t
-        , typeStringP t
+    let
+        w p = P.map (\newT -> {typeState = newT, elfs = [], elts = []}) (p t)
+    in P.oneOf
+        [ w typeRunBlockP
+        , w typeStringP
         ]
 
 
-typeStringP : TypeState -> P.Parser ParserOut
+typeStringP : TypeState -> P.Parser TypeState
 typeStringP t =
-    P.succeed (typeStringPHelp t)
+    P.succeed (\s -> {t | stack = Tstring s :: t.stack })
         |= stringP
 
 
-typeStringPHelp : TypeState -> String -> ParserOut
+typeStringPHelp : TypeState -> String -> TypeState
 typeStringPHelp {defs, stack} s =
     let
         newStack = Tstring s :: stack
     in
-        { typeState = {stack = newStack, defs = defs }
-        , elfs = []
-        , elts = []
-        }
+        {stack = newStack, defs = defs }
 
 
-typeRunBlockP : TypeState -> P.Parser ParserOut
+typeRunBlockP : TypeState -> P.Parser TypeState
 typeRunBlockP t =
     case t.stack of
         [] ->
             P.problem "got \"!\" but stack is empty"
 
         (Tblock b) :: _ ->
-            P.succeed <| { typeState = runTypeBlockHelp t b, elfs = [], elts = []}
+            P.succeed <| runTypeBlockHelp t b
 
         top :: _ ->
             P.problem <| String.concat
