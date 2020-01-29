@@ -350,7 +350,35 @@ typeElementP t =
     in P.oneOf
         [ w typeRunBlockP
         , w typeStringP
+        , w typeDefP
         ]
+
+
+typeDefP : TypeState -> P.Parser TypeState
+typeDefP t =
+    P.succeed identity
+        |. P.token "="
+        |. whiteSpaceP
+        |= variable
+        |> P.andThen (typeDefPhelp t)
+
+
+typeDefPhelp : TypeState -> String -> P.Parser TypeState
+typeDefPhelp t var =
+    case t.stack of
+        [] ->
+            P.problem "stack should contain at least one item"
+
+        s :: tack ->
+            if Dict.member var t.defs then
+                P.problem <|
+                    "multiple definitions of \"" ++ var ++ "\""
+
+            else
+                P.succeed
+                    { defs = Dict.insert var s t.defs
+                    , stack = tack
+                    }
 
 
 typeStringP : TypeState -> P.Parser TypeState
