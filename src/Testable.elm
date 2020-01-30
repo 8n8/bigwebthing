@@ -15,6 +15,7 @@ import Html.Attributes
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
+import Maybe.Extra
 import Parser as P exposing ((|.), (|=))
 import Set
 
@@ -352,7 +353,83 @@ typeElementP t =
         , w typeStringP
         , w typeDefP
         , w typeBlockP
+        , partialTypeCheckP t
         , w typeRetrieveP
+        ]
+
+
+partialTypeCheckP : TypeState -> P.Parser ParserOut
+partialTypeCheckP t =
+    P.succeed identity
+        |. P.keyword "topcheck"
+        |= partialTypeCheckHelp t
+
+
+partialTypeCheckHelp : TypeState -> P.Parser ParserOut
+partialTypeCheckHelp t =
+    case t.stack of
+        [] ->
+            P.problem <| "a partial type check needs a list on the top of the stack, but it is empty"
+        (Tlist ts) :: remainsOfStack ->
+            case getTypes ts of
+                Nothing ->
+                    P.problem <| "a partial type check needs a list of types only, but this list has other things in it"
+
+                Just types -> P.succeed
+                    { typeState = { t | stack = remainsOfStack }
+                    , elfs = []
+                    , elts = [partialTypeCheckElt types]
+                    }
+
+        topItem :: _ ->
+            P.problem <| String.concat
+                [ "a partial type check needs the top item on the "
+                , "stack to be a list of types, but it is a "
+                , showTypeProgramType topItem
+                ]
+                
+
+getTypes : List TypeProgramValue -> Maybe (List Type)
+getTypes values =
+    Maybe.Extra.traverse getType values
+
+
+getType : TypeProgramValue -> Maybe Type
+getType typeProgramValue =
+    case typeProgramValue of
+        Ttype t ->
+            Just t
+
+        _ ->
+            Nothing
+
+          
+partialTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String (Dict.Dict String Type, List Type)
+partialTypeCheckElt t dets stack =
+    let
+        lengthExpected = List.length t
+        lengthActual = List.length stack
+        relevant = List.take lengthExpected stack
+    in
+        if lengthExpected < lengthActual then
+            Err <| failedPartialMessage t stack 
+        else
+            if equalTypeStacks t relevant then
+                Ok (dets, stack)
+
+            else
+                Err <| failedPartialMessage t stack
+
+
+failedPartialMessage : List Type -> List Type -> String
+failedPartialMessage expected actual =
+    String.concat
+        [ "failed partial type check:\n"
+        , "expecting: "
+        , showTypeStack expected
+        , "\n"
+        , "but got: "
+        , showTypeStack actual
         ]
 
 
@@ -743,7 +820,7 @@ showTypeAtom t =
 
 showString : String -> String
 showString s =
-    String.reverse <| String.foldr showStringHelp "" s
+    String.foldr showStringHelp "" s
 
 
 showStringHelp : Char -> String -> String
@@ -1104,7 +1181,7 @@ showTypeProgramValue typeProgramValue =
             showTypeVal t
 
         Tstring s ->
-            s
+            "\"" ++ showString s ++ "\""
 
         Tblock _ ->
             "block"
@@ -1115,6 +1192,22 @@ showTypeProgramValue typeProgramValue =
                 , String.join ", " <| List.map showTypeProgramValue ts
                 , "]"
                 ]
+
+
+showTypeProgramType : TypeProgramValue -> String
+showTypeProgramType t =
+    case t of
+        Ttype _ ->
+            "type"
+
+        Tstring _ ->
+            "string"
+
+        Tblock _ ->
+            "block"
+
+        Tlist _ ->
+            "list"
 
 
 type alias Type =
@@ -1130,6 +1223,45 @@ type TypeAtom
 type StandardType
     = Sblock (List Elt)
     | Sstring
+
+
+equalTypeStacks : List Type -> List Type -> Bool
+equalTypeStacks t1 t2 =
+    List.all identity <| List.map2 equalType t1 t2
+
+
+equalType : Type -> Type -> Bool
+equalType t1 t2 =
+    equalStandards t1.standard t2.standard &&
+    equalCustoms t1.custom t2.custom
+
+
+equalCustoms : List TypeAtom -> List TypeAtom -> Bool
+equalCustoms t1 t2 =
+    List.all identity <| List.map2 equalCustom t1 t2
+
+
+equalCustom : TypeAtom -> TypeAtom -> Bool
+equalCustom t1 t2 =
+    t1 == t2
+
+
+equalStandards : List StandardType -> List StandardType -> Bool
+equalStandards b1 b2 =
+    List.all identity <| List.map2 equalStandard b1 b2
+
+
+equalStandard : StandardType -> StandardType -> Bool
+equalStandard b1 b2 =
+    case (b1, b2) of
+        (Sstring, Sstring) ->
+            True
+
+        (Sblock _, Sblock _) ->
+            True
+
+        _ ->
+            False
 
 
 type alias Elt =
