@@ -355,6 +355,29 @@ typeElementP t =
         , w typeBlockP
         , partialTypeCheckP t
         , w typeRetrieveP
+        , w typeListP
+        ]
+
+
+typeListP : TypeState -> P.Parser TypeState
+typeListP t =
+    P.sequence
+        { start = "["
+        , separator = ","
+        , end = "]"
+        , spaces = whiteSpaceP
+        , item = typeListLiteralElementP t
+        , trailing = P.Mandatory
+        }
+    |> P.map (\l -> {t|stack = Tlist l :: t.stack})
+
+
+typeListLiteralElementP : TypeState -> P.Parser TypeProgramValue
+typeListLiteralElementP t =
+    P.oneOf
+        [ P.map Tstring stringP
+        , P.map Tblock (typeBlockHelpP t)
+        , P.map Ttype (typeLiteralP t)
         ]
 
 
@@ -411,7 +434,7 @@ partialTypeCheckElt t dets stack =
         lengthActual = List.length stack
         relevant = List.take lengthExpected stack
     in
-        if lengthExpected < lengthActual then
+        if lengthExpected > lengthActual then
             Err <| failedPartialMessage t stack 
         else
             if equalTypeStacks t relevant then
@@ -452,10 +475,17 @@ typeRetrievePhelp t var =
 
 typeBlockP : TypeState -> P.Parser TypeState
 typeBlockP t =
-    P.succeed (\{elts, typeState} -> { typeState | stack = Tblock elts :: typeState.stack })
-        |. P.keyword "{"
+    P.map
+        (\elts -> { t | stack = Tblock elts :: t.stack })
+        (typeBlockHelpP t)
+
+
+typeBlockHelpP : TypeState -> P.Parser (List Elt)
+typeBlockHelpP t =
+    P.succeed .elts
+        |. P.token "{"
         |= typeLangP t
-        |. P.keyword "}"
+        |. P.token "}"
 
 
 typeDefP : TypeState -> P.Parser TypeState
@@ -896,25 +926,6 @@ showTypeStack typestack =
         ]
 
 
-showTypeCheck : List TypeLiteral -> String
-showTypeCheck typeCheck =
-    String.concat
-        [ "<"
-        , String.join ", " <| List.map showTypeLit typeCheck
-        , ">"
-        ]
-
-
-showTypeLit : TypeLiteral -> String
-showTypeLit typeLit =
-    case typeLit of
-        Tlstring ->
-            "string"
-
-        Tlblock ->
-            "block"
-
-
 retrieveP : P.Parser ( List Elf, List Elt )
 retrieveP =
     P.succeed retrievePhelp |= variable
@@ -963,19 +974,6 @@ makeRetrieveElt var dets typestack =
 --                 , item = typeLiteralP
 --                 , trailing = P.Mandatory
 --                 }
-
-
-typeCheckErr : List TypeLiteral -> List Type -> String
-typeCheckErr expected got =
-    String.concat
-        [ "type stack does not match type declaration:\n"
-        , "expecting "
-        , showTypeCheck <| List.reverse expected
-        , "\n"
-        , "but got "
-        , showTypeStack <| List.reverse got
-        , "\n"
-        ]
 
 
 -- makeFullTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
@@ -1037,25 +1035,20 @@ typeCheckErr expected got =
 --         Err <| typeCheckErr typeVals candidate
 
 
-typeLiteralP : P.Parser TypeLiteral
-typeLiteralP =
+typeLiteralP : TypeState -> P.Parser Type
+typeLiteralP t =
     P.oneOf [ stringTypeP, blockTypeP ]
 
 
-blockTypeP : P.Parser TypeLiteral
+blockTypeP : P.Parser Type
 blockTypeP =
-    P.succeed Tlblock
+    P.succeed {standard = [Sblock []], custom = []}
         |. P.keyword "block"
 
 
-type TypeLiteral
-    = Tlstring
-    | Tlblock
-
-
-stringTypeP : P.Parser TypeLiteral
+stringTypeP : P.Parser Type
 stringTypeP =
-    P.succeed Tlstring
+    P.succeed {standard = [Sstring], custom = []}
         |. P.keyword "string"
 
 
