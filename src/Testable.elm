@@ -313,7 +313,7 @@ elementP t =
             , programBlockP t
             -- , partialTypeCheckP
             -- , fullTypeCheckP
-            , typeLangP t
+            , topTypeLangP t
             , w retrieveP
             -- , switchP
             ]
@@ -348,10 +348,19 @@ typeElementP t =
     let
         w p = P.map (\newT -> {typeState = newT, elfs = [], elts = []}) (p t)
     in P.oneOf
-        [ w typeRunBlockP
+        [ typeRunBlockP t
         , w typeStringP
         , w typeDefP
+        , w typeBlockP
         ]
+
+
+typeBlockP : TypeState -> P.Parser TypeState
+typeBlockP t =
+    P.succeed (\{elts, typeState} -> { typeState | stack = Tblock elts :: typeState.stack })
+        |. P.keyword "{"
+        |= typeLangP t
+        |. P.keyword "}"
 
 
 typeDefP : TypeState -> P.Parser TypeState
@@ -395,14 +404,17 @@ typeStringPHelp {defs, stack} s =
         {stack = newStack, defs = defs }
 
 
-typeRunBlockP : TypeState -> P.Parser TypeState
+typeRunBlockP : TypeState -> P.Parser ParserOut
 typeRunBlockP t =
     case t.stack of
         [] ->
             P.problem "got \"!\" but stack is empty"
 
-        (Tblock b) :: _ ->
-            P.succeed <| runTypeBlockHelp t b
+        (Tblock b) :: tack ->
+            P.succeed {typeState = {defs = t.defs, stack = tack}
+                      , elfs = []
+                      , elts = b
+                      }
 
         top :: _ ->
             P.problem <| String.concat
@@ -1063,7 +1075,7 @@ type alias TypeState =
 type TypeProgramValue
     = Ttype Type
     | Tstring String
-    | Tblock (List (TypeState -> TypeState))
+    | Tblock (List Elt)
     | Tlist (List TypeProgramValue)
 
 
