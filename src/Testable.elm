@@ -352,7 +352,25 @@ typeElementP t =
         , w typeStringP
         , w typeDefP
         , w typeBlockP
+        , w typeRetrieveP
         ]
+
+
+typeRetrieveP : TypeState -> P.Parser TypeState
+typeRetrieveP t =
+    P.succeed identity
+        |= variable
+        |> P.andThen (typeRetrievePhelp t)
+
+
+typeRetrievePhelp : TypeState -> String -> P.Parser TypeState
+typeRetrievePhelp t var =
+    case Dict.get var t.defs of
+        Nothing ->
+            P.problem <| "no definition \"" ++ var ++ "\""
+
+        Just definition ->
+            P.succeed { t | stack = definition :: t.stack }
 
 
 typeBlockP : TypeState -> P.Parser TypeState
