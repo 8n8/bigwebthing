@@ -173,7 +173,9 @@ homeButton =
 standardTypeProgramDefs : Dict.Dict String TypeProgramValue
 standardTypeProgramDefs =
     Dict.fromList
-        []
+        [ ("block", Ttype {custom = [], standard = [Sblock []]})
+        , ("string", Ttype {custom = [], standard = [Sstring]})
+        ]
 
 
 initTypeProgramState : TypeState
@@ -428,6 +430,7 @@ typeListLiteralElementP t =
         [ P.map Tstring stringP
         , P.map (\{ elts } -> Tblock elts) (typeBlockHelpP t)
         , P.map Ttype (typeLiteralP t)
+        , P.succeed identity |= variable |> P.andThen (typeRetrievePhelp t)
         ]
 
 
@@ -522,16 +525,17 @@ typeRetrieveP t =
     P.succeed identity
         |= variable
         |> P.andThen (typeRetrievePhelp t)
+        |> P.map (\def -> { t | stack = def :: t.stack })
 
 
-typeRetrievePhelp : TypeState -> String -> P.Parser TypeState
+typeRetrievePhelp : TypeState -> String -> P.Parser TypeProgramValue
 typeRetrievePhelp t var =
     case Dict.get var t.defs of
         Nothing ->
             P.problem <| "no definition \"" ++ var ++ "\""
 
         Just definition ->
-            P.succeed { t | stack = definition :: t.stack }
+            P.succeed definition
 
 
 typeBlockP : TypeState -> P.Parser TypeState
@@ -976,7 +980,7 @@ makeRetrieveElt var dets typestack =
 
 typeLiteralP : TypeState -> P.Parser Type
 typeLiteralP _ =
-    P.oneOf [ stringTypeP, blockTypeP ]
+    P.oneOf [ ]
 
 
 blockTypeP : P.Parser Type
