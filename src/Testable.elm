@@ -208,7 +208,7 @@ runProgram program =
         Ok {elfs, elts} ->
             case runTypeChecks elts of
                 Just errMsg ->
-                    ( program, Just <| SmallString errMsg, [] )
+                    ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
                 Nothing ->
                     runElfs program elfs []
@@ -354,8 +354,61 @@ typeElementP t =
         , w typeDefP
         , w typeBlockP
         , partialTypeCheckP t
+        , fullTypeCheckP t
         , w typeRetrieveP
         , w typeListP
+        ]
+
+
+fullTypeCheckP : TypeState -> P.Parser ParserOut
+fullTypeCheckP t =
+    P.succeed identity
+        |. P.keyword "fullcheck"
+        |= fullTypeCheckHelp t
+
+
+fullTypeCheckHelp : TypeState -> P.Parser ParserOut
+fullTypeCheckHelp t =
+    case t.stack of
+        [] ->
+            P.problem <| "a full type check needs a list on the top of the stack, but it is empty"
+
+        (Tlist ts) :: remainsOfStack ->
+            case getTypes ts of
+                Nothing ->
+                    P.problem "a full type check needs a list of types only, but this list has things in it"
+
+                Just types -> P.succeed
+                    { typeState = { t | stack = remainsOfStack }
+                    , elfs = []
+                    , elts = [fullTypeCheckElt types]
+                    }
+
+        topItem :: _ ->
+            P.problem <| String.concat
+                [ "a full type check needs the top item on the "
+                , "stack to be a list of types, but it is a "
+                , showTypeProgramType topItem
+                ]
+
+
+fullTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String (Dict.Dict String Type, List Type)
+fullTypeCheckElt t dets stack =
+    if equalTypeStacks t stack then
+        Ok (dets, stack)
+    else
+        Err <| failedFullMessage t stack
+
+
+failedFullMessage : List Type -> List Type -> String
+failedFullMessage expected actual =
+    String.concat
+        [ "failed full type check:\n"
+        , "expecting: "
+        , showTypeStack expected
+        , "\n"
+        , "but got: "
+        , showTypeStack actual
         ]
 
 
@@ -396,7 +449,7 @@ partialTypeCheckHelp t =
         (Tlist ts) :: remainsOfStack ->
             case getTypes ts of
                 Nothing ->
-                    P.problem <| "a partial type check needs a list of types only, but this list has other things in it"
+                    P.problem "a partial type check needs a list of types only, but this list has other things in it"
 
                 Just types -> P.succeed
                     { typeState = { t | stack = remainsOfStack }
@@ -434,14 +487,17 @@ partialTypeCheckElt t dets stack =
         lengthActual = List.length stack
         relevant = List.take lengthExpected stack
     in
-        if lengthExpected > lengthActual then
-            Err <| failedPartialMessage t stack 
+        if lengthExpected == 0 then
+            Err <| "there's no point in an empty partial type check"
         else
-            if equalTypeStacks t relevant then
-                Ok (dets, stack)
-
+            if lengthExpected > lengthActual then
+                Err <| failedPartialMessage t stack 
             else
-                Err <| failedPartialMessage t stack
+                if equalTypeStacks t relevant then
+                    Ok (dets, stack)
+
+                else
+                    Err <| failedPartialMessage t stack
 
 
 failedPartialMessage : List Type -> List Type -> String
@@ -534,6 +590,7 @@ typeRunBlockP t =
     P.succeed identity
         |= typeRunBlockHelpP t
         |. P.token "!"
+
 
 
 typeRunBlockHelpP t =
@@ -1213,7 +1270,8 @@ type StandardType
 
 equalTypeStacks : List Type -> List Type -> Bool
 equalTypeStacks t1 t2 =
-    List.all identity <| List.map2 equalType t1 t2
+    (List.length t1 == List.length t2) &&
+    (List.all identity <| List.map2 equalType t1 t2)
 
 
 equalType : Type -> Type -> Bool
