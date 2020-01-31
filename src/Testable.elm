@@ -531,6 +531,12 @@ typeStringPHelp {defs, stack} s =
 
 typeRunBlockP : TypeState -> P.Parser ParserOut
 typeRunBlockP t =
+    P.succeed identity
+        |= typeRunBlockHelpP t
+        |. P.token "!"
+
+
+typeRunBlockHelpP t =
     case t.stack of
         [] ->
             P.problem "got \"!\" but stack is empty"
@@ -543,23 +549,10 @@ typeRunBlockP t =
 
         top :: _ ->
             P.problem <| String.concat
-                [ "expecting a block on top of the stack, but got "
+                [ "expecting a block on top of the stack, but "
+                , "got "
                 , showTypeProgramValue top
                 ]
-            
-
-runTypeBlockHelp :
-    TypeState
-    -> List (TypeState -> TypeState)
-    -> TypeState
-runTypeBlockHelp t block =
-    case block of
-        [] ->
-            t
-
-        b :: lock ->
-            runTypeBlockHelp (b t) lock
-
 
 
 -- switchP : P.Parser ( List Elf, List Elt )
@@ -743,7 +736,7 @@ defElt var dets typestack =
 runBlockP : P.Parser ( List Elf, List Elt )
 runBlockP =
     P.succeed ( [ runBlockElf ], [ runBlockElt ] )
-        |. P.keyword "!"
+        |. P.token "!"
 
 
 programBlockP : TypeState -> P.Parser ParserOut
