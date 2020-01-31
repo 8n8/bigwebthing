@@ -20,11 +20,6 @@ import Parser as P exposing ((|.), (|=))
 import Set
 
 
-plus : Int -> Int
-plus i =
-    i + 5
-
-
 type Msg
     = RetrievedHome String
     | RetrievedHash String
@@ -131,8 +126,6 @@ sansSerif = Font.family [ Font.typeface "Ubuntu" ]
 monospace = Font.family [ Font.typeface "Ubuntu Mono" ]
 
 
--- The wrapping is still not working nicely. See this Ellie for
--- an example: https://ellie-app.com/7PscK58sWRba1
 editor : Model -> Element.Element Msg
 editor model =
     case model.openProgram of
@@ -312,11 +305,8 @@ elementP t =
             , w stringPWrap
             , w defP
             , programBlockP t
-            -- , partialTypeCheckP
-            -- , fullTypeCheckP
             , topTypeLangP t
             , w retrieveP
-            -- , switchP
             ]
 
 
@@ -612,22 +602,6 @@ typeRunBlockHelpP t =
                 ]
 
 
--- switchP : P.Parser ( List Elf, List Elt )
--- switchP =
---     P.map makeSwitchElfsElts <|
---         P.sequence
---             { start = "switch"
---             , separator = ","
---             , end = "endswitch"
---             , spaces = whiteSpaceP
---             , item = switchPartP
---             , trailing = P.Mandatory
---             }
--- 
--- 
--- makeSwitchElfsElts = Debug.todo "todo"
-
-
 type alias SwitchPart =
     { pattern : Pattern
     , block : (List Elf, List Elt)
@@ -637,16 +611,6 @@ type alias SwitchPart =
 type Pattern
     = PString String
     | PVariable 
-
-
--- switchPartP : P.Parser SwitchPart
--- switchPartP =
---     P.succeed SwitchPart
---         |= patternP
---         |. whiteSpaceP
---         |. P.token "->"
---         |. whiteSpaceP
---         |= programBlockP
 
 
 patternP = Debug.todo ""
@@ -1012,79 +976,6 @@ makeRetrieveElt var dets typestack =
             Ok ( dets, t :: typestack )
 
 
--- fullTypeCheckP : P.Parser ( List Elf, List Elt )
--- fullTypeCheckP =
---     P.map (\ts -> ( [], [ makeFullTypeCheck ts ] )) <|
---         P.map List.reverse <|
---             P.sequence
---                 { start = "<"
---                 , separator = ","
---                 , end = ">"
---                 , spaces = whiteSpaceP
---                 , item = typeLiteralP
---                 , trailing = P.Mandatory
---                 }
-
-
--- makeFullTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
--- makeFullTypeCheck typeVals dets typeStack =
---     if equalT typeVals typeStack then
---         Ok ( dets, typeStack )
--- 
---     else
---         Err <| typeCheckErr typeVals typeStack
-
-
--- equalT : List TypeLiteral -> List Type -> Bool
--- equalT lits vals =
---     if List.length lits /= List.length vals then
---         False
--- 
---     else
---         List.all identity <| List.map2 equalThelp lits vals
--- 
--- 
--- equalThelp : TypeLiteral -> Type -> Bool
--- equalThelp lit val =
---     case ( lit, val ) of
---         ( Tlstring, Tstring ) ->
---             True
--- 
---         ( Tlblock, Tblock _ ) ->
---             True
--- 
---         _ ->
---             False
-
-
--- makePartialTypeCheck : List TypeLiteral -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
--- makePartialTypeCheck typeVals dets typeStack =
---     let
---         lenExpected =
---             List.length typeVals
--- 
---         lenActual =
---             List.length typeStack
--- 
---         candidate =
---             List.take lenExpected typeStack
---     in
---     if lenActual < lenExpected then
---         Err <|
---             String.concat
---                 [ "expecting "
---                 , String.fromInt lenExpected
---                 , " items on the stack, but only got "
---                 , String.fromInt lenActual
---                 ]
--- 
---     else if equalT typeVals candidate then
---         Ok ( dets, typeStack )
--- 
---     else
---         Err <| typeCheckErr typeVals candidate
-
-
 typeLiteralP : TypeState -> P.Parser Type
 typeLiteralP t =
     P.oneOf [ stringTypeP, blockTypeP ]
@@ -1100,20 +991,6 @@ stringTypeP : P.Parser Type
 stringTypeP =
     P.succeed {standard = [Sstring], custom = []}
         |. P.keyword "string"
-
-
--- partialTypeCheckP : P.Parser ( List Elf, List Elt )
--- partialTypeCheckP =
---     P.map (\elt -> ( [], [ makePartialTypeCheck elt ] )) <|
---         P.map List.reverse <|
---             P.sequence
---                 { start = "<.."
---                 , separator = ","
---                 , end = ">"
---                 , spaces = whiteSpaceP
---                 , item = typeLiteralP
---                 , trailing = P.Optional
---                 }
 
 
 whiteSpaceP : P.Parser ()
