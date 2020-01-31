@@ -122,8 +122,12 @@ css key value =
     Element.htmlAttribute <| Html.Attributes.style key value
 
 
-sansSerif = Font.family [ Font.typeface "Ubuntu" ]
-monospace = Font.family [ Font.typeface "Ubuntu Mono" ]
+sansSerif =
+    Font.family [ Font.typeface "Ubuntu" ]
+
+
+monospace =
+    Font.family [ Font.typeface "Ubuntu Mono" ]
 
 
 editor : Model -> Element.Element Msg
@@ -143,7 +147,7 @@ editor model =
                         Element.Input.placeholder [] <|
                             Element.text "Type program here"
                 , label =
-                    Element.Input.labelAbove [sansSerif] <|
+                    Element.Input.labelAbove [ sansSerif ] <|
                         Element.text "This box contains the program:"
                 , spellcheck = False
                 }
@@ -155,8 +159,9 @@ editorCheckbox checked =
         { onChange = ShowProgramCheckBox
         , icon = Element.Input.defaultCheckbox
         , checked = checked
-        , label = Element.Input.labelRight [] <|
-            Element.text "Tick this box if you're sure you want to edit the program."
+        , label =
+            Element.Input.labelRight [] <|
+                Element.text "Tick this box if you're sure you want to edit the program."
         }
 
 
@@ -171,8 +176,7 @@ homeButton =
 standardTypeProgramDefs : Dict.Dict String TypeProgramValue
 standardTypeProgramDefs =
     Dict.fromList
-        [
-        ]
+        []
 
 
 initTypeProgramState : TypeState
@@ -198,7 +202,7 @@ runProgram program =
             , []
             )
 
-        Ok {elfs, elts} ->
+        Ok { elfs, elts } ->
             case runTypeChecks elts of
                 Just errMsg ->
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
@@ -281,7 +285,7 @@ type alias ParserOut =
 
 programP : TypeState -> P.Parser ParserOut
 programP t =
-    P.loop {typeState = t, elfs = [], elts = []} programHelpP
+    P.loop { typeState = t, elfs = [], elts = [] } programHelpP
 
 
 programHelpP : ParserOut -> P.Parser (P.Step ParserOut ParserOut)
@@ -298,16 +302,17 @@ programHelpP p =
 elementP : TypeState -> P.Parser ParserOut
 elementP t =
     let
-        w p = P.map (\(elfs, elts) -> {elfs = elfs, elts = elts, typeState = t}) p
+        w p =
+            P.map (\( elfs, elts ) -> { elfs = elfs, elts = elts, typeState = t }) p
     in
-        P.oneOf
-            [ w runBlockP
-            , w stringPWrap
-            , w defP
-            , programBlockP t
-            , topTypeLangP t
-            , w retrieveP
-            ]
+    P.oneOf
+        [ w runBlockP
+        , w stringPWrap
+        , w defP
+        , programBlockP t
+        , topTypeLangP t
+        , w retrieveP
+        ]
 
 
 topTypeLangP : TypeState -> P.Parser ParserOut
@@ -320,13 +325,13 @@ topTypeLangP t =
 
 typeLangP : TypeState -> P.Parser ParserOut
 typeLangP t =
-    P.loop {typeState = t, elfs = [], elts = []} typeLangHelpP
+    P.loop { typeState = t, elfs = [], elts = [] } typeLangHelpP
 
 
 typeLangHelpP : ParserOut -> P.Parser (P.Step ParserOut ParserOut)
 typeLangHelpP p =
     P.oneOf
-        [ P.succeed (\{ typeState, elfs, elts } -> P.Loop {elfs=p.elfs ++ elfs, elts = p.elts ++ elts, typeState = typeState})
+        [ P.succeed (\{ typeState, elfs, elts } -> P.Loop { elfs = p.elfs ++ elfs, elts = p.elts ++ elts, typeState = typeState })
             |. whiteSpaceP
             |= typeElementP p.typeState
             |. whiteSpaceP
@@ -337,8 +342,10 @@ typeLangHelpP p =
 typeElementP : TypeState -> P.Parser ParserOut
 typeElementP t =
     let
-        w p = P.map (\newT -> {typeState = newT, elfs = [], elts = []}) (p t)
-    in P.oneOf
+        w p =
+            P.map (\newT -> { typeState = newT, elfs = [], elts = [] }) (p t)
+    in
+    P.oneOf
         [ typeRunBlockP t
         , w typeStringP
         , w typeDefP
@@ -368,24 +375,27 @@ fullTypeCheckHelp t =
                 Nothing ->
                     P.problem "a full type check needs a list of types only, but this list has things in it"
 
-                Just types -> P.succeed
-                    { typeState = { t | stack = remainsOfStack }
-                    , elfs = []
-                    , elts = [fullTypeCheckElt types]
-                    }
+                Just types ->
+                    P.succeed
+                        { typeState = { t | stack = remainsOfStack }
+                        , elfs = []
+                        , elts = [ fullTypeCheckElt types ]
+                        }
 
         topItem :: _ ->
-            P.problem <| String.concat
-                [ "a full type check needs the top item on the "
-                , "stack to be a list of types, but it is a "
-                , showTypeProgramType topItem
-                ]
+            P.problem <|
+                String.concat
+                    [ "a full type check needs the top item on the "
+                    , "stack to be a list of types, but it is a "
+                    , showTypeProgramType topItem
+                    ]
 
 
-fullTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String (Dict.Dict String Type, List Type)
+fullTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 fullTypeCheckElt t dets stack =
     if equalTypeStacks t stack then
-        Ok (dets, stack)
+        Ok ( dets, stack )
+
     else
         Err <| failedFullMessage t stack
 
@@ -412,14 +422,14 @@ typeListP t =
         , item = typeListLiteralElementP t
         , trailing = P.Mandatory
         }
-    |> P.map (\l -> {t|stack = Tlist l :: t.stack})
+        |> P.map (\l -> { t | stack = Tlist l :: t.stack })
 
 
 typeListLiteralElementP : TypeState -> P.Parser TypeProgramValue
 typeListLiteralElementP t =
     P.oneOf
         [ P.map Tstring stringP
-        , P.map (\{elts} -> Tblock elts) (typeBlockHelpP t)
+        , P.map (\{ elts } -> Tblock elts) (typeBlockHelpP t)
         , P.map Ttype (typeLiteralP t)
         ]
 
@@ -436,24 +446,27 @@ partialTypeCheckHelp t =
     case t.stack of
         [] ->
             P.problem <| "a partial type check needs a list on the top of the stack, but it is empty"
+
         (Tlist ts) :: remainsOfStack ->
             case getTypes ts of
                 Nothing ->
                     P.problem "a partial type check needs a list of types only, but this list has other things in it"
 
-                Just types -> P.succeed
-                    { typeState = { t | stack = remainsOfStack }
-                    , elfs = []
-                    , elts = [partialTypeCheckElt types]
-                    }
+                Just types ->
+                    P.succeed
+                        { typeState = { t | stack = remainsOfStack }
+                        , elfs = []
+                        , elts = [ partialTypeCheckElt types ]
+                        }
 
         topItem :: _ ->
-            P.problem <| String.concat
-                [ "a partial type check needs the top item on the "
-                , "stack to be a list of types, but it is a "
-                , showTypeProgramType topItem
-                ]
-                
+            P.problem <|
+                String.concat
+                    [ "a partial type check needs the top item on the "
+                    , "stack to be a list of types, but it is a "
+                    , showTypeProgramType topItem
+                    ]
+
 
 getTypes : List TypeProgramValue -> Maybe (List Type)
 getTypes values =
@@ -469,25 +482,30 @@ getType typeProgramValue =
         _ ->
             Nothing
 
-          
-partialTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String (Dict.Dict String Type, List Type)
+
+partialTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 partialTypeCheckElt t dets stack =
     let
-        lengthExpected = List.length t
-        lengthActual = List.length stack
-        relevant = List.take lengthExpected stack
-    in
-        if lengthExpected == 0 then
-            Err <| "there's no point in an empty partial type check"
-        else
-            if lengthExpected > lengthActual then
-                Err <| failedPartialMessage t stack 
-            else
-                if equalTypeStacks t relevant then
-                    Ok (dets, stack)
+        lengthExpected =
+            List.length t
 
-                else
-                    Err <| failedPartialMessage t stack
+        lengthActual =
+            List.length stack
+
+        relevant =
+            List.take lengthExpected stack
+    in
+    if lengthExpected == 0 then
+        Err <| "there's no point in an empty partial type check"
+
+    else if lengthExpected > lengthActual then
+        Err <| failedPartialMessage t stack
+
+    else if equalTypeStacks t relevant then
+        Ok ( dets, stack )
+
+    else
+        Err <| failedPartialMessage t stack
 
 
 failedPartialMessage : List Type -> List Type -> String
@@ -522,7 +540,7 @@ typeRetrievePhelp t var =
 typeBlockP : TypeState -> P.Parser TypeState
 typeBlockP t =
     P.map
-        (\{elts, typeState} -> { typeState | stack = (Tblock elts) :: typeState.stack })
+        (\{ elts, typeState } -> { typeState | stack = Tblock elts :: typeState.stack })
         (typeBlockHelpP t)
 
 
@@ -552,7 +570,9 @@ typeDefPhelp t var =
         s :: tack ->
             if Dict.member var t.defs then
                 P.problem <|
-                    "multiple definitions of \"" ++ var ++ "\""
+                    "multiple definitions of \""
+                        ++ var
+                        ++ "\""
 
             else
                 P.succeed
@@ -563,16 +583,17 @@ typeDefPhelp t var =
 
 typeStringP : TypeState -> P.Parser TypeState
 typeStringP t =
-    P.succeed (\s -> {t | stack = Tstring s :: t.stack })
+    P.succeed (\s -> { t | stack = Tstring s :: t.stack })
         |= stringP
 
 
 typeStringPHelp : TypeState -> String -> TypeState
-typeStringPHelp {defs, stack} s =
+typeStringPHelp { defs, stack } s =
     let
-        newStack = Tstring s :: stack
+        newStack =
+            Tstring s :: stack
     in
-        {stack = newStack, defs = defs }
+    { stack = newStack, defs = defs }
 
 
 typeRunBlockP : TypeState -> P.Parser ParserOut
@@ -582,38 +603,40 @@ typeRunBlockP t =
         |. P.token "!"
 
 
-
 typeRunBlockHelpP t =
     case t.stack of
         [] ->
             P.problem "got \"!\" but stack is empty"
 
         (Tblock b) :: tack ->
-            P.succeed {typeState = {defs = t.defs, stack = tack}
-                      , elfs = []
-                      , elts = b
-                      }
+            P.succeed
+                { typeState = { defs = t.defs, stack = tack }
+                , elfs = []
+                , elts = b
+                }
 
         top :: _ ->
-            P.problem <| String.concat
-                [ "expecting a block on top of the stack, but "
-                , "got "
-                , showTypeProgramValue top
-                ]
+            P.problem <|
+                String.concat
+                    [ "expecting a block on top of the stack, but "
+                    , "got "
+                    , showTypeProgramValue top
+                    ]
 
 
 type alias SwitchPart =
     { pattern : Pattern
-    , block : (List Elf, List Elt)
+    , block : ( List Elf, List Elt )
     }
 
 
 type Pattern
     = PString String
-    | PVariable 
+    | PVariable
 
 
-patternP = Debug.todo ""
+patternP =
+    Debug.todo ""
 
 
 stringPWrap : P.Parser ( List Elf, List Elt )
@@ -629,7 +652,7 @@ stringElf s p =
 
 stringElt : Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 stringElt dets stack =
-    Ok ( dets, {standard = [Sstring], custom = []}  :: stack )
+    Ok ( dets, { standard = [ Sstring ], custom = [] } :: stack )
 
 
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
@@ -671,7 +694,7 @@ stringHelp revChunks =
             |= P.oneOf
                 [ P.map (\_ -> "\n") (P.token "n")
                 , P.map (\_ -> "\t") (P.token "t")
-                , P.map (\_ -> "\r") (P.token "r")
+                , P.map (\_ -> "\u{000D}") (P.token "r")
                 , P.map (\_ -> "\"") (P.token "\"")
                 ]
         , P.chompWhile isUninteresting
@@ -762,7 +785,7 @@ runBlockP =
 
 programBlockP : TypeState -> P.Parser ParserOut
 programBlockP t =
-    P.succeed (\{elfs, elts, typeState} -> {elfs = [ blockElf elfs ], elts = [ blockElt elts ], typeState = typeState })
+    P.succeed (\{ elfs, elts, typeState } -> { elfs = [ blockElf elfs ], elts = [ blockElt elts ], typeState = typeState })
         |. P.keyword "{"
         |= programP t
         |. P.keyword "}"
@@ -775,7 +798,7 @@ blockElf elfs p =
 
 blockElt : List Elt -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
 blockElt elts dets stack =
-    Ok ( dets, {standard = [Sblock elts], custom = []} :: stack )
+    Ok ( dets, { standard = [ Sblock elts ], custom = [] } :: stack )
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -807,7 +830,7 @@ runBlockElt dets typeStack =
     case typeStack of
         [] ->
             Err "empty stack"
-    
+
         t :: xs ->
             case getBlock t.standard of
                 Nothing ->
@@ -816,6 +839,7 @@ runBlockElt dets typeStack =
                             [ "bad stack: expecting block, but got "
                             , showTypeVal t
                             ]
+
                 Just block ->
                     case runTypeChecksHelp block dets xs of
                         Ok newStack ->
@@ -983,13 +1007,13 @@ typeLiteralP t =
 
 blockTypeP : P.Parser Type
 blockTypeP =
-    P.succeed {standard = [Sblock []], custom = []}
+    P.succeed { standard = [ Sblock [] ], custom = [] }
         |. P.keyword "block"
 
 
 stringTypeP : P.Parser Type
 stringTypeP =
-    P.succeed {standard = [Sstring], custom = []}
+    P.succeed { standard = [ Sstring ], custom = [] }
         |. P.keyword "string"
 
 
@@ -1147,14 +1171,14 @@ type StandardType
 
 equalTypeStacks : List Type -> List Type -> Bool
 equalTypeStacks t1 t2 =
-    (List.length t1 == List.length t2) &&
-    (List.all identity <| List.map2 equalType t1 t2)
+    (List.length t1 == List.length t2)
+        && (List.all identity <| List.map2 equalType t1 t2)
 
 
 equalType : Type -> Type -> Bool
 equalType t1 t2 =
-    equalStandards t1.standard t2.standard &&
-    equalCustoms t1.custom t2.custom
+    equalStandards t1.standard t2.standard
+        && equalCustoms t1.custom t2.custom
 
 
 equalCustoms : List TypeAtom -> List TypeAtom -> Bool
@@ -1174,11 +1198,11 @@ equalStandards b1 b2 =
 
 equalStandard : StandardType -> StandardType -> Bool
 equalStandard b1 b2 =
-    case (b1, b2) of
-        (Sstring, Sstring) ->
+    case ( b1, b2 ) of
+        ( Sstring, Sstring ) ->
             True
 
-        (Sblock _, Sblock _) ->
+        ( Sblock _, Sblock _ ) ->
             True
 
         _ ->
@@ -1192,7 +1216,7 @@ type alias Elt =
 standardTypes : Dict.Dict String Type
 standardTypes =
     Dict.fromList
-        [ ( "print", { standard = [Sblock [ printElt ]], custom = []} )
+        [ ( "print", { standard = [ Sblock [ printElt ] ], custom = [] } )
         ]
 
 
@@ -1247,13 +1271,16 @@ printElt : Elt
 printElt dets stack =
     case stack of
         [] ->
-            Err <| String.concat
-                [ "\"print\" needs there to be a something on the "
-                , "stack, but it is empty"
-                ]
+            Err <|
+                String.concat
+                    [ "\"print\" needs there to be a something on the "
+                    , "stack, but it is empty"
+                    ]
+
         s :: tack ->
-            if isSubType s ({standard = [Sstring], custom = []}) then
+            if isSubType s { standard = [ Sstring ], custom = [] } then
                 Ok ( dets, tack )
+
             else
                 Err <|
                     String.concat
@@ -1305,7 +1332,6 @@ customOfStandardHelp bs t =
     case t of
         Astring _ ->
             List.member Sstring bs
-
 
 
 runTypeChecks : List Elt -> Maybe String
@@ -1372,7 +1398,7 @@ showProgVal p =
 
 leftInput : Model -> Element.Element Msg
 leftInput model =
-    Element.Input.multiline [monospace]
+    Element.Input.multiline [ monospace ]
         { onChange = UpdatedLeft
         , text = leftText model
         , placeholder =
@@ -1380,7 +1406,7 @@ leftInput model =
                 Element.Input.placeholder [] <|
                     Element.text "Type here"
         , label =
-            Element.Input.labelAbove [sansSerif] <|
+            Element.Input.labelAbove [ sansSerif ] <|
                 Element.text <|
                     "Your input goes here:"
         , spellcheck = True
@@ -1399,13 +1425,13 @@ leftText model =
 
 showRightDoc : Model -> Element.Element Msg
 showRightDoc model =
-    Element.el [monospace] <|
-    case model.openProgram of
-        Nothing ->
-            Element.text <| "internal error: can't find program"
+    Element.el [ monospace ] <|
+        case model.openProgram of
+            Nothing ->
+                Element.text <| "internal error: can't find program"
 
-        Just (_, doc) ->
-            displayDoc model.lookedUpBlob doc
+            Just ( _, doc ) ->
+                displayDoc model.lookedUpBlob doc
 
 
 displayDoc :

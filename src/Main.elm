@@ -68,6 +68,7 @@ update msg model =
     case msg of
         ShowProgramCheckBox check ->
             ( { model | editProgram = check }, Cmd.none )
+
         LaunchProgram programName ->
             case Dict.get programName model.home.programs of
                 Nothing ->
@@ -148,8 +149,9 @@ update msg model =
                                 { program | code = newCode }
                         in
                         reRunProgram model newProg
+
             else
-                (model, Cmd.none)
+                ( model, Cmd.none )
 
 
 init : () -> ( Model, Cmd Msg )
