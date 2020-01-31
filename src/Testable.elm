@@ -6,7 +6,6 @@ import Bytes.Decode as D
 import Bytes.Encode as E
 import Dict
 import Element
-import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input
@@ -63,11 +62,6 @@ type alias PubKeys =
     }
 
 
-serializeBlob : Blob -> Maybe String
-serializeBlob blob =
-    Base64.fromBytes <| E.encode (encodeBlob blob)
-
-
 initHome : Home
 initHome =
     { outbox = []
@@ -89,6 +83,7 @@ defaultHome =
     }
 
 
+defaultHomeCode : String
 defaultHomeCode =
     """"Hello, this is the placeholder home app." print !"""
 
@@ -122,10 +117,12 @@ css key value =
     Element.htmlAttribute <| Html.Attributes.style key value
 
 
+sansSerif : Element.Attribute Msg
 sansSerif =
     Font.family [ Font.typeface "Ubuntu" ]
 
 
+monospace : Element.Attribute Msg
 monospace =
     Font.family [ Font.typeface "Ubuntu Mono" ]
 
@@ -587,15 +584,6 @@ typeStringP t =
         |= stringP
 
 
-typeStringPHelp : TypeState -> String -> TypeState
-typeStringPHelp { defs, stack } s =
-    let
-        newStack =
-            Tstring s :: stack
-    in
-    { stack = newStack, defs = defs }
-
-
 typeRunBlockP : TypeState -> P.Parser ParserOut
 typeRunBlockP t =
     P.succeed identity
@@ -603,6 +591,7 @@ typeRunBlockP t =
         |. P.token "!"
 
 
+typeRunBlockHelpP : TypeState -> P.Parser ParserOut
 typeRunBlockHelpP t =
     case t.stack of
         [] ->
@@ -622,21 +611,6 @@ typeRunBlockHelpP t =
                     , "got "
                     , showTypeProgramValue top
                     ]
-
-
-type alias SwitchPart =
-    { pattern : Pattern
-    , block : ( List Elf, List Elt )
-    }
-
-
-type Pattern
-    = PString String
-    | PVariable
-
-
-patternP =
-    Debug.todo ""
 
 
 stringPWrap : P.Parser ( List Elf, List Elt )
@@ -1001,7 +975,7 @@ makeRetrieveElt var dets typestack =
 
 
 typeLiteralP : TypeState -> P.Parser Type
-typeLiteralP t =
+typeLiteralP _ =
     P.oneOf [ stringTypeP, blockTypeP ]
 
 
@@ -1046,6 +1020,7 @@ oneWhitespaceP =
         ]
 
 
+initDoc : Document
 initDoc =
     SmallString "this program produces no output"
 
@@ -1236,7 +1211,7 @@ printElf p =
                 , stack = tack
             }
 
-        stack ->
+        _ ->
             { p
                 | internalError =
                     Just <|
@@ -1308,7 +1283,7 @@ isSubType sub master =
 
 
 standardOfCustom : List StandardType -> List TypeAtom -> Bool
-standardOfCustom sub master =
+standardOfCustom _ _ =
     False
 
 
@@ -1870,6 +1845,7 @@ map6 func decoderA decoderB decoderC decoderD decoderE decoderF =
         |> D.andThen (dmap decoderF)
 
 
+dmap : D.Decoder a -> (a -> b) -> D.Decoder b
 dmap a b =
     D.map b a
 
