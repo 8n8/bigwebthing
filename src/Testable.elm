@@ -376,7 +376,7 @@ typeListLiteralElementP : TypeState -> P.Parser TypeProgramValue
 typeListLiteralElementP t =
     P.oneOf
         [ P.map Tstring stringP
-        , P.map Tblock (typeBlockHelpP t)
+        , P.map (\{elts} -> Tblock elts) (typeBlockHelpP t)
         , P.map Ttype (typeLiteralP t)
         ]
 
@@ -476,13 +476,13 @@ typeRetrievePhelp t var =
 typeBlockP : TypeState -> P.Parser TypeState
 typeBlockP t =
     P.map
-        (\elts -> { t | stack = Tblock elts :: t.stack })
+        (\{elts, typeState} -> { typeState | stack = (Tblock elts) :: typeState.stack })
         (typeBlockHelpP t)
 
 
-typeBlockHelpP : TypeState -> P.Parser (List Elt)
+typeBlockHelpP : TypeState -> P.Parser ParserOut
 typeBlockHelpP t =
-    P.succeed .elts
+    P.succeed identity
         |. P.token "{"
         |= typeLangP t
         |. P.token "}"
