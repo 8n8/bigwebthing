@@ -391,13 +391,16 @@ fullTypeCheckHelp t =
                     ]
 
 
-fullTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-fullTypeCheckElt t dets stack =
-    if equalTypeStacks t stack then
-        Ok ( dets, stack )
+fullTypeCheckElt : List Type -> Elt
+fullTypeCheckElt t state =
+    if equalTypeStacks t state.stack then
+        Ok state
 
     else
-        Err <| failedFullMessage t stack
+        Err
+            { state = state
+            , message = failedFullMessage t state.stack
+            }
 
 
 failedFullMessage : List Type -> List Type -> String
@@ -483,29 +486,39 @@ getType typeProgramValue =
             Nothing
 
 
-partialTypeCheckElt : List Type -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-partialTypeCheckElt t dets stack =
+partialTypeCheckElt : List Type -> Elt
+partialTypeCheckElt t state =
     let
         lengthExpected =
             List.length t
 
         lengthActual =
-            List.length stack
+            List.length state.stack
 
         relevant =
-            List.take lengthExpected stack
+            List.take lengthExpected state.stack
     in
     if lengthExpected == 0 then
-        Err <| "there's no point in an empty partial type check"
+        Err
+            { message =
+                "there's no point in an empty partial type check"
+            , state = state
+            }
 
     else if lengthExpected > lengthActual then
-        Err <| failedPartialMessage t stack
+        Err
+            { message = failedPartialMessage t state.stack
+            , state = state
+            }
 
     else if equalTypeStacks t relevant then
-        Ok ( dets, stack )
+        Ok state
 
     else
-        Err <| failedPartialMessage t stack
+        Err
+            { message = failedPartialMessage t state.stack
+            , state = state
+            }
 
 
 failedPartialMessage : List Type -> List Type -> String
@@ -619,8 +632,10 @@ typeRunBlockHelpP t =
 
 stringPWrap : P.Parser ( List Elf, List Elt )
 stringPWrap =
-    P.succeed (\s -> ( [ stringElf s ], [ stringElt ] ))
+    P.succeed (\start s end -> ( [ stringElf s ], [ stringElt start end ] ))
+        |= P.getPosition
         |= stringP
+        |= P.getPosition
 
 
 stringElf : String -> ProgramState -> ProgramState
@@ -628,9 +643,14 @@ stringElf s p =
     { p | stack = Pstring s :: p.stack }
 
 
-stringElt : Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-stringElt dets stack =
-    Ok ( dets, { standard = [ Sstring ], custom = [] } :: stack )
+stringElt : ( Int, Int ) -> ( Int, Int ) -> Elt
+stringElt start end s =
+    Ok
+        { s
+            | stack = { standard = [ Sstring ], custom = [] } :: s.stack
+            , startPosition = start
+            , endPosition = end
+        }
 
 
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
@@ -697,10 +717,12 @@ isUninteresting char =
 
 defP : P.Parser ( List Elf, List Elt )
 defP =
-    P.succeed (\var -> ( [ defElf var ], [ defElt var ] ))
+    P.succeed (\start var end -> ( [ defElf var ], [ defElt var start end ] ))
+        |= P.getPosition
         |. P.token "="
         |. whiteSpaceP
         |= variable
+        |= P.getPosition
 
 
 defElf : String -> ProgramState -> ProgramState
@@ -732,41 +754,53 @@ defElf var p =
                 }
 
 
-defElt :
-    String
-    -> Dict.Dict String Type
-    -> List Type
-    -> Result String ( Dict.Dict String Type, List Type )
-defElt var dets typestack =
-    case typestack of
+defElt : String -> ( Int, Int ) -> ( Int, Int ) -> Elt
+defElt var start end state =
+    case state.stack of
         [] ->
-            Err "you need to put something on the stack before a definition"
+            Err
+                { message = "you need to put something on the stack before a definition"
+                , state = newPos state start end
+                }
 
         s :: tack ->
-            if Dict.member var dets then
-                Err <|
-                    String.concat
-                        [ "mutiple definitions of \""
-                        , var
-                        , "\""
-                        ]
+            if Dict.member var state.defs then
+                Err
+                    { message =
+                        String.concat
+                            [ "mutiple definitions of \""
+                            , var
+                            , "\""
+                            ]
+                    , state = newPos state start end
+                    }
 
             else
-                Ok ( Dict.insert var s dets, tack )
+                Ok
+                    { state
+                        | defs = Dict.insert var s state.defs
+                        , stack = tack
+                        , startPosition = start
+                        , endPosition = end
+                    }
 
 
 runBlockP : P.Parser ( List Elf, List Elt )
 runBlockP =
-    P.succeed ( [ runBlockElf ], [ runBlockElt ] )
+    P.succeed (\b e -> ( [ runBlockElf ], [ runBlockElt b e ] ))
+        |= P.getPosition
         |. P.token "!"
+        |= P.getPosition
 
 
 programBlockP : TypeState -> P.Parser ParserOut
 programBlockP t =
-    P.succeed (\{ elfs, elts, typeState } -> { elfs = [ blockElf elfs ], elts = [ blockElt elts ], typeState = typeState })
+    P.succeed (\start { elfs, elts, typeState } end -> { elfs = [ blockElf elfs ], elts = [ blockElt elts start end ], typeState = typeState })
+        |= P.getPosition
         |. P.keyword "{"
         |= programP t
         |. P.keyword "}"
+        |= P.getPosition
 
 
 blockElf : List Elf -> ProgramState -> ProgramState
@@ -774,9 +808,14 @@ blockElf elfs p =
     { p | stack = Pblock elfs :: p.stack }
 
 
-blockElt : List Elt -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-blockElt elts dets stack =
-    Ok ( dets, { standard = [ Sblock elts ], custom = [] } :: stack )
+blockElt : List Elt -> ( Int, Int ) -> ( Int, Int ) -> Elt
+blockElt elts start end s =
+    Ok
+        { s
+            | stack = { standard = [ Sblock elts ], custom = [] } :: s.stack
+            , startPosition = start
+            , endPosition = end
+        }
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -800,31 +839,36 @@ runBlockElf s =
             }
 
 
-runBlockElt :
-    Dict.Dict String Type
-    -> List Type
-    -> Result String ( Dict.Dict String Type, List Type )
-runBlockElt dets typeStack =
-    case typeStack of
+runBlockElt : ( Int, Int ) -> ( Int, Int ) -> Elt
+runBlockElt start end state =
+    case state.stack of
         [] ->
-            Err "empty stack"
+            Err
+                { state = newPos state start end, message = "empty stack" }
 
         t :: xs ->
             case getBlock t.standard of
                 Nothing ->
-                    Err <|
-                        String.concat
-                            [ "bad stack: expecting block, but got "
-                            , showTypeVal t
-                            ]
+                    Err
+                        { state = newPos state start end
+                        , message =
+                            String.concat
+                                [ "bad stack: expecting block, but "
+                                , "got "
+                                , showTypeVal t
+                                ]
+                        }
 
                 Just block ->
-                    case runTypeChecksHelp block dets xs of
-                        Ok newStack ->
-                            Ok ( dets, newStack )
+                    runTypeChecksHelp block { state | stack = xs, startPosition = start, endPosition = end }
 
-                        Err errMsg ->
-                            Err errMsg
+
+newPos : EltState -> ( Int, Int ) -> ( Int, Int ) -> EltState
+newPos state start end =
+    { state
+        | startPosition = start
+        , endPosition = end
+    }
 
 
 justs : List (Maybe a) -> List a
@@ -944,12 +988,15 @@ showTypeStack typestack =
 
 retrieveP : P.Parser ( List Elf, List Elt )
 retrieveP =
-    P.succeed retrievePhelp |= variable
+    P.succeed retrievePhelp
+        |= P.getPosition
+        |= variable
+        |= P.getPosition
 
 
-retrievePhelp : String -> ( List Elf, List Elt )
-retrievePhelp var =
-    ( [ makeRetrieveElf var ], [ makeRetrieveElt var ] )
+retrievePhelp : ( Int, Int ) -> String -> ( Int, Int ) -> ( List Elf, List Elt )
+retrievePhelp start var end =
+    ( [ makeRetrieveElf var ], [ makeRetrieveElt var start end ] )
 
 
 makeRetrieveElf : String -> ProgramState -> ProgramState
@@ -968,14 +1015,17 @@ makeRetrieveElf var p =
             { p | stack = f :: p.stack }
 
 
-makeRetrieveElt : String -> Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
-makeRetrieveElt var dets typestack =
-    case Dict.get var dets of
+makeRetrieveElt : String -> ( Int, Int ) -> ( Int, Int ) -> Elt
+makeRetrieveElt var start end state =
+    case Dict.get var state.defs of
         Nothing ->
-            Err <| String.concat [ "no definition \"", var, "\"" ]
+            Err
+                { message = "no definition \"" ++ var ++ "\""
+                , state = newPos state start end
+                }
 
         Just t ->
-            Ok ( dets, t :: typestack )
+            Ok <| newPos { state | stack = t :: state.stack } start end
 
 
 customTypeWrapP : TypeState -> P.Parser TypeState
@@ -1163,7 +1213,8 @@ type alias TypeState =
     }
 
 
-type TypeDef = TypeDef (TypeState -> TypeProgramValue)
+type TypeDef
+    = TypeDef (TypeState -> TypeProgramValue)
 
 
 type TypeProgramValue
@@ -1265,7 +1316,23 @@ equalStandard b1 b2 =
 
 
 type alias Elt =
-    Dict.Dict String Type -> List Type -> Result String ( Dict.Dict String Type, List Type )
+    EltState -> EltOut
+
+
+type alias TypeError =
+    { state : EltState, message : String }
+
+
+type alias EltOut =
+    Result TypeError EltState
+
+
+type alias EltState =
+    { startPosition : ( Int, Int )
+    , endPosition : ( Int, Int )
+    , stack : List Type
+    , defs : Dict.Dict String Type
+    }
 
 
 standardTypes : Dict.Dict String Type
@@ -1323,26 +1390,32 @@ print doc s =
 
 
 printElt : Elt
-printElt dets stack =
-    case stack of
+printElt state =
+    case state.stack of
         [] ->
-            Err <|
-                String.concat
-                    [ "\"print\" needs there to be a something on the "
-                    , "stack, but it is empty"
-                    ]
+            let
+                message =
+                    String.concat
+                        [ "\"print\" needs there to be a something "
+                        , "on the stack, but it is empty"
+                        ]
+            in
+            Err { state = state, message = message }
 
         s :: tack ->
             if isSubType s { standard = [ Sstring ], custom = [] } then
-                Ok ( dets, tack )
+                Ok { state | stack = tack }
 
             else
-                Err <|
-                    String.concat
-                        [ "\"print\" needs the top value on the "
-                        , "stack to be a string, but it is "
-                        , showTypeVal s
-                        ]
+                let
+                    message =
+                        String.concat
+                            [ "\"print\" needs the top value on the "
+                            , "stack to be a string, but it is "
+                            , showTypeVal s
+                            ]
+                in
+                Err { state = state, message = message }
 
 
 isSubType : Type -> Type -> Bool
@@ -1389,41 +1462,52 @@ customOfStandardHelp bs t =
             List.member Sstring bs
 
 
+initEltState =
+    { startPosition = ( 0, 0 )
+    , endPosition = ( 0, 0 )
+    , stack = []
+    , defs = standardTypes
+    }
+
+
 runTypeChecks : List Elt -> Maybe String
 runTypeChecks elts =
-    case runTypeChecksHelp elts standardTypes [] of
-        Ok [] ->
-            Nothing
+    case runTypeChecksHelp elts initEltState of
+        Ok { stack } ->
+            case stack of
+                [] ->
+                    Nothing
 
-        Ok ts ->
-            Just <|
-                String.concat
-                    [ "typestack should be empty at end of program, but "
-                    , "got "
-                    , showTypeStack ts
-                    ]
+                ts ->
+                    Just <|
+                        String.concat
+                            [ "typestack should be empty at end of program, but "
+                            , "got "
+                            , showTypeStack ts
+                            ]
 
         Err err ->
-            Just err
+            Just <| errorToString err
 
 
-runTypeChecksHelp :
-    List Elt
-    -> Dict.Dict String Type
-    -> List Type
-    -> Result String (List Type)
-runTypeChecksHelp elts dets typeStack =
+errorToString : TypeError -> String
+errorToString { state, message } =
+    message
+
+
+runTypeChecksHelp : List Elt -> EltState -> EltOut
+runTypeChecksHelp elts state =
     case elts of
         [] ->
-            Ok typeStack
+            Ok state
 
         e :: lts ->
-            case e dets typeStack of
+            case e state of
                 Err errMsg ->
                     Err errMsg
 
-                Ok ( newDets, newTypeStack ) ->
-                    runTypeChecksHelp lts newDets newTypeStack
+                Ok newState ->
+                    runTypeChecksHelp lts newState
 
 
 type alias HumanMsg =
