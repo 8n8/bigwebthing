@@ -170,11 +170,11 @@ homeButton =
         }
 
 
-standardTypeProgramDefs : Dict.Dict String TypeProgramValue
+standardTypeProgramDefs : Dict.Dict String TypeDef
 standardTypeProgramDefs =
     Dict.fromList
-        [ ( "block", Ttype { custom = [], standard = [ Sblock [] ] } )
-        , ( "string", Ttype { custom = [], standard = [ Sstring ] } )
+        [ ( "block", TypeDef <| \_ -> Ttype { custom = [], standard = [ Sblock [] ] } )
+        , ( "string", TypeDef <| \_ -> Ttype { custom = [], standard = [ Sstring ] } )
         ]
 
 
@@ -534,8 +534,8 @@ typeRetrievePhelp t var =
         Nothing ->
             P.problem <| "no definition \"" ++ var ++ "\""
 
-        Just definition ->
-            P.succeed definition
+        Just (TypeDef definition) ->
+            P.succeed <| definition t
 
 
 typeBlockP : TypeState -> P.Parser TypeState
@@ -577,7 +577,7 @@ typeDefPhelp t var =
 
             else
                 P.succeed
-                    { defs = Dict.insert var s t.defs
+                    { defs = Dict.insert var (TypeDef <| \_ -> s) t.defs
                     , stack = tack
                     }
 
@@ -1158,9 +1158,12 @@ runElfsHelp elfs s =
 
 
 type alias TypeState =
-    { defs : Dict.Dict String TypeProgramValue
+    { defs : Dict.Dict String TypeDef
     , stack : List TypeProgramValue
     }
+
+
+type TypeDef = TypeDef (TypeState -> TypeProgramValue)
 
 
 type TypeProgramValue
