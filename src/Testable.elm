@@ -173,8 +173,8 @@ homeButton =
 standardTypeProgramDefs : Dict.Dict String TypeProgramValue
 standardTypeProgramDefs =
     Dict.fromList
-        [ ("block", Ttype {custom = [], standard = [Sblock []]})
-        , ("string", Ttype {custom = [], standard = [Sstring]})
+        [ ( "block", Ttype { custom = [], standard = [ Sblock [] ] } )
+        , ( "string", Ttype { custom = [], standard = [ Sstring ] } )
         ]
 
 
@@ -351,6 +351,7 @@ typeElementP t =
         , w typeBlockP
         , partialTypeCheckP t
         , fullTypeCheckP t
+        , w customTypeWrapP
         , w typeRetrieveP
         , w typeListP
         ]
@@ -429,7 +430,6 @@ typeListLiteralElementP t =
     P.oneOf
         [ P.map Tstring stringP
         , P.map (\{ elts } -> Tblock elts) (typeBlockHelpP t)
-        , P.map Ttype (typeLiteralP t)
         , P.succeed identity |= variable |> P.andThen (typeRetrievePhelp t)
         ]
 
@@ -978,9 +978,82 @@ makeRetrieveElt var dets typestack =
             Ok ( dets, t :: typestack )
 
 
-typeLiteralP : TypeState -> P.Parser Type
-typeLiteralP _ =
-    P.oneOf [ ]
+customTypeWrapP : TypeState -> P.Parser TypeState
+customTypeWrapP t =
+    P.succeed identity
+        |. P.keyword "totype"
+        |= customTypeT t
+
+
+customTypeT : TypeState -> P.Parser TypeState
+customTypeT t =
+    case t.stack of
+        [] ->
+            P.problem "totype needs something on the stack, but it is empty"
+
+        (Tlist candidates) :: tack ->
+            case toTypeAtoms candidates of
+                Err badElements ->
+                    P.problem <|
+                        String.concat
+                            [ "cannot convert these elements in the list to a type: "
+                            , String.join ", " <| List.map showTypeProgramValue badElements
+                            ]
+
+                Ok typeAtoms ->
+                    let
+                        type_ =
+                            { custom = typeAtoms, standard = [] }
+
+                        newStack =
+                            Ttype type_ :: tack
+                    in
+                    P.succeed { t | stack = newStack }
+
+        bad :: _ ->
+            P.problem <|
+                String.concat
+                    [ "totype needs the top of the stack to be a list, "
+                    , "but it is "
+                    , showTypeProgramValue bad
+                    ]
+
+
+toTypeAtoms : List TypeProgramValue -> Result (List TypeProgramValue) (List TypeAtom)
+toTypeAtoms candidates =
+    let
+        ( good, bad ) =
+            toTypeAtomsHelp candidates [] []
+    in
+    if List.length bad == 0 then
+        Ok good
+
+    else
+        Err bad
+
+
+toTypeAtomsHelp : List TypeProgramValue -> List TypeAtom -> List TypeProgramValue -> ( List TypeAtom, List TypeProgramValue )
+toTypeAtomsHelp remaining goodAccum badAccum =
+    case remaining of
+        [] ->
+            ( goodAccum, badAccum )
+
+        r :: emaining ->
+            case r of
+                Ttype _ ->
+                    toTypeAtomsHelp emaining goodAccum (r :: badAccum)
+
+                Tstring s ->
+                    toTypeAtomsHelp
+                        emaining
+                        (Astring s :: goodAccum)
+                        badAccum
+
+                Tblock _ ->
+                    toTypeAtomsHelp emaining goodAccum (r :: badAccum)
+
+                Tlist _ ->
+                    toTypeAtomsHelp emaining goodAccum (r :: badAccum)
 
 
 blockTypeP : P.Parser Type
@@ -1134,8 +1207,8 @@ showTypeProgramType t =
 
 
 type alias Type =
-    { standard : List StandardType
-    , custom : List TypeAtom
+    { custom : List TypeAtom
+    , standard : List StandardType
     }
 
 
