@@ -138,20 +138,16 @@ update msg model =
                     reRunProgram model newProg
 
         UpdatedEditor newCode ->
-            if model.editProgram then
-                case model.openProgram of
-                    Nothing ->
-                        ( model, Cmd.none )
+            case model.openProgram of
+                Nothing ->
+                    ( model, Cmd.none )
 
-                    Just ( program, _ ) ->
-                        let
-                            newProg =
-                                { program | code = newCode }
-                        in
-                        reRunProgram model newProg
-
-            else
-                ( model, Cmd.none )
+                Just ( program, _ ) ->
+                    let
+                        newProg =
+                            { program | code = newCode }
+                    in
+                    reRunProgram model newProg
 
 
 init : () -> ( Model, Cmd Msg )

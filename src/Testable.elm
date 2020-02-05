@@ -85,7 +85,7 @@ defaultHome =
 
 defaultHomeCode : String
 defaultHomeCode =
-    """"Hello, this is the placeholder home app." print !"""
+    """"Hello, this is the placeholder home app." print ."""
 
 
 view : Model -> Html.Html Msg
@@ -107,7 +107,7 @@ viewHelp model =
         , Element.text "The program output goes here:"
         , showRightDoc model
         , Element.text "End of program output."
-        , editorCheckbox model.editProgram
+        --, editorCheckbox model.editProgram
         , editor model
         ]
 
@@ -389,7 +389,7 @@ topTypeLangPhelp actions =
             P.problem err
 
         Ok { state, elts } ->
-            P.succeed { typeState = state, elfs = [], elts = [] }
+            P.succeed { typeState = state, elfs = [], elts = elts }
 
 
 typeLangP : P.Parser (List Ety)
@@ -419,7 +419,7 @@ typeElementP =
         , typeStringP
         , typeDefP
         , typeBlockP
-        , partialTypeCheckP
+        -- , partialTypeCheckP
         , fullTypeCheckP
         , customTypeWrapP
         , typeRetrieveP
@@ -519,6 +519,29 @@ getType typeProgramValue =
         Ttype t ->
             Just t
 
+        Tlist ts ->
+            listToType ts
+
+        _ ->
+            Nothing
+
+
+listToType : List TypeProgramValue -> Maybe Type
+listToType l =
+    case Maybe.Extra.traverse valueToAtom l of
+        Nothing ->
+            Nothing
+
+        Just ts ->
+            Just { custom = ts, standard = [] }
+
+
+valueToAtom : TypeProgramValue -> Maybe TypeAtom
+valueToAtom value =
+    case value of
+        Tstring s ->
+            Just <| Astring s
+
         _ ->
             Nothing
 
@@ -548,7 +571,7 @@ partialTypeCheckElt t state =
             , state = state
             }
 
-    else if equalTypeStacks t relevant then
+    else if equalTypeStacks relevant t then
         Ok state
 
     else
@@ -647,14 +670,14 @@ stringEty s t =
 typeRunBlockP : P.Parser (List Ety)
 typeRunBlockP =
     P.succeed [ typeRunBlockEty ]
-        |. P.token "!"
+        |. P.token "."
 
 
 typeRunBlockEty : TypeState -> Result String TypeProgramOut
 typeRunBlockEty t =
     case t.stack of
         [] ->
-            Err "got \"!\" but stack is empty"
+            Err "got \".\" but stack is empty"
 
         (Tblock b) :: tack ->
             runTypeBlock { t | stack = tack } b
@@ -712,7 +735,7 @@ runTypeBlockHelp elements t =
 
 stringPWrap : P.Parser ( List Elf, List Elt )
 stringPWrap =
-    P.succeed (\start s end -> ( [ stringElf s ], [ stringElt start end ] ))
+    P.succeed (\start s end -> ( [ stringElf s ], [ stringElt start end s ] ))
         |= P.getPosition
         |= stringP
         |= P.getPosition
@@ -723,11 +746,11 @@ stringElf s p =
     { p | stack = Pstring s :: p.stack }
 
 
-stringElt : ( Int, Int ) -> ( Int, Int ) -> Elt
-stringElt start end s =
+stringElt : ( Int, Int ) -> ( Int, Int ) -> String -> Elt
+stringElt start end string s =
     Ok
         { s
-            | stack = { standard = [ Sstring ], custom = [] } :: s.stack
+            | stack = { standard = [], custom = [Astring string] } :: s.stack
             , startPosition = start
             , endPosition = end
         }
@@ -793,7 +816,7 @@ variable =
 reserved : Set.Set String
 reserved =
     Set.fromList
-        [ "!" ]
+        [ "." ]
 
 
 okVariableStart : Set.Set Char
@@ -893,7 +916,7 @@ runBlockP : P.Parser ( List Elf, List Elt )
 runBlockP =
     P.succeed (\b e -> ( [ runBlockElf ], [ runBlockElt b e ] ))
         |= P.getPosition
-        |. P.token "!"
+        |. P.token "."
         |= P.getPosition
 
 
@@ -926,7 +949,7 @@ runBlockElf : ProgramState -> ProgramState
 runBlockElf s =
     case s.stack of
         [] ->
-            { s | internalError = Just "! but empty stack" }
+            { s | internalError = Just ". but empty stack" }
 
         (Pblock block) :: xs ->
             runElfsHelp block { s | stack = xs }
@@ -1419,7 +1442,7 @@ type StandardType
 equalTypeStacks : List Type -> List Type -> Bool
 equalTypeStacks t1 t2 =
     (List.length t1 == List.length t2)
-        && (List.all identity <| List.map2 equalType t1 t2)
+        && (List.all identity <| List.map2 isSubType t1 t2)
 
 
 equalType : Type -> Type -> Bool
