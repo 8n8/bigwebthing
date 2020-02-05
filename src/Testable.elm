@@ -176,7 +176,33 @@ standardTypeProgramDefs =
         [ ( "block", Ttype { custom = [], standard = [ Sblock [] ] } )
         , ( "string", Ttype { custom = [], standard = [ Sstring ] } )
         , ( "topcheck", Tblock [ topcheck ] )
+        , ( "[]", Tlist [] )
+        , ( ",", Tblock [ typeCons ] )
         ]
+
+
+typeConsHelp : String
+typeConsHelp =
+    "to prepend to a list the top of the stack should be the new element, and the second item in the stack should be the list"
+
+
+typeCons : TypeState -> Result String TypeProgramOut
+typeCons t =
+    case t.stack of
+        [] ->
+            Err <| "empty stack, but " ++ typeConsHelp
+
+        _ :: [] ->
+            Err <| "only one thing in stack, but " ++ typeConsHelp
+
+        toPrepend :: (Tlist ts) :: remainsOfStack ->
+            Ok
+                { state = { t | stack = Tlist (toPrepend :: ts) :: remainsOfStack }
+                , elts = []
+                }
+
+        _ ->
+            Err <| "bad stack: " ++ typeConsHelp
 
 
 topcheck : TypeState -> Result String TypeProgramOut
@@ -758,10 +784,34 @@ stringHelp revChunks =
 variable : P.Parser String
 variable =
     P.variable
-        { start = Char.isAlpha
-        , inner = \c -> Char.isAlphaNum c || c == '_'
-        , reserved = Set.empty
+        { start = \c -> Char.isAlpha c || Set.member c okVariableStart
+        , inner = \c -> Char.isAlphaNum c || Set.member c okVariableInner
+        , reserved = reserved
         }
+
+
+reserved : Set.Set String
+reserved =
+    Set.fromList
+        [ "!" ]
+
+
+okVariableStart : Set.Set Char
+okVariableStart =
+    Set.fromList
+        [ '['
+        , ']'
+        , ','
+        ]
+
+
+okVariableInner : Set.Set Char
+okVariableInner =
+    Set.fromList
+        [ '['
+        , ']'
+        , ','
+        ]
 
 
 isUninteresting : Char -> Bool
