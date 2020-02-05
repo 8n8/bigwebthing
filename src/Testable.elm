@@ -833,7 +833,6 @@ okVariableInner =
     Set.fromList
         [ '['
         , ']'
-        , ','
         ]
 
 
@@ -987,7 +986,10 @@ runBlockElt start end state =
                         }
 
                 Just block ->
-                    runTypeChecksHelp block { state | stack = xs, startPosition = start, endPosition = end }
+                    case runTypeChecksHelp block { state | stack = xs, startPosition = start, endPosition = end } of
+                        Err err -> Err err
+                        Ok ok ->
+                            Ok { ok | defs = state.defs }
 
 
 newPos : EltState -> ( Int, Int ) -> ( Int, Int ) -> EltState
