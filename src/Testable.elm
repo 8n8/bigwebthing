@@ -181,6 +181,7 @@ standardTypeProgramDefs =
         , ( "[]", Tlist [] )
         , ( "cons", Tblock [ typeCons ] )
         , ( "listtype", Tblock [ listtype ] )
+        , ( "totype", Tblock [ customTypeEty ])
         ]
 
 
@@ -469,7 +470,6 @@ typeElementP =
         , typeStringP
         , typeDefP
         , typeBlockP
-        , customTypeWrapP
         , typeRetrieveP
         ]
 
