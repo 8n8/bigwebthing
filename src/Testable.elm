@@ -85,7 +85,7 @@ defaultHome =
 
 defaultHomeCode : String
 defaultHomeCode =
-    """"Hello, this is the placeholder home app." print ."""
+    """[] "hi" cons. "there" cons."""
 
 
 view : Model -> Html.Html Msg
@@ -107,6 +107,7 @@ viewHelp model =
         , Element.text "The program output goes here:"
         , showRightDoc model
         , Element.text "End of program output."
+
         --, editorCheckbox model.editProgram
         , editor model
         ]
@@ -177,7 +178,7 @@ standardTypeProgramDefs =
         , ( "string", Ttype { custom = [], standard = [ Sstring ] } )
         , ( "topcheck", Tblock [ topcheck ] )
         , ( "[]", Tlist [] )
-        , ( ",", Tblock [ typeCons ] )
+        , ( "cons", Tblock [ typeCons ] )
         ]
 
 
@@ -419,6 +420,7 @@ typeElementP =
         , typeStringP
         , typeDefP
         , typeBlockP
+
         -- , partialTypeCheckP
         , fullTypeCheckP
         , customTypeWrapP
@@ -750,7 +752,7 @@ stringElt : ( Int, Int ) -> ( Int, Int ) -> String -> Elt
 stringElt start end string s =
     Ok
         { s
-            | stack = { standard = [], custom = [Astring string] } :: s.stack
+            | stack = { standard = [], custom = [ Astring string ] } :: s.stack
             , startPosition = start
             , endPosition = end
         }
@@ -987,7 +989,9 @@ runBlockElt start end state =
 
                 Just block ->
                     case runTypeChecksHelp block { state | stack = xs, startPosition = start, endPosition = end } of
-                        Err err -> Err err
+                        Err err ->
+                            Err err
+
                         Ok ok ->
                             Ok { ok | defs = state.defs }
 
@@ -1104,6 +1108,9 @@ showStandardType standard =
 
         Sblock _ ->
             "block"
+
+        Slist type_ ->
+            "list: " ++ showTypeVal type_
 
 
 showTypeStack : List Type -> String
@@ -1439,6 +1446,7 @@ type TypeAtom
 type StandardType
     = Sblock (List Elt)
     | Sstring
+    | Slist Type
 
 
 equalTypeStacks : List Type -> List Type -> Bool
@@ -1505,14 +1513,110 @@ standardTypes : Dict.Dict String Type
 standardTypes =
     Dict.fromList
         [ ( "print", { standard = [ Sblock [ printElt ] ], custom = [] } )
+        , ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
+        , ( "cons", { standard = [ Sblock [ consElt ] ], custom = [] } )
+
+        -- , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
         ]
+
+
+consElt : Elt
+consElt s =
+    case s.stack of
+        [] ->
+            Err { message = "empty stack: " ++ consInfo, state = s }
+
+        _ :: [] ->
+            Err { message = "only one thing on stack: " ++ consInfo, state = s }
+
+        toPrepend :: candidate :: remainsOfStack ->
+            case listTypeCons toPrepend candidate of
+                Just combinedListType ->
+                    Ok { s | stack = combinedListType :: remainsOfStack }
+
+                Nothing ->
+                    Err { message = "second item on stack is not a list: " ++ consInfo, state = s }
+
+
+listTypeCons : Type -> Type -> Maybe Type
+listTypeCons toAdd shouldBeList =
+    case ( shouldBeList.custom, shouldBeList.standard ) of
+        ( [], [ Slist listType ] ) ->
+            Just { custom = [], standard = [ Slist (typeUnion toAdd listType) ] }
+
+        _ ->
+            Nothing
+
+
+isListType : Type -> Bool
+isListType { custom, standard } =
+    case ( custom, standard ) of
+        ( [], [ Slist _ ] ) ->
+            True
+
+        _ ->
+            False
+
+
+typeUnion : Type -> Type -> Type
+typeUnion t1 t2 =
+    let
+        _ =
+            Debug.log "t1" t1
+
+        _ =
+            Debug.log "t2" t2
+    in
+    Debug.log "result "
+        { custom = customUnion t1.custom t2.custom
+        , standard = standardUnion t1.standard t2.standard
+        }
+
+
+customUnion : List TypeAtom -> List TypeAtom -> List TypeAtom
+customUnion l1 l2 =
+    l1 ++ l2
+
+
+standardUnion : List StandardType -> List StandardType -> List StandardType
+standardUnion l1 l2 =
+    l1 ++ l2
+
+
+
+-- switchEltInfo = "\"switch\" needs a stack with a list of 2-tuples on the top of it. The first element in each tuple should be a type and the second element a block."
+--
+--
+-- switchElt : Elt
+-- switchElt state =
+--     case state.stack of
+--         [] ->
+--             Err { state = state, message = "empty stack: " ++ switchEltInfo }
 
 
 standardLibrary : Dict.Dict String ProgVal
 standardLibrary =
     Dict.fromList
         [ ( "print", Pblock [ printElf ] )
+        , ( "[]", Plist [] )
+        , ( "cons", Pblock [ consElf ] )
+
+        --, ( "switch", Pblock [ switchElf ] )
         ]
+
+
+consInfo =
+    "\"cons\" adds something to the front of a list. The top item on the stack should be the new list element.  The second item on the stack should be the list that will be added to."
+
+
+consElf : Elf
+consElf p =
+    case p.stack of
+        toPrepend :: (Plist ps) :: remainsOfStack ->
+            { p | stack = Plist (toPrepend :: ps) :: remainsOfStack }
+
+        _ ->
+            { p | internalError = Just <| "bad stack: " ++ consInfo }
 
 
 printElf : ProgramState -> ProgramState
@@ -1653,16 +1757,37 @@ runTypeChecks elts =
                             ]
 
         Err err ->
-            Just <| errorToString err
+            Just <| prettyErrorMessage err
 
 
-errorToString : TypeError -> String
-errorToString { state, message } =
-    message
+prettyErrorMessage : TypeError -> String
+prettyErrorMessage { state, message } =
+    String.concat
+        [ "type error between "
+        , prettyPosition state.startPosition
+        , " and "
+        , prettyPosition state.endPosition
+        , ":\n"
+        , message
+        ]
+
+
+prettyPosition : ( Int, Int ) -> String
+prettyPosition ( row, column ) =
+    String.concat
+        [ "row "
+        , String.fromInt row
+        , " column "
+        , String.fromInt column
+        ]
 
 
 runTypeChecksHelp : List Elt -> EltState -> EltOut
 runTypeChecksHelp elts state =
+    let
+        _ =
+            Debug.log "stack" state.stack
+    in
     case elts of
         [] ->
             Ok state
@@ -1686,6 +1811,7 @@ type alias HumanMsg =
 type ProgVal
     = Pstring String
     | Pblock (List Elf)
+    | Plist (List ProgVal)
 
 
 showProgVal : ProgVal -> String
@@ -1698,6 +1824,13 @@ showProgVal p =
             String.concat
                 [ "block of length "
                 , String.fromInt <| List.length bs
+                ]
+
+        Plist l ->
+            String.concat
+                [ "["
+                , String.join ", " <| List.map showProgVal l
+                , "]"
                 ]
 
 
