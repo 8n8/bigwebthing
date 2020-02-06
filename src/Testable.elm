@@ -177,6 +177,7 @@ standardTypeProgramDefs =
         [ ( "block", Ttype { custom = [], standard = [ Sblock [] ] } )
         , ( "string", Ttype { custom = [], standard = [ Sstring ] } )
         , ( "topcheck", Tblock [ topcheck ] )
+        , ( "fullcheck", Tblock [ fullcheck ] )
         , ( "[]", Tlist [] )
         , ( "cons", Tblock [ typeCons ] )
         , ( "listtype", Tblock [ listtype ] )
@@ -199,9 +200,9 @@ listtype t =
         [] ->
             Err <| "empty stack, but " ++ listtypeInfo
 
-        Ttype type_ :: remainsOfStack ->
+        (Ttype type_) :: remainsOfStack ->
             Ok
-                { state = {t | stack = Ttype {custom = [], standard = [Slist type_]} :: remainsOfStack}
+                { state = { t | stack = Ttype { custom = [], standard = [ Slist type_ ] } :: remainsOfStack }
                 , elts = []
                 }
 
@@ -249,6 +250,32 @@ topcheck t =
             Err <|
                 String.concat
                     [ "a partial type check needs the top item on the "
+                    , "stack to be a list of types, but it is a "
+                    , showTypeProgramType topItem
+                    ]
+
+
+fullcheck : TypeState -> Result String TypeProgramOut
+fullcheck t =
+    case t.stack of
+        [] ->
+            Err "a full type check needs a list on top of the stack, but it is empty"
+
+        (Tlist ts) :: tack ->
+            case getTypes ts of
+                Nothing ->
+                    Err "a full type check needs a list of types only, but this list has other things in it"
+
+                Just types ->
+                    Ok
+                        { state = { t | stack = tack }
+                        , elts = [ fullTypeCheckElt types ]
+                        }
+
+        topItem :: _ ->
+            Err <|
+                String.concat
+                    [ "a full type check needs the top item on the "
                     , "stack to be a list of types, but it is a "
                     , showTypeProgramType topItem
                     ]
@@ -442,9 +469,6 @@ typeElementP =
         , typeStringP
         , typeDefP
         , typeBlockP
-
-        -- , partialTypeCheckP
-        , fullTypeCheckP
         , customTypeWrapP
         , typeRetrieveP
         ]
