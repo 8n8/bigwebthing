@@ -179,12 +179,34 @@ standardTypeProgramDefs =
         , ( "topcheck", Tblock [ topcheck ] )
         , ( "[]", Tlist [] )
         , ( "cons", Tblock [ typeCons ] )
+        , ( "listtype", Tblock [ listtype ] )
         ]
 
 
 typeConsHelp : String
 typeConsHelp =
     "to prepend to a list the top of the stack should be the new element, and the second item in the stack should be the list"
+
+
+listtypeInfo : String
+listtypeInfo =
+    "to make a type into a list type there should be a type on the top of the stack"
+
+
+listtype : TypeState -> Result String TypeProgramOut
+listtype t =
+    case t.stack of
+        [] ->
+            Err <| "empty stack, but " ++ listtypeInfo
+
+        Ttype type_ :: remainsOfStack ->
+            Ok
+                { state = {t | stack = Ttype {custom = [], standard = [Slist type_]} :: remainsOfStack}
+                , elts = []
+                }
+
+        _ ->
+            Err <| "bad stack: " ++ listtypeInfo
 
 
 typeCons : TypeState -> Result String TypeProgramOut
@@ -1560,17 +1582,9 @@ isListType { custom, standard } =
 
 typeUnion : Type -> Type -> Type
 typeUnion t1 t2 =
-    let
-        _ =
-            Debug.log "t1" t1
-
-        _ =
-            Debug.log "t2" t2
-    in
-    Debug.log "result "
-        { custom = customUnion t1.custom t2.custom
-        , standard = standardUnion t1.standard t2.standard
-        }
+    { custom = customUnion t1.custom t2.custom
+    , standard = standardUnion t1.standard t2.standard
+    }
 
 
 customUnion : List TypeAtom -> List TypeAtom -> List TypeAtom
@@ -1784,10 +1798,6 @@ prettyPosition ( row, column ) =
 
 runTypeChecksHelp : List Elt -> EltState -> EltOut
 runTypeChecksHelp elts state =
-    let
-        _ =
-            Debug.log "stack" state.stack
-    in
     case elts of
         [] ->
             Ok state
