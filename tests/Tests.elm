@@ -1,10 +1,11 @@
 module Tests exposing (..)
 
+import Dict
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
+import Parser as P
 import Test exposing (..)
 import Testable exposing (..)
-import Parser as P
 
 
 suite : Test
@@ -30,10 +31,10 @@ programBlockPT =
     describe "programBlockP"
         [ test "empty" <|
             \_ ->
-                Expect.err <| P.run programBlockP ""
+                Expect.err <| P.run (programBlockP { stack = [], defs = Dict.empty }) ""
         , test "simple" <|
             \_ ->
-                Expect.ok <| P.run programBlockP "{ \"h\" }"
+                Expect.ok <| P.run (programBlockP { stack = [], defs = Dict.empty }) "{ \"h\" }"
         ]
 
 
@@ -49,9 +50,6 @@ variableT =
         , test "bad first character" <|
             \_ ->
                 Expect.err <| P.run variable "2a"
-        , test "multiple characters" <|
-            \_ ->
-                Expect.equal (P.run variable "C2x232") (Ok "c2x232")
         ]
 
 
@@ -60,13 +58,19 @@ programPT =
     describe "programP"
         [ test "empty" <|
             \_ ->
-                Expect.equal (P.run programP "") (Ok ([], []))
-
+                Expect.equal (P.run (programP { stack = [], defs = Dict.empty }) "") (Ok { typeState = { stack = [], defs = Dict.empty }, elfs = [], elts = [] })
         , fuzz string "throws a load of junk at it to check it finishes" <|
             \s ->
-                let _ = P.run programP s
-                in Expect.pass
+                let
+                    _ =
+                        P.run (programP { stack = [], defs = Dict.empty }) s
+                in
+                Expect.pass
+        , fuzz string "block comment" <|
+            \s ->
+                Expect.ok <| P.run (programP { stack = [], defs = Dict.empty }) ("/*" ++ s ++ "*/")
         ]
+
 
 stringPT : Test
 stringPT =
