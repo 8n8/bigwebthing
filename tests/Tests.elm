@@ -19,10 +19,20 @@ parsingT : Test
 parsingT =
     describe "Parsers"
         [ programPT
+        , topProgramPT
         , stringPT
         , defPT
         , variableT
         , programBlockPT
+        ]
+
+
+topProgramPT : Test
+topProgramPT =
+    describe "topProgramP"
+        [ test "multiline" <|
+            \_ ->
+                Expect.ok <| P.run topProgramP "/**/"
         ]
 
 
@@ -66,9 +76,9 @@ programPT =
                         P.run (programP { stack = [], defs = Dict.empty }) s
                 in
                 Expect.pass
-        , fuzz string "block comment" <|
-            \s ->
-                Expect.ok <| P.run (programP { stack = [], defs = Dict.empty }) ("/*" ++ s ++ "*/")
+        , test "block comment" <|
+            \_ ->
+                Expect.ok <| P.run (programP { stack = [], defs = Dict.empty }) "/**/"
         ]
 
 
@@ -99,4 +109,13 @@ defPT =
         , test "spaces between = and name" <|
             \_ ->
                 Expect.ok <| P.run defP "=ff"
+        ]
+
+
+oneWhitespacePT : Test
+oneWhitespacePT =
+    describe "oneWhitespaceP"
+        [ test "multiline simple" <|
+            \_ ->
+                Expect.ok <| P.run oneWhitespaceP "/**/"
         ]

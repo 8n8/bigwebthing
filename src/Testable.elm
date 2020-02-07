@@ -181,7 +181,7 @@ standardTypeProgramDefs =
         , ( "[]", Tlist [] )
         , ( "cons", Tblock [ typeCons ] )
         , ( "listtype", Tblock [ listtype ] )
-        , ( "totype", Tblock [ customTypeEty ])
+        , ( "totype", Tblock [ customTypeEty ] )
         ]
 
 
@@ -388,18 +388,34 @@ type alias ParserOut =
 
 programP : TypeState -> P.Parser ParserOut
 programP t =
-    P.loop { typeState = t, elfs = [], elts = [] } programHelpP
+    P.map Tuple.first <| P.loop ( { typeState = t, elfs = [], elts = [] }, 0 ) programHelpP
 
 
-programHelpP : ParserOut -> P.Parser (P.Step ParserOut ParserOut)
-programHelpP p =
-    P.oneOf
-        [ P.succeed (\{ typeState, elfs, elts } -> P.Loop { elfs = p.elfs ++ elfs, elts = p.elts ++ elts, typeState = typeState })
-            |. whiteSpaceP
-            |= elementP p.typeState
-            |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done p)
-        ]
+programHelpP : ( ParserOut, Int ) -> P.Parser (P.Step ( ParserOut, Int ) ( ParserOut, Int ))
+programHelpP ( p, offset ) =
+    P.succeed (programLoopHelp p offset)
+        |= elementP p.typeState
+        |= P.getOffset
+
+
+programLoopHelp :
+    ParserOut
+    -> Int
+    -> ParserOut
+    -> Int
+    -> P.Step ( ParserOut, Int ) ( ParserOut, Int )
+programLoopHelp oldP oldOffset newP newOffset =
+    if newOffset == oldOffset then
+        P.Done ( oldP, oldOffset )
+
+    else
+        P.Loop
+            ( { elfs = oldP.elfs ++ newP.elfs
+              , elts = oldP.elts ++ newP.elts
+              , typeState = newP.typeState
+              }
+            , newOffset
+            )
 
 
 elementP : TypeState -> P.Parser ParserOut
@@ -415,6 +431,7 @@ elementP t =
         , programBlockP t
         , topTypeLangP
         , w retrieveP
+        , P.map (\_ -> { elfs = [], elts = [], typeState = t }) whiteSpaceP
         ]
 
 
@@ -1355,11 +1372,14 @@ ifProgress parser offset =
             )
 
 
+{-| Don't use P.NotNestable for multicomment, as it doesn't consume
+the closing \*
+-}
 oneWhitespaceP : P.Parser ()
 oneWhitespaceP =
     P.oneOf
         [ P.lineComment "//"
-        , P.multiComment "/*" "*/" P.NotNestable
+        , P.multiComment "/*" "*/" P.Nestable
         , P.spaces
         ]
 
