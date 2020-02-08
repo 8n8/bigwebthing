@@ -1629,9 +1629,67 @@ standardTypes =
         , ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
         , ( "cons", { standard = [ Sblock [ consElt ] ], custom = [] } )
         , ( "makeTuple", { standard = [ Sblock [ makeTupleElt ] ], custom = [] } )
-
-        -- , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
+        , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
         ]
+
+
+switchInfo : String
+switchInfo =
+    """"switch" needs a list of tuples on the top of the stack followed by the value to switch on. Each tuple should contain two elements, the first a type to match to the value, and the second a block to run if the type matches the value."""
+
+
+switchElt : Elt
+switchElt s =
+    case s.stack of
+        [] ->
+            Err { message = "empty stack: " ++ switchInfo, state = s }
+
+        _ :: [] ->
+            Err { message = "only one thing in stack: " ++ switchInfo, state = s }
+
+        pathsCandidate :: value :: remainsOfStack ->
+            case router pathsCandidate value of
+                Err err ->
+                    Err { message = err ++ ": " ++ switchInfo, state = s }
+
+                Ok blockToRun ->
+                    Ok { s | stack = { custom = [], standard = [ blockToRun ] } :: remainsOfStack }
+
+
+router : Type -> Type -> Result String StandardType
+router pathsCandidate value =
+    case ( pathsCandidate.custom, pathsCandidate.standard ) of
+        ( [], [ Slist listComponents ] ) ->
+            case ( listComponents.custom, listComponents.standard ) of
+                ( [], [] ) ->
+                    Err "empty paths"
+
+                ( [], [ _ ] ) ->
+                    Err "only one path"
+
+                ( [], atLeastTwoPaths ) ->
+                    case getPaths atLeastTwoPaths of
+                        Err err ->
+                            Err err
+
+                        Ok paths ->
+                            Result.map Sblock <| choosePath paths value
+
+                _ ->
+                    Err "bad paths"
+
+        _ ->
+            Err "bad paths"
+
+
+getPaths : List StandardType -> Result String (List ( Type, List Elt ))
+getPaths =
+    Debug.todo "getPaths"
+
+
+choosePath : List ( Type, List Elt ) -> Type -> Result String (List Elt)
+choosePath =
+    Debug.todo "choosePath"
 
 
 makeTupleInfo : String
