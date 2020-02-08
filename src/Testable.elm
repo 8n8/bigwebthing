@@ -16,6 +16,7 @@ import Json.Encode as Je
 import List.Nonempty as N
 import Maybe.Extra
 import Parser as P exposing ((|.), (|=))
+import Result.Extra
 import Set
 
 
@@ -107,8 +108,6 @@ viewHelp model =
         , Element.text "The program output goes here:"
         , showRightDoc model
         , Element.text "End of program output."
-
-        --, editorCheckbox model.editProgram
         , editor model
         ]
 
@@ -149,18 +148,6 @@ editor model =
                         Element.text "This box contains the program:"
                 , spellcheck = False
                 }
-
-
-editorCheckbox : Bool -> Element.Element Msg
-editorCheckbox checked =
-    Element.Input.checkbox []
-        { onChange = ShowProgramCheckBox
-        , icon = Element.Input.defaultCheckbox
-        , checked = checked
-        , label =
-            Element.Input.labelRight [] <|
-                Element.text "Tick this box if you're sure you want to edit the program."
-        }
 
 
 homeButton : Element.Element Msg
@@ -306,7 +293,7 @@ runProgram program =
             )
 
         Ok { elfs, elts } ->
-            case runTypeChecks elts of
+            case runTypeChecks elts initEltState of
                 Just errMsg ->
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
@@ -1648,16 +1635,106 @@ switchElt s =
             Err { message = "only one thing in stack: " ++ switchInfo, state = s }
 
         pathsCandidate :: value :: remainsOfStack ->
-            case router pathsCandidate value of
+            case extractAndCheckPaths pathsCandidate value of
                 Err err ->
                     Err { message = err ++ ": " ++ switchInfo, state = s }
 
-                Ok blockToRun ->
-                    Ok { s | stack = { custom = [], standard = [ blockToRun ] } :: remainsOfStack }
+                Ok blocksToRun ->
+                    case Result.Extra.combine <| List.map (\elts -> runTypeChecksHelp elts s) (List.map Tuple.second blocksToRun) of
+                        Err err ->
+                            Err err
+
+                        Ok alternateEndings ->
+                            equalEndings s alternateEndings (List.map Tuple.first blocksToRun)
 
 
-router : Type -> Type -> Result String StandardType
-router pathsCandidate value =
+equalEndings : EltState -> List EltState -> List Type -> Result TypeError EltState
+equalEndings baseState alternateEndings pathTypes =
+    case alternateEndings of
+        [] ->
+            Err { state = baseState, message = "internal error: no alternate endings" }
+
+        a :: lternateEndings ->
+            if List.all (equalStackAndDefs a) lternateEndings then
+                Ok a
+
+            else
+                Err { state = baseState, message = "the different paths do different things" }
+
+
+equalStackAndDefs : EltState -> EltState -> Bool
+equalStackAndDefs s1 s2 =
+    s1.stack == s2.stack && s1.defs == s2.defs
+
+
+
+-- router : Type -> Type -> Result String StandardType
+-- router pathsCandidate value =
+--     case ( pathsCandidate.custom, pathsCandidate.standard ) of
+--         ( [], [ Slist listComponents ] ) ->
+--             case ( listComponents.custom, listComponents.standard ) of
+--                 ( [], [] ) ->
+--                     Err "empty paths"
+--
+--                 ( [], [ _ ] ) ->
+--                     Err "only one path"
+--
+--                 ( [], atLeastTwoPaths ) ->
+--                     case getPaths atLeastTwoPaths of
+--                         Err err ->
+--                             Err err
+--
+--                         Ok paths ->
+--                             Result.map Sblock <| choosePath paths value
+--
+--                 _ ->
+--                     Err "bad paths"
+--
+--         _ ->
+--             Err "bad paths"
+
+
+getPaths : List StandardType -> Result String (List ( Type, List Elt ))
+getPaths candidates =
+    Result.Extra.combine <| List.map getPath candidates
+
+
+getPath : StandardType -> Result String ( Type, List Elt )
+getPath candidatePath =
+    case candidatePath of
+        Stuple [ match, blockCandidate ] ->
+            case getBlockEltsFromType blockCandidate of
+                Nothing ->
+                    Err "the second element in the tuple is not a block"
+
+                Just block ->
+                    Ok ( match, block )
+
+        Stuple [] ->
+            Err "empty tuple"
+
+        Stuple [ _ ] ->
+            Err "1-tuple"
+
+        Stuple types ->
+            Err <| "tuple contains " ++ String.fromInt (List.length types) ++ " elements, which is too long"
+
+        _ ->
+            Err <| "expecting tuple but got " ++ showStandardType candidatePath
+
+
+getBlockEltsFromType : Type -> Maybe (List Elt)
+getBlockEltsFromType { custom, standard } =
+    case ( custom, standard ) of
+        ( [], [ Sblock elts ] ) ->
+            Just elts
+
+        _ ->
+            Nothing
+
+
+extractAndCheckPaths : Type -> Type -> Result String (List ( Type, List Elt ))
+extractAndCheckPaths pathsCandidate value =
     case ( pathsCandidate.custom, pathsCandidate.standard ) of
         ( [], [ Slist listComponents ] ) ->
             case ( listComponents.custom, listComponents.standard ) of
@@ -1673,7 +1750,19 @@ router pathsCandidate value =
                             Err err
 
                         Ok paths ->
-                            Result.map Sblock <| choosePath paths value
+                            let
+                                ( missingPaths, surplusPaths ) =
+                                    checkPathsComplete paths value
+                            in
+                            if missingPaths == emptyType then
+                                if surplusPaths == emptyType then
+                                    Ok paths
+
+                                else
+                                    Err <| "too many paths: " ++ showTypeVal surplusPaths
+
+                            else
+                                Err <| "not enough paths: " ++ showTypeVal missingPaths
 
                 _ ->
                     Err "bad paths"
@@ -1682,14 +1771,59 @@ router pathsCandidate value =
             Err "bad paths"
 
 
-getPaths : List StandardType -> Result String (List ( Type, List Elt ))
-getPaths =
-    Debug.todo "getPaths"
+emptyType : Type
+emptyType =
+    { custom = [], standard = [] }
 
 
-choosePath : List ( Type, List Elt ) -> Type -> Result String (List Elt)
-choosePath =
-    Debug.todo "choosePath"
+checkPathsComplete :
+    List ( Type, List Elt )
+    -> Type
+    -> ( Type, Type )
+checkPathsComplete paths value =
+    let
+        combinedPaths =
+            typeListUnion <| List.map Tuple.first paths
+
+        missingPaths =
+            typeDiff value combinedPaths
+
+        surplusPaths =
+            typeDiff combinedPaths value
+    in
+    ( missingPaths, surplusPaths )
+
+
+typeDiff : Type -> Type -> Type
+typeDiff fromThis subtractThis =
+    { custom = customDiff fromThis.custom subtractThis.custom
+    , standard = standardDiff fromThis.standard subtractThis.standard
+    }
+
+
+customDiff : List TypeAtom -> List TypeAtom -> List TypeAtom
+customDiff fromThis subtractThis =
+    List.filter (\x -> not <| List.member x subtractThis) fromThis
+
+
+standardDiff : List StandardType -> List StandardType -> List StandardType
+standardDiff fromThis subtractThis =
+    List.filter (\x -> not <| List.member x subtractThis) fromThis
+
+
+typeListUnion : List Type -> Type
+typeListUnion types =
+    typeListUnionHelp types { custom = [], standard = [] }
+
+
+typeListUnionHelp : List Type -> Type -> Type
+typeListUnionHelp notLookedAtYet accumulator =
+    case notLookedAtYet of
+        [] ->
+            accumulator
+
+        topType :: remainder ->
+            typeListUnionHelp remainder (typeUnion topType accumulator)
 
 
 makeTupleInfo : String
@@ -1779,17 +1913,6 @@ customUnion l1 l2 =
 standardUnion : List StandardType -> List StandardType -> List StandardType
 standardUnion l1 l2 =
     l1 ++ l2
-
-
-
--- switchEltInfo = "\"switch\" needs a stack with a list of 2-tuples on the top of it. The first element in each tuple should be a type and the second element a block."
---
---
--- switchElt : Elt
--- switchElt state =
---     case state.stack of
---         [] ->
---             Err { state = state, message = "empty stack: " ++ switchEltInfo }
 
 
 standardLibrary : Dict.Dict String ProgVal
@@ -1941,9 +2064,9 @@ initEltState =
     }
 
 
-runTypeChecks : List Elt -> Maybe String
-runTypeChecks elts =
-    case runTypeChecksHelp elts initEltState of
+runTypeChecks : List Elt -> EltState -> Maybe String
+runTypeChecks elts init =
+    case runTypeChecksHelp elts init of
         Ok { stack } ->
             case stack of
                 [] ->
