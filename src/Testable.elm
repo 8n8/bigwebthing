@@ -427,6 +427,7 @@ elementP t =
     P.oneOf
         [ w runBlockP
         , w stringPWrap
+        , w intPWrap
         , w defP
         , programBlockP t
         , topTypeLangP
@@ -798,6 +799,39 @@ runTypeBlockHelp elements t =
                     Err err
 
 
+intPWrap : P.Parser ( List Elf, List Elt )
+intPWrap =
+    P.succeed (\start i end -> ( [ intElf i ], [ intElt start end i ] ))
+        |= P.getPosition
+        |= intP
+        |= P.getPosition
+
+
+intP : P.Parser Int
+intP =
+    P.oneOf
+        [ P.succeed negate
+            |. P.symbol "-"
+            |= P.int
+        , P.int
+        ]
+
+
+intElf : Int -> ProgramState -> ProgramState
+intElf i p =
+    { p | stack = Pint i :: p.stack }
+
+
+intElt : ( Int, Int ) -> ( Int, Int ) -> Int -> Elt
+intElt start end i s =
+    Ok
+        { s
+            | stack = { standard = [], custom = [ Aint i ] } :: s.stack
+            , startPosition = start
+            , endPosition = end
+        }
+
+
 stringPWrap : P.Parser ( List Elf, List Elt )
 stringPWrap =
     P.succeed (\start s end -> ( [ stringElf s ], [ stringElt start end s ] ))
@@ -1103,6 +1137,9 @@ showTypeAtom t =
         Astring s ->
             "string: \"" ++ showString s ++ "\""
 
+        Aint i ->
+            "int: " ++ String.fromInt i
+
 
 showString : String -> String
 showString s =
@@ -1174,6 +1211,13 @@ showStandardType standard =
 
         Slist type_ ->
             "list: " ++ showTypeVal type_
+
+        Sint ->
+            "int"
+
+        Stuple types ->
+            "tuple: "
+                ++ (String.join ", " <| List.map showTypeVal types)
 
 
 showTypeStack : List Type -> String
@@ -1507,12 +1551,15 @@ type alias Type =
 
 type TypeAtom
     = Astring String
+    | Aint Int
 
 
 type StandardType
     = Sblock (List Elt)
     | Sstring
+    | Sint
     | Slist Type
+    | Stuple (List Type)
 
 
 equalTypeStacks : List Type -> List Type -> Bool
@@ -1581,9 +1628,44 @@ standardTypes =
         [ ( "print", { standard = [ Sblock [ printElt ] ], custom = [] } )
         , ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
         , ( "cons", { standard = [ Sblock [ consElt ] ], custom = [] } )
+        , ( "makeTuple", { standard = [ Sblock [ makeTupleElt ] ], custom = [] } )
 
         -- , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
         ]
+
+
+makeTupleInfo : String
+makeTupleInfo =
+    """"makeTuple" needs an integer on the top of the stack to give its length, followed by enough items to fill the tuple"""
+
+
+makeTupleElt : Elt
+makeTupleElt s =
+    case s.stack of
+        [] ->
+            Err { message = "empty stack: " ++ makeTupleInfo, state = s }
+
+        lengthCandidate :: remainsOfStack ->
+            case getLength lengthCandidate of
+                Nothing ->
+                    Err { message = "bad length: " ++ makeTupleInfo, state = s }
+
+                Just length ->
+                    if List.length remainsOfStack < length then
+                        Err { message = "stack too small: " ++ makeTupleInfo, state = s }
+
+                    else
+                        Ok { s | stack = { custom = [], standard = [ Stuple (List.take length remainsOfStack) ] } :: List.drop length remainsOfStack }
+
+
+getLength : Type -> Maybe Int
+getLength { custom, standard } =
+    case ( custom, standard ) of
+        ( [ Aint i ], [] ) ->
+            Just i
+
+        _ ->
+            Nothing
 
 
 consElt : Elt
@@ -1789,6 +1871,9 @@ customOfStandardHelp bs t =
         Astring _ ->
             List.member Sstring bs
 
+        Aint _ ->
+            List.member Sint bs
+
 
 initEltState =
     { startPosition = ( 0, 0 )
@@ -1864,6 +1949,7 @@ type alias HumanMsg =
 
 type ProgVal
     = Pstring String
+    | Pint Int
     | Pblock (List Elf)
     | Plist (List ProgVal)
 
@@ -1873,6 +1959,9 @@ showProgVal p =
     case p of
         Pstring s ->
             "string: " ++ s
+
+        Pint i ->
+            "int: " ++ String.fromInt i
 
         Pblock bs ->
             String.concat
