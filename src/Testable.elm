@@ -1045,7 +1045,7 @@ runBlockElf s =
                     Just <|
                         String.concat
                             [ "expecting a block on top of the "
-                            , "stack, but got"
+                            , "stack, but got "
                             , showProgVal x
                             ]
             }
@@ -1490,10 +1490,6 @@ runElfsHelp :
     -> ProgramState
     -> ProgramState
 runElfsHelp elfs s =
-    let
-        _ =
-            Debug.log "progStack" s.stack
-    in
     case elfs of
         [] ->
             s
@@ -1736,27 +1732,35 @@ switchElt s =
                 Err err ->
                     Err { message = err ++ ": " ++ switchInfo, state = s }
 
-                Ok blocksToRun ->
-                    case Result.Extra.combine <| List.map (\elts -> runTypeChecksHelp elts { s | stack = remainsOfStack }) (List.map Tuple.second blocksToRun) of
+                Ok (b :: locksToRun) ->
+                    case Result.Extra.combine <| List.map (\elts -> runTypeChecksHelp elts { s | stack = remainsOfStack }) (List.map Tuple.second (b :: locksToRun)) of
                         Err err ->
                             Err err
 
                         Ok alternateEndings ->
-                            equalEndings { s | stack = remainsOfStack } alternateEndings (List.map Tuple.first blocksToRun)
+                            case equalEndings { s | stack = remainsOfStack } alternateEndings (List.map Tuple.first (b :: locksToRun)) of
+                                Nothing ->
+                                    Ok { s | stack = { custom = [], standard = [ Sblock (Tuple.second b) ] } :: remainsOfStack }
+
+                                Just err ->
+                                    Err err
+
+                Ok [] ->
+                    Err { message = "internal TYPE error: for some reason there were no blocks", state = s }
 
 
-equalEndings : EltState -> List EltState -> List Type -> Result TypeError EltState
+equalEndings : EltState -> List EltState -> List Type -> Maybe TypeError
 equalEndings baseState alternateEndings pathTypes =
     case alternateEndings of
         [] ->
-            Err { state = baseState, message = "internal error: no alternate endings" }
+            Just { state = baseState, message = "internal error: no alternate endings" }
 
         a :: lternateEndings ->
             if List.all (equalStackAndDefs a) lternateEndings then
-                Ok a
+                Nothing
 
             else
-                Err { state = baseState, message = "the different paths do different things" }
+                Just { state = baseState, message = "the different paths do different things" }
 
 
 equalStackAndDefs : EltState -> EltState -> Bool
@@ -2007,9 +2011,27 @@ standardLibrary =
         , ( "[]", Plist [] )
         , ( "cons", Pblock [ consElf ] )
         , ( "switch", Pblock [ switchElf ] )
-        , ( "testForSwitch", Pint 2 )
+        , ( "testForSwitch", Pint 1 )
         , ( "typelevelint", Pblock [ typelevelintElf ] )
+        , ( "makeTuple", Pblock [ makeTupleElf ] )
         ]
+
+
+makeTupleElf : Elf
+makeTupleElf p =
+    case p.stack of
+        (Pint length) :: remainsOfStack ->
+            let
+                tuple =
+                    Ptuple <| List.take length remainsOfStack
+
+                remainsOfRemains =
+                    List.drop length remainsOfStack
+            in
+            { p | stack = tuple :: remainsOfRemains }
+
+        _ ->
+            { p | internalError = Just "expecting an int" }
 
 
 typelevelintElf : Elf
@@ -2044,10 +2066,6 @@ switchElf p =
 
 extractPaths : List ProgVal -> Result ProgVal (List ( Type, ProgVal ))
 extractPaths candidates =
-    let
-        _ =
-            Debug.log "candidates" candidates
-    in
     Result.Extra.combine <| List.map getMatchPath candidates
 
 
