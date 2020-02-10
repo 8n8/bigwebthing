@@ -1646,6 +1646,7 @@ standardTypes =
         , ( "string", { standard = [ Sstring ], custom = [] } )
         , ( "typelevelint", { standard = [ Sblock [ typeIntElt ] ], custom = [] } )
         , ( "typelevelstring", { standard = [ Sblock [ typeStringElt ] ], custom = [] } )
+        , ( "testForSwitch", { standard = [], custom = [ Aint 1, Aint 2 ] } )
         ]
 
 
@@ -1727,12 +1728,12 @@ switchElt s =
                     Err { message = err ++ ": " ++ switchInfo, state = s }
 
                 Ok blocksToRun ->
-                    case Result.Extra.combine <| List.map (\elts -> runTypeChecksHelp elts s) (List.map Tuple.second blocksToRun) of
+                    case Result.Extra.combine <| List.map (\elts -> runTypeChecksHelp elts { s | stack = remainsOfStack }) (List.map Tuple.second blocksToRun) of
                         Err err ->
                             Err err
 
                         Ok alternateEndings ->
-                            equalEndings s alternateEndings (List.map Tuple.first blocksToRun)
+                            equalEndings { s | stack = remainsOfStack } alternateEndings (List.map Tuple.first blocksToRun)
 
 
 equalEndings : EltState -> List EltState -> List Type -> Result TypeError EltState
@@ -2024,6 +2025,7 @@ standardLibrary =
         , ( "[]", Plist [] )
         , ( "cons", Pblock [ consElf ] )
         , ( "switch", Pblock [ switchElf ] )
+        , ( "testForSwitch", Pint 2 )
         ]
 
 
