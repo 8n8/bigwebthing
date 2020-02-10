@@ -1119,13 +1119,16 @@ getBlockHelp s =
 
 
 showTypeAtom : TypeAtom -> String
-showTypeAtom t =
-    case t of
+showTypeAtom typeAtom =
+    case typeAtom of
         Astring s ->
             "string: \"" ++ showString s ++ "\""
 
         Aint i ->
             "int: " ++ String.fromInt i
+
+        Atype t ->
+            "type: " ++ showTypeVal t
 
 
 showString : String -> String
@@ -1205,6 +1208,9 @@ showStandardType standard =
         Stuple types ->
             "tuple: "
                 ++ (String.join ", " <| List.map showTypeVal types)
+
+        Stype ->
+            "type"
 
 
 showTypeStack : List Type -> String
@@ -1539,12 +1545,14 @@ type alias Type =
 type TypeAtom
     = Astring String
     | Aint Int
+    | Atype Type
 
 
 type StandardType
     = Sblock (List Elt)
     | Sstring
     | Sint
+    | Stype
     | Slist Type
     | Stuple (List Type)
 
@@ -2054,6 +2062,9 @@ customOfStandardHelp bs t =
 
         Aint _ ->
             List.member Sint bs
+
+        Atype _ ->
+            List.member Stype bs
 
 
 initEltState =
