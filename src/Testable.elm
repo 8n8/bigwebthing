@@ -1773,7 +1773,12 @@ getPath candidatePath =
                     Err "the second element in the tuple is not a block"
 
                 Just block ->
-                    Ok ( match, block )
+                    case unwrapMatch match of
+                        Ok unwrapped ->
+                            Ok ( unwrapped, block )
+
+                        Err err ->
+                            Err err
 
         Stuple [] ->
             Err "empty tuple"
@@ -1786,6 +1791,16 @@ getPath candidatePath =
 
         _ ->
             Err <| "expecting tuple but got " ++ showStandardType candidatePath
+
+
+unwrapMatch : Type -> Result String Type
+unwrapMatch { standard, custom } =
+    case ( standard, custom ) of
+        ( [], [ Atype type_ ] ) ->
+            Ok type_
+
+        _ ->
+            Err <| "bad match type: " ++ showTypeVal { custom = custom, standard = standard }
 
 
 getBlockEltsFromType : Type -> Maybe (List Elt)
