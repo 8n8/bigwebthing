@@ -1619,13 +1619,30 @@ standardTypes =
         , ( "cons", { standard = [ Sblock [ consElt ] ], custom = [] } )
         , ( "makeTuple", { standard = [ Sblock [ makeTupleElt ] ], custom = [] } )
         , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
-
-        -- , ( "totype", {standard = [ Sblock [ customTypeElt ] ], custom = []})
+        , ( "typeUnion", { standard = [ Sblock [ typeUnionElt ] ], custom = [] } )
         , ( "int", { standard = [ Sint ], custom = [] } )
         , ( "string", { standard = [ Sstring ], custom = [] } )
         , ( "typelevelint", { standard = [ Sblock [ typeIntElt ] ], custom = [] } )
         , ( "typelevelstring", { standard = [ Sblock [ typeStringElt ] ], custom = [] } )
         ]
+
+
+typeUnionInfo : String
+typeUnionInfo =
+    """typeUnion needs the top two items in the stack to be types"""
+
+
+typeUnionElt : Elt
+typeUnionElt s =
+    case s.stack of
+        [] ->
+            Err { state = s, message = "empty stack: " ++ typeUnionInfo }
+
+        _ :: [] ->
+            Err { state = s, message = "only one thing in stack: " ++ typeUnionInfo }
+
+        top :: next :: remainsOfStack ->
+            Ok { s | stack = typeUnion top next :: remainsOfStack }
 
 
 typeStringEltInfo : String
