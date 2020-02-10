@@ -994,6 +994,7 @@ defElt var start end state =
                         , stack = tack
                         , startPosition = start
                         , endPosition = end
+                        , defPos = Dict.insert var ( start, end ) state.defPos
                     }
 
 
@@ -1261,7 +1262,13 @@ makeRetrieveElt var start end state =
                 }
 
         Just t ->
-            Ok <| newPos { state | stack = t :: state.stack } start end
+            Ok
+                { state
+                    | stack = t :: state.stack
+                    , startPosition = start
+                    , endPosition = end
+                    , defUse = Set.insert var state.defUse
+                }
 
 
 customTypeEty : Ety
@@ -1635,6 +1642,8 @@ type alias EltState =
     , endPosition : ( Int, Int )
     , stack : List Type
     , defs : Dict.Dict String Type
+    , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
+    , defUse : Set.Set String
     }
 
 
@@ -2228,33 +2237,104 @@ initEltState =
     , endPosition = ( 0, 0 )
     , stack = []
     , defs = standardTypes
+    , defPos = Dict.empty
+    , defUse = Set.empty
     }
 
 
 runTypeChecks : List Elt -> EltState -> Maybe String
 runTypeChecks elts init =
     case runTypeChecksHelp elts init of
-        Ok { stack } ->
-            case stack of
-                [] ->
-                    Nothing
-
-                ts ->
-                    Just <|
-                        String.concat
-                            [ "typestack should be empty at end of program, but "
-                            , "got "
-                            , showTypeStack ts
-                            ]
+        Ok endState ->
+            typeEndChecks endState
 
         Err err ->
             Just <| prettyErrorMessage err
 
 
+typeEndChecks : EltState -> Maybe String
+typeEndChecks s =
+    case endEmpty s of
+        Nothing ->
+            noUnusedNames s
+
+        Just badEmpty ->
+            Just badEmpty
+
+
+noUnusedNames : EltState -> Maybe String
+noUnusedNames s =
+    let
+        keys =
+            Set.fromList <| Dict.keys s.defs
+
+        standardKeys =
+            Set.fromList <| Dict.keys standardTypes
+
+        newKeys =
+            Set.diff keys standardKeys
+
+        unused =
+            Set.diff newKeys s.defUse
+    in
+    case namesAndPositions unused s.defPos of
+        [] ->
+            Nothing
+
+        moreThanOne ->
+            Just <| prettyUnused moreThanOne
+
+
+prettyUnused : List ( String, ( Int, Int ), ( Int, Int ) ) -> String
+prettyUnused unused =
+    String.join ", " <| List.map onePrettyUnused unused
+
+
+onePrettyUnused : ( String, ( Int, Int ), ( Int, Int ) ) -> String
+onePrettyUnused ( name, start, end ) =
+    String.concat
+        [ "\""
+        , name
+        , "\" defined but not used: between "
+        , prettyPosition start
+        , " and "
+        , prettyPosition end
+        ]
+
+
+namesAndPositions : Set.Set String -> Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> List ( String, ( Int, Int ), ( Int, Int ) )
+namesAndPositions unused positions =
+    justs <| List.map (makePosition positions) <| Set.toList unused
+
+
+makePosition : Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> String -> Maybe ( String, ( Int, Int ), ( Int, Int ) )
+makePosition positions name =
+    case Dict.get name positions of
+        Nothing ->
+            Nothing
+
+        Just ( start, end ) ->
+            Just ( name, start, end )
+
+
+endEmpty : EltState -> Maybe String
+endEmpty s =
+    case s.stack of
+        [] ->
+            Nothing
+
+        ts ->
+            Just <|
+                String.concat
+                    [ "typestack should be empty at end of program, but got "
+                    , showTypeStack ts
+                    ]
+
+
 prettyErrorMessage : TypeError -> String
 prettyErrorMessage { state, message } =
     String.concat
-        [ "type error between "
+        [ "between "
         , prettyPosition state.startPosition
         , " and "
         , prettyPosition state.endPosition
