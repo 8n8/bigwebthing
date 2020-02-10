@@ -1623,13 +1623,34 @@ standardTypes =
         -- , ( "totype", {standard = [ Sblock [ customTypeElt ] ], custom = []})
         , ( "int", { standard = [ Sint ], custom = [] } )
         , ( "string", { standard = [ Sstring ], custom = [] } )
-        , ( "typelevel:int", { standard = [ Sblock [ typeIntElt ] ], custom = [] } )
+        , ( "typelevelint", { standard = [ Sblock [ typeIntElt ] ], custom = [] } )
+        , ( "typelevelstring", { standard = [ Sblock [ typeStringElt ] ], custom = [] } )
         ]
+
+
+typeStringEltInfo : String
+typeStringEltInfo =
+    """"typelevelstring" needs the top of the stack to be a string"""
+
+
+typeStringElt : Elt
+typeStringElt s =
+    case s.stack of
+        [] ->
+            Err { state = s, message = "empty stack: " ++ typeStringEltInfo }
+
+        { standard, custom } :: tack ->
+            case ( standard, custom ) of
+                ( [], [ Astring str ] ) ->
+                    Ok { s | stack = { standard = [], custom = [ Atype { standard = [], custom = [ Astring str ] } ] } :: tack }
+
+                _ ->
+                    Err { message = "expecting a string, but got " ++ showTypeVal { standard = standard, custom = custom } ++ ": " ++ typeStringEltInfo, state = s }
 
 
 typeIntEltInfo : String
 typeIntEltInfo =
-    """"typelevel:int" needs the top of the stack to be an int"""
+    """"typelevelint" needs the top of the stack to be an int"""
 
 
 typeIntElt : Elt
