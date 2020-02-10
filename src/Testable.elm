@@ -1264,12 +1264,6 @@ makeRetrieveElt var start end state =
             Ok <| newPos { state | stack = t :: state.stack } start end
 
 
-customTypeWrapP : P.Parser (List Ety)
-customTypeWrapP =
-    P.succeed [ customTypeEty ]
-        |. P.keyword "totype"
-
-
 customTypeEty : Ety
 customTypeEty t =
     case t.stack of
@@ -1625,7 +1619,32 @@ standardTypes =
         , ( "cons", { standard = [ Sblock [ consElt ] ], custom = [] } )
         , ( "makeTuple", { standard = [ Sblock [ makeTupleElt ] ], custom = [] } )
         , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
+
+        -- , ( "totype", {standard = [ Sblock [ customTypeElt ] ], custom = []})
+        , ( "int", { standard = [ Sint ], custom = [] } )
+        , ( "string", { standard = [ Sstring ], custom = [] } )
+        , ( "typelevel:int", { standard = [ Sblock [ typeIntElt ] ], custom = [] } )
         ]
+
+
+typeIntEltInfo : String
+typeIntEltInfo =
+    """"typelevel:int" needs the top of the stack to be an int"""
+
+
+typeIntElt : Elt
+typeIntElt s =
+    case s.stack of
+        [] ->
+            Err { state = s, message = "empty stack: " ++ typeIntEltInfo }
+
+        { standard, custom } :: tack ->
+            case ( standard, custom ) of
+                ( [], [ Aint i ] ) ->
+                    Ok { s | stack = { standard = [], custom = [ Atype { standard = [], custom = [ Aint i ] } ] } :: tack }
+
+                _ ->
+                    Err { message = "expecting an int, but got " ++ showTypeVal { standard = standard, custom = custom } ++ ": " ++ typeIntEltInfo, state = s }
 
 
 switchInfo : String
@@ -2144,6 +2163,7 @@ type ProgVal
     | Pint Int
     | Pblock (List Elf)
     | Plist (List ProgVal)
+    | Ptype Type
 
 
 showProgVal : ProgVal -> String
@@ -2167,6 +2187,9 @@ showProgVal p =
                 , String.join ", " <| List.map showProgVal l
                 , "]"
                 ]
+
+        Ptype type_ ->
+            "type: " ++ showTypeVal type_
 
 
 leftInput : Model -> Element.Element Msg
