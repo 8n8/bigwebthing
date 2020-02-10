@@ -1440,7 +1440,12 @@ runElfs program elfs progStack =
         newP =
             runElfsHelp elfs oldP
     in
-    ( newP.program, newP.rightDoc, newP.outbox )
+    case newP.internalError of
+        Nothing ->
+            ( newP.program, newP.rightDoc, newP.outbox )
+
+        Just err ->
+            ( oldP.program, Just <| SmallString ("internal error: " ++ err), oldP.outbox )
 
 
 type alias ProgramState =
@@ -1485,6 +1490,10 @@ runElfsHelp :
     -> ProgramState
     -> ProgramState
 runElfsHelp elfs s =
+    let
+        _ =
+            Debug.log "progStack" s.stack
+    in
     case elfs of
         [] ->
             s
@@ -1755,33 +1764,6 @@ equalStackAndDefs s1 s2 =
     s1.stack == s2.stack && s1.defs == s2.defs
 
 
-
--- router : Type -> Type -> Result String StandardType
--- router pathsCandidate value =
---     case ( pathsCandidate.custom, pathsCandidate.standard ) of
---         ( [], [ Slist listComponents ] ) ->
---             case ( listComponents.custom, listComponents.standard ) of
---                 ( [], [] ) ->
---                     Err "empty paths"
---
---                 ( [], [ _ ] ) ->
---                     Err "only one path"
---
---                 ( [], atLeastTwoPaths ) ->
---                     case getPaths atLeastTwoPaths of
---                         Err err ->
---                             Err err
---
---                         Ok paths ->
---                             Result.map Sblock <| choosePath paths value
---
---                 _ ->
---                     Err "bad paths"
---
---         _ ->
---             Err "bad paths"
-
-
 getPaths : List StandardType -> Result String (List ( Type, List Elt ))
 getPaths candidates =
     Result.Extra.combine <| List.map getPath candidates
@@ -1868,10 +1850,10 @@ extractAndCheckPaths pathsCandidate value =
                                 Err <| "not enough paths: " ++ showTypeVal missingPaths
 
                 _ ->
-                    Err "bad paths"
+                    Err "bad paths 2 "
 
         _ ->
-            Err "bad paths"
+            Err "bad paths 3"
 
 
 emptyType : Type
@@ -2026,7 +2008,18 @@ standardLibrary =
         , ( "cons", Pblock [ consElf ] )
         , ( "switch", Pblock [ switchElf ] )
         , ( "testForSwitch", Pint 2 )
+        , ( "typelevelint", Pblock [ typelevelintElf ] )
         ]
+
+
+typelevelintElf : Elf
+typelevelintElf p =
+    case p.stack of
+        (Pint i) :: remainsOfStack ->
+            { p | stack = Ptype { custom = [ Aint i ], standard = [] } :: remainsOfStack }
+
+        _ ->
+            { p | internalError = Just "should be an int on top of the stack" }
 
 
 switchElf : Elf
@@ -2034,37 +2027,41 @@ switchElf p =
     case p.stack of
         (Plist paths) :: value :: remainsOfStack ->
             case extractPaths paths of
-                Nothing ->
-                    { p | internalError = Just "bad paths" }
+                Err err ->
+                    { p | internalError = Just <| "bad paths 1: " ++ showProgVal err }
 
-                Just goodPaths ->
+                Ok goodPaths ->
                     case findPath (typeOf value) goodPaths of
                         Nothing ->
                             { p | internalError = Just <| "no path for value: " ++ showProgVal value }
 
                         Just path ->
-                            runElfsHelp path { p | stack = remainsOfStack }
+                            { p | stack = path :: remainsOfStack }
 
         _ ->
             { p | internalError = Just "bad stack" }
 
 
-extractPaths : List ProgVal -> Maybe (List ( Type, List Elf ))
+extractPaths : List ProgVal -> Result ProgVal (List ( Type, ProgVal ))
 extractPaths candidates =
-    Maybe.Extra.traverse getMatchPath candidates
+    let
+        _ =
+            Debug.log "candidates" candidates
+    in
+    Result.Extra.combine <| List.map getMatchPath candidates
 
 
-getMatchPath : ProgVal -> Maybe ( Type, List Elf )
+getMatchPath : ProgVal -> Result ProgVal ( Type, ProgVal )
 getMatchPath p =
     case p of
-        Ptuple [ Ptype t, Pblock elfs ] ->
-            Just ( t, elfs )
+        Ptuple [ Ptype t, path ] ->
+            Ok ( t, path )
 
-        _ ->
-            Nothing
+        bad ->
+            Err bad
 
 
-findPath : Type -> List ( Type, List Elf ) -> Maybe (List Elf)
+findPath : Type -> List ( Type, ProgVal ) -> Maybe ProgVal
 findPath value paths =
     let
         matching =
