@@ -1454,6 +1454,28 @@ type alias ProgramState =
     }
 
 
+typeOf : ProgVal -> Type
+typeOf value =
+    case value of
+        Pstring s ->
+            { custom = [ Astring s ], standard = [] }
+
+        Pint i ->
+            { custom = [ Aint i ], standard = [] }
+
+        Pblock _ ->
+            { custom = [], standard = [ Sblock [] ] }
+
+        Plist values ->
+            typeListUnion <| List.map typeOf values
+
+        Ptype t ->
+            { custom = [ Atype t ], standard = [] }
+
+        Ptuple t ->
+            { custom = [], standard = [ Stuple <| List.map typeOf t ] }
+
+
 type alias Elf =
     ProgramState -> ProgramState
 
@@ -2001,9 +2023,54 @@ standardLibrary =
         [ ( "print", Pblock [ printElf ] )
         , ( "[]", Plist [] )
         , ( "cons", Pblock [ consElf ] )
-
-        --, ( "switch", Pblock [ switchElf ] )
+        , ( "switch", Pblock [ switchElf ] )
         ]
+
+
+switchElf : Elf
+switchElf p =
+    case p.stack of
+        (Plist paths) :: value :: remainsOfStack ->
+            case extractPaths paths of
+                Nothing ->
+                    { p | internalError = Just "bad paths" }
+
+                Just goodPaths ->
+                    case findPath (typeOf value) goodPaths of
+                        Nothing ->
+                            { p | internalError = Just <| "no path for value: " ++ showProgVal value }
+
+                        Just path ->
+                            runElfsHelp path { p | stack = remainsOfStack }
+
+        _ ->
+            { p | internalError = Just "bad stack" }
+
+
+extractPaths : List ProgVal -> Maybe (List ( Type, List Elf ))
+extractPaths candidates =
+    Maybe.Extra.traverse getMatchPath candidates
+
+
+getMatchPath : ProgVal -> Maybe ( Type, List Elf )
+getMatchPath p =
+    case p of
+        Ptuple [ Ptype t, Pblock elfs ] ->
+            Just ( t, elfs )
+
+        _ ->
+            Nothing
+
+
+findPath : Type -> List ( Type, List Elf ) -> Maybe (List Elf)
+findPath value paths =
+    let
+        matching =
+            List.filter
+                (isSubType value << Tuple.first)
+                paths
+    in
+    Maybe.map Tuple.second <| List.head matching
 
 
 consInfo =
@@ -2213,6 +2280,7 @@ type alias HumanMsg =
 
 type ProgVal
     = Pstring String
+    | Ptuple (List ProgVal)
     | Pint Int
     | Pblock (List Elf)
     | Plist (List ProgVal)
@@ -2243,6 +2311,9 @@ showProgVal p =
 
         Ptype type_ ->
             "type: " ++ showTypeVal type_
+
+        Ptuple ts ->
+            "tuple: " ++ String.join ", " (List.map showProgVal ts)
 
 
 leftInput : Model -> Element.Element Msg
