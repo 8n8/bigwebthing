@@ -273,6 +273,7 @@ initTypeProgramState : TypeState
 initTypeProgramState =
     { defs = standardTypeProgramDefs
     , stack = []
+    , runTimeNames = Set.fromList <| Dict.keys standardTypes
     }
 
 
@@ -415,10 +416,10 @@ elementP t =
         [ w runBlockP
         , w stringPWrap
         , w intPWrap
-        , w defP
+        , defPwrap t
         , programBlockP t
         , topTypeLangP
-        , w retrieveP
+        , retrievePwrap t
         , P.map (\_ -> { elfs = [], elts = [], typeState = t }) whiteSpaceP
         ]
 
@@ -432,15 +433,9 @@ topTypeLangP =
         |> P.andThen topTypeLangPhelp
 
 
-initialTypeState =
-    { defs = standardTypeProgramDefs
-    , stack = []
-    }
-
-
 topTypeLangPhelp : List (TypeState -> Result String TypeProgramOut) -> P.Parser ParserOut
 topTypeLangPhelp actions =
-    case runTypeBlock initialTypeState actions of
+    case runTypeBlock initTypeProgramState actions of
         Err err ->
             P.problem err
 
@@ -704,6 +699,7 @@ typeDefEty var t =
                     { state =
                         { defs = Dict.insert var s t.defs
                         , stack = tack
+                        , runTimeNames = t.runTimeNames
                         }
                     , elts = []
                     }
@@ -756,6 +752,7 @@ runTypeBlock t elements =
                 { state =
                     { defs = t.defs
                     , stack = result.state.stack
+                    , runTimeNames = t.runTimeNames
                     }
                 , elts = result.elts
                 }
@@ -927,9 +924,27 @@ isUninteresting char =
     char /= '\\' && char /= '"'
 
 
-defP : P.Parser ( List Elf, List Elt )
+defPwrap : TypeState -> P.Parser ParserOut
+defPwrap t =
+    P.andThen (defPWrapHelp t) defP
+
+
+defPWrapHelp : TypeState -> ( List Elf, List Elt, String ) -> P.Parser ParserOut
+defPWrapHelp t ( elfs, elts, newName ) =
+    if Set.member newName t.runTimeNames then
+        P.problem <| "\"" ++ newName ++ "\" is already defined"
+
+    else
+        P.succeed
+            { typeState = { t | runTimeNames = Set.insert newName t.runTimeNames }
+            , elfs = elfs
+            , elts = elts
+            }
+
+
+defP : P.Parser ( List Elf, List Elt, String )
 defP =
-    P.succeed (\start var end -> ( [ defElf var ], [ defElt var start end ] ))
+    P.succeed (\start var end -> ( [ defElf var ], [ defElt var start end ], var ))
         |= P.getPosition
         |. P.token "="
         |. whiteSpaceP
@@ -1010,9 +1025,9 @@ programBlockP : TypeState -> P.Parser ParserOut
 programBlockP t =
     P.succeed (\start { elfs, elts, typeState } end -> { elfs = [ blockElf elfs ], elts = [ blockElt elts start end ], typeState = typeState })
         |= P.getPosition
-        |. P.keyword "{"
+        |. P.token "{"
         |= programP t
-        |. P.keyword "}"
+        |. P.token "}"
         |= P.getPosition
 
 
@@ -1223,7 +1238,21 @@ showTypeStack typestack =
         ]
 
 
-retrieveP : P.Parser ( List Elf, List Elt )
+retrievePwrap : TypeState -> P.Parser ParserOut
+retrievePwrap t =
+    P.andThen (retrievePwrapHelp t) retrieveP
+
+
+retrievePwrapHelp : TypeState -> ( List Elf, List Elt, String ) -> P.Parser ParserOut
+retrievePwrapHelp t ( elfs, elts, name ) =
+    if Set.member name t.runTimeNames then
+        P.succeed { typeState = t, elfs = elfs, elts = elts }
+
+    else
+        P.problem <| "\"" ++ name ++ "\" is not defined"
+
+
+retrieveP : P.Parser ( List Elf, List Elt, String )
 retrieveP =
     P.succeed retrievePhelp
         |= P.getPosition
@@ -1231,9 +1260,9 @@ retrieveP =
         |= P.getPosition
 
 
-retrievePhelp : ( Int, Int ) -> String -> ( Int, Int ) -> ( List Elf, List Elt )
+retrievePhelp : ( Int, Int ) -> String -> ( Int, Int ) -> ( List Elf, List Elt, String )
 retrievePhelp start var end =
-    ( [ makeRetrieveElf var ], [ makeRetrieveElt var start end ] )
+    ( [ makeRetrieveElf var ], [ makeRetrieveElt var start end ], var )
 
 
 makeRetrieveElf : String -> ProgramState -> ProgramState
@@ -1512,6 +1541,7 @@ runElfsHelp elfs s =
 type alias TypeState =
     { defs : Dict.Dict String TypeProgramValue
     , stack : List TypeProgramValue
+    , runTimeNames : Set.Set String
     }
 
 
