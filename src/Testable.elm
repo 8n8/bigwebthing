@@ -1093,7 +1093,32 @@ runBlockElt start end state =
                             Err err
 
                         Ok ok ->
-                            Ok { ok | defs = state.defs }
+                            case blockUnusedNames ok state of
+                                Nothing ->
+                                    Ok { ok | defs = state.defs }
+
+                                Just err ->
+                                    Err err
+
+
+blockUnusedNames : EltState -> EltState -> Maybe TypeError
+blockUnusedNames new old =
+    let
+        newNames =
+            Dict.diff new.defPos old.defPos
+
+        newNameSet =
+            Set.fromList <| Dict.keys newNames
+
+        newUnused =
+            Set.diff newNameSet new.defUse
+    in
+    case namesAndPositions newUnused new.defPos of
+        [] ->
+            Nothing
+
+        oneOrMore ->
+            Just { message = prettyUnused oneOrMore, state = new }
 
 
 newPos : EltState -> ( Int, Int ) -> ( Int, Int ) -> EltState
@@ -2311,8 +2336,8 @@ noUnusedNames s =
         [] ->
             Nothing
 
-        moreThanOne ->
-            Just <| prettyUnused moreThanOne
+        oneOrMore ->
+            Just <| prettyUnused oneOrMore
 
 
 prettyUnused : List ( String, ( Int, Int ), ( Int, Int ) ) -> String
