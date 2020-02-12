@@ -169,6 +169,8 @@ standardTypeProgramDefs =
         , ( "cons", Tblock [ typeCons ] )
         , ( "listtype", Tblock [ listtype ] )
         , ( "totype", Tblock [ customTypeEty ] )
+        , ( "int", Ttype { standard = [ Sint ], custom = [] } )
+        , ( "alltypes", Ttype { standard = [ Sall ], custom = [] } )
         ]
 
 
@@ -507,7 +509,7 @@ fullTypeCheckEty t =
 
 fullTypeCheckElt : List Type -> Elt
 fullTypeCheckElt t state =
-    if equalTypeStacks t state.stack then
+    if isSubStack state.stack t then
         Ok state
 
     else
@@ -619,7 +621,7 @@ partialTypeCheckElt t state =
             , state = state
             }
 
-    else if equalTypeStacks relevant t then
+    else if isSubStack relevant t then
         Ok state
 
     else
@@ -1253,6 +1255,9 @@ showStandardType standard =
         Stype ->
             "type"
 
+        Sall ->
+            "all"
+
 
 showTypeStack : List Type -> String
 showTypeStack typestack =
@@ -1638,6 +1643,13 @@ type StandardType
     | Stype
     | Slist Type
     | Stuple (List Type)
+    | Sall
+
+
+isSubStack : List Type -> List Type -> Bool
+isSubStack sub master =
+    (List.length sub == List.length master)
+        && (List.all identity <| List.map2 isSubType sub master)
 
 
 equalTypeStacks : List Type -> List Type -> Bool
@@ -1714,8 +1726,27 @@ standardTypes =
         , ( "int", { standard = [ Sint ], custom = [] } )
         , ( "string", { standard = [ Sstring ], custom = [] } )
         , ( "typeof", { standard = [ Sblock [ typeofElt ] ], custom = [] } )
+        , ( "swap", { standard = [ Sblock [ swapElt ] ], custom = [] } )
         , ( "testForSwitch", { standard = [], custom = [ Aint 1, Aint 2 ] } )
         ]
+
+
+swapInfo : String
+swapInfo =
+    """"swap" swaps the top two things on the stack"""
+
+
+swapElt : Elt
+swapElt state =
+    case state.stack of
+        [] ->
+            Err { state = state, message = "empty stack: " ++ swapInfo }
+
+        _ :: [] ->
+            Err { state = state, message = "only one thing in stack: " ++ swapInfo }
+
+        s :: t :: ack ->
+            Ok { state | stack = t :: s :: ack }
 
 
 typeUnionInfo : String
@@ -2052,7 +2083,18 @@ standardLibrary =
         , ( "testForSwitch", Pint 1 )
         , ( "typeof", Pblock [ typeofElf ] )
         , ( "makeTuple", Pblock [ makeTupleElf ] )
+        , ( "swap", Pblock [ swapElf ] )
         ]
+
+
+swapElf : Elf
+swapElf p =
+    case p.stack of
+        s :: t :: ack ->
+            { p | stack = t :: s :: ack }
+
+        _ ->
+            { p | internalError = Just "swap needs at least two things on the stack" }
 
 
 makeTupleElf : Elf
@@ -2235,7 +2277,50 @@ standardOfCustom _ _ =
 
 standardOfStandard : List StandardType -> List StandardType -> Bool
 standardOfStandard sub master =
-    List.all (\s -> List.member s master) sub
+    List.all (standardOfStandardHelp master) sub
+
+
+standardOfStandardHelp : List StandardType -> StandardType -> Bool
+standardOfStandardHelp master candidate =
+    List.member Sall master
+        || (case candidate of
+                Sblock _ ->
+                    List.any isABlock master
+
+                Slist lt ->
+                    listMatch lt (getLists master [])
+
+                _ ->
+                    List.member candidate master
+           )
+
+
+getLists : List StandardType -> List Type -> List Type
+getLists notReadYet accum =
+    case notReadYet of
+        [] ->
+            accum
+
+        (Slist t) :: otReadYet ->
+            getLists otReadYet (t :: accum)
+
+        _ :: otReadYet ->
+            getLists otReadYet accum
+
+
+listMatch : Type -> List Type -> Bool
+listMatch candidate master =
+    List.any (isSubType candidate) master
+
+
+isABlock : StandardType -> Bool
+isABlock t =
+    case t of
+        Sblock _ ->
+            True
+
+        _ ->
+            False
 
 
 customOfCustom : List TypeAtom -> List TypeAtom -> Bool
@@ -2250,15 +2335,17 @@ customOfStandard sub master =
 
 customOfStandardHelp : List StandardType -> TypeAtom -> Bool
 customOfStandardHelp bs t =
-    case t of
-        Astring _ ->
-            List.member Sstring bs
+    List.member Sall bs
+        || (case t of
+                Astring _ ->
+                    List.member Sstring bs
 
-        Aint _ ->
-            List.member Sint bs
+                Aint _ ->
+                    List.member Sint bs
 
-        Atype _ ->
-            List.member Stype bs
+                Atype _ ->
+                    List.member Stype bs
+           )
 
 
 initEltState =
