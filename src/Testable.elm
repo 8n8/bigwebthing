@@ -168,6 +168,7 @@ standardTypeProgramDefs =
         , ( "[]", Tlist [] )
         , ( "cons", Tblock [ typeCons ] )
         , ( "listtype", Tblock [ listtype ] )
+        , ( "tupletype", Tblock [ tupletypeEty ] )
         , ( "totype", Tblock [ customTypeEty ] )
         , ( "int", Ttype { standard = [ Sint ], custom = [] } )
         , ( "alltypes", Ttype { standard = [ Sall ], custom = [] } )
@@ -177,6 +178,47 @@ standardTypeProgramDefs =
 typeConsHelp : String
 typeConsHelp =
     "to prepend to a list the top of the stack should be the new element, and the second item in the stack should be the list"
+
+
+tupletypeInfo : String
+tupletypeInfo =
+    "to make a tuple type there should be a list of types on the top of the stack"
+
+
+tupletypeEty : Ety
+tupletypeEty t =
+    case t.stack of
+        [] ->
+            Err <| "empty stack: " ++ tupletypeInfo
+
+        (Tlist typeCandidates) :: remainsOfStack ->
+            case toTypes typeCandidates of
+                Ok types ->
+                    Ok
+                        { state = { t | stack = Ttype { custom = [], standard = [ Stuple types ] } :: remainsOfStack }
+                        , elts = []
+                        }
+
+                Err err ->
+                    Err err
+
+        _ ->
+            Err <| "bad stack: " ++ tupletypeInfo
+
+
+toTypes : List TypeProgramValue -> Result String (List Type)
+toTypes candidates =
+    Result.Extra.combine <| List.map toTypesHelp candidates
+
+
+toTypesHelp : TypeProgramValue -> Result String Type
+toTypesHelp tvalue =
+    case tvalue of
+        Ttype t ->
+            Ok t
+
+        _ ->
+            Err <| "not a type: " ++ showTypeProgramValue tvalue
 
 
 listtypeInfo : String
@@ -2080,7 +2122,7 @@ standardLibrary =
         , ( "[]", Plist [] )
         , ( "cons", Pblock [ consElf ] )
         , ( "switch", Pblock [ switchElf ] )
-        , ( "testForSwitch", Pint 1 )
+        , ( "testForSwitch", Pint 2 )
         , ( "typeof", Pblock [ typeofElf ] )
         , ( "makeTuple", Pblock [ makeTupleElf ] )
         , ( "swap", Pblock [ swapElf ] )
@@ -2290,9 +2332,17 @@ standardOfStandardHelp master candidate =
                 Slist lt ->
                     listMatch lt (getLists master [])
 
+                Stuple tupleTypes ->
+                    tupleMatch tupleTypes (getTuples master [])
+
                 _ ->
                     List.member candidate master
            )
+
+
+tupleMatch : List Type -> List (List Type) -> Bool
+tupleMatch sub master =
+    List.any (isSubStack sub) master
 
 
 getLists : List StandardType -> List Type -> List Type
@@ -2306,6 +2356,19 @@ getLists notReadYet accum =
 
         _ :: otReadYet ->
             getLists otReadYet accum
+
+
+getTuples : List StandardType -> List (List Type) -> List (List Type)
+getTuples notReadYet accum =
+    case notReadYet of
+        [] ->
+            accum
+
+        (Stuple tu) :: otReadYet ->
+            getTuples otReadYet (tu :: accum)
+
+        _ :: otReadYet ->
+            getTuples otReadYet accum
 
 
 listMatch : Type -> List Type -> Bool
