@@ -1713,8 +1713,7 @@ standardTypes =
         , ( "typeUnion", { standard = [ Sblock [ typeUnionElt ] ], custom = [] } )
         , ( "int", { standard = [ Sint ], custom = [] } )
         , ( "string", { standard = [ Sstring ], custom = [] } )
-        , ( "typelevelint", { standard = [ Sblock [ typeIntElt ] ], custom = [] } )
-        , ( "typelevelstring", { standard = [ Sblock [ typeStringElt ] ], custom = [] } )
+        , ( "typeof", { standard = [ Sblock [ typeofElt ] ], custom = [] } )
         , ( "testForSwitch", { standard = [], custom = [ Aint 1, Aint 2 ] } )
         ]
 
@@ -1737,44 +1736,19 @@ typeUnionElt s =
             Ok { s | stack = typeUnion top next :: remainsOfStack }
 
 
-typeStringEltInfo : String
-typeStringEltInfo =
-    """"typelevelstring" needs the top of the stack to be a string"""
+typeofEltInfo : String
+typeofEltInfo =
+    """"typeof" needs an item on the top of the stack"""
 
 
-typeStringElt : Elt
-typeStringElt s =
-    case s.stack of
+typeofElt : Elt
+typeofElt state =
+    case state.stack of
         [] ->
-            Err { state = s, message = "empty stack: " ++ typeStringEltInfo }
+            Err { state = state, message = "empty stack: " ++ typeofEltInfo }
 
-        { standard, custom } :: tack ->
-            case ( standard, custom ) of
-                ( [], [ Astring str ] ) ->
-                    Ok { s | stack = { standard = [], custom = [ Atype { standard = [], custom = [ Astring str ] } ] } :: tack }
-
-                _ ->
-                    Err { message = "expecting a string, but got " ++ showTypeVal { standard = standard, custom = custom } ++ ": " ++ typeStringEltInfo, state = s }
-
-
-typeIntEltInfo : String
-typeIntEltInfo =
-    """"typelevelint" needs the top of the stack to be an int"""
-
-
-typeIntElt : Elt
-typeIntElt s =
-    case s.stack of
-        [] ->
-            Err { state = s, message = "empty stack: " ++ typeIntEltInfo }
-
-        { standard, custom } :: tack ->
-            case ( standard, custom ) of
-                ( [], [ Aint i ] ) ->
-                    Ok { s | stack = { standard = [], custom = [ Atype { standard = [], custom = [ Aint i ] } ] } :: tack }
-
-                _ ->
-                    Err { message = "expecting an int, but got " ++ showTypeVal { standard = standard, custom = custom } ++ ": " ++ typeIntEltInfo, state = s }
+        s :: tack ->
+            Ok { state | stack = { custom = [ Atype s ], standard = [] } :: tack }
 
 
 switchInfo : String
@@ -2076,7 +2050,7 @@ standardLibrary =
         , ( "cons", Pblock [ consElf ] )
         , ( "switch", Pblock [ switchElf ] )
         , ( "testForSwitch", Pint 1 )
-        , ( "typelevelint", Pblock [ typelevelintElf ] )
+        , ( "typeof", Pblock [ typeofElf ] )
         , ( "makeTuple", Pblock [ makeTupleElf ] )
         ]
 
@@ -2098,14 +2072,14 @@ makeTupleElf p =
             { p | internalError = Just "expecting an int" }
 
 
-typelevelintElf : Elf
-typelevelintElf p =
+typeofElf : Elf
+typeofElf p =
     case p.stack of
-        (Pint i) :: remainsOfStack ->
-            { p | stack = Ptype { custom = [ Aint i ], standard = [] } :: remainsOfStack }
+        [] ->
+            { p | internalError = Just "there should be something on the stack" }
 
-        _ ->
-            { p | internalError = Just "should be an int on top of the stack" }
+        s :: tack ->
+            { p | stack = Ptype (typeOf s) :: tack }
 
 
 switchElf : Elf
