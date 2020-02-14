@@ -161,149 +161,11 @@ homeButton =
 standardTypeProgramDefs : Dict.Dict String TypeProgramValue
 standardTypeProgramDefs =
     Dict.fromList
-        [ ( "string", Ttype { custom = [], standard = [ Sstring ] } )
+        [ ( "string", Ttype [ PallStrings ] )
         , ( "[]", Tlist [] )
-        , ( "int", Ttype { standard = [ Sint ], custom = [] } )
-        , ( "alltypes", Ttype { standard = [ Sall ], custom = [] } )
+        , ( "int", Ttype [ PallInts ] )
+        , ( "alltypes", Ttype [ Pall ] )
         ]
-
-
-typeConsHelp : String
-typeConsHelp =
-    "to prepend to a list the top of the stack should be the new element, and the second item in the stack should be the list"
-
-
-tupletypeInfo : String
-tupletypeInfo =
-    "to make a tuple type there should be a list of types on the top of the stack"
-
-
-tupletypeEty : Ety
-tupletypeEty t =
-    case t.stack of
-        [] ->
-            Err <| "empty stack: " ++ tupletypeInfo
-
-        (Tlist typeCandidates) :: remainsOfStack ->
-            case toTypes typeCandidates of
-                Ok types ->
-                    Ok
-                        { state = { t | stack = Ttype { custom = [], standard = [ Stuple types ] } :: remainsOfStack }
-                        , elts = []
-                        }
-
-                Err err ->
-                    Err err
-
-        _ ->
-            Err <| "bad stack: " ++ tupletypeInfo
-
-
-toTypes : List TypeProgramValue -> Result String (List Type)
-toTypes candidates =
-    Result.Extra.combine <| List.map toTypesHelp candidates
-
-
-toTypesHelp : TypeProgramValue -> Result String Type
-toTypesHelp tvalue =
-    case tvalue of
-        Ttype t ->
-            Ok t
-
-        _ ->
-            Err <| "not a type: " ++ showTypeProgramValue tvalue
-
-
-listtypeInfo : String
-listtypeInfo =
-    "to make a type into a list type there should be a type on the top of the stack"
-
-
-listtype : TypeState -> Result String TypeProgramOut
-listtype t =
-    case t.stack of
-        [] ->
-            Err <| "empty stack, but " ++ listtypeInfo
-
-        (Ttype type_) :: remainsOfStack ->
-            Ok
-                { state = { t | stack = Ttype { custom = [], standard = [ Slist type_ ] } :: remainsOfStack }
-                , elts = []
-                }
-
-        _ ->
-            Err <| "bad stack: " ++ listtypeInfo
-
-
-typeCons : TypeState -> Result String TypeProgramOut
-typeCons t =
-    case t.stack of
-        [] ->
-            Err <| "empty stack, but " ++ typeConsHelp
-
-        _ :: [] ->
-            Err <| "only one thing in stack, but " ++ typeConsHelp
-
-        toPrepend :: (Tlist ts) :: remainsOfStack ->
-            Ok
-                { state = { t | stack = Tlist (toPrepend :: ts) :: remainsOfStack }
-                , elts = []
-                }
-
-        _ ->
-            Err <| "bad stack: " ++ typeConsHelp
-
-
-topcheck : TypeState -> Result String TypeProgramOut
-topcheck t =
-    case t.stack of
-        [] ->
-            Err "a partial type check needs a list on top of the stack, but it is empty"
-
-        (Tlist ts) :: tack ->
-            case getTypes ts of
-                Nothing ->
-                    Err "a partial type check needs a list of types only, but this list has other things in it"
-
-                Just types ->
-                    Ok
-                        { state = { t | stack = tack }
-                        , elts = [ partialTypeCheckElt types ]
-                        }
-
-        topItem :: _ ->
-            Err <|
-                String.concat
-                    [ "a partial type check needs the top item on the "
-                    , "stack to be a list of types, but it is a "
-                    , showTypeProgramType topItem
-                    ]
-
-
-fullcheck : TypeState -> Result String TypeProgramOut
-fullcheck t =
-    case t.stack of
-        [] ->
-            Err "a full type check needs a list on top of the stack, but it is empty"
-
-        (Tlist ts) :: tack ->
-            case getTypes ts of
-                Nothing ->
-                    Err "a full type check needs a list of types only, but this list has other things in it"
-
-                Just types ->
-                    Ok
-                        { state = { t | stack = tack }
-                        , elts = [ fullTypeCheckElt types ]
-                        }
-
-        topItem :: _ ->
-            Err <|
-                String.concat
-                    [ "a full type check needs the top item on the "
-                    , "stack to be a list of types, but it is a "
-                    , showTypeProgramType topItem
-                    ]
 
 
 initTypeProgramState : TypeState
@@ -473,16 +335,6 @@ topTypeLangP =
         |. P.token ">"
 
 
-{-| topTypeLangPhelp : List (TypeState -> Result String TypeProgramOut) -> P.Parser ParserOut
-topTypeLangPhelp actions =
-case runTypeBlock initTypeProgramState actions of
-Err err ->
-P.problem err
-
-        Ok { state, elts } ->
-            P.succeed { typeState = state, elfs = [], elts = elts }
-
--}
 typeLangP : P.Parser (List (Located TlAtom))
 typeLangP =
     P.loop [] typeLangHelpP
@@ -514,190 +366,10 @@ typeElementP =
         ]
 
 
-fullTypeCheckP : P.Parser (List Ety)
-fullTypeCheckP =
-    P.succeed [ fullTypeCheckEty ]
-        |. P.keyword "fullcheck"
-
-
-fullTypeCheckEty : Ety
-fullTypeCheckEty t =
-    case t.stack of
-        [] ->
-            Err "stack is empty but should be a list"
-
-        (Tlist ts) :: remainsOfStack ->
-            case getTypes ts of
-                Nothing ->
-                    Err "list on top of stack contains things that are not types"
-
-                Just types ->
-                    Ok
-                        { state = { t | stack = remainsOfStack }
-                        , elts = [ fullTypeCheckElt types ]
-                        }
-
-        topItem :: _ ->
-            Err <|
-                String.concat
-                    [ "a full type check needs the top item on the stack to be a list of types, but it is a "
-                    , showTypeProgramType topItem
-                    ]
-
-
-fullTypeCheckElt : List Type -> Elt
-fullTypeCheckElt t state =
-    if isSubStack state.stack t then
-        Ok state
-
-    else
-        Err
-            { state = state
-            , message = failedFullMessage t state.stack
-            }
-
-
-failedFullMessage : List Type -> List Type -> String
-failedFullMessage expected actual =
-    String.concat
-        [ "failed full type check:\n"
-        , "expecting: "
-        , showTypeStack expected
-        , "\n"
-        , "but got: "
-        , showTypeStack actual
-        ]
-
-
-partialTypeCheckP : P.Parser (List Ety)
-partialTypeCheckP =
-    P.succeed [ partialTypeCheckEty ]
-        |. P.keyword "topcheck"
-
-
-partialTypeCheckEty : Ety
-partialTypeCheckEty t =
-    case t.stack of
-        [] ->
-            Err "stack is empty but should have a list on the top"
-
-        (Tlist ts) :: remainsOfStack ->
-            case getTypes ts of
-                Nothing ->
-                    Err "list on top of stack has things other than types in it"
-
-                Just types ->
-                    Ok
-                        { state = { t | stack = remainsOfStack }
-                        , elts = [ partialTypeCheckElt types ]
-                        }
-
-        topItem :: _ ->
-            Err <| "top item on stack is not a list, it is a " ++ showTypeProgramType topItem
-
-
-getTypes : List TypeProgramValue -> Maybe (List Type)
-getTypes values =
-    Maybe.Extra.traverse getType values
-
-
-getType : TypeProgramValue -> Maybe Type
-getType typeProgramValue =
-    case typeProgramValue of
-        Ttype t ->
-            Just t
-
-        Tlist ts ->
-            listToType ts
-
-        _ ->
-            Nothing
-
-
-listToType : List TypeProgramValue -> Maybe Type
-listToType l =
-    case Maybe.Extra.traverse valueToAtom l of
-        Nothing ->
-            Nothing
-
-        Just ts ->
-            Just { custom = ts, standard = [] }
-
-
-valueToAtom : TypeProgramValue -> Maybe ProgVal
-valueToAtom value =
-    case value of
-        Tstring s ->
-            Just <| Pstring s
-
-        _ ->
-            Nothing
-
-
-partialTypeCheckElt : List Type -> Elt
-partialTypeCheckElt t state =
-    let
-        lengthExpected =
-            List.length t
-
-        lengthActual =
-            List.length state.stack
-
-        relevant =
-            List.take lengthExpected state.stack
-    in
-    if lengthExpected == 0 then
-        Err
-            { message =
-                "there's no point in an empty partial type check"
-            , state = state
-            }
-
-    else if lengthExpected > lengthActual then
-        Err
-            { message = failedPartialMessage t state.stack
-            , state = state
-            }
-
-    else if isSubStack relevant t then
-        Ok state
-
-    else
-        Err
-            { message = failedPartialMessage t state.stack
-            , state = state
-            }
-
-
-failedPartialMessage : List Type -> List Type -> String
-failedPartialMessage expected actual =
-    String.concat
-        [ "failed partial type check:\n"
-        , "expecting: "
-        , showTypeStack expected
-        , "\n"
-        , "but got: "
-        , showTypeStack actual
-        ]
-
-
 typeRetrieveP : P.Parser TlAtom
 typeRetrieveP =
     P.succeed TlRetrieve
         |= variable
-
-
-typeRetrieveEty : String -> Ety
-typeRetrieveEty var t =
-    case Dict.get var t.defs of
-        Nothing ->
-            Err <| "no definition \"" ++ var ++ "\""
-
-        Just definition ->
-            Ok <|
-                { state = { t | stack = definition :: t.stack }
-                , elts = []
-                }
 
 
 typeBlockP : P.Parser TlAtom
@@ -811,21 +483,6 @@ intP =
             |= P.int
         , P.int
         ]
-
-
-intElf : Int -> ProgramState -> ProgramState
-intElf i p =
-    { p | stack = Pint i :: p.stack }
-
-
-intElt : ( Int, Int ) -> ( Int, Int ) -> Int -> Elt
-intElt start end i s =
-    Ok
-        { s
-            | stack = { standard = [], custom = [ Pint i ] } :: s.stack
-            , startPosition = start
-            , endPosition = end
-        }
 
 
 stringPWrap : P.Parser Atom
@@ -1076,6 +733,22 @@ justsHelp maybe accum =
             accum
 
 
+showTypeAtom : TypeAtom -> String
+showTypeAtom typeAtom =
+    case typeAtom of
+        Astring s ->
+            "string: \"" ++ showString s ++ "\""
+
+        Aint i ->
+            "int: " ++ String.fromInt i
+
+        Atype t ->
+            "type: " ++ showTypeVal t
+
+        Ablock block ->
+            "block: " ++ String.join ", " (List.map (showAtom << .value) block)
+
+
 showAtom : Atom -> String
 showAtom atom =
     case atom of
@@ -1148,38 +821,12 @@ showStringHelp char accumulator =
 
 
 showTypeVal : Type -> String
-showTypeVal { custom, standard } =
-    case ( custom, standard ) of
-        ( [], [] ) ->
-            "empty"
-
-        ( [], b :: [] ) ->
-            showStandardType b
-
-        ( [], bs ) ->
-            String.concat
-                [ "{"
-                , String.join ", " <|
-                    List.map showStandardType bs
-                , "}"
-                ]
-
-        ( cs, [] ) ->
-            String.concat
-                [ "{"
-                , String.join ", " <| List.map showProgVal cs
-                , "}"
-                ]
-
-        ( cs, bs ) ->
-            String.concat
-                [ "{"
-                , String.join ", " <|
-                    List.map showStandardType bs
-                , ", "
-                , String.join ", " <| List.map showProgVal cs
-                , "}"
-                ]
+showTypeVal type_ =
+    String.concat
+        [ "["
+        , String.join ", " <| List.map showProgVal type_
+        , "]"
+        ]
 
 
 showStandardType : StandardType -> String
@@ -1207,9 +854,6 @@ showStandardType standard =
         Sall ->
             "all"
 
-        SallTuples ->
-            "tuple"
-
 
 showTypeStack : List Type -> String
 showTypeStack typestack =
@@ -1223,12 +867,6 @@ showTypeStack typestack =
 retrieveP : P.Parser Atom
 retrieveP =
     P.map Retrieve variable
-
-
-stringTypeP : P.Parser Type
-stringTypeP =
-    P.succeed { standard = [ Sstring ], custom = [] }
-        |. P.keyword "string"
 
 
 whiteSpaceP : P.Parser ()
@@ -1309,7 +947,7 @@ type alias ProgramState =
 
 typeOf : ProgVal -> Type
 typeOf value =
-    { custom = [value], standard = [] }
+    [ value ]
 
 
 type alias Elf =
@@ -1440,9 +1078,14 @@ showTypeProgramType t =
 
 
 type alias Type =
-    { custom : List ProgVal
-    , standard : List StandardType
-    }
+    List ProgVal
+
+
+type TypeAtom
+    = Astring String
+    | Aint Int
+    | Atype Type
+    | Ablock (List (Located Atom))
 
 
 type StandardType
@@ -1452,7 +1095,6 @@ type StandardType
     | Stype
     | Slist Type
     | Stuple (List Type)
-    | SallTuples
     | Sall
 
 
@@ -1481,12 +1123,6 @@ isSubStack sub master =
         && (List.all identity <| List.map2 isSubType sub master)
 
 
-equalTypeStacks : List Type -> List Type -> Bool
-equalTypeStacks t1 t2 =
-    (List.length t1 == List.length t2)
-        && (List.all identity <| List.map2 isSubType t1 t2)
-
-
 type alias Elt =
     EltState -> EltOut
 
@@ -1507,7 +1143,7 @@ type alias EltState =
     , typeDefPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , typeDefUse : Set.Set String
     , defs : Dict.Dict String Type
-    , stack : Type
+    , stack : List Type
     , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , defUse : Set.Set String
     }
@@ -1516,16 +1152,52 @@ type alias EltState =
 standardTypes : Dict.Dict String Type
 standardTypes =
     Dict.fromList
-        [ ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
-        , ( "int", { standard = [ Sint ], custom = [] } )
-        , ( "string", { standard = [ Sstring ], custom = [] } )
-        , ( "testForSwitch", { standard = [], custom = [ Pint 1, Pint 2 ] } )
+        [ ( "[]", [ Plist [] ] )
+        , ( "int", [ PallInts ] )
+        , ( "string", [ PallStrings ] )
+        , ( "testForSwitch", [ Pint 1, Pint 2 ] )
         ]
+
+
+swapInfo : String
+swapInfo =
+    """"swap" swaps the top two things on the stack"""
+
+
+swapElt : Elt
+swapElt state =
+    case state.stack of
+        [] ->
+            Err { state = state, message = "empty stack: " ++ swapInfo }
+
+        _ :: [] ->
+            Err { state = state, message = "only one thing in stack: " ++ swapInfo }
+
+        s :: t :: ack ->
+            Ok { state | stack = t :: s :: ack }
+
+
+typeUnionInfo : String
+typeUnionInfo =
+    """typeUnion needs the top two items in the stack to be types"""
+
+
+typeUnionElt : Elt
+typeUnionElt s =
+    case s.stack of
+        [] ->
+            Err { state = s, message = "empty stack: " ++ typeUnionInfo }
+
+        _ :: [] ->
+            Err { state = s, message = "only one thing in stack: " ++ typeUnionInfo }
+
+        top :: next :: remainsOfStack ->
+            Ok { s | stack = typeUnion top next :: remainsOfStack }
 
 
 typeListUnion : List Type -> Type
 typeListUnion types =
-    typeListUnionHelp types { custom = [], standard = [] }
+    typeListUnionHelp types []
 
 
 typeListUnionHelp : List Type -> Type -> Type
@@ -1538,86 +1210,12 @@ typeListUnionHelp notLookedAtYet accumulator =
             typeListUnionHelp remainder (typeUnion topType accumulator)
 
 
-makeTupleInfo : String
-makeTupleInfo =
-    """"makeTuple" needs an integer on the top of the stack to give its length, followed by enough items to fill the tuple"""
-
-
-makeTupleElt : Elt
-makeTupleElt s =
-    case s.stack of
-        [] ->
-            Err { message = "empty stack: " ++ makeTupleInfo, state = s }
-
-        lengthCandidate :: remainsOfStack ->
-            case getLength lengthCandidate of
-                Nothing ->
-                    Err { message = "bad length: " ++ makeTupleInfo, state = s }
-
-                Just length ->
-                    if List.length remainsOfStack < length then
-                        Err { message = "stack too small: " ++ makeTupleInfo, state = s }
-
-                    else
-                        Ok { s | stack = { custom = [], standard = [ Stuple (List.take length remainsOfStack) ] } :: List.drop length remainsOfStack }
-
-
-getLength : Type -> Maybe Int
-getLength { custom, standard } =
-    case ( custom, standard ) of
-        ( [ Pint i ], [] ) ->
-            Just i
-
-        _ ->
-            Nothing
-
-
-consElt : Elt
-consElt s =
-    case s.stack of
-        [] ->
-            Err { message = "empty stack: " ++ consInfo, state = s }
-
-        _ :: [] ->
-            Err { message = "only one thing on stack: " ++ consInfo, state = s }
-
-        toPrepend :: candidate :: remainsOfStack ->
-            case listTypeCons toPrepend candidate of
-                Just combinedListType ->
-                    Ok { s | stack = combinedListType :: remainsOfStack }
-
-                Nothing ->
-                    Err { message = "second item on stack is not a list: " ++ consInfo, state = s }
-
-
-listTypeCons : Type -> Type -> Maybe Type
-listTypeCons toAdd shouldBeList =
-    case ( shouldBeList.custom, shouldBeList.standard ) of
-        ( [], [ Slist listType ] ) ->
-            Just { custom = [], standard = [ Slist (typeUnion toAdd listType) ] }
-
-        _ ->
-            Nothing
-
-
-isListType : Type -> Bool
-isListType { custom, standard } =
-    case ( custom, standard ) of
-        ( [], [ Slist _ ] ) ->
-            True
-
-        _ ->
-            False
-
-
 typeUnion : Type -> Type -> Type
 typeUnion t1 t2 =
-    { custom = customUnion t1.custom t2.custom
-    , standard = standardUnion t1.standard t2.standard
-    }
+    t1 ++ t2
 
 
-customUnion : List ProgVal -> List ProgVal -> List ProgVal
+customUnion : List TypeAtom -> List TypeAtom -> List TypeAtom
 customUnion l1 l2 =
     l1 ++ l2
 
@@ -1786,7 +1384,7 @@ printElt state =
             Err { state = state, message = message }
 
         s :: tack ->
-            if isSubType s { standard = [ Sstring ], custom = [] } then
+            if isSubType s [ PallStrings ] then
                 Ok { state | stack = tack }
 
             else
@@ -1803,22 +1401,36 @@ printElt state =
 
 isSubType : Type -> Type -> Bool
 isSubType sub master =
-    List.any identity
-        [ sub == master
-        , List.all identity
-            [ List.any identity
-                [ customOfCustom sub.custom master.custom
-                , customOfStandard sub.custom master.standard
-                ]
-            , List.any identity
-                [ standardOfCustom sub.standard master.custom
-                , standardOfStandard sub.standard master.standard
-                ]
-            ]
-        ]
+    List.all (matchesType master) sub
 
 
-standardOfCustom : List StandardType -> List ProgVal -> Bool
+matchesType : Type -> ProgVal -> Bool
+matchesType master sub =
+    List.any (isContained sub) master
+
+
+isContained : ProgVal -> ProgVal -> Bool
+isContained sub master =
+    sub
+        == master
+        || master
+        == Pall
+        || (case ( sub, master ) of
+                ( Pstring _, PallStrings ) ->
+                    True
+
+                ( Pint _, PallInts ) ->
+                    True
+
+                ( Pblock _, PallBlocks ) ->
+                    True
+
+                _ ->
+                    False
+           )
+
+
+standardOfCustom : List StandardType -> List TypeAtom -> Bool
 standardOfCustom _ _ =
     False
 
@@ -1882,56 +1494,32 @@ listMatch candidate master =
     List.any (isSubType candidate) master
 
 
-customOfCustom : List ProgVal -> List ProgVal -> Bool
+customOfCustom : List TypeAtom -> List TypeAtom -> Bool
 customOfCustom sub master =
     List.all (\s -> List.member s master) sub
 
 
-customOfStandard : List ProgVal -> List StandardType -> Bool
+customOfStandard : List TypeAtom -> List StandardType -> Bool
 customOfStandard sub master =
     List.all (customOfStandardHelp master) sub
 
 
-customOfStandardHelp : List StandardType -> ProgVal -> Bool
+customOfStandardHelp : List StandardType -> TypeAtom -> Bool
 customOfStandardHelp bs t =
     List.member Sall bs
         || (case t of
-                Pstring _ ->
+                Astring _ ->
                     List.member Sstring bs
 
-                Pint _ ->
+                Aint _ ->
                     List.member Sint bs
 
-                Ptype _ ->
+                Atype _ ->
                     List.member Stype bs
 
-                Pblock block ->
+                Ablock block ->
                     List.member Sblock bs
-
-                Ptuple ts ->
-                    List.any (matchingTuple ts) bs
-
-                Plist ls ->
-                    List.any (matchingList ls) bs
            )
-
-
-matchingList : List ProgVal -> StandardType -> Bool
-matchingList values type_ =
-    isSubType
-        {custom = values, standard = []}
-        {custom = [], standard = [type_]}
-
-
-matchingTuple : List ProgVal -> StandardType -> Bool
-matchingTuple tupleTypes master =
-    case master of
-        Stuple masterTuple ->
-            (List.length tupleTypes == List.length masterTuple) &&
-            List.all identity (List.map2 (\p t -> isSubType (typeOf p) t) tupleTypes masterTuple)
-
-        _ ->
-            False
 
 
 initEltState =
@@ -2083,16 +1671,6 @@ processAtom state atom =
                     Err { state = state, message = "no definition \"" ++ v ++ "\"" }
 
                 Just retrieved ->
-                    case (state.stack.standard, state.stack.custom) of
-                        ([], [Stuple elements]) ->
-                            Ok
-                                { state
-                                    | stack = { custom = [], standard= Stuple (retrieved :: elements) }
-                                    , defUse = Set.insert v state.defUse
-                                 }
-
-                        
-
                     Ok
                         { state
                             | stack = retrieved :: state.stack
@@ -2100,7 +1678,7 @@ processAtom state atom =
                         }
 
         Block bs ->
-            Ok { state | stack = { custom = [ Pblock bs ], standard = [] } :: state.stack }
+            Ok { state | stack = [ Pblock bs ] :: state.stack }
 
         Define newName ->
             case Dict.get newName state.defPos of
@@ -2125,8 +1703,8 @@ processAtom state atom =
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                { custom } :: tack ->
-                    case custom of
+                type_ :: tack ->
+                    case type_ of
                         [ Pblock bs ] ->
                             case runTypeChecksHelp bs state of
                                 Err err ->
@@ -2142,10 +1720,10 @@ processAtom state atom =
             runTypeProgram typeAtomsLocated state
 
         StringLiteral s ->
-            Ok { state | stack = { custom = [ Pstring s ], standard = [] } :: state.stack }
+            Ok { state | stack = [ Pstring s ] :: state.stack }
 
         IntegerLiteral i ->
-            Ok { state | stack = { custom = [ Pint i ], standard = [] } :: state.stack }
+            Ok { state | stack = [ Pint i ] :: state.stack }
 
 
 runTypeProgram : List (Located TlAtom) -> EltState -> EltOut
@@ -2236,6 +1814,10 @@ type ProgVal
     | Pblock (List (Located Atom))
     | Plist (List ProgVal)
     | Ptype Type
+    | PallInts
+    | PallStrings
+    | PallBlocks
+    | Pall
 
 
 showProgVal : ProgVal -> String
@@ -2248,10 +1830,7 @@ showProgVal p =
             "int: " ++ String.fromInt i
 
         Pblock bs ->
-            String.concat
-                [ "block of length "
-                , String.fromInt <| List.length bs
-                ]
+            "block: {" ++ String.join ", " (List.map (showAtom << .value) bs) ++ "}"
 
         Plist l ->
             String.concat
@@ -2265,6 +1844,18 @@ showProgVal p =
 
         Ptuple ts ->
             "tuple: " ++ String.join ", " (List.map showProgVal ts)
+
+        PallInts ->
+            "int"
+
+        PallStrings ->
+            "string"
+
+        PallBlocks ->
+            "block"
+
+        Pall ->
+            "all"
 
 
 leftInput : Model -> Element.Element Msg
