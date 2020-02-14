@@ -161,15 +161,8 @@ homeButton =
 standardTypeProgramDefs : Dict.Dict String TypeProgramValue
 standardTypeProgramDefs =
     Dict.fromList
-        [ ( "block", Ttype { custom = [], standard = [ Sblock [] ] } )
-        , ( "string", Ttype { custom = [], standard = [ Sstring ] } )
-        , ( "topcheck", Tblock [ topcheck ] )
-        , ( "fullcheck", Tblock [ fullcheck ] )
+        [ ( "string", Ttype { custom = [], standard = [ Sstring ] } )
         , ( "[]", Tlist [] )
-        , ( "cons", Tblock [ typeCons ] )
-        , ( "listtype", Tblock [ listtype ] )
-        , ( "tupletype", Tblock [ tupletypeEty ] )
-        , ( "totype", Tblock [ customTypeEty ] )
         , ( "int", Ttype { standard = [ Sint ], custom = [] } )
         , ( "alltypes", Ttype { standard = [ Sall ], custom = [] } )
         ]
@@ -321,10 +314,17 @@ initTypeProgramState =
     }
 
 
-topProgramP : P.Parser ParserOut
+type alias Located a =
+    { start : ( Int, Int )
+    , value : a
+    , end : ( Int, Int )
+    }
+
+
+topProgramP : P.Parser (List (Located Atom))
 topProgramP =
     P.succeed identity
-        |= programP initTypeProgramState
+        |= programP
         |. P.end
 
 
@@ -337,13 +337,13 @@ runProgram program =
             , []
             )
 
-        Ok { elfs, elts } ->
-            case runTypeChecks elts initEltState of
+        Ok atoms ->
+            case runTypeChecks atoms initEltState of
                 Just errMsg ->
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
                 Nothing ->
-                    runElfs program elfs []
+                    runElfs program atoms []
 
 
 deadEndsToString : List P.DeadEnd -> String
@@ -418,76 +418,72 @@ type alias ParserOut =
     }
 
 
-programP : TypeState -> P.Parser ParserOut
-programP t =
-    P.map Tuple.first <| P.loop ( { typeState = t, elfs = [], elts = [] }, 0 ) programHelpP
+programP : P.Parser (List (Located Atom))
+programP =
+    P.loop [] programHelpP
 
 
-programHelpP : ( ParserOut, Int ) -> P.Parser (P.Step ( ParserOut, Int ) ( ParserOut, Int ))
-programHelpP ( p, offset ) =
-    P.succeed (programLoopHelp p offset)
-        |= elementP p.typeState
-        |= P.getOffset
+programHelpP :
+    List (Located Atom)
+    -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
+programHelpP p =
+    P.oneOf
+        [ P.map (\element -> P.Loop (element :: p))
+            (located elementP)
+        , P.succeed ()
+            |> P.map (\_ -> P.Done (List.reverse p))
+        ]
 
 
 programLoopHelp :
-    ParserOut
+    List (Located Atom)
     -> Int
-    -> ParserOut
+    -> List (Located Atom)
     -> Int
-    -> P.Step ( ParserOut, Int ) ( ParserOut, Int )
+    -> P.Step ( List (Located Atom), Int ) ( List (Located Atom), Int )
 programLoopHelp oldP oldOffset newP newOffset =
     if newOffset == oldOffset then
         P.Done ( oldP, oldOffset )
 
     else
         P.Loop
-            ( { elfs = oldP.elfs ++ newP.elfs
-              , elts = oldP.elts ++ newP.elts
-              , typeState = newP.typeState
-              }
+            ( oldP ++ newP
             , newOffset
             )
 
 
-elementP : TypeState -> P.Parser ParserOut
-elementP t =
-    let
-        w p =
-            P.map (\( elfs, elts ) -> { elfs = elfs, elts = elts, typeState = t }) p
-    in
+elementP : P.Parser Atom
+elementP =
     P.oneOf
-        [ w runBlockP
-        , w stringPWrap
-        , w intPWrap
-        , defPwrap t
-        , programBlockP t
+        [ runBlockP
+        , stringPWrap
+        , intPWrap
+        , defP
+        , programBlockP
         , topTypeLangP
-        , retrievePwrap t
-        , P.map (\_ -> { elfs = [], elts = [], typeState = t }) whiteSpaceP
+        , retrieveP
         ]
 
 
-topTypeLangP : P.Parser ParserOut
+topTypeLangP : P.Parser Atom
 topTypeLangP =
-    P.succeed identity
+    P.succeed TypeLanguage
         |. P.token "<"
         |= typeLangP
         |. P.token ">"
-        |> P.andThen topTypeLangPhelp
 
 
-topTypeLangPhelp : List (TypeState -> Result String TypeProgramOut) -> P.Parser ParserOut
+{-| topTypeLangPhelp : List (TypeState -> Result String TypeProgramOut) -> P.Parser ParserOut
 topTypeLangPhelp actions =
-    case runTypeBlock initTypeProgramState actions of
-        Err err ->
-            P.problem err
+case runTypeBlock initTypeProgramState actions of
+Err err ->
+P.problem err
 
         Ok { state, elts } ->
             P.succeed { typeState = state, elfs = [], elts = elts }
 
-
-typeLangP : P.Parser (List Ety)
+-}
+typeLangP : P.Parser (List (Located TlAtom))
 typeLangP =
     P.loop [] typeLangHelpP
 
@@ -496,18 +492,18 @@ type alias Ety =
     TypeState -> Result String TypeProgramOut
 
 
-typeLangHelpP : List Ety -> P.Parser (P.Step (List Ety) (List Ety))
-typeLangHelpP oldEtys =
+typeLangHelpP :
+    List (Located TlAtom)
+    -> P.Parser (P.Step (List (Located TlAtom)) (List (Located TlAtom)))
+typeLangHelpP p =
     P.oneOf
-        [ P.succeed (\etys -> P.Loop (oldEtys ++ etys))
-            |. whiteSpaceP
-            |= typeElementP
-            |. whiteSpaceP
-        , P.succeed () |> P.map (\_ -> P.Done oldEtys)
+        [ P.map (\element -> P.Loop (element :: p))
+            (located typeElementP)
+        , P.succeed () |> P.map (\_ -> P.Done (List.reverse p))
         ]
 
 
-typeElementP : P.Parser (List Ety)
+typeElementP : P.Parser TlAtom
 typeElementP =
     P.oneOf
         [ typeRunBlockP
@@ -685,9 +681,9 @@ failedPartialMessage expected actual =
         ]
 
 
-typeRetrieveP : P.Parser (List Ety)
+typeRetrieveP : P.Parser TlAtom
 typeRetrieveP =
-    P.succeed (\v -> [ typeRetrieveEty v ])
+    P.succeed TlRetrieve
         |= variable
 
 
@@ -704,25 +700,17 @@ typeRetrieveEty var t =
                 }
 
 
-typeBlockP : P.Parser (List Ety)
+typeBlockP : P.Parser TlAtom
 typeBlockP =
-    P.succeed (\etys -> [ typeBlockEty etys ])
+    P.succeed TlBlock
         |. P.token "{"
         |= typeLangP
         |. P.token "}"
 
 
-typeBlockEty : List Ety -> Ety
-typeBlockEty etys t =
-    Ok
-        { state = { t | stack = Tblock etys :: t.stack }
-        , elts = []
-        }
-
-
-typeDefP : P.Parser (List Ety)
+typeDefP : P.Parser TlAtom
 typeDefP =
-    P.succeed (\v -> [ typeDefEty v ])
+    P.succeed TlDefine
         |. P.token "="
         |. whiteSpaceP
         |= variable
@@ -749,9 +737,9 @@ typeDefEty var t =
                     }
 
 
-typeStringP : P.Parser (List Ety)
+typeStringP : P.Parser TlAtom
 typeStringP =
-    P.succeed (\s -> [ stringEty s ])
+    P.succeed TlStringLiteral
         |= stringP
 
 
@@ -760,28 +748,10 @@ stringEty s t =
     Ok { state = { t | stack = Tstring s :: t.stack }, elts = [] }
 
 
-typeRunBlockP : P.Parser (List Ety)
+typeRunBlockP : P.Parser TlAtom
 typeRunBlockP =
-    P.succeed [ typeRunBlockEty ]
+    P.succeed TlRunblock
         |. P.token "."
-
-
-typeRunBlockEty : TypeState -> Result String TypeProgramOut
-typeRunBlockEty t =
-    case t.stack of
-        [] ->
-            Err "got \".\" but stack is empty"
-
-        (Tblock b) :: tack ->
-            runTypeBlock { t | stack = tack } b
-
-        top :: _ ->
-            Err <|
-                String.concat
-                    [ "expecting a block on top of the stack, but "
-                    , "got "
-                    , showTypeProgramValue top
-                    ]
 
 
 runTypeBlock : TypeState -> List (TypeState -> Result String TypeProgramOut) -> Result String TypeProgramOut
@@ -827,12 +797,10 @@ runTypeBlockHelp elements t =
                     Err err
 
 
-intPWrap : P.Parser ( List Elf, List Elt )
+intPWrap : P.Parser Atom
 intPWrap =
-    P.succeed (\start i end -> ( [ intElf i ], [ intElt start end i ] ))
-        |= P.getPosition
+    P.succeed IntegerLiteral
         |= intP
-        |= P.getPosition
 
 
 intP : P.Parser Int
@@ -860,12 +828,10 @@ intElt start end i s =
         }
 
 
-stringPWrap : P.Parser ( List Elf, List Elt )
+stringPWrap : P.Parser Atom
 stringPWrap =
-    P.succeed (\start s end -> ( [ stringElf s ], [ stringElt start end s ] ))
-        |= P.getPosition
+    P.succeed StringLiteral
         |= stringP
-        |= P.getPosition
 
 
 stringElf : String -> ProgramState -> ProgramState
@@ -968,32 +934,22 @@ isUninteresting char =
     char /= '\\' && char /= '"'
 
 
-defPwrap : TypeState -> P.Parser ParserOut
-defPwrap t =
-    P.andThen (defPWrapHelp t) defP
-
-
-defPWrapHelp : TypeState -> ( List Elf, List Elt, String ) -> P.Parser ParserOut
-defPWrapHelp t ( elfs, elts, newName ) =
-    if Set.member newName t.runTimeNames then
-        P.problem <| "\"" ++ newName ++ "\" is already defined"
-
-    else
-        P.succeed
-            { typeState = { t | runTimeNames = Set.insert newName t.runTimeNames }
-            , elfs = elfs
-            , elts = elts
-            }
-
-
-defP : P.Parser ( List Elf, List Elt, String )
-defP =
-    P.succeed (\start var end -> ( [ defElf var ], [ defElt var start end ], var ))
+located : P.Parser a -> P.Parser (Located a)
+located parser =
+    P.succeed Located
+        |. whiteSpaceP
         |= P.getPosition
+        |= parser
+        |= P.getPosition
+        |. whiteSpaceP
+
+
+defP : P.Parser Atom
+defP =
+    P.succeed Define
         |. P.token "="
         |. whiteSpaceP
         |= variable
-        |= P.getPosition
 
 
 defElf : String -> ProgramState -> ProgramState
@@ -1057,37 +1013,18 @@ defElt var start end state =
                     }
 
 
-runBlockP : P.Parser ( List Elf, List Elt )
+runBlockP : P.Parser Atom
 runBlockP =
-    P.succeed (\b e -> ( [ runBlockElf ], [ runBlockElt b e ] ))
-        |= P.getPosition
+    P.succeed Runblock
         |. P.token "."
-        |= P.getPosition
 
 
-programBlockP : TypeState -> P.Parser ParserOut
-programBlockP t =
-    P.succeed (\start { elfs, elts, typeState } end -> { elfs = [ blockElf elfs ], elts = [ blockElt elts start end ], typeState = typeState })
-        |= P.getPosition
+programBlockP : P.Parser Atom
+programBlockP =
+    P.succeed Block
         |. P.token "{"
-        |= programP t
+        |= programP
         |. P.token "}"
-        |= P.getPosition
-
-
-blockElf : List Elf -> ProgramState -> ProgramState
-blockElf elfs p =
-    { p | stack = Pblock elfs :: p.stack }
-
-
-blockElt : List Elt -> ( Int, Int ) -> ( Int, Int ) -> Elt
-blockElt elts start end s =
-    Ok
-        { s
-            | stack = { standard = [ Sblock elts ], custom = [] } :: s.stack
-            , startPosition = start
-            , endPosition = end
-        }
 
 
 runBlockElf : ProgramState -> ProgramState
@@ -1109,40 +1046,6 @@ runBlockElf s =
                             , showProgVal x
                             ]
             }
-
-
-runBlockElt : ( Int, Int ) -> ( Int, Int ) -> Elt
-runBlockElt start end state =
-    case state.stack of
-        [] ->
-            Err
-                { state = newPos state start end, message = "empty stack" }
-
-        t :: xs ->
-            case getBlock t.standard of
-                Nothing ->
-                    Err
-                        { state = newPos state start end
-                        , message =
-                            String.concat
-                                [ "bad stack: expecting block, but "
-                                , "got "
-                                , showTypeVal t
-                                ]
-                        }
-
-                Just block ->
-                    case runTypeChecksHelp block { state | stack = xs, startPosition = start, endPosition = end } of
-                        Err err ->
-                            Err err
-
-                        Ok ok ->
-                            case blockUnusedNames ok state of
-                                Nothing ->
-                                    Ok { ok | defs = state.defs }
-
-                                Just err ->
-                                    Err err
 
 
 blockUnusedNames : EltState -> EltState -> Maybe TypeError
@@ -1188,21 +1091,6 @@ justsHelp maybe accum =
             accum
 
 
-getBlock : List StandardType -> Maybe (List Elt)
-getBlock standards =
-    List.head <| justs <| List.map getBlockHelp standards
-
-
-getBlockHelp : StandardType -> Maybe (List Elt)
-getBlockHelp s =
-    case s of
-        Sblock b ->
-            Just b
-
-        _ ->
-            Nothing
-
-
 showTypeAtom : TypeAtom -> String
 showTypeAtom typeAtom =
     case typeAtom of
@@ -1214,6 +1102,56 @@ showTypeAtom typeAtom =
 
         Atype t ->
             "type: " ++ showTypeVal t
+
+        Ablock block ->
+            "block: " ++ String.join ", " (List.map (showAtom << .value) block)
+
+
+showAtom : Atom -> String
+showAtom atom =
+    case atom of
+        Retrieve string ->
+            "Retrieve " ++ showString string
+
+        Block atoms ->
+            "Block {" ++ String.join " " (List.map (showAtom << .value) atoms) ++ "}"
+
+        Define string ->
+            "Define " ++ string
+
+        Runblock ->
+            "Runblock"
+
+        TypeLanguage tlAtoms ->
+            "Typelanguage <" ++ String.join " " (List.map (showTlAtom << .value) tlAtoms) ++ ">"
+
+        StringLiteral string ->
+            "String " ++ showString string
+
+        IntegerLiteral integer ->
+            "Integer " ++ String.fromInt integer
+
+
+showTlAtom : TlAtom -> String
+showTlAtom atom =
+    case atom of
+        TlRetrieve string ->
+            "Retrieve " ++ string
+
+        TlBlock atoms ->
+            "Block {" ++ String.join " " (List.map (showTlAtom << .value) atoms) ++ "}"
+
+        TlDefine string ->
+            "Define " ++ string
+
+        TlRunblock ->
+            "Runblock"
+
+        TlStringLiteral string ->
+            "String " ++ string
+
+        TlIntegerLiteral integer ->
+            "Integer " ++ String.fromInt integer
 
 
 showString : String -> String
@@ -1281,7 +1219,7 @@ showStandardType standard =
         Sstring ->
             "string"
 
-        Sblock _ ->
+        Sblock ->
             "block"
 
         Slist type_ ->
@@ -1310,179 +1248,9 @@ showTypeStack typestack =
         ]
 
 
-retrievePwrap : TypeState -> P.Parser ParserOut
-retrievePwrap t =
-    P.andThen (retrievePwrapHelp t) retrieveP
-
-
-retrievePwrapHelp : TypeState -> ( List Elf, List Elt, String ) -> P.Parser ParserOut
-retrievePwrapHelp t ( elfs, elts, name ) =
-    if Set.member name t.runTimeNames then
-        P.succeed { typeState = t, elfs = elfs, elts = elts }
-
-    else
-        P.problem <| "\"" ++ name ++ "\" is not defined"
-
-
-retrieveP : P.Parser ( List Elf, List Elt, String )
+retrieveP : P.Parser Atom
 retrieveP =
-    P.succeed retrievePhelp
-        |= P.getPosition
-        |= variable
-        |= P.getPosition
-
-
-retrievePhelp : ( Int, Int ) -> String -> ( Int, Int ) -> ( List Elf, List Elt, String )
-retrievePhelp start var end =
-    ( [ makeRetrieveElf var ], [ makeRetrieveElt var start end ], var )
-
-
-makeRetrieveElf : String -> ProgramState -> ProgramState
-makeRetrieveElf var p =
-    case Dict.get var p.defs of
-        Nothing ->
-            { p
-                | internalError =
-                    Just <|
-                        "no definition \""
-                            ++ var
-                            ++ "\""
-            }
-
-        Just f ->
-            { p | stack = f :: p.stack }
-
-
-makeRetrieveElt : String -> ( Int, Int ) -> ( Int, Int ) -> Elt
-makeRetrieveElt var start end state =
-    case Dict.get var state.defs of
-        Nothing ->
-            Err
-                { message = "no definition \"" ++ var ++ "\""
-                , state = newPos state start end
-                }
-
-        Just t ->
-            Ok
-                { state
-                    | stack = t :: state.stack
-                    , startPosition = start
-                    , endPosition = end
-                    , defUse = Set.insert var state.defUse
-                }
-
-
-customTypeEty : Ety
-customTypeEty t =
-    case t.stack of
-        [] ->
-            Err "empty stack, but it should have a list of types atoms"
-
-        (Tlist candidates) :: tack ->
-            case toTypeAtoms candidates of
-                Err badElements ->
-                    Err <|
-                        String.concat
-                            [ "cannot convert these elements in the list to a type: "
-                            , String.join ", " <| List.map showTypeProgramValue badElements
-                            ]
-
-                Ok typeAtoms ->
-                    let
-                        type_ =
-                            { custom = typeAtoms, standard = [] }
-
-                        newStack =
-                            Ttype type_ :: tack
-                    in
-                    Ok
-                        { state = { t | stack = newStack }
-                        , elts = []
-                        }
-
-        bad :: _ ->
-            Err <|
-                String.concat
-                    [ "totype needs the top of the stack to be a list, but it is "
-                    , showTypeProgramValue bad
-                    ]
-
-
-customTypeT : TypeState -> P.Parser TypeState
-customTypeT t =
-    case t.stack of
-        [] ->
-            P.problem "totype needs something on the stack, but it is empty"
-
-        (Tlist candidates) :: tack ->
-            case toTypeAtoms candidates of
-                Err badElements ->
-                    P.problem <|
-                        String.concat
-                            [ "cannot convert these elements in the list to a type: "
-                            , String.join ", " <| List.map showTypeProgramValue badElements
-                            ]
-
-                Ok typeAtoms ->
-                    let
-                        type_ =
-                            { custom = typeAtoms, standard = [] }
-
-                        newStack =
-                            Ttype type_ :: tack
-                    in
-                    P.succeed { t | stack = newStack }
-
-        bad :: _ ->
-            P.problem <|
-                String.concat
-                    [ "totype needs the top of the stack to be a list, "
-                    , "but it is "
-                    , showTypeProgramValue bad
-                    ]
-
-
-toTypeAtoms : List TypeProgramValue -> Result (List TypeProgramValue) (List TypeAtom)
-toTypeAtoms candidates =
-    let
-        ( good, bad ) =
-            toTypeAtomsHelp candidates [] []
-    in
-    if List.length bad == 0 then
-        Ok good
-
-    else
-        Err bad
-
-
-toTypeAtomsHelp : List TypeProgramValue -> List TypeAtom -> List TypeProgramValue -> ( List TypeAtom, List TypeProgramValue )
-toTypeAtomsHelp remaining goodAccum badAccum =
-    case remaining of
-        [] ->
-            ( goodAccum, badAccum )
-
-        r :: emaining ->
-            case r of
-                Ttype _ ->
-                    toTypeAtomsHelp emaining goodAccum (r :: badAccum)
-
-                Tstring s ->
-                    toTypeAtomsHelp
-                        emaining
-                        (Astring s :: goodAccum)
-                        badAccum
-
-                Tblock _ ->
-                    toTypeAtomsHelp emaining goodAccum (r :: badAccum)
-
-                Tlist _ ->
-                    toTypeAtomsHelp emaining goodAccum (r :: badAccum)
-
-
-blockTypeP : P.Parser Type
-blockTypeP =
-    P.succeed { standard = [ Sblock [] ], custom = [] }
-        |. P.keyword "block"
+    P.map Retrieve variable
 
 
 stringTypeP : P.Parser Type
@@ -1530,7 +1298,7 @@ initDoc =
 
 runElfs :
     Program
-    -> List Elf
+    -> List (Located Atom)
     -> List ProgVal
     -> ( Program, Maybe Document, List HumanMsg )
 runElfs program elfs progStack =
@@ -1576,8 +1344,8 @@ typeOf value =
         Pint i ->
             { custom = [ Aint i ], standard = [] }
 
-        Pblock _ ->
-            { custom = [], standard = [ Sblock [] ] }
+        Pblock block ->
+            { custom = [ Ablock block ], standard = [] }
 
         Plist values ->
             typeListUnion <| List.map typeOf values
@@ -1594,20 +1362,63 @@ type alias Elf =
 
 
 runElfsHelp :
-    List Elf
+    List (Located Atom)
     -> ProgramState
     -> ProgramState
-runElfsHelp elfs s =
-    case elfs of
+runElfsHelp atoms s =
+    case atoms of
         [] ->
             s
 
-        e :: lfs ->
-            let
-                newS =
-                    e s
-            in
-            runElfsHelp lfs newS
+        a :: toms ->
+            runElfsHelp toms (programProcessAtom a s)
+
+
+programProcessAtom : Located Atom -> ProgramState -> ProgramState
+programProcessAtom { start, value, end } s =
+    case value of
+        Retrieve name ->
+            case Dict.get name s.defs of
+                Nothing ->
+                    { s | internalError = Just <| "could not find name \"" ++ name ++ "\"" }
+
+                Just retrieved ->
+                    { s | stack = retrieved :: s.stack }
+
+        Block block ->
+            { s | stack = Pblock block :: s.stack }
+
+        Define newName ->
+            case s.stack of
+                [] ->
+                    { s | internalError = Just "empty stack" }
+
+                top :: remainsOfStack ->
+                    { s
+                        | defs = Dict.insert newName top s.defs
+                        , stack = remainsOfStack
+                    }
+
+        Runblock ->
+            case s.stack of
+                (Pblock block) :: remainsOfStack ->
+                    let
+                        newS =
+                            runElfsHelp block { s | stack = remainsOfStack }
+                    in
+                    { newS | defs = s.defs }
+
+                _ ->
+                    { s | internalError = Just "not a block on top of stack" }
+
+        TypeLanguage _ ->
+            s
+
+        StringLiteral string ->
+            { s | stack = Pstring string :: s.stack }
+
+        IntegerLiteral i ->
+            { s | stack = Pint i :: s.stack }
 
 
 type alias TypeState =
@@ -1626,8 +1437,9 @@ type alias TypeProgramOut =
 type TypeProgramValue
     = Ttype Type
     | Tstring String
-    | Tblock (List (TypeState -> Result String TypeProgramOut))
+    | Tblock (List (Located TlAtom))
     | Tlist (List TypeProgramValue)
+    | Tinteger Int
 
 
 showTypeProgramValue : TypeProgramValue -> String
@@ -1649,6 +1461,9 @@ showTypeProgramValue typeProgramValue =
                 , "]"
                 ]
 
+        Tinteger i ->
+            String.fromInt i
+
 
 showTypeProgramType : TypeProgramValue -> String
 showTypeProgramType t =
@@ -1665,6 +1480,9 @@ showTypeProgramType t =
         Tlist _ ->
             "list"
 
+        Tinteger _ ->
+            "int"
+
 
 type alias Type =
     { custom : List TypeAtom
@@ -1676,16 +1494,36 @@ type TypeAtom
     = Astring String
     | Aint Int
     | Atype Type
+    | Ablock (List (Located Atom))
 
 
 type StandardType
-    = Sblock (List Elt)
+    = Sblock
     | Sstring
     | Sint
     | Stype
     | Slist Type
     | Stuple (List Type)
     | Sall
+
+
+type Atom
+    = Retrieve String
+    | Block (List (Located Atom))
+    | Define String
+    | Runblock
+    | TypeLanguage (List (Located TlAtom))
+    | StringLiteral String
+    | IntegerLiteral Int
+
+
+type TlAtom
+    = TlRetrieve String
+    | TlBlock (List (Located TlAtom))
+    | TlDefine String
+    | TlRunblock
+    | TlStringLiteral String
+    | TlIntegerLiteral Int
 
 
 isSubStack : List Type -> List Type -> Bool
@@ -1723,15 +1561,7 @@ equalStandards b1 b2 =
 
 equalStandard : StandardType -> StandardType -> Bool
 equalStandard b1 b2 =
-    case ( b1, b2 ) of
-        ( Sstring, Sstring ) ->
-            True
-
-        ( Sblock _, Sblock _ ) ->
-            True
-
-        _ ->
-            False
+    b1 == b2
 
 
 type alias Elt =
@@ -1749,8 +1579,12 @@ type alias EltOut =
 type alias EltState =
     { startPosition : ( Int, Int )
     , endPosition : ( Int, Int )
-    , stack : List Type
+    , typeDefs : Dict.Dict String TypeProgramValue
+    , typeStack : List TypeProgramValue
+    , typeDefPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
+    , typeDefUse : Set.Set String
     , defs : Dict.Dict String Type
+    , stack : List Type
     , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , defUse : Set.Set String
     }
@@ -1759,16 +1593,9 @@ type alias EltState =
 standardTypes : Dict.Dict String Type
 standardTypes =
     Dict.fromList
-        [ ( "print", { standard = [ Sblock [ printElt ] ], custom = [] } )
-        , ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
-        , ( "cons", { standard = [ Sblock [ consElt ] ], custom = [] } )
-        , ( "makeTuple", { standard = [ Sblock [ makeTupleElt ] ], custom = [] } )
-        , ( "switch", { standard = [ Sblock [ switchElt ] ], custom = [] } )
-        , ( "typeUnion", { standard = [ Sblock [ typeUnionElt ] ], custom = [] } )
+        [ ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
         , ( "int", { standard = [ Sint ], custom = [] } )
         , ( "string", { standard = [ Sstring ], custom = [] } )
-        , ( "typeof", { standard = [ Sblock [ typeofElt ] ], custom = [] } )
-        , ( "swap", { standard = [ Sblock [ swapElt ] ], custom = [] } )
         , ( "testForSwitch", { standard = [], custom = [ Aint 1, Aint 2 ] } )
         ]
 
@@ -1822,193 +1649,6 @@ typeofElt state =
 
         s :: tack ->
             Ok { state | stack = { custom = [ Atype s ], standard = [] } :: tack }
-
-
-switchInfo : String
-switchInfo =
-    """"switch" needs a list of tuples on the top of the stack followed by the value to switch on. Each tuple should contain two elements, the first a type to match to the value, and the second a block to run if the type matches the value."""
-
-
-switchElt : Elt
-switchElt s =
-    case s.stack of
-        [] ->
-            Err { message = "empty stack: " ++ switchInfo, state = s }
-
-        _ :: [] ->
-            Err { message = "only one thing in stack: " ++ switchInfo, state = s }
-
-        pathsCandidate :: value :: remainsOfStack ->
-            case extractAndCheckPaths pathsCandidate value of
-                Err err ->
-                    Err { message = err ++ ": " ++ switchInfo, state = s }
-
-                Ok (b :: locksToRun) ->
-                    case Result.Extra.combine <| List.map (\elts -> runTypeChecksHelp elts { s | stack = remainsOfStack }) (List.map Tuple.second (b :: locksToRun)) of
-                        Err err ->
-                            Err err
-
-                        Ok alternateEndings ->
-                            case equalEndings { s | stack = remainsOfStack } alternateEndings (List.map Tuple.first (b :: locksToRun)) of
-                                Nothing ->
-                                    Ok { s | stack = { custom = [], standard = [ Sblock (Tuple.second b) ] } :: remainsOfStack }
-
-                                Just err ->
-                                    Err err
-
-                Ok [] ->
-                    Err { message = "internal TYPE error: for some reason there were no blocks", state = s }
-
-
-equalEndings : EltState -> List EltState -> List Type -> Maybe TypeError
-equalEndings baseState alternateEndings pathTypes =
-    case alternateEndings of
-        [] ->
-            Just { state = baseState, message = "internal error: no alternate endings" }
-
-        a :: lternateEndings ->
-            if List.all (equalStackAndDefs a) lternateEndings then
-                Nothing
-
-            else
-                Just { state = baseState, message = "the different paths do different things" }
-
-
-equalStackAndDefs : EltState -> EltState -> Bool
-equalStackAndDefs s1 s2 =
-    s1.stack == s2.stack && s1.defs == s2.defs
-
-
-getPaths : List StandardType -> Result String (List ( Type, List Elt ))
-getPaths candidates =
-    Result.Extra.combine <| List.map getPath candidates
-
-
-getPath : StandardType -> Result String ( Type, List Elt )
-getPath candidatePath =
-    case candidatePath of
-        Stuple [ match, blockCandidate ] ->
-            case getBlockEltsFromType blockCandidate of
-                Nothing ->
-                    Err "the second element in the tuple is not a block"
-
-                Just block ->
-                    case unwrapMatch match of
-                        Ok unwrapped ->
-                            Ok ( unwrapped, block )
-
-                        Err err ->
-                            Err err
-
-        Stuple [] ->
-            Err "empty tuple"
-
-        Stuple [ _ ] ->
-            Err "1-tuple"
-
-        Stuple types ->
-            Err <| "tuple contains " ++ String.fromInt (List.length types) ++ " elements, which is too long"
-
-        _ ->
-            Err <| "expecting tuple but got " ++ showStandardType candidatePath
-
-
-unwrapMatch : Type -> Result String Type
-unwrapMatch { standard, custom } =
-    case ( standard, custom ) of
-        ( [], [ Atype type_ ] ) ->
-            Ok type_
-
-        _ ->
-            Err <| "bad match type: " ++ showTypeVal { custom = custom, standard = standard }
-
-
-getBlockEltsFromType : Type -> Maybe (List Elt)
-getBlockEltsFromType { custom, standard } =
-    case ( custom, standard ) of
-        ( [], [ Sblock elts ] ) ->
-            Just elts
-
-        _ ->
-            Nothing
-
-
-extractAndCheckPaths : Type -> Type -> Result String (List ( Type, List Elt ))
-extractAndCheckPaths pathsCandidate value =
-    case ( pathsCandidate.custom, pathsCandidate.standard ) of
-        ( [], [ Slist listComponents ] ) ->
-            case ( listComponents.custom, listComponents.standard ) of
-                ( [], [] ) ->
-                    Err "empty paths"
-
-                ( [], [ _ ] ) ->
-                    Err "only one path"
-
-                ( [], atLeastTwoPaths ) ->
-                    case getPaths atLeastTwoPaths of
-                        Err err ->
-                            Err err
-
-                        Ok paths ->
-                            let
-                                ( missingPaths, surplusPaths ) =
-                                    checkPathsComplete paths value
-                            in
-                            if missingPaths == emptyType then
-                                if surplusPaths == emptyType then
-                                    Ok paths
-
-                                else
-                                    Err <| "too many paths: " ++ showTypeVal surplusPaths
-
-                            else
-                                Err <| "not enough paths: " ++ showTypeVal missingPaths
-
-                _ ->
-                    Err "bad paths 2 "
-
-        _ ->
-            Err "bad paths 3"
-
-
-emptyType : Type
-emptyType =
-    { custom = [], standard = [] }
-
-
-checkPathsComplete :
-    List ( Type, List Elt )
-    -> Type
-    -> ( Type, Type )
-checkPathsComplete paths value =
-    let
-        combinedPaths =
-            typeListUnion <| List.map Tuple.first paths
-
-        missingPaths =
-            typeDiff value combinedPaths
-
-        surplusPaths =
-            typeDiff combinedPaths value
-    in
-    ( missingPaths, surplusPaths )
-
-
-typeDiff : Type -> Type -> Type
-typeDiff fromThis subtractThis =
-    { custom = customDiff fromThis.custom subtractThis.custom
-    , standard = standardDiff fromThis.standard subtractThis.standard
-    }
-
-
-customDiff : List TypeAtom -> List TypeAtom -> List TypeAtom
-customDiff fromThis subtractThis =
-    List.filter (\x -> not <| List.member x subtractThis) fromThis
-
-
-standardDiff : List StandardType -> List StandardType -> List StandardType
-standardDiff fromThis subtractThis =
-    List.filter (\x -> not <| List.member x subtractThis) fromThis
 
 
 typeListUnion : List Type -> Type
@@ -2118,14 +1758,8 @@ standardUnion l1 l2 =
 standardLibrary : Dict.Dict String ProgVal
 standardLibrary =
     Dict.fromList
-        [ ( "print", Pblock [ printElf ] )
-        , ( "[]", Plist [] )
-        , ( "cons", Pblock [ consElf ] )
-        , ( "switch", Pblock [ switchElf ] )
+        [ ( "[]", Plist [] )
         , ( "testForSwitch", Pint 2 )
-        , ( "typeof", Pblock [ typeofElf ] )
-        , ( "makeTuple", Pblock [ makeTupleElf ] )
-        , ( "swap", Pblock [ swapElf ] )
         ]
 
 
@@ -2326,8 +1960,8 @@ standardOfStandardHelp : List StandardType -> StandardType -> Bool
 standardOfStandardHelp master candidate =
     List.member Sall master
         || (case candidate of
-                Sblock _ ->
-                    List.any isABlock master
+                Sblock ->
+                    List.any ((==) Sblock) master
 
                 Slist lt ->
                     listMatch lt (getLists master [])
@@ -2376,16 +2010,6 @@ listMatch candidate master =
     List.any (isSubType candidate) master
 
 
-isABlock : StandardType -> Bool
-isABlock t =
-    case t of
-        Sblock _ ->
-            True
-
-        _ ->
-            False
-
-
 customOfCustom : List TypeAtom -> List TypeAtom -> Bool
 customOfCustom sub master =
     List.all (\s -> List.member s master) sub
@@ -2408,6 +2032,9 @@ customOfStandardHelp bs t =
 
                 Atype _ ->
                     List.member Stype bs
+
+                Ablock block ->
+                    List.member Sblock bs
            )
 
 
@@ -2418,12 +2045,16 @@ initEltState =
     , defs = standardTypes
     , defPos = Dict.empty
     , defUse = Set.empty
+    , typeDefPos = Dict.empty
+    , typeDefUse = Set.empty
+    , typeDefs = standardTypeProgramDefs
+    , typeStack = []
     }
 
 
-runTypeChecks : List Elt -> EltState -> Maybe String
-runTypeChecks elts init =
-    case runTypeChecksHelp elts init of
+runTypeChecks : List (Located Atom) -> EltState -> Maybe String
+runTypeChecks atoms init =
+    case runTypeChecksHelp atoms init of
         Ok endState ->
             typeEndChecks endState
 
@@ -2532,19 +2163,157 @@ prettyPosition ( row, column ) =
         ]
 
 
-runTypeChecksHelp : List Elt -> EltState -> EltOut
-runTypeChecksHelp elts state =
-    case elts of
+runTypeChecksHelp : List (Located Atom) -> EltState -> EltOut
+runTypeChecksHelp atoms state =
+    case atoms of
         [] ->
             Ok state
 
-        e :: lts ->
-            case e state of
-                Err errMsg ->
-                    Err errMsg
+        a :: toms ->
+            case processAtom { state | startPosition = a.start, endPosition = a.end } a.value of
+                Err err ->
+                    Err err
+
+                Ok ok ->
+                    runTypeChecksHelp toms ok
+
+
+processAtom : EltState -> Atom -> EltOut
+processAtom state atom =
+    case atom of
+        Retrieve v ->
+            case Dict.get v state.defs of
+                Nothing ->
+                    Err { state = state, message = "no definition \"" ++ v ++ "\"" }
+
+                Just retrieved ->
+                    Ok
+                        { state
+                            | stack = retrieved :: state.stack
+                            , defUse = Set.insert v state.defUse
+                        }
+
+        Block bs ->
+            Ok { state | stack = { custom = [ Ablock bs ], standard = [] } :: state.stack }
+
+        Define newName ->
+            case Dict.get newName state.defPos of
+                Just ( position, _ ) ->
+                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyPosition position }
+
+                Nothing ->
+                    case state.stack of
+                        [] ->
+                            Err { state = state, message = "empty stack" }
+
+                        s :: tack ->
+                            Ok
+                                { state
+                                    | stack = tack
+                                    , defs = Dict.insert newName s state.defs
+                                    , defPos = Dict.insert newName ( state.startPosition, state.endPosition ) state.defPos
+                                }
+
+        Runblock ->
+            case state.stack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                { custom } :: tack ->
+                    case custom of
+                        [ Ablock bs ] ->
+                            case runTypeChecksHelp bs state of
+                                Err err ->
+                                    Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
+
+                                Ok newState ->
+                                    Ok { newState | defs = state.defs }
+
+                        _ ->
+                            Err { state = state, message = "not all blocks" }
+
+        TypeLanguage typeAtomsLocated ->
+            runTypeProgram typeAtomsLocated state
+
+        StringLiteral s ->
+            Ok { state | stack = { custom = [ Astring s ], standard = [] } :: state.stack }
+
+        IntegerLiteral i ->
+            Ok { state | stack = { custom = [ Aint i ], standard = [] } :: state.stack }
+
+
+runTypeProgram : List (Located TlAtom) -> EltState -> EltOut
+runTypeProgram atoms state =
+    case atoms of
+        [] ->
+            Ok state
+
+        a :: toms ->
+            case processTypeAtom { state | startPosition = a.start, endPosition = a.end } a.value of
+                Err err ->
+                    Err err
 
                 Ok newState ->
-                    runTypeChecksHelp lts newState
+                    runTypeProgram toms newState
+
+
+processTypeAtom : EltState -> TlAtom -> EltOut
+processTypeAtom state atom =
+    case atom of
+        TlRetrieve toRetrieve ->
+            case Dict.get toRetrieve state.typeDefs of
+                Nothing ->
+                    Err { state = state, message = "no definition \"" ++ toRetrieve ++ "\"" }
+
+                Just retrieved ->
+                    Ok
+                        { state
+                            | typeStack = retrieved :: state.typeStack
+                            , typeDefUse = Set.insert toRetrieve state.typeDefUse
+                        }
+
+        TlBlock block ->
+            Ok { state | typeStack = Tblock block :: state.typeStack }
+
+        TlDefine newName ->
+            case Dict.get newName state.typeDefPos of
+                Just ( startPosition, endPosition ) ->
+                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyPosition startPosition }
+
+                Nothing ->
+                    case state.typeStack of
+                        [] ->
+                            Err { state = state, message = "empty stack" }
+
+                        s :: tack ->
+                            Ok
+                                { state
+                                    | typeStack = tack
+                                    , typeDefs = Dict.insert newName s state.typeDefs
+                                    , typeDefPos = Dict.insert newName ( state.startPosition, state.endPosition ) state.typeDefPos
+                                }
+
+        TlRunblock ->
+            case state.typeStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                (Tblock bs) :: tack ->
+                    case runTypeProgram bs state of
+                        Err err ->
+                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
+
+                        Ok newState ->
+                            Ok { newState | typeDefs = state.typeDefs }
+
+                _ ->
+                    Err { state = state, message = "it's not a block" }
+
+        TlStringLiteral s ->
+            Ok { state | typeStack = Tstring s :: state.typeStack }
+
+        TlIntegerLiteral i ->
+            Ok { state | typeStack = Tinteger i :: state.typeStack }
 
 
 type alias HumanMsg =
@@ -2558,7 +2327,7 @@ type ProgVal
     = Pstring String
     | Ptuple (List ProgVal)
     | Pint Int
-    | Pblock (List Elf)
+    | Pblock (List (Located Atom))
     | Plist (List ProgVal)
     | Ptype Type
 
