@@ -1143,7 +1143,7 @@ type alias EltState =
     , typeDefPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , typeDefUse : Set.Set String
     , defs : Dict.Dict String Type
-    , stack : Type
+    , stack : List Type
     , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , defUse : Set.Set String
     }
@@ -1175,6 +1175,24 @@ swapElt state =
 
         s :: t :: ack ->
             Ok { state | stack = t :: s :: ack }
+
+
+typeUnionInfo : String
+typeUnionInfo =
+    """typeUnion needs the top two items in the stack to be types"""
+
+
+typeUnionElt : Elt
+typeUnionElt s =
+    case s.stack of
+        [] ->
+            Err { state = s, message = "empty stack: " ++ typeUnionInfo }
+
+        _ :: [] ->
+            Err { state = s, message = "only one thing in stack: " ++ typeUnionInfo }
+
+        top :: next :: remainsOfStack ->
+            Ok { s | stack = typeUnion top next :: remainsOfStack }
 
 
 typeListUnion : List Type -> Type
@@ -1653,14 +1671,14 @@ processAtom state atom =
                     Err { state = state, message = "no definition \"" ++ v ++ "\"" }
 
                 Just retrieved ->
-                     Ok
-                         { state
-                             | stack = typeUnion retrieved state.stack
-                             , defUse = Set.insert v state.defUse
-                         }
+                    Ok
+                        { state
+                            | stack = retrieved :: state.stack
+                            , defUse = Set.insert v state.defUse
+                        }
 
         Block bs ->
-            Ok { state | stack = typeUnion [Pblock bs] state.stack }
+            Ok { state | stack = [ Pblock bs ] :: state.stack }
 
         Define newName ->
             case Dict.get newName state.defPos of
@@ -1669,40 +1687,40 @@ processAtom state atom =
 
                 Nothing ->
                     case state.stack of
-                        [Ptuple (s::tack)] ->
+                        [] ->
+                            Err { state = state, message = "empty stack" }
+
+                        s :: tack ->
                             Ok
                                 { state
-                                    | stack = [Ptuple tack]
-                                    , defs = Dict.insert newName [s] state.defs
+                                    | stack = tack
+                                    , defs = Dict.insert newName s state.defs
                                     , defPos = Dict.insert newName ( state.startPosition, state.endPosition ) state.defPos
                                 }
 
-                        _ ->
-                            Err { state = state, message = "expecting tuple with at least one thing in it, but got " ++ showTypeVal state.stack }
-
         Runblock ->
             case state.stack of
-                [Ptuple (Pblock bs::tack)] ->
-                    case runTypeChecksHelp bs state of
-                        Err err ->
-                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
+                [] ->
+                    Err { state = state, message = "empty stack" }
 
-                        Ok newState ->
-                            Ok { newState | defs = state.defs, stack = [Ptuple tack] }
+                type_ :: tack ->
+                    case type_ of
+                        [ Pblock bs ] ->
+                            case runTypeChecksHelp bs state of
+                                Err err ->
+                                    Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
 
-                _ ->
-                    Err { state = state, message= "expecting tuple with a block on the top, but got " ++ showTypeVal state.stack }
+                                Ok newState ->
+                                    Ok { newState | defs = state.defs }
+
+                        _ ->
+                            Err { state = state, message = "not all blocks" }
 
         TypeLanguage typeAtomsLocated ->
             runTypeProgram typeAtomsLocated state
 
         StringLiteral s ->
-            case state.stack of
-                [Ptuple ts] ->
-                    Ok { state | stack = [ Ptuple <| Pstring s :: ts ] }
-
-                _ ->
-                    Err { state = state, message = "expecting tuple, but got " ++ showTypeVal state.stack }
+            Ok { state | stack = [ Pstring s ] :: state.stack }
 
         IntegerLiteral i ->
             Ok { state | stack = [ Pint i ] :: state.stack }
@@ -1799,7 +1817,6 @@ type ProgVal
     | PallInts
     | PallStrings
     | PallBlocks
-    | PallTuples
     | Pall
 
 
@@ -1839,9 +1856,6 @@ showProgVal p =
 
         Pall ->
             "all"
-
-        PallTuples ->
-            "tuple"
 
 
 leftInput : Model -> Element.Element Msg
