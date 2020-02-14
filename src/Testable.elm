@@ -624,11 +624,11 @@ listToType l =
             Just { custom = ts, standard = [] }
 
 
-valueToAtom : TypeProgramValue -> Maybe TypeAtom
+valueToAtom : TypeProgramValue -> Maybe ProgVal
 valueToAtom value =
     case value of
         Tstring s ->
-            Just <| Astring s
+            Just <| Pstring s
 
         _ ->
             Nothing
@@ -822,7 +822,7 @@ intElt : ( Int, Int ) -> ( Int, Int ) -> Int -> Elt
 intElt start end i s =
     Ok
         { s
-            | stack = { standard = [], custom = [ Aint i ] } :: s.stack
+            | stack = { standard = [], custom = [ Pint i ] } :: s.stack
             , startPosition = start
             , endPosition = end
         }
@@ -843,7 +843,7 @@ stringElt : ( Int, Int ) -> ( Int, Int ) -> String -> Elt
 stringElt start end string s =
     Ok
         { s
-            | stack = { standard = [], custom = [ Astring string ] } :: s.stack
+            | stack = { standard = [], custom = [ Pstring string ] } :: s.stack
             , startPosition = start
             , endPosition = end
         }
@@ -1091,22 +1091,6 @@ justsHelp maybe accum =
             accum
 
 
-showTypeAtom : TypeAtom -> String
-showTypeAtom typeAtom =
-    case typeAtom of
-        Astring s ->
-            "string: \"" ++ showString s ++ "\""
-
-        Aint i ->
-            "int: " ++ String.fromInt i
-
-        Atype t ->
-            "type: " ++ showTypeVal t
-
-        Ablock block ->
-            "block: " ++ String.join ", " (List.map (showAtom << .value) block)
-
-
 showAtom : Atom -> String
 showAtom atom =
     case atom of
@@ -1198,7 +1182,7 @@ showTypeVal { custom, standard } =
         ( cs, [] ) ->
             String.concat
                 [ "{"
-                , String.join ", " <| List.map showTypeAtom cs
+                , String.join ", " <| List.map showProgVal cs
                 , "}"
                 ]
 
@@ -1208,7 +1192,7 @@ showTypeVal { custom, standard } =
                 , String.join ", " <|
                     List.map showStandardType bs
                 , ", "
-                , String.join ", " <| List.map showTypeAtom cs
+                , String.join ", " <| List.map showProgVal cs
                 , "}"
                 ]
 
@@ -1337,24 +1321,7 @@ type alias ProgramState =
 
 typeOf : ProgVal -> Type
 typeOf value =
-    case value of
-        Pstring s ->
-            { custom = [ Astring s ], standard = [] }
-
-        Pint i ->
-            { custom = [ Aint i ], standard = [] }
-
-        Pblock block ->
-            { custom = [ Ablock block ], standard = [] }
-
-        Plist values ->
-            typeListUnion <| List.map typeOf values
-
-        Ptype t ->
-            { custom = [ Atype t ], standard = [] }
-
-        Ptuple t ->
-            { custom = [], standard = [ Stuple <| List.map typeOf t ] }
+    { custom = [value], standard = [] }
 
 
 type alias Elf =
@@ -1485,16 +1452,9 @@ showTypeProgramType t =
 
 
 type alias Type =
-    { custom : List TypeAtom
+    { custom : List ProgVal
     , standard : List StandardType
     }
-
-
-type TypeAtom
-    = Astring String
-    | Aint Int
-    | Atype Type
-    | Ablock (List (Located Atom))
 
 
 type StandardType
@@ -1538,32 +1498,6 @@ equalTypeStacks t1 t2 =
         && (List.all identity <| List.map2 isSubType t1 t2)
 
 
-equalType : Type -> Type -> Bool
-equalType t1 t2 =
-    equalStandards t1.standard t2.standard
-        && equalCustoms t1.custom t2.custom
-
-
-equalCustoms : List TypeAtom -> List TypeAtom -> Bool
-equalCustoms t1 t2 =
-    List.all identity <| List.map2 equalCustom t1 t2
-
-
-equalCustom : TypeAtom -> TypeAtom -> Bool
-equalCustom t1 t2 =
-    t1 == t2
-
-
-equalStandards : List StandardType -> List StandardType -> Bool
-equalStandards b1 b2 =
-    List.all identity <| List.map2 equalStandard b1 b2
-
-
-equalStandard : StandardType -> StandardType -> Bool
-equalStandard b1 b2 =
-    b1 == b2
-
-
 type alias Elt =
     EltState -> EltOut
 
@@ -1596,7 +1530,7 @@ standardTypes =
         [ ( "[]", { standard = [ Slist { standard = [], custom = [] } ], custom = [] } )
         , ( "int", { standard = [ Sint ], custom = [] } )
         , ( "string", { standard = [ Sstring ], custom = [] } )
-        , ( "testForSwitch", { standard = [], custom = [ Aint 1, Aint 2 ] } )
+        , ( "testForSwitch", { standard = [], custom = [ Pint 1, Pint 2 ] } )
         ]
 
 
@@ -1648,7 +1582,7 @@ typeofElt state =
             Err { state = state, message = "empty stack: " ++ typeofEltInfo }
 
         s :: tack ->
-            Ok { state | stack = { custom = [ Atype s ], standard = [] } :: tack }
+            Ok { state | stack = { custom = [ Ptype s ], standard = [] } :: tack }
 
 
 typeListUnion : List Type -> Type
@@ -1693,7 +1627,7 @@ makeTupleElt s =
 getLength : Type -> Maybe Int
 getLength { custom, standard } =
     case ( custom, standard ) of
-        ( [ Aint i ], [] ) ->
+        ( [ Pint i ], [] ) ->
             Just i
 
         _ ->
@@ -1745,7 +1679,7 @@ typeUnion t1 t2 =
     }
 
 
-customUnion : List TypeAtom -> List TypeAtom -> List TypeAtom
+customUnion : List ProgVal -> List ProgVal -> List ProgVal
 customUnion l1 l2 =
     l1 ++ l2
 
@@ -1946,7 +1880,7 @@ isSubType sub master =
         ]
 
 
-standardOfCustom : List StandardType -> List TypeAtom -> Bool
+standardOfCustom : List StandardType -> List ProgVal -> Bool
 standardOfCustom _ _ =
     False
 
@@ -2010,32 +1944,56 @@ listMatch candidate master =
     List.any (isSubType candidate) master
 
 
-customOfCustom : List TypeAtom -> List TypeAtom -> Bool
+customOfCustom : List ProgVal -> List ProgVal -> Bool
 customOfCustom sub master =
     List.all (\s -> List.member s master) sub
 
 
-customOfStandard : List TypeAtom -> List StandardType -> Bool
+customOfStandard : List ProgVal -> List StandardType -> Bool
 customOfStandard sub master =
     List.all (customOfStandardHelp master) sub
 
 
-customOfStandardHelp : List StandardType -> TypeAtom -> Bool
+customOfStandardHelp : List StandardType -> ProgVal -> Bool
 customOfStandardHelp bs t =
     List.member Sall bs
         || (case t of
-                Astring _ ->
+                Pstring _ ->
                     List.member Sstring bs
 
-                Aint _ ->
+                Pint _ ->
                     List.member Sint bs
 
-                Atype _ ->
+                Ptype _ ->
                     List.member Stype bs
 
-                Ablock block ->
+                Pblock block ->
                     List.member Sblock bs
+
+                Ptuple ts ->
+                    List.any (matchingTuple ts) bs
+
+                Plist ls ->
+                    List.any (matchingList ls) bs
            )
+
+
+matchingList : List ProgVal -> StandardType -> Bool
+matchingList values type_ =
+    isSubType
+        {custom = values, standard = []}
+        {custom = [], standard = [type_]}
+
+
+matchingTuple : List ProgVal -> StandardType -> Bool
+matchingTuple tupleTypes master =
+    case master of
+        Stuple masterTuple ->
+            (List.length tupleTypes == List.length masterTuple) &&
+            List.all identity (List.map2 (\p t -> isSubType (typeOf p) t) tupleTypes masterTuple)
+
+        _ ->
+            False
 
 
 initEltState =
@@ -2194,7 +2152,7 @@ processAtom state atom =
                         }
 
         Block bs ->
-            Ok { state | stack = { custom = [ Ablock bs ], standard = [] } :: state.stack }
+            Ok { state | stack = { custom = [ Pblock bs ], standard = [] } :: state.stack }
 
         Define newName ->
             case Dict.get newName state.defPos of
@@ -2221,7 +2179,7 @@ processAtom state atom =
 
                 { custom } :: tack ->
                     case custom of
-                        [ Ablock bs ] ->
+                        [ Pblock bs ] ->
                             case runTypeChecksHelp bs state of
                                 Err err ->
                                     Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
@@ -2236,10 +2194,10 @@ processAtom state atom =
             runTypeProgram typeAtomsLocated state
 
         StringLiteral s ->
-            Ok { state | stack = { custom = [ Astring s ], standard = [] } :: state.stack }
+            Ok { state | stack = { custom = [ Pstring s ], standard = [] } :: state.stack }
 
         IntegerLiteral i ->
-            Ok { state | stack = { custom = [ Aint i ], standard = [] } :: state.stack }
+            Ok { state | stack = { custom = [ Pint i ], standard = [] } :: state.stack }
 
 
 runTypeProgram : List (Located TlAtom) -> EltState -> EltOut
