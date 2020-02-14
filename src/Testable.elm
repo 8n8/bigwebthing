@@ -834,21 +834,6 @@ stringPWrap =
         |= stringP
 
 
-stringElf : String -> ProgramState -> ProgramState
-stringElf s p =
-    { p | stack = Pstring s :: p.stack }
-
-
-stringElt : ( Int, Int ) -> ( Int, Int ) -> String -> Elt
-stringElt start end string s =
-    Ok
-        { s
-            | stack = { standard = [], custom = [ Pstring string ] } :: s.stack
-            , startPosition = start
-            , endPosition = end
-        }
-
-
 {-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
 -}
 stringP : P.Parser String
@@ -1222,6 +1207,9 @@ showStandardType standard =
         Sall ->
             "all"
 
+        SallTuples ->
+            "tuple"
+
 
 showTypeStack : List Type -> String
 showTypeStack typestack =
@@ -1464,6 +1452,7 @@ type StandardType
     | Stype
     | Slist Type
     | Stuple (List Type)
+    | SallTuples
     | Sall
 
 
@@ -1518,7 +1507,7 @@ type alias EltState =
     , typeDefPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , typeDefUse : Set.Set String
     , defs : Dict.Dict String Type
-    , stack : List Type
+    , stack : Type
     , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , defUse : Set.Set String
     }
@@ -1532,57 +1521,6 @@ standardTypes =
         , ( "string", { standard = [ Sstring ], custom = [] } )
         , ( "testForSwitch", { standard = [], custom = [ Pint 1, Pint 2 ] } )
         ]
-
-
-swapInfo : String
-swapInfo =
-    """"swap" swaps the top two things on the stack"""
-
-
-swapElt : Elt
-swapElt state =
-    case state.stack of
-        [] ->
-            Err { state = state, message = "empty stack: " ++ swapInfo }
-
-        _ :: [] ->
-            Err { state = state, message = "only one thing in stack: " ++ swapInfo }
-
-        s :: t :: ack ->
-            Ok { state | stack = t :: s :: ack }
-
-
-typeUnionInfo : String
-typeUnionInfo =
-    """typeUnion needs the top two items in the stack to be types"""
-
-
-typeUnionElt : Elt
-typeUnionElt s =
-    case s.stack of
-        [] ->
-            Err { state = s, message = "empty stack: " ++ typeUnionInfo }
-
-        _ :: [] ->
-            Err { state = s, message = "only one thing in stack: " ++ typeUnionInfo }
-
-        top :: next :: remainsOfStack ->
-            Ok { s | stack = typeUnion top next :: remainsOfStack }
-
-
-typeofEltInfo : String
-typeofEltInfo =
-    """"typeof" needs an item on the top of the stack"""
-
-
-typeofElt : Elt
-typeofElt state =
-    case state.stack of
-        [] ->
-            Err { state = state, message = "empty stack: " ++ typeofEltInfo }
-
-        s :: tack ->
-            Ok { state | stack = { custom = [ Ptype s ], standard = [] } :: tack }
 
 
 typeListUnion : List Type -> Type
@@ -2145,6 +2083,16 @@ processAtom state atom =
                     Err { state = state, message = "no definition \"" ++ v ++ "\"" }
 
                 Just retrieved ->
+                    case (state.stack.standard, state.stack.custom) of
+                        ([], [Stuple elements]) ->
+                            Ok
+                                { state
+                                    | stack = { custom = [], standard= Stuple (retrieved :: elements) }
+                                    , defUse = Set.insert v state.defUse
+                                 }
+
+                        
+
                     Ok
                         { state
                             | stack = retrieved :: state.stack
