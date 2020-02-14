@@ -1817,6 +1817,8 @@ type ProgVal
     | PallInts
     | PallStrings
     | PallBlocks
+    | PallTuples
+    | PsomeTuples (List Type)
     | Pall
 
 
@@ -1856,6 +1858,12 @@ showProgVal p =
 
         Pall ->
             "all"
+
+        PallTuples ->
+            "tuple"
+
+        PsomeTuples ts ->
+            "tuple: (" ++ String.join ", " (List.map showTypeVal ts) ++ ")"
 
 
 leftInput : Model -> Element.Element Msg
