@@ -1010,6 +1010,12 @@ programProcessAtom { start, value, end } s =
                 PmakeTuple :: (Pint tupleLength) :: remainsOfStack ->
                     { s | stack = Ptuple (List.take tupleLength remainsOfStack) :: List.drop tupleLength remainsOfStack }
 
+                PtypeOf :: next :: remainsOfStack ->
+                    { s | stack = Ptype [ next ] :: remainsOfStack }
+
+                Pswitch :: paths :: toSwitchOn :: remainsOfStack ->
+                    switch paths toSwitchOn { s | stack = remainsOfStack }
+
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
@@ -1021,6 +1027,31 @@ programProcessAtom { start, value, end } s =
 
         IntegerLiteral i ->
             { s | stack = Pint i :: s.stack }
+
+
+switch : ProgVal -> ProgVal -> ProgramState -> ProgramState
+switch pathsCandidate toSwitchOn state =
+    case matchPath pathsCandidate toSwitchOn of
+        Err err ->
+            { state | internalError = Just err }
+
+        Ok chosen ->
+            { state | stack = chosen :: state.stack }
+
+
+matchPath : ProgVal -> ProgVal -> Result String ProgVal
+matchPath pathsCandidate toSwitchOn =
+    case extractPaths pathsCandidate of
+        Err err ->
+            Err <| "bad paths: got " ++ showProgVal err
+
+        Ok paths ->
+            case List.head <| List.filter (\p -> isSubType [ toSwitchOn ] (Tuple.first p)) paths of
+                Nothing ->
+                    Err "no matching paths"
+
+                Just chosen ->
+                    Ok <| Tuple.second chosen
 
 
 type alias TypeState =
@@ -1169,6 +1200,8 @@ standardTypes =
         , ( "emptylist", [ Plist [] ] )
         , ( "cons", [ Pcons ] )
         , ( "maketuple", [ PmakeTuple ] )
+        , ( "typeof", [ PtypeOf ] )
+        , ( "switch", [ Pswitch ] )
         ]
 
 
@@ -1206,6 +1239,63 @@ typeUnionElt s =
 
         top :: next :: remainsOfStack ->
             Ok { s | stack = typeUnion top next :: remainsOfStack }
+
+
+extractAndCheckPaths : Type -> Type -> Result String (List Type)
+extractAndCheckPaths pathsCandidate toSwitchOn =
+    case pathsCandidate of
+        [ Plist pl ] ->
+            case Result.Extra.combine <| List.map toPath pl of
+                Err err ->
+                    Err err
+
+                Ok paths ->
+                    let
+                        ( missingPaths, surplusPaths ) =
+                            checkPathsComplete paths toSwitchOn
+                    in
+                    if List.isEmpty missingPaths then
+                        if List.isEmpty surplusPaths then
+                            Ok <| List.map Tuple.second paths
+
+                        else
+                            Err <| "too many paths: " ++ showTypeVal surplusPaths
+
+                    else
+                        Err <| "not enough paths: " ++ showTypeVal missingPaths
+
+        _ ->
+            Err "paths are not a list"
+
+
+checkPathsComplete : List ( Type, Type ) -> Type -> ( Type, Type )
+checkPathsComplete paths value =
+    let
+        combinedPaths =
+            typeListUnion <| List.map Tuple.first paths
+
+        missingPaths =
+            typeDiff value combinedPaths
+
+        surplusPaths =
+            typeDiff combinedPaths value
+    in
+    ( missingPaths, surplusPaths )
+
+
+typeDiff : Type -> Type -> Type
+typeDiff fromThis subtractThis =
+    List.filter (\x -> not <| isSubType [ x ] subtractThis) fromThis
+
+
+toPath : ProgVal -> Result String ( Type, Type )
+toPath candidate =
+    case candidate of
+        PsomeTuples [ value, [ Ptype toMatch ] ] ->
+            Ok ( toMatch, value )
+
+        _ ->
+            Err <| "not a path: " ++ showProgVal candidate
 
 
 typeListUnion : List Type -> Type
@@ -1260,6 +1350,8 @@ standardLibrary =
         , ( "emptylist", Plist [] )
         , ( "cons", Pcons )
         , ( "maketuple", PmakeTuple )
+        , ( "typeof", PtypeOf )
+        , ( "switch", Pswitch )
         ]
 
 
@@ -1300,35 +1392,20 @@ typeofElf p =
             { p | stack = Ptype (typeOf s) :: tack }
 
 
-switchElf : Elf
-switchElf p =
-    case p.stack of
-        (Plist paths) :: value :: remainsOfStack ->
-            case extractPaths paths of
-                Err err ->
-                    { p | internalError = Just <| "bad paths 1: " ++ showProgVal err }
-
-                Ok goodPaths ->
-                    case findPath (typeOf value) goodPaths of
-                        Nothing ->
-                            { p | internalError = Just <| "no path for value: " ++ showProgVal value }
-
-                        Just path ->
-                            { p | stack = path :: remainsOfStack }
+extractPaths : ProgVal -> Result ProgVal (List ( Type, ProgVal ))
+extractPaths candidates =
+    case candidates of
+        Plist ls ->
+            Result.Extra.combine <| List.map getMatchPath ls
 
         _ ->
-            { p | internalError = Just "bad stack" }
-
-
-extractPaths : List ProgVal -> Result ProgVal (List ( Type, ProgVal ))
-extractPaths candidates =
-    Result.Extra.combine <| List.map getMatchPath candidates
+            Err candidates
 
 
 getMatchPath : ProgVal -> Result ProgVal ( Type, ProgVal )
 getMatchPath p =
     case p of
-        Ptuple [ Ptype t, path ] ->
+        Ptuple [ path, Ptype t ] ->
             Ok ( t, path )
 
         bad ->
@@ -1740,20 +1817,24 @@ processAtom state atom =
                     Err { state = state, message = "empty stack" }
 
                 [ Pblock bs ] :: tack ->
-                    case runTypeChecksHelp bs state of
+                    case runTypeChecksHelp bs { state | stack = tack } of
                         Err err ->
-                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
+                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition ++ ": " ++ err.message }
 
                         Ok newState ->
                             Ok { newState | defs = state.defs }
 
                 [ Pprint ] :: tack ->
                     case tack of
-                        [ Pstring _ ] :: ack ->
-                            Ok { state | stack = ack }
+                        stringCandidate :: ack ->
+                            if isSubType stringCandidate [ PallStrings ] then
+                                Ok { state | stack = ack }
 
-                        _ ->
-                            Err { message = "expecting a string", state = state }
+                            else
+                                Err { message = "expecting a string", state = state }
+
+                        [] ->
+                            Err { message = "empty stack", state = state }
 
                 [ Pcons ] :: tack ->
                     case tack of
@@ -1772,13 +1853,37 @@ processAtom state atom =
                     case tack of
                         [ Pint i ] :: remainsOfStack ->
                             if List.length remainsOfStack < i then
-                                Err { state = state, message = "stack not long enough" }
+                                Err { state = state, message = "stack too short" }
 
                             else
                                 Ok { state | stack = [ PsomeTuples (List.take i remainsOfStack) ] :: List.drop i remainsOfStack }
 
                         _ ->
                             Err { state = state, message = "no integer on top of stack" }
+
+                [ PtypeOf ] :: tack ->
+                    case tack of
+                        t :: ack ->
+                            Ok { state | stack = [ Ptype t ] :: ack }
+
+                        _ ->
+                            Err { state = state, message = "empty stack" }
+
+                [ Pswitch ] :: tack ->
+                    case tack of
+                        [] ->
+                            Err { message = "empty stack", state = state }
+
+                        _ :: [] ->
+                            Err { message = "only one thing in stack", state = state }
+
+                        pathsCandidate :: toSwitchOn :: remainsOfStack ->
+                            case extractAndCheckPaths pathsCandidate toSwitchOn of
+                                Err err ->
+                                    Err { message = err, state = state }
+
+                                Ok routes ->
+                                    Ok { state | stack = typeListUnion routes :: remainsOfStack }
 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
@@ -1891,6 +1996,8 @@ type ProgVal
     | Pprint
     | Pcons
     | PmakeTuple
+    | PtypeOf
+    | Pswitch
 
 
 showProgVal : ProgVal -> String
@@ -1947,6 +2054,12 @@ showProgVal p =
 
         PmakeTuple ->
             "maketuple"
+
+        PtypeOf ->
+            "typeof"
+
+        Pswitch ->
+            "switch"
 
 
 leftInput : Model -> Element.Element Msg
