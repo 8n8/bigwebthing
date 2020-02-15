@@ -1001,8 +1001,11 @@ programProcessAtom { start, value, end } s =
                     in
                     { newS | defs = s.defs }
 
+                Pprint :: (Pstring string) :: remainsOfStack ->
+                    { s | rightDoc = Just <| print s.rightDoc string, stack = remainsOfStack }
+
                 _ ->
-                    { s | internalError = Just "not a block on top of stack" }
+                    { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
         TypeLanguage _ ->
             s
@@ -1156,6 +1159,7 @@ standardTypes =
         , ( "int", [ PallInts ] )
         , ( "string", [ PallStrings ] )
         , ( "testForSwitch", [ Pint 1, Pint 2 ] )
+        , ( "print", [ Pprint ] )
         ]
 
 
@@ -1230,6 +1234,7 @@ standardLibrary =
     Dict.fromList
         [ ( "[]", Plist [] )
         , ( "testForSwitch", Pint 2 )
+        , ( "print", Pprint )
         ]
 
 
@@ -1713,6 +1718,14 @@ processAtom state atom =
                                 Ok newState ->
                                     Ok { newState | defs = state.defs }
 
+                        [ Pprint ] ->
+                            case tack of
+                                [ Pstring _ ] :: ack ->
+                                    Ok { state | stack = ack }
+
+                                _ ->
+                                    Err { message = "expecting a string", state = state }
+
                         _ ->
                             Err { state = state, message = "not all blocks" }
 
@@ -1820,6 +1833,7 @@ type ProgVal
     | PallTuples
     | PsomeTuples (List Type)
     | Pall
+    | Pprint
 
 
 showProgVal : ProgVal -> String
@@ -1864,6 +1878,9 @@ showProgVal p =
 
         PsomeTuples ts ->
             "tuple: (" ++ String.join ", " (List.map showTypeVal ts) ++ ")"
+
+        Pprint ->
+            "print"
 
 
 leftInput : Model -> Element.Element Msg
