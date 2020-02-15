@@ -1268,6 +1268,21 @@ extractAndCheckPaths pathsCandidate toSwitchOn =
             Err "paths are not a list"
 
 
+getBlocks : Type -> Maybe (List (List (Located Atom)))
+getBlocks type_ =
+    Maybe.Extra.combine <| List.map getBlock type_
+
+
+getBlock : ProgVal -> Maybe (List (Located Atom))
+getBlock v =
+    case v of
+        Pblock bs ->
+            Just bs
+
+        _ ->
+            Nothing
+
+
 checkPathsComplete : List ( Type, Type ) -> Type -> ( Type, Type )
 checkPathsComplete paths value =
     let
@@ -1328,7 +1343,15 @@ listTypeCons toAdd toAddTo =
 
 typeUnion : Type -> Type -> Type
 typeUnion t1 t2 =
-    t1 ++ t2
+    case ( t1, t2 ) of
+        ( [ PsomeTuples t1s ], [ PsomeTuples t2s ] ) ->
+            [ PsomeTuples <| List.map2 typeUnion t1s t2s ]
+
+        ( [ Ptype p1 ], [ Ptype p2 ] ) ->
+            [ Ptype (p1 ++ p2) ]
+
+        _ ->
+            t1 ++ t2
 
 
 customUnion : List TypeAtom -> List TypeAtom -> List TypeAtom
@@ -1816,13 +1839,30 @@ processAtom state atom =
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                [ Pblock bs ] :: tack ->
-                    case runTypeChecksHelp bs { state | stack = tack } of
-                        Err err ->
-                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition ++ ": " ++ err.message }
+                ((Pblock b1) :: bs) :: tack ->
+                    case getBlocks (Pblock b1 :: bs) of
+                        Nothing ->
+                            Err { message = "expecting a block, but got " ++ showTypeVal (Pblock b1 :: bs), state = state }
 
-                        Ok newState ->
-                            Ok { newState | defs = state.defs }
+                        Just blocks ->
+                            case Result.Extra.combine <| List.map (\b -> runTypeChecksHelp b { state | stack = tack }) blocks of
+                                Err err ->
+                                    Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition ++ ": " ++ err.message }
+
+                                Ok results ->
+                                    let
+                                        stacksAsTuples =
+                                            List.map (\s -> [ PsomeTuples s.stack ]) results
+
+                                        combinedType =
+                                            typeListUnion stacksAsTuples
+                                    in
+                                    case combinedType of
+                                        [ PsomeTuples ts ] ->
+                                            Ok { state | defs = state.defs, stack = ts }
+
+                                        _ ->
+                                            Err { state = state, message = "internal error in type checker: could not convert stacks to tuples" }
 
                 [ Pprint ] :: tack ->
                     case tack of
