@@ -319,11 +319,11 @@ elementP =
     P.oneOf
         [ runBlockP
         , stringPWrap
+        , retrieveP
         , intPWrap
         , defP
         , programBlockP
         , topTypeLangP
-        , retrieveP
         ]
 
 
@@ -1004,6 +1004,12 @@ programProcessAtom { start, value, end } s =
                 Pprint :: (Pstring string) :: remainsOfStack ->
                     { s | rightDoc = Just <| print s.rightDoc string, stack = remainsOfStack }
 
+                Pcons :: toAdd :: (Plist ls) :: remainsOfStack ->
+                    { s | stack = Plist (toAdd :: ls) :: remainsOfStack }
+
+                PmakeTuple :: (Pint tupleLength) :: remainsOfStack ->
+                    { s | stack = Ptuple (List.take tupleLength remainsOfStack) :: List.drop tupleLength remainsOfStack }
+
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
@@ -1160,6 +1166,9 @@ standardTypes =
         , ( "string", [ PallStrings ] )
         , ( "testForSwitch", [ Pint 1, Pint 2 ] )
         , ( "print", [ Pprint ] )
+        , ( "emptylist", [ Plist [] ] )
+        , ( "cons", [ Pcons ] )
+        , ( "maketuple", [ PmakeTuple ] )
         ]
 
 
@@ -1214,6 +1223,19 @@ typeListUnionHelp notLookedAtYet accumulator =
             typeListUnionHelp remainder (typeUnion topType accumulator)
 
 
+listTypeCons : Type -> Type -> Maybe Type
+listTypeCons toAdd toAddTo =
+    case toAddTo of
+        [ PallLists ] ->
+            Just [ PallLists ]
+
+        [ Plist values ] ->
+            Just [ Plist <| typeUnion toAdd values ]
+
+        _ ->
+            Nothing
+
+
 typeUnion : Type -> Type -> Type
 typeUnion t1 t2 =
     t1 ++ t2
@@ -1235,6 +1257,9 @@ standardLibrary =
         [ ( "[]", Plist [] )
         , ( "testForSwitch", Pint 2 )
         , ( "print", Pprint )
+        , ( "emptylist", Plist [] )
+        , ( "cons", Pcons )
+        , ( "maketuple", PmakeTuple )
         ]
 
 
@@ -1429,6 +1454,12 @@ isContained sub master =
 
                 ( Pblock _, PallBlocks ) ->
                     True
+
+                ( Plist _, PallLists ) ->
+                    True
+
+                ( Plist subList, Plist masterList ) ->
+                    isSubType subList masterList
 
                 _ ->
                     False
@@ -1708,26 +1739,49 @@ processAtom state atom =
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                type_ :: tack ->
-                    case type_ of
-                        [ Pblock bs ] ->
-                            case runTypeChecksHelp bs state of
-                                Err err ->
-                                    Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
+                [ Pblock bs ] :: tack ->
+                    case runTypeChecksHelp bs state of
+                        Err err ->
+                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
 
-                                Ok newState ->
-                                    Ok { newState | defs = state.defs }
+                        Ok newState ->
+                            Ok { newState | defs = state.defs }
 
-                        [ Pprint ] ->
-                            case tack of
-                                [ Pstring _ ] :: ack ->
-                                    Ok { state | stack = ack }
-
-                                _ ->
-                                    Err { message = "expecting a string", state = state }
+                [ Pprint ] :: tack ->
+                    case tack of
+                        [ Pstring _ ] :: ack ->
+                            Ok { state | stack = ack }
 
                         _ ->
-                            Err { state = state, message = "not all blocks" }
+                            Err { message = "expecting a string", state = state }
+
+                [ Pcons ] :: tack ->
+                    case tack of
+                        toAdd :: toAddTo :: remainsOfStack ->
+                            case listTypeCons toAdd toAddTo of
+                                Nothing ->
+                                    Err { message = "the second thing on the stack must be a list", state = state }
+
+                                Just newListType ->
+                                    Ok { state | stack = newListType :: remainsOfStack }
+
+                        _ ->
+                            Err { message = "the top of the stack should be the thing to add, and the second thing should be the list to add to", state = state }
+
+                [ PmakeTuple ] :: tack ->
+                    case tack of
+                        [ Pint i ] :: remainsOfStack ->
+                            if List.length remainsOfStack < i then
+                                Err { state = state, message = "stack not long enough" }
+
+                            else
+                                Ok { state | stack = [ PsomeTuples (List.take i remainsOfStack) ] :: List.drop i remainsOfStack }
+
+                        _ ->
+                            Err { state = state, message = "no integer on top of stack" }
+
+                _ ->
+                    Err { message = "there's nothing to run", state = state }
 
         TypeLanguage typeAtomsLocated ->
             runTypeProgram typeAtomsLocated state
@@ -1826,6 +1880,7 @@ type ProgVal
     | Pint Int
     | Pblock (List (Located Atom))
     | Plist (List ProgVal)
+    | PallLists
     | Ptype Type
     | PallInts
     | PallStrings
@@ -1834,6 +1889,8 @@ type ProgVal
     | PsomeTuples (List Type)
     | Pall
     | Pprint
+    | Pcons
+    | PmakeTuple
 
 
 showProgVal : ProgVal -> String
@@ -1850,7 +1907,7 @@ showProgVal p =
 
         Plist l ->
             String.concat
-                [ "["
+                [ "list ["
                 , String.join ", " <| List.map showProgVal l
                 , "]"
                 ]
@@ -1881,6 +1938,15 @@ showProgVal p =
 
         Pprint ->
             "print"
+
+        PallLists ->
+            "list"
+
+        Pcons ->
+            "cons"
+
+        PmakeTuple ->
+            "maketuple"
 
 
 leftInput : Model -> Element.Element Msg
