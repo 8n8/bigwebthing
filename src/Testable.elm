@@ -557,9 +557,7 @@ reserved =
 okVariableStart : Set.Set Char
 okVariableStart =
     Set.fromList
-        [ '['
-        , ']'
-        , ','
+        [ '+'
         ]
 
 
@@ -688,6 +686,19 @@ runBlockElf s =
                             , showProgVal x
                             ]
             }
+
+
+runLoop : List (Located Atom) -> ProgramState -> ProgramState
+runLoop blockBody oldState =
+    case oldState.stack of
+        (Pint 0) :: remainsOfStack ->
+            { oldState | stack = remainsOfStack }
+
+        (Pint 1) :: remainsOfStack ->
+            runLoop blockBody (runElfsHelp blockBody oldState)
+
+        _ ->
+            { oldState | internalError = Just "need 0 or 1 on top of stack" }
 
 
 blockUnusedNames : EltState -> EltState -> Maybe TypeError
@@ -1016,6 +1027,9 @@ programProcessAtom { start, value, end } s =
                 Pswitch :: paths :: toSwitchOn :: remainsOfStack ->
                     switch paths toSwitchOn { s | stack = remainsOfStack }
 
+                Ploop :: (Pblock blockToRun) :: remainsOfStack ->
+                    runLoop blockToRun { s | stack = remainsOfStack }
+
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
@@ -1202,6 +1216,8 @@ standardTypes =
         , ( "maketuple", [ PmakeTuple ] )
         , ( "typeof", [ PtypeOf ] )
         , ( "switch", [ Pswitch ] )
+        , ( "loop", [ Ploop ] )
+        , ( "+", [ Pplus ] )
         ]
 
 
@@ -1375,6 +1391,8 @@ standardLibrary =
         , ( "maketuple", PmakeTuple )
         , ( "typeof", PtypeOf )
         , ( "switch", Pswitch )
+        , ( "loop", Ploop )
+        , ( "+", Pplus )
         ]
 
 
@@ -1925,6 +1943,48 @@ processAtom state atom =
                                 Ok routes ->
                                     Ok { state | stack = typeListUnion routes :: remainsOfStack }
 
+                [ Ploop ] :: tack ->
+                    case tack of
+                        [] ->
+                            Err { message = "empty stack", state = state }
+
+                        _ :: [] ->
+                            Err { message = "only one thing in stack", state = state }
+
+                        maybeBlocks :: maybeKeepRunning :: restOfStack ->
+                            if isSubType maybeKeepRunning [ Pint 0, Pint 1 ] then
+                                case checkBlocks maybeBlocks restOfStack { state | stack = restOfStack } of
+                                    Nothing ->
+                                        Ok { state | stack = restOfStack }
+
+                                    Just err ->
+                                        Err err
+
+                            else
+                                Err { message = "second item in the stack must be a 1 or 0", state = state }
+
+                [ Pplus ] :: tack ->
+                    case tack of
+                        [] ->
+                            Err { message = "empty stack", state = state }
+
+                        _ :: [] ->
+                            Err { message = "only one thing on stack", state = state }
+
+                        [ Pint n1 ] :: [ Pint n2 ] :: remainder ->
+                            Ok { state | stack = [ Pint (n1 + n2) ] :: remainder }
+
+                        maybeN1 :: maybeN2 :: remainder ->
+                            if isSubType maybeN1 [ PallInts ] then
+                                if isSubType maybeN2 [ PallInts ] then
+                                    Ok { state | stack = [ PallInts ] :: remainder }
+
+                                else
+                                    Err { message = "the second thing on the stack is not an integer, it is a " ++ showTypeVal maybeN2, state = state }
+
+                            else
+                                Err { message = "the top thing on the stack is not an integer, it is a " ++ showTypeVal maybeN2, state = state }
+
                 _ ->
                     Err { message = "there's nothing to run", state = state }
 
@@ -1951,6 +2011,37 @@ runTypeProgram atoms state =
 
                 Ok newState ->
                     runTypeProgram toms newState
+
+
+checkBlocks : Type -> List Type -> EltState -> Maybe TypeError
+checkBlocks maybeBlocks restOfStack oldState =
+    case getBlocks maybeBlocks of
+        Nothing ->
+            Just { message = "not only a block", state = oldState }
+
+        Just blocks ->
+            case Result.Extra.combine <| List.map (\b -> runTypeChecksHelp b oldState) blocks of
+                Err err ->
+                    Just err
+
+                Ok results ->
+                    let
+                        stacksAsTuples =
+                            List.map (\s -> [ PsomeTuples oldState.stack ]) results
+
+                        combinedType =
+                            typeListUnion stacksAsTuples
+                    in
+                    case combinedType of
+                        [ PsomeTuples ts ] ->
+                            if ts /= restOfStack then
+                                Just { message = "bad loop block changed the stack", state = oldState }
+
+                            else
+                                Nothing
+
+                        _ ->
+                            Just { state = oldState, message = "internal error in type checker: could not convert stacks to tuples" }
 
 
 processTypeAtom : EltState -> TlAtom -> EltOut
@@ -2038,6 +2129,9 @@ type ProgVal
     | PmakeTuple
     | PtypeOf
     | Pswitch
+    | Ploop
+    | Pplus
+    | Ppop
 
 
 showProgVal : ProgVal -> String
@@ -2100,6 +2194,12 @@ showProgVal p =
 
         Pswitch ->
             "switch"
+
+        Ploop ->
+            "loop"
+
+        Pplus ->
+            "plus"
 
 
 leftInput : Model -> Element.Element Msg
