@@ -1223,6 +1223,8 @@ standardTypes =
         , ( "loop", [ Ploop ] )
         , ( "+", [ Pplus ] )
         , ( "pop", [ Ppop ] )
+        , ( "true", [ Pbool True ] )
+        , ( "false", [ Pbool False ] )
         ]
 
 
@@ -2146,6 +2148,7 @@ type ProgVal
     | Ploop
     | Pplus
     | Ppop
+    | Pbool Bool
 
 
 showProgVal : ProgVal -> String
@@ -2217,6 +2220,12 @@ showProgVal p =
 
         Ppop ->
             "pop"
+
+        Pbool True ->
+            "bool: true"
+
+        Pbool False ->
+            "bool: false"
 
 
 leftInput : Model -> Element.Element Msg
