@@ -551,22 +551,23 @@ variable =
 reserved : Set.Set String
 reserved =
     Set.fromList
-        [ "." ]
+        [ "."
+        , "="
+        ]
 
 
 okVariableStart : Set.Set Char
 okVariableStart =
     Set.fromList
         [ '+'
+        , '='
         ]
 
 
 okVariableInner : Set.Set Char
 okVariableInner =
     Set.fromList
-        [ '['
-        , ']'
-        ]
+        []
 
 
 isUninteresting : Char -> Bool
@@ -1030,6 +1031,9 @@ programProcessAtom { start, value, end } s =
                 Ploop :: (Pblock blockToRun) :: remainsOfStack ->
                     runLoop blockToRun { s | stack = remainsOfStack }
 
+                Ppop :: remainsOfStack ->
+                    { s | stack = remainsOfStack }
+
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
@@ -1218,6 +1222,7 @@ standardTypes =
         , ( "switch", [ Pswitch ] )
         , ( "loop", [ Ploop ] )
         , ( "+", [ Pplus ] )
+        , ( "pop", [ Ppop ] )
         ]
 
 
@@ -1393,6 +1398,7 @@ standardLibrary =
         , ( "switch", Pswitch )
         , ( "loop", Ploop )
         , ( "+", Pplus )
+        , ( "pop", Ppop )
         ]
 
 
@@ -1963,6 +1969,14 @@ processAtom state atom =
                             else
                                 Err { message = "second item in the stack must be a 1 or 0", state = state }
 
+                [ Ppop ] :: tack ->
+                    case tack of
+                        t :: ack ->
+                            Ok { state | stack = ack }
+
+                        _ ->
+                            Err { message = "empty stack", state = state }
+
                 [ Pplus ] :: tack ->
                     case tack of
                         [] ->
@@ -2200,6 +2214,9 @@ showProgVal p =
 
         Pplus ->
             "plus"
+
+        Ppop ->
+            "pop"
 
 
 leftInput : Model -> Element.Element Msg
