@@ -567,7 +567,7 @@ okVariableStart =
 okVariableInner : Set.Set Char
 okVariableInner =
     Set.fromList
-        []
+        ['=']
 
 
 isUninteresting : Char -> Bool
@@ -1034,6 +1034,9 @@ programProcessAtom { start, value, end } s =
                 Ppop :: remainsOfStack ->
                     { s | stack = remainsOfStack }
 
+                Pequal :: e1 :: e2 :: remainsOfStack ->
+                    { s | stack = Pbool (e1 == e2) :: remainsOfStack }
+
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
@@ -1225,6 +1228,7 @@ standardTypes =
         , ( "pop", [ Ppop ] )
         , ( "true", [ Pbool True ] )
         , ( "false", [ Pbool False ] )
+        , ( "==", [ Pequal ] )
         ]
 
 
@@ -1401,6 +1405,7 @@ standardLibrary =
         , ( "loop", Ploop )
         , ( "+", Pplus )
         , ( "pop", Ppop )
+        , ( "==", Pequal )
         ]
 
 
@@ -2001,6 +2006,15 @@ processAtom state atom =
                             else
                                 Err { message = "the top thing on the stack is not an integer, it is a " ++ showTypeVal maybeN2, state = state }
 
+                [ Pequal ] :: tack ->
+                    case tack of
+                        [] -> Err { message = "empty stack", state = state }
+
+                        _ :: [] -> Err { message = "only one thing on stack", state = state }
+
+                        t :: a :: ck ->
+                            Ok { state | stack = [Pbool True, Pbool False] :: ck }
+ 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
 
@@ -2149,6 +2163,7 @@ type ProgVal
     | Pplus
     | Ppop
     | Pbool Bool
+    | Pequal
 
 
 showProgVal : ProgVal -> String
@@ -2226,6 +2241,9 @@ showProgVal p =
 
         Pbool False ->
             "bool: false"
+
+        Pequal ->
+            "=="
 
 
 leftInput : Model -> Element.Element Msg
