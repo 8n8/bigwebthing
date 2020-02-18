@@ -567,7 +567,7 @@ okVariableStart =
 okVariableInner : Set.Set Char
 okVariableInner =
     Set.fromList
-        ['=']
+        [ '=' ]
 
 
 isUninteresting : Char -> Bool
@@ -696,7 +696,7 @@ runLoop blockBody oldState =
             { oldState | stack = remainsOfStack }
 
         (Pint 1) :: remainsOfStack ->
-            runLoop blockBody (runElfsHelp blockBody oldState)
+            runLoop blockBody (runElfsHelp blockBody { oldState | stack = remainsOfStack })
 
         _ ->
             { oldState | internalError = Just "need 0 or 1 on top of stack" }
@@ -1031,8 +1031,11 @@ programProcessAtom { start, value, end } s =
                 Ploop :: (Pblock blockToRun) :: remainsOfStack ->
                     runLoop blockToRun { s | stack = remainsOfStack }
 
-                Ppop :: remainsOfStack ->
+                Ppop :: toPop :: remainsOfStack ->
                     { s | stack = remainsOfStack }
+
+                Pplus :: (Pint n1) :: (Pint n2) :: rest ->
+                    { s | stack = Pint (n1 + n2) :: rest }
 
                 Pequal :: e1 :: e2 :: remainsOfStack ->
                     { s | stack = Pbool (e1 == e2) :: remainsOfStack }
@@ -1229,6 +1232,8 @@ standardTypes =
         , ( "true", [ Pbool True ] )
         , ( "false", [ Pbool False ] )
         , ( "==", [ Pequal ] )
+        , ( "counter", [ PallInts ] )
+        , ( "runloop", [ Pint 0, Pint 1 ] )
         ]
 
 
@@ -1403,9 +1408,13 @@ standardLibrary =
         , ( "typeof", PtypeOf )
         , ( "switch", Pswitch )
         , ( "loop", Ploop )
+        , ( "counter", Pint 0 )
+        , ( "runloop", Pint 1 )
         , ( "+", Pplus )
         , ( "pop", Ppop )
         , ( "==", Pequal )
+        , ( "true", Pbool True )
+        , ( "false", Pbool False )
         ]
 
 
@@ -2008,13 +2017,15 @@ processAtom state atom =
 
                 [ Pequal ] :: tack ->
                     case tack of
-                        [] -> Err { message = "empty stack", state = state }
+                        [] ->
+                            Err { message = "empty stack", state = state }
 
-                        _ :: [] -> Err { message = "only one thing on stack", state = state }
+                        _ :: [] ->
+                            Err { message = "only one thing on stack", state = state }
 
                         t :: a :: ck ->
-                            Ok { state | stack = [Pbool True, Pbool False] :: ck }
- 
+                            Ok { state | stack = [ Pbool True, Pbool False ] :: ck }
+
                 _ ->
                     Err { message = "there's nothing to run", state = state }
 
