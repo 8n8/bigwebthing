@@ -692,14 +692,14 @@ runBlockElf s =
 runLoop : List (Located Atom) -> ProgramState -> ProgramState
 runLoop blockBody oldState =
     case oldState.stack of
-        (Pint 0) :: remainsOfStack ->
+        (Pbool False) :: remainsOfStack ->
             { oldState | stack = remainsOfStack }
 
-        (Pint 1) :: remainsOfStack ->
+        (Pbool True) :: remainsOfStack ->
             runLoop blockBody (runElfsHelp blockBody { oldState | stack = remainsOfStack })
 
         _ ->
-            { oldState | internalError = Just "need 0 or 1 on top of stack" }
+            { oldState | internalError = Just "need a bool on top of stack" }
 
 
 blockUnusedNames : EltState -> EltState -> Maybe TypeError
@@ -1233,7 +1233,7 @@ standardTypes =
         , ( "false", [ Pbool False ] )
         , ( "==", [ Pequal ] )
         , ( "counter", [ PallInts ] )
-        , ( "runloop", [ Pint 0, Pint 1 ] )
+        , ( "runloop", [ Pbool True, Pbool False ] )
         ]
 
 
@@ -1409,7 +1409,7 @@ standardLibrary =
         , ( "switch", Pswitch )
         , ( "loop", Ploop )
         , ( "counter", Pint 0 )
-        , ( "runloop", Pint 1 )
+        , ( "runloop", Pbool True )
         , ( "+", Pplus )
         , ( "pop", Ppop )
         , ( "==", Pequal )
@@ -1896,10 +1896,13 @@ processAtom state atom =
 
                                         combinedType =
                                             typeListUnion stacksAsTuples
+
+                                        combinedUsed =
+                                            List.foldr Set.union Set.empty (List.map .defUse results)
                                     in
                                     case combinedType of
                                         [ PsomeTuples ts ] ->
-                                            Ok { state | defs = state.defs, stack = ts }
+                                            Ok { state | stack = ts, defUse = combinedUsed }
 
                                         _ ->
                                             Err { state = state, message = "internal error in type checker: could not convert stacks to tuples" }
@@ -1974,12 +1977,12 @@ processAtom state atom =
                             Err { message = "only one thing in stack", state = state }
 
                         maybeBlocks :: maybeKeepRunning :: restOfStack ->
-                            if isSubType maybeKeepRunning [ Pint 0, Pint 1 ] then
-                                case checkBlocks maybeBlocks restOfStack { state | stack = restOfStack } of
-                                    Nothing ->
-                                        Ok { state | stack = restOfStack }
+                            if isSubType maybeKeepRunning [ Pbool True, Pbool False ] then
+                                case checkBlocks maybeBlocks { state | stack = restOfStack } of
+                                    Ok newUsed ->
+                                        Ok { state | stack = restOfStack, defUse = newUsed }
 
-                                    Just err ->
+                                    Err err ->
                                         Err err
 
                             else
@@ -2054,35 +2057,42 @@ runTypeProgram atoms state =
                     runTypeProgram toms newState
 
 
-checkBlocks : Type -> List Type -> EltState -> Maybe TypeError
-checkBlocks maybeBlocks restOfStack oldState =
+checkBlocks : Type -> EltState -> Result TypeError (Set.Set String)
+checkBlocks maybeBlocks oldState =
     case getBlocks maybeBlocks of
         Nothing ->
-            Just { message = "not only a block", state = oldState }
+            Err { message = "not only a block", state = oldState }
 
         Just blocks ->
             case Result.Extra.combine <| List.map (\b -> runTypeChecksHelp b oldState) blocks of
                 Err err ->
-                    Just err
+                    Err err
 
                 Ok results ->
                     let
                         stacksAsTuples =
-                            List.map (\s -> [ PsomeTuples oldState.stack ]) results
+                            List.map (\s -> [ PsomeTuples s.stack ]) results
 
                         combinedType =
                             typeListUnion stacksAsTuples
+
+                        combinedUsed =
+                            List.foldr Set.union Set.empty (List.map .defUse results)
                     in
                     case combinedType of
                         [ PsomeTuples ts ] ->
-                            if ts /= restOfStack then
-                                Just { message = "bad loop block changed the stack", state = oldState }
+                            let
+                                oldStack =
+                                    [ Pbool True, Pbool False ] :: oldState.stack
+                            in
+                            if ts /= oldStack then
+                                Err { message = "Bad loop block changed the stack. Old stack: " ++ showTypeStack oldStack ++ "\nNew stack: " ++ showTypeStack ts, state = oldState }
 
                             else
-                                Nothing
+                                Ok combinedUsed
 
                         _ ->
-                            Just { state = oldState, message = "internal error in type checker: could not convert stacks to tuples" }
+                            Err { state = oldState, message = "internal error in type checker: could not convert stacks to tuples" }
 
 
 processTypeAtom : EltState -> TlAtom -> EltOut
