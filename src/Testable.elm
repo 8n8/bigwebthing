@@ -18,6 +18,7 @@ import Maybe.Extra
 import Parser as P exposing ((|.), (|=))
 import Result.Extra
 import Set
+import SHA256
 
 
 type Msg
@@ -76,7 +77,6 @@ initHome =
 defaultHome : Program
 defaultHome =
     { code = defaultHomeCode
-    , name = "home"
     , description = "The main home app."
     , inbox = []
     , blobs = []
@@ -2594,7 +2594,6 @@ encodeProgram : Program -> E.Encoder
 encodeProgram program =
     E.sequence
         [ encodeSizedString program.code
-        , encodeSizedString program.name
         , encodeSizedString program.description
         , encodeInbox program.inbox
         , encodeBlobs program.blobs
@@ -2680,7 +2679,12 @@ encodeSizedString str =
 
 programsToDict : List Program -> Dict.Dict String Program
 programsToDict programs =
-    Dict.fromList <| List.map (\p -> ( p.name, p )) programs
+    Dict.fromList <| List.map (\p -> ( hash p.code, p )) programs
+
+
+hash : String -> String
+hash s =
+    SHA256.toBase64 <| SHA256.fromString s
 
 
 {-| Pinched from the Bytes documentation.
@@ -2714,8 +2718,7 @@ sizedString =
 
 decodeProgram : D.Decoder Program
 decodeProgram =
-    map6 Program
-        sizedString
+    D.map5 Program
         sizedString
         sizedString
         (list decodeHumanMsg)
@@ -2823,7 +2826,6 @@ decodeOrdering =
 
 type alias Program =
     { code : String
-    , name : String
     , description : String
     , inbox : List HumanMsg
     , blobs : List Blob

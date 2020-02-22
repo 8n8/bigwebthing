@@ -209,11 +209,6 @@ reRunProgram model program =
                             { oldHome
                                 | outbox = newOutbox
                                 , biggestNonceBase = oldHome.biggestNonceBase + List.length msgs
-                                , programs =
-                                    Dict.insert
-                                        program.name
-                                        p
-                                        oldHome.programs
                             }
                     in
                     ( { model
