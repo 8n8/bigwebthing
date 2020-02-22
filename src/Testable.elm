@@ -67,7 +67,7 @@ type alias PubKeys =
 initHome : Home
 initHome =
     { outbox = []
-    , programs = Dict.fromList [ ( "home", defaultHome ) ]
+    , programs = Dict.fromList [ ( hash defaultHomeCode, defaultHome ) ]
     , pubKeys = Dict.empty
     , biggestNonceBase = 0
     , myKeys = Nothing
@@ -1046,6 +1046,14 @@ programProcessAtom { start, value, end } s =
                 PlistPrograms :: remainsOfStack ->
                     { s | stack = Plist (List.map Pstring <| Dict.keys s.allPrograms) :: remainsOfStack }
 
+                PcatString :: (Plist stringCandidates) :: tack ->
+                    case extractStrings stringCandidates of
+                        Nothing ->
+                            { s | internalError = Just "not all strings on top of stack" }
+
+                        Just strings ->
+                            { s | stack = Pstring (String.concat strings) :: tack }
+
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
 
@@ -1057,6 +1065,21 @@ programProcessAtom { start, value, end } s =
 
         IntegerLiteral i ->
             { s | stack = Pint i :: s.stack }
+
+
+extractStrings : List ProgVal -> Maybe (List String)
+extractStrings candidates =
+    Maybe.Extra.combine <| List.map extractString candidates
+
+
+extractString : ProgVal -> Maybe String
+extractString candidate =
+    case candidate of
+        Pstring s ->
+            Just s
+
+        _ ->
+            Nothing
 
 
 switch : ProgVal -> ProgVal -> ProgramState -> ProgramState
@@ -1242,6 +1265,7 @@ standardTypes =
         , ( "counter", [ PallInts ] )
         , ( "runloop", [ Pbool True, Pbool False ] )
         , ( "listprograms", [ PlistPrograms ] )
+        , ( "catstrings", [ PcatString ] )
         ]
 
 
@@ -1424,6 +1448,7 @@ standardLibrary =
         , ( "true", Pbool True )
         , ( "false", Pbool False )
         , ( "listprograms", PlistPrograms )
+        , ( "catstrings", PcatString )
         ]
 
 
@@ -1917,6 +1942,18 @@ processAtom state atom =
                                         _ ->
                                             Err { state = state, message = "internal error in type checker: could not convert stacks to tuples" }
 
+                [ PcatString ] :: tack ->
+                    case tack of
+                        stringsCandidate :: ack ->
+                            if isSubType stringsCandidate [ Plist [ PallStrings ] ] then
+                                Ok { state | stack = [ PallStrings ] :: ack }
+
+                            else
+                                Err { message = "expecting a list of strings, but got " ++ showTypeVal stringsCandidate, state = state }
+
+                        [] ->
+                            Err { message = "empty stack", state = state }
+
                 [ Pprint ] :: tack ->
                     case tack of
                         stringCandidate :: ack ->
@@ -1924,7 +1961,7 @@ processAtom state atom =
                                 Ok { state | stack = ack }
 
                             else
-                                Err { message = "expecting a string", state = state }
+                                Err { message = "expecting a string but got " ++ showTypeVal stringCandidate, state = state }
 
                         [] ->
                             Err { message = "empty stack", state = state }
@@ -2203,6 +2240,7 @@ type ProgVal
     | Pbool Bool
     | Pequal
     | PlistPrograms
+    | PcatString
 
 
 showProgVal : ProgVal -> String
@@ -2286,6 +2324,9 @@ showProgVal p =
 
         PlistPrograms ->
             "listprograms"
+
+        PcatString ->
+            "catstring"
 
 
 leftInput : Model -> Element.Element Msg
