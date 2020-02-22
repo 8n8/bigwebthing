@@ -17,8 +17,8 @@ import List.Nonempty as N
 import Maybe.Extra
 import Parser as P exposing ((|.), (|=))
 import Result.Extra
-import Set
 import SHA256
+import Set
 
 
 type Msg
@@ -190,8 +190,8 @@ topProgramP =
         |. P.end
 
 
-runProgram : Program -> ( Program, Maybe Document, List HumanMsg )
-runProgram program =
+runProgram : Program -> Dict.Dict String Program -> ( Program, Maybe Document, List HumanMsg )
+runProgram program allPrograms =
     case P.run topProgramP program.code of
         Err deadEnds ->
             ( program
@@ -205,7 +205,7 @@ runProgram program =
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
                 Nothing ->
-                    runElfs program atoms []
+                    runElfs allPrograms program atoms []
 
 
 deadEndsToString : List P.DeadEnd -> String
@@ -919,11 +919,12 @@ initDoc =
 
 
 runElfs :
-    Program
+    Dict.Dict String Program
+    -> Program
     -> List (Located Atom)
     -> List ProgVal
     -> ( Program, Maybe Document, List HumanMsg )
-runElfs program elfs progStack =
+runElfs allPrograms program elfs progStack =
     let
         oldP =
             { program = program
@@ -933,6 +934,7 @@ runElfs program elfs progStack =
             , outbox = []
             , blobs = []
             , internalError = Nothing
+            , allPrograms = allPrograms
             }
 
         newP =
@@ -948,6 +950,7 @@ runElfs program elfs progStack =
 
 type alias ProgramState =
     { program : Program
+    , allPrograms : Dict.Dict String Program
     , defs : Dict.Dict String ProgVal
     , stack : List ProgVal
     , rightDoc : Maybe Document
@@ -1039,6 +1042,9 @@ programProcessAtom { start, value, end } s =
 
                 Pequal :: e1 :: e2 :: remainsOfStack ->
                     { s | stack = Pbool (e1 == e2) :: remainsOfStack }
+
+                PlistPrograms :: remainsOfStack ->
+                    { s | stack = Plist (List.map Pstring <| Dict.keys s.allPrograms) :: remainsOfStack }
 
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
@@ -1210,6 +1216,7 @@ type alias EltState =
     , stack : List Type
     , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , defUse : Set.Set String
+    , isHome : Bool
     }
 
 
@@ -1234,6 +1241,7 @@ standardTypes =
         , ( "==", [ Pequal ] )
         , ( "counter", [ PallInts ] )
         , ( "runloop", [ Pbool True, Pbool False ] )
+        , ( "listprograms", [ PlistPrograms ] )
         ]
 
 
@@ -1415,6 +1423,7 @@ standardLibrary =
         , ( "==", Pequal )
         , ( "true", Pbool True )
         , ( "false", Pbool False )
+        , ( "listprograms", PlistPrograms )
         ]
 
 
@@ -1709,6 +1718,7 @@ initEltState =
     , typeDefUse = Set.empty
     , typeDefs = standardTypeProgramDefs
     , typeStack = []
+    , isHome = True
     }
 
 
@@ -1918,6 +1928,13 @@ processAtom state atom =
 
                         [] ->
                             Err { message = "empty stack", state = state }
+
+                [ PlistPrograms ] :: tack ->
+                    if state.isHome then
+                        Ok { state | stack = [ Plist [ PallStrings ] ] :: tack }
+
+                    else
+                        Err { message = "not home app", state = state }
 
                 [ Pcons ] :: tack ->
                     case tack of
@@ -2185,6 +2202,7 @@ type ProgVal
     | Ppop
     | Pbool Bool
     | Pequal
+    | PlistPrograms
 
 
 showProgVal : ProgVal -> String
@@ -2265,6 +2283,9 @@ showProgVal p =
 
         Pequal ->
             "=="
+
+        PlistPrograms ->
+            "listprograms"
 
 
 leftInput : Model -> Element.Element Msg

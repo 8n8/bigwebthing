@@ -154,7 +154,7 @@ init : () -> ( Model, Cmd Msg )
 init _ =
     let
         ( newProgram, rightDoc, outMsgs ) =
-            runProgram defaultHome
+            runProgram defaultHome Dict.empty
     in
     ( { home = initHome
       , openProgram = Just ( defaultHome, rightDoc )
@@ -172,7 +172,7 @@ reRunProgram : Model -> Testable.Program -> ( Model, Cmd Msg )
 reRunProgram model program =
     let
         ( p, doc, msgs ) =
-            runProgram program
+            runProgram program model.home.programs
 
         oldHome =
             model.home
