@@ -30,6 +30,7 @@ type Msg
     | LaunchProgram String
     | NewRawKeys Je.Value
     | ShowProgramCheckBox Bool
+    | UpdatedDescription String
 
 
 updatePrograms : Dict.Dict String Program -> Maybe ( Program, a ) -> Program -> Dict.Dict String Program
@@ -128,7 +129,24 @@ viewHelp model =
         , showRightDoc model
         , Element.text "End of program output."
         , editor model
+        , editDescription model.openProgram
         ]
+
+
+editDescription : Maybe ( Program, a ) -> Element.Element Msg
+editDescription maybeProgram =
+    case maybeProgram of
+        Nothing ->
+            Element.text "internal error: can't find program"
+
+        Just ( program, _ ) ->
+            Element.Input.multiline [ monospace ]
+                { onChange = UpdatedDescription
+                , text = program.description
+                , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type description here"
+                , label = Element.Input.labelAbove [ sansSerif ] <| Element.text "Program description:"
+                , spellcheck = True
+                }
 
 
 launcher : List ( String, String ) -> Maybe String -> Element.Element Msg
@@ -149,7 +167,7 @@ programLaunchRadioView : String -> String -> Element.Element Msg
 programLaunchRadioView name description =
     Element.column []
         [ Element.text name
-        , Element.text description
+        , Element.paragraph [] [ Element.text description ]
         ]
 
 
@@ -172,7 +190,7 @@ editor : Model -> Element.Element Msg
 editor model =
     case model.openProgram of
         Nothing ->
-            Element.text <| "internal err: can't find program"
+            Element.text "internal error: can't find program"
 
         Just ( program, _ ) ->
             Element.Input.multiline

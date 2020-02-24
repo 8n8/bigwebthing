@@ -152,6 +152,19 @@ update msg model =
                     in
                     reRunProgram { model | home = newHome} newProg
 
+        UpdatedDescription newDescription ->
+            case model.openProgram of
+                Nothing ->
+                    ( model, Cmd.none)
+                Just (program, doc) ->
+                    let
+                        newProg = { program | description = newDescription }
+                        newPrograms = Dict.insert (hash program.code) newProg model.home.programs
+                        oldHome = model.home
+                        newHome = { oldHome | programs = newPrograms }
+                    in
+                        ( {model | home = newHome, openProgram = Just (newProg, doc)}, Cmd.none )
+
 
 init : () -> ( Model, Cmd Msg )
 init _ =
