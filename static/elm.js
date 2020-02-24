@@ -22,6 +22,13 @@ app.ports.cacheHome.subscribe(function(base64str) {
   localforage.setItem('home', base64js.toByteArray(base64str));
 });
 
+app.ports.getSecretKeys.subscribe(function() {
+  const encryptionKey = base64js.fromByteArray(nacl.box.keyPair().secretKey);
+  const signingKey = base64js.fromByteArray(nacl.sign.keyPair().secretKey);
+  const keys = {encrypt: encryptionKey, sign: signingKey};
+  app.ports.gotSecretKeys.send(keys);
+});
+
 // app.ports.cacheHash.subscribe(function(base64str) {
 //   const bytes = base64js.toByteArray(base64str);
 //   const hash = nacl.hash(bytes);

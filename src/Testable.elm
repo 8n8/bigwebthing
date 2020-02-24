@@ -97,7 +97,12 @@ initHome =
 
 view : Model -> Html.Html Msg
 view model =
-    Element.layout [] (viewHelp model)
+    case model.internalErr of
+        Nothing ->
+            Element.layout [] (viewHelp model)
+
+        Just err ->
+            Element.layout [] (Element.text <| "internal error: " ++ err)
 
 
 viewHelp : Model -> Element.Element Msg
@@ -110,9 +115,14 @@ viewHelp model =
         , Font.size 25
         ]
     <|
-        [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram)
-        , newProgramButton
-        ]
+        (if Dict.isEmpty model.home.programs then
+            []
+
+         else
+            [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram) ]
+        )
+            ++ [ newProgramButton
+               ]
             ++ (case model.openProgram of
                     Nothing ->
                         []
