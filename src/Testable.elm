@@ -88,26 +88,11 @@ type alias PubKeys =
 initHome : Home
 initHome =
     { outbox = []
-    , programs = Dict.fromList [ ( hash defaultHomeCode, defaultHome ) ]
+    , programs = Dict.empty
     , pubKeys = Dict.empty
     , biggestNonceBase = 0
     , myKeys = Nothing
     }
-
-
-defaultHome : Program
-defaultHome =
-    { code = defaultHomeCode
-    , description = "The main home app."
-    , inbox = []
-    , blobs = []
-    , typedIn = ""
-    }
-
-
-defaultHomeCode : String
-defaultHomeCode =
-    """[] "hi" cons. "there" cons."""
 
 
 view : Model -> Html.Html Msg
@@ -124,15 +109,23 @@ viewHelp model =
         , sansSerif
         , Font.size 25
         ]
+    <|
         [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram)
         , newProgramButton
-        , leftInput model
-        , Element.text "The program output goes here:"
-        , showRightDoc model
-        , Element.text "End of program output."
-        , editor model
-        , editDescription model.openProgram
         ]
+            ++ (case model.openProgram of
+                    Nothing ->
+                        []
+
+                    Just _ ->
+                        [ leftInput model
+                        , Element.text "The program output goes here:"
+                        , showRightDoc model
+                        , Element.text "End of program output."
+                        , editor model
+                        , editDescription model.openProgram
+                        ]
+               )
 
 
 editDescription : Maybe ( Program, a ) -> Element.Element Msg
@@ -2411,7 +2404,7 @@ leftText : Model -> String
 leftText model =
     case model.openProgram of
         Nothing ->
-            "internal error:: can't find program"
+            "internal error: can't find program"
 
         Just ( program, _ ) ->
             program.typedIn

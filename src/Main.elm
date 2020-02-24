@@ -193,17 +193,13 @@ update msg model =
                 newHome =
                     { oldHome | programs = newPrograms }
             in
-            ( { model | home = newHome }, Cmd.none )
+            ( { model | home = newHome, openProgram = Just ( newProgram, Nothing ) }, Cmd.none )
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    let
-        ( newProgram, rightDoc, outMsgs ) =
-            runProgram defaultHome Dict.empty
-    in
     ( { home = initHome
-      , openProgram = Just ( defaultHome, rightDoc )
+      , openProgram = Nothing
       , lookedUpBlob = Nothing
       , toLookUp = []
       , internalErr = Nothing
