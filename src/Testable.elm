@@ -102,12 +102,34 @@ viewHelp model =
         , sansSerif
         , Font.size 25
         ]
-        [ homeButton
+        [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram)
         , leftInput model
         , Element.text "The program output goes here:"
         , showRightDoc model
         , Element.text "End of program output."
         , editor model
+        ]
+
+
+launcher : List ( String, String ) -> Maybe String -> Element.Element Msg
+launcher programs selected =
+    Element.Input.radio []
+        { onChange = LaunchProgram
+        , selected = selected
+        , label = Element.Input.labelAbove [] (Element.text "Choose a program")
+        , options = List.map programLaunchRadio programs
+        }
+
+
+programLaunchRadio ( name, description ) =
+    Element.Input.option name (programLaunchRadioView name description)
+
+
+programLaunchRadioView : String -> String -> Element.Element Msg
+programLaunchRadioView name description =
+    Element.column []
+        [ Element.text name
+        , Element.text description
         ]
 
 
@@ -152,7 +174,7 @@ editor model =
 homeButton : Element.Element Msg
 homeButton =
     Element.Input.button [ Element.padding 10, Border.width 1, Border.color <| Element.rgb255 0 0 0 ]
-        { onPress = Just <| LaunchProgram "home"
+        { onPress = Just <| LaunchProgram <| hash defaultHomeCode
         , label = Element.text "Launch home app"
         }
 
@@ -2620,7 +2642,7 @@ encodeSecretKeys maybeKeys =
         Nothing ->
             E.unsignedInt8 0
 
-        Just {encrypt, sign} ->
+        Just { encrypt, sign } ->
             E.sequence
                 [ E.unsignedInt8 1
                 , encodeBytes encrypt
@@ -2631,15 +2653,16 @@ encodeSecretKeys maybeKeys =
 encodePubKeys : Dict.Dict String PubKeys -> E.Encoder
 encodePubKeys keys =
     let
-        asList = Dict.toList keys
+        asList =
+            Dict.toList keys
     in
-        E.sequence <|
-            (E.unsignedInt32 Bytes.BE <| List.length asList)
-                :: List.map encodePubKey asList
+    E.sequence <|
+        (E.unsignedInt32 Bytes.BE <| List.length asList)
+            :: List.map encodePubKey asList
 
 
-encodePubKey : (String, PubKeys) -> E.Encoder
-encodePubKey (name, {encrypt, sign}) =
+encodePubKey : ( String, PubKeys ) -> E.Encoder
+encodePubKey ( name, { encrypt, sign } ) =
     E.sequence
         [ encodeSizedString name
         , encodeBytes encrypt
