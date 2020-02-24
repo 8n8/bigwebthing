@@ -146,24 +146,54 @@ update msg model =
                     let
                         newProg =
                             { program | code = newCode }
-                        newPrograms = updatePrograms model.home.programs model.openProgram newProg
-                        oldHome = model.home
-                        newHome = { oldHome | programs = newPrograms }
+
+                        newPrograms =
+                            updatePrograms model.home.programs model.openProgram newProg
+
+                        oldHome =
+                            model.home
+
+                        newHome =
+                            { oldHome | programs = newPrograms }
                     in
-                    reRunProgram { model | home = newHome} newProg
+                    reRunProgram { model | home = newHome } newProg
 
         UpdatedDescription newDescription ->
             case model.openProgram of
                 Nothing ->
-                    ( model, Cmd.none)
-                Just (program, doc) ->
+                    ( model, Cmd.none )
+
+                Just ( program, doc ) ->
                     let
-                        newProg = { program | description = newDescription }
-                        newPrograms = Dict.insert (hash program.code) newProg model.home.programs
-                        oldHome = model.home
-                        newHome = { oldHome | programs = newPrograms }
+                        newProg =
+                            { program | description = newDescription }
+
+                        newPrograms =
+                            Dict.insert (hash program.code) newProg model.home.programs
+
+                        oldHome =
+                            model.home
+
+                        newHome =
+                            { oldHome | programs = newPrograms }
                     in
-                        ( {model | home = newHome, openProgram = Just (newProg, doc)}, Cmd.none )
+                    ( { model | home = newHome, openProgram = Just ( newProg, doc ) }, Cmd.none )
+
+        MakeNewProgram ->
+            let
+                newProgram =
+                    { code = "", description = "New program", inbox = [], blobs = [], typedIn = "" }
+
+                newPrograms =
+                    Dict.insert (hash newProgram.code) newProgram model.home.programs
+
+                oldHome =
+                    model.home
+
+                newHome =
+                    { oldHome | programs = newPrograms }
+            in
+            ( { model | home = newHome }, Cmd.none )
 
 
 init : () -> ( Model, Cmd Msg )
@@ -235,6 +265,7 @@ reRunProgram model program =
                         , cacheHomeHelp newHome
                         ]
                     )
+
 
 subscriptions : Model -> Sub Msg
 subscriptions model =

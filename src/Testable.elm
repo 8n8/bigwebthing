@@ -31,6 +31,7 @@ type Msg
     | NewRawKeys Je.Value
     | ShowProgramCheckBox Bool
     | UpdatedDescription String
+    | MakeNewProgram
 
 
 updatePrograms : Dict.Dict String Program -> Maybe ( Program, a ) -> Program -> Dict.Dict String Program
@@ -124,6 +125,7 @@ viewHelp model =
         , Font.size 25
         ]
         [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram)
+        , newProgramButton
         , leftInput model
         , Element.text "The program output goes here:"
         , showRightDoc model
@@ -209,11 +211,11 @@ editor model =
                 }
 
 
-homeButton : Element.Element Msg
-homeButton =
-    Element.Input.button [ Element.padding 10, Border.width 1, Border.color <| Element.rgb255 0 0 0 ]
-        { onPress = Just <| LaunchProgram <| hash defaultHomeCode
-        , label = Element.text "Launch home app"
+newProgramButton : Element.Element Msg
+newProgramButton =
+    Element.Input.button []
+        { onPress = Just MakeNewProgram
+        , label = Element.text "Make new program"
         }
 
 
