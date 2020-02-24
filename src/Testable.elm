@@ -2615,11 +2615,47 @@ decodePubKey =
         (D.bytes 32)
 
 
+encodeSecretKeys : Maybe MySecretKeys -> E.Encoder
+encodeSecretKeys maybeKeys =
+    case maybeKeys of
+        Nothing ->
+            E.unsignedInt8 0
+
+        Just {encrypt, sign} ->
+            E.sequence
+                [ E.unsignedInt8 1
+                , encodeBytes encrypt
+                , encodeBytes sign
+                ]
+
+
+encodePubKeys : Dict.Dict String PubKeys -> E.Encoder
+encodePubKeys keys =
+    let
+        asList = Dict.toList keys
+    in
+        E.sequence <|
+            (E.unsignedInt32 Bytes.BE <| List.length asList)
+                :: List.map encodePubKey asList
+
+
+encodePubKey : (String, PubKeys) -> E.Encoder
+encodePubKey (name, {encrypt, sign}) =
+    E.sequence
+        [ encodeSizedString name
+        , encodeBytes encrypt
+        , encodeBytes sign
+        ]
+
+
 encodeHome : Home -> E.Encoder
 encodeHome h =
     E.sequence
-        [ encodePrograms h.programs
+        [ E.unsignedInt32 Bytes.BE h.biggestNonceBase
+        , encodeSecretKeys h.myKeys
         , encodeHumanMsgs h.outbox
+        , encodePrograms h.programs
+        , encodePubKeys h.pubKeys
         ]
 
 
