@@ -146,8 +146,11 @@ update msg model =
                     let
                         newProg =
                             { program | code = newCode }
+                        newPrograms = updatePrograms model.home.programs model.openProgram newProg
+                        oldHome = model.home
+                        newHome = { oldHome | programs = newPrograms }
                     in
-                    reRunProgram model newProg
+                    reRunProgram { model | home = newHome} newProg
 
 
 init : () -> ( Model, Cmd Msg )
@@ -219,7 +222,6 @@ reRunProgram model program =
                         , cacheHomeHelp newHome
                         ]
                     )
-
 
 subscriptions : Model -> Sub Msg
 subscriptions model =

@@ -32,6 +32,26 @@ type Msg
     | ShowProgramCheckBox Bool
 
 
+updatePrograms : Dict.Dict String Program -> Maybe ( Program, a ) -> Program -> Dict.Dict String Program
+updatePrograms oldPrograms maybeOldProgram newProgram =
+    case maybeOldProgram of
+        Nothing ->
+            oldPrograms
+
+        Just ( oldProgram, _ ) ->
+            let
+                oldHash =
+                    hash oldProgram.code
+
+                withoutOld =
+                    Dict.remove oldHash oldPrograms
+
+                newHash =
+                    hash newProgram.code
+            in
+            Dict.insert newHash newProgram withoutOld
+
+
 type alias Model =
     { home : Home
     , openProgram : Maybe ( Program, Maybe Document )
