@@ -160,7 +160,6 @@ init _ =
       , openProgram = Just ( defaultHome, rightDoc )
       , lookedUpBlob = Nothing
       , toLookUp = []
-      , accumBlob = Nothing
       , internalErr = Nothing
       , editProgram = False
       }

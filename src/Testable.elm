@@ -37,7 +37,6 @@ type alias Model =
     , openProgram : Maybe ( Program, Maybe Document )
     , lookedUpBlob : Maybe ( Bytes.Bytes, Set.Set String )
     , toLookUp : List String
-    , accumBlob : Maybe Bytes.Bytes
     , internalErr : Maybe String
     , editProgram : Bool
     }
