@@ -248,16 +248,16 @@ type alias Located a =
     }
 
 
-topProgramP : P.Parser (List (Located Atom))
-topProgramP =
+topProgramP : Dict.Dict String Program -> P.Parser (List (Located Atom))
+topProgramP programs =
     P.succeed identity
-        |= programP
+        |= programP programs
         |. P.end
 
 
 runProgram : Program -> Dict.Dict String Program -> ( Program, Maybe Document, List HumanMsg )
 runProgram program allPrograms =
-    case P.run topProgramP program.code of
+    case P.run (topProgramP allPrograms) program.code of
         Err deadEnds ->
             ( program
             , Just <| SmallString <| deadEndsToString deadEnds
@@ -345,21 +345,43 @@ type alias ParserOut =
     }
 
 
-programP : P.Parser (List (Located Atom))
-programP =
-    P.loop [] programHelpP
+programP : Dict.Dict String Program -> P.Parser (List (Located Atom))
+programP programs =
+    P.loop [] (programHelpP programs)
 
 
 programHelpP :
-    List (Located Atom)
+    Dict.Dict String Program
+    -> List (Located Atom)
     -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
-programHelpP p =
+programHelpP programs p =
     P.oneOf
-        [ P.map (\element -> P.Loop (element :: p))
-            (located elementP)
+        [ P.map (\elements -> P.Loop (List.reverse elements ++ p)) (importHelpP programs)
+        , P.map (\element -> P.Loop (element :: p))
+            (located (elementP programs))
         , P.succeed ()
             |> P.map (\_ -> P.Done (List.reverse p))
         ]
+
+
+importHelpP : Dict.Dict String Program -> P.Parser (List (Located Atom))
+importHelpP programs =
+    P.andThen (importHelpHelpP programs) importP
+
+
+importHelpHelpP : Dict.Dict String Program -> String -> P.Parser (List (Located Atom))
+importHelpHelpP programs toImport =
+    case Dict.get toImport programs of
+        Nothing ->
+            P.problem <| "can't find program with name \"" ++ toImport ++ "\""
+
+        Just program ->
+            case P.run (programP programs) program.code of
+                Err err ->
+                    P.problem <| deadEndsToString err
+
+                Ok atoms ->
+                    P.succeed atoms
 
 
 programLoopHelp :
@@ -379,17 +401,61 @@ programLoopHelp oldP oldOffset newP newOffset =
             )
 
 
-elementP : P.Parser Atom
-elementP =
+elementP : Dict.Dict String Program -> P.Parser Atom
+elementP programs =
     P.oneOf
         [ runBlockP
         , stringPWrap
         , retrieveP
         , intPWrap
         , defP
-        , programBlockP
+        , programBlockP programs
         , topTypeLangP
         ]
+
+
+importP : P.Parser String
+importP =
+    P.succeed identity
+        |. P.keyword "import"
+        |. whiteSpaceP
+        |= hashP
+
+
+hashP : P.Parser String
+hashP =
+    P.andThen
+        (\s ->
+            if String.length s == 44 then
+                P.succeed s
+
+            else
+                P.problem "hash is not 44 characters"
+        )
+        hashPhelp
+
+
+hashPhelp : P.Parser String
+hashPhelp =
+    P.succeed (\body -> body ++ "=")
+        |= hashBody
+        |. P.token "="
+
+
+hashBody : P.Parser String
+hashBody =
+    P.getChompedString <| P.succeed () |. hashCharsP
+
+
+hashCharsP : P.Parser ()
+hashCharsP =
+    P.chompWhile (\c -> Set.member c okHashChars)
+
+
+okHashChars : Set.Set Char
+okHashChars =
+    Set.fromList
+        [ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/' ]
 
 
 topTypeLangP : P.Parser Atom
@@ -725,11 +791,11 @@ runBlockP =
         |. P.token "."
 
 
-programBlockP : P.Parser Atom
-programBlockP =
+programBlockP : Dict.Dict String Program -> P.Parser Atom
+programBlockP programs =
     P.succeed Block
         |. P.token "{"
-        |= programP
+        |= programP programs
         |. P.token "}"
 
 
