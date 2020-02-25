@@ -5,6 +5,7 @@ import Browser
 import Bytes.Decode as D
 import Bytes.Encode as E
 import Dict
+import Hex.Convert
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
@@ -114,13 +115,13 @@ update msg model =
                 Just bytes ->
                     case D.decode decodeHome bytes of
                         Nothing ->
-                            ( model, Cmd.none )
+                            ( { model | internalErr = Just "Could not decode bytes for Home" }, Cmd.none )
 
                         Just home ->
                             ( { model | home = home }, Cmd.none )
 
                 Nothing ->
-                    ( model, Cmd.none )
+                    ( { model | internalErr = Just "Could not convert base64 to bytes for Home" }, Cmd.none )
 
         RetrievedHash raw ->
             ( model, Cmd.none )

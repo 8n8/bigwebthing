@@ -16,6 +16,7 @@
             "elm-community/maybe-extra": "5.1.0",
             "elm-community/result-extra": "2.3.0",
             "folkertdev/elm-sha2": "1.0.0",
+            "jxxcarlson/hex": "4.0.0",
             "mdgriffith/elm-ui": "1.1.5",
             "mgold/elm-nonempty-list": "4.0.2"
         },
@@ -24,6 +25,7 @@
             "elm/time": "1.0.0",
             "elm/url": "1.0.0",
             "elm/virtual-dom": "1.0.2",
+            "elm-community/list-extra": "8.2.3",
             "rtfeldman/elm-hex": "1.0.0"
         }
     },

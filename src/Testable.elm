@@ -9,6 +9,7 @@ import Element
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input
+import Hex.Convert
 import Html
 import Html.Attributes
 import Json.Decode as Jd
@@ -2688,8 +2689,8 @@ encodeSecretKeys maybeKeys =
         Just { encrypt, sign } ->
             E.sequence
                 [ E.unsignedInt8 1
-                , encodeBytes encrypt
-                , encodeBytes sign
+                , E.bytes encrypt
+                , E.bytes sign
                 ]
 
 
@@ -2737,20 +2738,19 @@ programs, followed by the programs, one after another.
 -}
 encodePrograms : Dict.Dict String Program -> E.Encoder
 encodePrograms programs =
-    let
-        asList =
-            Dict.values programs
-    in
+    encodeList (Dict.values programs) encodeProgram
+
+
+encodeList : List a -> (a -> E.Encoder) -> E.Encoder
+encodeList toEncode elementEncoder =
     E.sequence <|
-        (E.unsignedInt32 Bytes.BE <| List.length asList)
-            :: List.map encodeProgram asList
+        (E.unsignedInt32 Bytes.BE <| List.length toEncode)
+            :: List.map elementEncoder toEncode
 
 
 encodeHumanMsgs : List HumanMsg -> E.Encoder
 encodeHumanMsgs msgs =
-    E.sequence <|
-        (E.unsignedInt32 Bytes.BE <| List.length msgs)
-            :: List.map encodeHumanMsg msgs
+    encodeList msgs encodeHumanMsg
 
 
 encodeProgram : Program -> E.Encoder
@@ -2933,6 +2933,9 @@ decodeDocumentHelp typeNum =
 
         2 ->
             decodeOrdering
+
+        3 ->
+            D.map SmallString sizedString
 
         _ ->
             D.fail
