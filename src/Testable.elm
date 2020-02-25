@@ -1991,21 +1991,40 @@ processAtom state atom =
 
                                 Ok results ->
                                     let
+                                        allNames =
+                                            List.foldr Set.union Set.empty (List.map (Set.fromList << Dict.keys << .defPos) results)
+
+                                        oldNames =
+                                            Set.fromList <| Dict.keys state.defPos
+
+                                        newNames =
+                                            Set.diff allNames oldNames
+
+                                        newUnused =
+                                            Set.diff newNames combinedUsed
+
                                         stacksAsTuples =
                                             List.map (\s -> [ PsomeTuples s.stack ]) results
 
                                         combinedType =
                                             typeListUnion stacksAsTuples
 
+                                        combinedPositions =
+                                            List.foldr Dict.union Dict.empty (List.map .defPos results)
+
                                         combinedUsed =
                                             List.foldr Set.union Set.empty (List.map .defUse results)
                                     in
-                                    case combinedType of
-                                        [ PsomeTuples ts ] ->
-                                            Ok { state | stack = ts, defUse = combinedUsed }
+                                    if Set.isEmpty newUnused then
+                                        case combinedType of
+                                            [ PsomeTuples ts ] ->
+                                                Ok { state | stack = ts, defUse = combinedUsed }
 
-                                        _ ->
-                                            Err { state = state, message = "internal error in type checker: could not convert stacks to tuples" }
+                                            _ ->
+                                                Err { state = state, message = "internal error in type checker: could not convert stacks to tuples" }
+
+                                    else
+                                        Err { state = state, message = prettyUnusedInBlock newUnused combinedPositions }
 
                 [ PcatString ] :: tack ->
                     case tack of
@@ -2159,6 +2178,21 @@ processAtom state atom =
 
         IntegerLiteral i ->
             Ok { state | stack = [ Pint i ] :: state.stack }
+
+
+prettyUnusedInBlock : Set.Set String -> Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> String
+prettyUnusedInBlock names positions =
+    let
+        help : String -> String
+        help name =
+            case Dict.get name positions of
+                Nothing ->
+                    "internal error: cannot find position of name \"" ++ name ++ "\""
+
+                Just ( start, end ) ->
+                    onePrettyUnused ( name, start, end )
+    in
+    String.join ", " <| List.map help <| Set.toList names
 
 
 runTypeProgram : List (Located TlAtom) -> EltState -> EltOut
