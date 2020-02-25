@@ -278,6 +278,14 @@ deadEndsToString deadEnds =
     String.join "\n\n" <| List.map deadEndToString deadEnds
 
 
+exportP : P.Parser Atom
+exportP =
+    P.succeed Export
+        |. P.keyword "export"
+        |. whiteSpaceP
+        |= variable
+
+
 deadEndToString : P.DeadEnd -> String
 deadEndToString deadEnd =
     String.concat
@@ -406,6 +414,7 @@ elementP programs =
     P.oneOf
         [ runBlockP
         , stringPWrap
+        , exportP
         , retrieveP
         , intPWrap
         , defP
@@ -916,6 +925,9 @@ showAtom atom =
         IntegerLiteral integer ->
             "Integer " ++ String.fromInt integer
 
+        Export s ->
+            "Export " ++ s
+
 
 showTlAtom : TlAtom -> String
 showTlAtom atom =
@@ -1197,6 +1209,9 @@ programProcessAtom { start, value, end } s =
         IntegerLiteral i ->
             { s | stack = Pint i :: s.stack }
 
+        Export _ ->
+            s
+
 
 extractStrings : List ProgVal -> Maybe (List String)
 extractStrings candidates =
@@ -1330,6 +1345,7 @@ type Atom
     | TypeLanguage (List (Located TlAtom))
     | StringLiteral String
     | IntegerLiteral Int
+    | Export String
 
 
 type TlAtom
@@ -2244,6 +2260,9 @@ processAtom state atom =
 
         IntegerLiteral i ->
             Ok { state | stack = [ Pint i ] :: state.stack }
+
+        Export exported ->
+            Ok { state | defUse = Set.insert exported state.defUse }
 
 
 prettyUnusedInBlock : Set.Set String -> Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> String
