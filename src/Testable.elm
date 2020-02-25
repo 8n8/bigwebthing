@@ -244,20 +244,21 @@ initTypeProgramState =
 type alias Located a =
     { start : ( Int, Int )
     , value : a
+    , file : String
     , end : ( Int, Int )
     }
 
 
-topProgramP : Dict.Dict String Program -> P.Parser (List (Located Atom))
-topProgramP programs =
+topProgramP : String -> Dict.Dict String Program -> P.Parser (List (Located Atom))
+topProgramP filename programs =
     P.succeed identity
-        |= programP programs
+        |= programP filename programs
         |. P.end
 
 
 runProgram : Program -> Dict.Dict String Program -> ( Program, Maybe Document, List HumanMsg )
 runProgram program allPrograms =
-    case P.run (topProgramP allPrograms) program.code of
+    case P.run (topProgramP (hash program.code) allPrograms) program.code of
         Err deadEnds ->
             ( program
             , Just <| SmallString <| deadEndsToString deadEnds
@@ -265,7 +266,7 @@ runProgram program allPrograms =
             )
 
         Ok atoms ->
-            case runTypeChecks atoms initEltState of
+            case runTypeChecks atoms { initEltState | fileName = hash program.code } of
                 Just errMsg ->
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
@@ -353,20 +354,21 @@ type alias ParserOut =
     }
 
 
-programP : Dict.Dict String Program -> P.Parser (List (Located Atom))
-programP programs =
-    P.loop [] (programHelpP programs)
+programP : String -> Dict.Dict String Program -> P.Parser (List (Located Atom))
+programP filename programs =
+    P.loop [] (programHelpP filename programs)
 
 
 programHelpP :
-    Dict.Dict String Program
+    String
+    -> Dict.Dict String Program
     -> List (Located Atom)
     -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
-programHelpP programs p =
+programHelpP filename programs p =
     P.oneOf
         [ P.map (\elements -> P.Loop (List.reverse elements ++ p)) (importHelpP programs)
         , P.map (\element -> P.Loop (element :: p))
-            (located (elementP programs))
+            (located filename (elementP programs))
         , P.succeed ()
             |> P.map (\_ -> P.Done (List.reverse p))
         ]
@@ -384,7 +386,7 @@ importHelpHelpP programs toImport =
             P.problem <| "can't find program with name \"" ++ toImport ++ "\""
 
         Just program ->
-            case P.run (programP programs) program.code of
+            case P.run (programP toImport programs) program.code of
                 Err err ->
                     P.problem <| deadEndsToString err
 
@@ -409,8 +411,8 @@ programLoopHelp oldP oldOffset newP newOffset =
             )
 
 
-elementP : Dict.Dict String Program -> P.Parser Atom
-elementP programs =
+elementP : Dict.Dict String Program -> String -> P.Parser Atom
+elementP programs filename =
     P.oneOf
         [ runBlockP
         , stringPWrap
@@ -418,8 +420,8 @@ elementP programs =
         , retrieveP
         , intPWrap
         , defP
-        , programBlockP programs
-        , topTypeLangP
+        , programBlockP filename programs
+        , topTypeLangP filename
         ]
 
 
@@ -467,17 +469,17 @@ okHashChars =
         [ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/' ]
 
 
-topTypeLangP : P.Parser Atom
-topTypeLangP =
+topTypeLangP : String -> P.Parser Atom
+topTypeLangP filename =
     P.succeed TypeLanguage
         |. P.token "<"
-        |= typeLangP
+        |= typeLangP filename
         |. P.token ">"
 
 
-typeLangP : P.Parser (List (Located TlAtom))
-typeLangP =
-    P.loop [] typeLangHelpP
+typeLangP : String -> P.Parser (List (Located TlAtom))
+typeLangP filename =
+    P.loop [] (typeLangHelpP filename)
 
 
 type alias Ety =
@@ -485,23 +487,24 @@ type alias Ety =
 
 
 typeLangHelpP :
-    List (Located TlAtom)
+    String
+    -> List (Located TlAtom)
     -> P.Parser (P.Step (List (Located TlAtom)) (List (Located TlAtom)))
-typeLangHelpP p =
+typeLangHelpP filename p =
     P.oneOf
         [ P.map (\element -> P.Loop (element :: p))
-            (located typeElementP)
+            (located filename typeElementP)
         , P.succeed () |> P.map (\_ -> P.Done (List.reverse p))
         ]
 
 
-typeElementP : P.Parser TlAtom
-typeElementP =
+typeElementP : String -> P.Parser TlAtom
+typeElementP filename =
     P.oneOf
         [ typeRunBlockP
         , typeStringP
         , typeDefP
-        , typeBlockP
+        , typeBlockP filename
         , typeRetrieveP
         ]
 
@@ -512,11 +515,11 @@ typeRetrieveP =
         |= variable
 
 
-typeBlockP : P.Parser TlAtom
-typeBlockP =
+typeBlockP : String -> P.Parser TlAtom
+typeBlockP filename =
     P.succeed TlBlock
         |. P.token "{"
-        |= typeLangP
+        |= typeLangP filename
         |. P.token "}"
 
 
@@ -715,12 +718,12 @@ isUninteresting char =
     char /= '\\' && char /= '"'
 
 
-located : P.Parser a -> P.Parser (Located a)
-located parser =
-    P.succeed Located
+located : String -> (String -> P.Parser a) -> P.Parser (Located a)
+located filename parser =
+    P.succeed (\start value end -> { start = start, end = end, value = value, file = filename })
         |. whiteSpaceP
         |= P.getPosition
-        |= parser
+        |= parser filename
         |= P.getPosition
         |. whiteSpaceP
 
@@ -800,11 +803,11 @@ runBlockP =
         |. P.token "."
 
 
-programBlockP : Dict.Dict String Program -> P.Parser Atom
-programBlockP programs =
+programBlockP : String -> Dict.Dict String Program -> P.Parser Atom
+programBlockP filename programs =
     P.succeed Block
         |. P.token "{"
-        |= programP programs
+        |= programP filename programs
         |. P.token "}"
 
 
@@ -1387,6 +1390,7 @@ type alias EltState =
     , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
     , defUse : Set.Set String
     , isHome : Bool
+    , fileName : String
     }
 
 
@@ -1882,6 +1886,7 @@ customOfStandardHelp bs t =
 initEltState =
     { startPosition = ( 0, 0 )
     , endPosition = ( 0, 0 )
+    , fileName = ""
     , stack = []
     , defs = standardTypes
     , defPos = Dict.empty
@@ -1947,10 +1952,8 @@ onePrettyUnused ( name, start, end ) =
     String.concat
         [ "\""
         , name
-        , "\" defined but not used: between "
-        , prettyPosition start
-        , " and "
-        , prettyPosition end
+        , "\" defined but not used: \n"
+        , prettyLocation name start end
         ]
 
 
@@ -1986,12 +1989,22 @@ endEmpty s =
 prettyErrorMessage : TypeError -> String
 prettyErrorMessage { state, message } =
     String.concat
-        [ "between "
-        , prettyPosition state.startPosition
-        , " and "
-        , prettyPosition state.endPosition
+        [ prettyLocation state.fileName state.startPosition state.endPosition
         , ":\n"
         , message
+        ]
+
+
+prettyLocation : String -> ( Int, Int ) -> ( Int, Int ) -> String
+prettyLocation name start end =
+    String.concat
+        [ "in file "
+        , name
+        , "\n"
+        , "between "
+        , prettyPosition start
+        , " and "
+        , prettyPosition end
         ]
 
 
@@ -2012,7 +2025,7 @@ runTypeChecksHelp atoms state =
             Ok state
 
         a :: toms ->
-            case processAtom { state | startPosition = a.start, endPosition = a.end } a.value of
+            case processAtom { state | startPosition = a.start, endPosition = a.end, fileName = a.file } a.value of
                 Err err ->
                     Err err
 
