@@ -431,6 +431,7 @@ importP =
         |. P.keyword "import"
         |. whiteSpaceP
         |= hashP
+        |. whiteSpaceP
 
 
 hashP : P.Parser String
@@ -696,6 +697,8 @@ reserved =
     Set.fromList
         [ "."
         , "="
+        , "import"
+        , "export"
         ]
 
 
@@ -2275,7 +2278,11 @@ processAtom state atom =
             Ok { state | stack = [ Pint i ] :: state.stack }
 
         Export exported ->
-            Ok { state | defUse = Set.insert exported state.defUse }
+            if Dict.member exported state.defPos then
+                Ok { state | defUse = Set.insert exported state.defUse }
+
+            else
+                Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
 
 
 prettyUnusedInBlock : Set.Set String -> Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> String
