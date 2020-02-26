@@ -266,7 +266,7 @@ runProgram program allPrograms =
             )
 
         Ok atoms ->
-            case runTypeChecks atoms { initEltState | fileName = hash program.code } of
+            case runTypeChecks atoms { initEltState | position = { start = initEltState.position.start, end = initEltState.position.end, file = hash program.code } } of
                 Just errMsg ->
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
@@ -768,13 +768,13 @@ defElf var p =
                 }
 
 
-defElt : String -> ( Int, Int ) -> ( Int, Int ) -> Elt
-defElt var start end state =
+defElt : String -> Position -> Elt
+defElt var position state =
     case state.stack of
         [] ->
             Err
                 { message = "you need to put something on the stack before a definition"
-                , state = newPos state start end
+                , state = { state | position = position }
                 }
 
         s :: tack ->
@@ -786,7 +786,7 @@ defElt var start end state =
                             , var
                             , "\""
                             ]
-                    , state = newPos state start end
+                    , state = { state | position = position }
                     }
 
             else
@@ -794,9 +794,8 @@ defElt var start end state =
                     { state
                         | defs = Dict.insert var s state.defs
                         , stack = tack
-                        , startPosition = start
-                        , endPosition = end
-                        , defPos = Dict.insert var ( start, end ) state.defPos
+                        , position = position
+                        , defPos = Dict.insert var position state.defPos
                     }
 
 
@@ -866,14 +865,6 @@ blockUnusedNames new old =
 
         oneOrMore ->
             Just { message = prettyUnused oneOrMore, state = new }
-
-
-newPos : EltState -> ( Int, Int ) -> ( Int, Int ) -> EltState
-newPos state start end =
-    { state
-        | startPosition = start
-        , endPosition = end
-    }
 
 
 justs : List (Maybe a) -> List a
@@ -1382,18 +1373,23 @@ type alias EltOut =
 
 
 type alias EltState =
-    { startPosition : ( Int, Int )
-    , endPosition : ( Int, Int )
+    { position : Position
     , typeDefs : Dict.Dict String TypeProgramValue
     , typeStack : List TypeProgramValue
-    , typeDefPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
+    , typeDefPos : Dict.Dict String Position
     , typeDefUse : Set.Set String
     , defs : Dict.Dict String Type
     , stack : List Type
-    , defPos : Dict.Dict String ( ( Int, Int ), ( Int, Int ) )
+    , defPos : Dict.Dict String Position
     , defUse : Set.Set String
     , isHome : Bool
-    , fileName : String
+    }
+
+
+type alias Position =
+    { file : String
+    , start : ( Int, Int )
+    , end : ( Int, Int )
     }
 
 
@@ -1887,9 +1883,7 @@ customOfStandardHelp bs t =
 
 
 initEltState =
-    { startPosition = ( 0, 0 )
-    , endPosition = ( 0, 0 )
-    , fileName = ""
+    { position = { start = ( 0, 0 ), end = ( 0, 0 ), file = "" }
     , stack = []
     , defs = standardTypes
     , defPos = Dict.empty
@@ -1945,34 +1939,34 @@ noUnusedNames s =
             Just <| prettyUnused oneOrMore
 
 
-prettyUnused : List ( String, ( Int, Int ), ( Int, Int ) ) -> String
+prettyUnused : List ( String, Position ) -> String
 prettyUnused unused =
     String.join ", " <| List.map onePrettyUnused unused
 
 
-onePrettyUnused : ( String, ( Int, Int ), ( Int, Int ) ) -> String
-onePrettyUnused ( name, start, end ) =
+onePrettyUnused : ( String, Position ) -> String
+onePrettyUnused ( name, position ) =
     String.concat
         [ "\""
         , name
         , "\" defined but not used: \n"
-        , prettyLocation name start end
+        , prettyLocation position
         ]
 
 
-namesAndPositions : Set.Set String -> Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> List ( String, ( Int, Int ), ( Int, Int ) )
+namesAndPositions : Set.Set String -> Dict.Dict String Position -> List ( String, Position )
 namesAndPositions unused positions =
     justs <| List.map (makePosition positions) <| Set.toList unused
 
 
-makePosition : Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> String -> Maybe ( String, ( Int, Int ), ( Int, Int ) )
+makePosition : Dict.Dict String Position -> String -> Maybe ( String, Position )
 makePosition positions name =
     case Dict.get name positions of
         Nothing ->
             Nothing
 
-        Just ( start, end ) ->
-            Just ( name, start, end )
+        Just position ->
+            Just ( name, position )
 
 
 endEmpty : EltState -> Maybe String
@@ -1992,17 +1986,17 @@ endEmpty s =
 prettyErrorMessage : TypeError -> String
 prettyErrorMessage { state, message } =
     String.concat
-        [ prettyLocation state.fileName state.startPosition state.endPosition
+        [ prettyLocation state.position
         , ":\n"
         , message
         ]
 
 
-prettyLocation : String -> ( Int, Int ) -> ( Int, Int ) -> String
-prettyLocation name start end =
+prettyLocation : Position -> String
+prettyLocation { file, start, end } =
     String.concat
-        [ "in file "
-        , name
+        [ "file "
+        , file
         , "\n"
         , "between "
         , prettyPosition start
@@ -2028,7 +2022,7 @@ runTypeChecksHelp atoms state =
             Ok state
 
         a :: toms ->
-            case processAtom { state | startPosition = a.start, endPosition = a.end, fileName = a.file } a.value of
+            case processAtom { state | position = { start = a.start, end = a.end, file = a.file } } a.value of
                 Err err ->
                     Err err
 
@@ -2056,8 +2050,8 @@ processAtom state atom =
 
         Define newName ->
             case Dict.get newName state.defPos of
-                Just ( position, _ ) ->
-                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyPosition position }
+                Just position ->
+                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyLocation position }
 
                 Nothing ->
                     case state.stack of
@@ -2069,7 +2063,7 @@ processAtom state atom =
                                 { state
                                     | stack = tack
                                     , defs = Dict.insert newName s state.defs
-                                    , defPos = Dict.insert newName ( state.startPosition, state.endPosition ) state.defPos
+                                    , defPos = Dict.insert newName state.position state.defPos
                                 }
 
         Runblock ->
@@ -2085,7 +2079,7 @@ processAtom state atom =
                         Just blocks ->
                             case Result.Extra.combine <| List.map (\b -> runTypeChecksHelp b { state | stack = tack }) blocks of
                                 Err err ->
-                                    Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition ++ ": " ++ err.message }
+                                    Err { err | message = "error inside block called at " ++ prettyLocation state.position ++ ": " ++ err.message }
 
                                 Ok results ->
                                     let
@@ -2285,7 +2279,7 @@ processAtom state atom =
                 Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
 
 
-prettyUnusedInBlock : Set.Set String -> Dict.Dict String ( ( Int, Int ), ( Int, Int ) ) -> String
+prettyUnusedInBlock : Set.Set String -> Dict.Dict String Position -> String
 prettyUnusedInBlock names positions =
     let
         help : String -> String
@@ -2294,8 +2288,8 @@ prettyUnusedInBlock names positions =
                 Nothing ->
                     "internal error: cannot find position of name \"" ++ name ++ "\""
 
-                Just ( start, end ) ->
-                    onePrettyUnused ( name, start, end )
+                Just position ->
+                    onePrettyUnused ( name, position )
     in
     String.join ", " <| List.map help <| Set.toList names
 
@@ -2307,7 +2301,7 @@ runTypeProgram atoms state =
             Ok state
 
         a :: toms ->
-            case processTypeAtom { state | startPosition = a.start, endPosition = a.end } a.value of
+            case processTypeAtom { state | position = { start = a.start, end = a.end, file = a.file } } a.value of
                 Err err ->
                     Err err
 
@@ -2373,8 +2367,8 @@ processTypeAtom state atom =
 
         TlDefine newName ->
             case Dict.get newName state.typeDefPos of
-                Just ( startPosition, endPosition ) ->
-                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyPosition startPosition }
+                Just position ->
+                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyLocation position }
 
                 Nothing ->
                     case state.typeStack of
@@ -2386,7 +2380,7 @@ processTypeAtom state atom =
                                 { state
                                     | typeStack = tack
                                     , typeDefs = Dict.insert newName s state.typeDefs
-                                    , typeDefPos = Dict.insert newName ( state.startPosition, state.endPosition ) state.typeDefPos
+                                    , typeDefPos = Dict.insert newName state.position state.typeDefPos
                                 }
 
         TlRunblock ->
@@ -2397,7 +2391,7 @@ processTypeAtom state atom =
                 (Tblock bs) :: tack ->
                     case runTypeProgram bs state of
                         Err err ->
-                            Err { err | message = "error inside block called at " ++ prettyPosition state.startPosition }
+                            Err { err | message = "error inside block called at " ++ prettyLocation state.position }
 
                         Ok newState ->
                             Ok { newState | typeDefs = state.typeDefs }
