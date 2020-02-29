@@ -82,14 +82,14 @@ func decodeKeyChangeMsg(body []byte) (keyChangeMsg, error) {
 }
 
 const maxBlobLen = 16000
-const maxBodyLen = pubKeyLen + authCodeLen + msgSigLen + 1 +
+const maxBodyLen = pubKeyLen + authCodeLen + msgSigLen +
 	maxBlobMsgLen
 const maxBlobMsgLen = pubKeyLen + nonceLen + maxBlobLen
 
 // All messages that are restricted to members only have this
 // structure:
 //
-//     sender public key + auth code + signature + meaning byte +
+//     sender public key + auth code + signature +
 //         everything else
 //
 func protectedErr(
@@ -105,14 +105,18 @@ func protectedErr(
 	const senderEnd = pubKeyLen
 	const authCodeEnd = senderEnd + authCodeLen
 	const sigEnd = authCodeEnd + msgSigLen
-	const meaningEnd = sigEnd + 1
+
 	var sender publicSigningKeyT
 	copy(sender[:], body[:senderEnd])
+
 	var authCode authCodeT
 	copy(authCode[:], body[senderEnd:authCodeEnd])
+
 	var signature msgSigT
 	copy(signature[:], body[authCodeEnd:sigEnd])
+
 	everythingElse := body[sigEnd:]
+
 	if len(everythingElse) == 0 {
 		return errors.New("no message body"), 400
 	}
@@ -268,33 +272,6 @@ func main() {
 				http.Error(w, err.Error(), errCode)
 				return
 			}
-		})
-	http.HandleFunc(
-		"/authcode",
-		func(w http.ResponseWriter, r *http.Request) {
-			authCode, err := genAuthCode()
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-
-			_, err = w.Write(authCode[:])
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-
-			now := time.Now().Unix()
-			newCodes := make(map[authCodeT]int64)
-			newCodes[authCode] = now
-			AUTHCODESMUX.Lock()
-			for a, t := range AUTHCODES {
-				if t-now < authTimeOut {
-					newCodes[a] = t
-				}
-			}
-			AUTHCODES = newCodes
-			AUTHCODESMUX.Unlock()
 		})
 	http.HandleFunc(
 		"/",
