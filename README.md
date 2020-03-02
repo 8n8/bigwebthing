@@ -34,61 +34,61 @@ The server checks that the first part is indeed something that it recently gave 
 Messages are sent to the server in HTTP requests. The server will not accept messages greater than 16KB.
 
 Some APIs are only accessible to certain users and must have an identity token as follows:
-+ <32 public signing key of sender>
-+ <16 authentication code downloaded from the server earlier>
-+ <96 signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(sha256hash(message + authCode)).>
++ 32 bytes: public signing key of sender>
++ 16 bytes: authentication code downloaded from the server earlier>
++ 96 bytes: signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(sha256hash(message + authCode)).>
 So an identity token is 144 bytes long.
 
 These are the types of messages that the server will accept:
 
 1. (Free) Make a friendly name for a public signing key:
-+ <1 must be 0x01>
-+ <32 proof of work>
-+ <32 public signing key>
-+ <name, a Utf-8 string of non-confusing characters, no more than 40>
++ 0x01
++ 32 bytes: proof of work
++ 32 bytes: public signing key
++ name, a Utf-8 string of non-confusing characters, no more than 40
 
 2. (Free) Retrieve key for name
-+ <1 must be 0x02>
-+ <name - the name to look up>
++ 0x02
++ name - the name to look up
 The response is the 32-byte public key attached to the name.
 
 3. (Free) Get proof of work difficulty and key
-+ <1 must be 0x03>
++ 0x03
 The response is:
-+ <1 how many of the bytes at the start of the proof of work must be zeros (the difficulty)>
-+ <16 unique, i.e. the server must never respond in the same way to this request>
++ 1 byte: how many of the bytes at the start of the proof of work must be zeros (the difficulty)
++ 16 bytes: unique, i.e. the server must never respond in the same way to this request
 
 4. (Admin) Add a member
-+ <1 must be 0x04>
-+ <144 identity token for user 'admin'>
-+ <name of member to add>
++ 0x04
++ 144 bytes: identity token for user 'admin'
++ name of member to add
 
-5. (Admin) Add a member
-+ <1 must be 0x05>
-+ <144 identity token for user 'admin'>
-+ <name of member to add>
+5. (Admin) Remove a member
++ 0x05
++ 144 bytes: identity token for user 'admin'
++ name of member to remove
 
 6. (Free) Change the key attached to a friendly name
-+ <1 must be 0x06>
-+ <144 identity token (using the old key)>
-+ <32 new key>
++ 0x06
++ 144 bytes: identity token (using the old key)
++ 32 bytes: new key
 
 7. (Free) Get code for authentication
-+ <1 must be 0x07>
++ 0x07
 The response is a unique 16 bytes, that is, the server must never respond in the same way to this request.
 
 8. (Paid) Send message
-+ <1 must be 0x08>
-+ <144 identity token>
-+ <32 recipient public key>
-+ <2 length of message>
-+ <message>
++ 0x08
++ 144 bytes: identity token
++ 32 bytes: recipient public key
++ 2 bytes: length of message
++ message
 
 9. (Paid) Retrieve message
-+ <1 must be 0x09>
-+ <144 identity token>
++ 0x09
++ 144 bytes: identity token
 The response is:
-+ <1 0x01 if there are messages or 0x00 if there aren't>
++ 0x01 if there are messages or 0x00 if there aren't
 + the message - as in (8) above
 
 ### Client API
