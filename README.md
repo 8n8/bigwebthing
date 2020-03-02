@@ -93,10 +93,12 @@ The response is:
 
 ### Client API
 
+Messages are encrypted and decrypted on the client, so that the server can't read them.
+
 The encrypted blob must be no more than 16KB long. Before encryption and encoding it is one of:
 
 1. a new public encryption key
-2. a request to be whitelisted, using a one-time code
+2. a new public signing key
 3. a chunk of a program
 4. a chunk of a document
 
@@ -112,8 +114,6 @@ A document contains:
 1. a body and
 2. the name of the program that can open it.
 
-The body of a document is either a binary blob or some text with links to other documents in it. A link is the cryptographic hash of the document linked to.
-
 A program contains:
 
 1. the code
@@ -128,8 +128,6 @@ The version number is an integer, starting at 0. All versions must be able to re
 A program can:
 
 1. Display a document.
-
-2. Access a local database.
 
 3. Read and delete messages sent to it from other people.
 
