@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"golang.org/x/crypto/blake2b"
+	"fmt"
 	"golang.org/x/crypto/nacl/sign"
 	"io"
 	"io/ioutil"
@@ -13,6 +13,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"github.com/gorilla/websocket"
 )
 
 var AUTHCODES = make(map[[16]byte]int64)
@@ -263,44 +264,111 @@ const csp =
 	"img-src 'self'; " +
 	"report-uri http://localhost:3001/cspreport;"
 
-func main() {
-	http.HandleFunc(
-		"/protected",
-		func(w http.ResponseWriter, r *http.Request) {
-			err, errCode := protectedErr(w, r)
-			if err != nil {
-				http.Error(w, err.Error(), errCode)
-				return
-			}
-		})
-	http.HandleFunc(
-		"/",
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" {
-				http.NotFound(w, r)
-				return
-			}
-			// w.Header().Add("Content-Security-Policy", csp)
-			handle, err := os.Open("index.html")
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			_, err = io.Copy(w, handle)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-			}
-		})
-	http.HandleFunc(
-		"/cspreport",
-		func(w http.ResponseWriter, r *http.Request) {
-			body, _ := ioutil.ReadAll(r.Body)
-			fmt.Println(string(body))
-		})
-        http.Handle("/static/", http.FileServer(http.Dir("")))
-        serveFile("favicon.ico", "image/ico")
-	fmt.Println(http.ListenAndServe(":3001", nil))
+
+type stateT struct {
+	fatalErr error
 }
+
+
+func initState() stateT {
+	return stateT{
+		fatalErr: nil,
+	}
+}
+
+
+func initOutput() outputT {
+	return startHttpServer{}
+}
+
+
+type startHttpServer struct {}
+
+
+func messenger(inputChannel chan inputT) {
+	return function(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Upgrader{}.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		for {
+			_, message, err := connection.ReadMessage()
+			if err != nil {
+				break
+			}
+			inputChannel <- message
+		}
+	}
+}
+
+
+func (startHttpServer) io(inputChannel chan inputT) {
+	http.HandleFunc("/messenger", messenger(inputChannel))
+	http.ListenAndServe(":3001", nil)
+}
+
+
+type inputT interface {
+	update(stateT) (stateT, outputT)
+}
+
+
+type outputT interface {
+	io(chan inputT)
+}
+
+
+func main() {
+	state := initState()
+	output := initOutput()
+	inputChannel := make(chan inputT)
+	for state.fatalErr == nil {
+		go output.io(inputChannel)
+		input := <- inputChannel
+		state, output = input.update(state)
+	}
+	fmt.Println(state.fatalErr)
+}
+
+
+// 	http.HandleFunc(
+// 		"/protected",
+// 		func(w http.ResponseWriter, r *http.Request) {
+// 			err, errCode := protectedErr(w, r)
+// 			if err != nil {
+// 				http.Error(w, err.Error(), errCode)
+// 				return
+// 			}
+// 		})
+// 	http.HandleFunc(
+// 		"/",
+// 		func(w http.ResponseWriter, r *http.Request) {
+// 			if r.URL.Path != "/" {
+// 				http.NotFound(w, r)
+// 				return
+// 			}
+// 			// w.Header().Add("Content-Security-Policy", csp)
+// 			handle, err := os.Open("index.html")
+// 			if err != nil {
+// 				http.Error(w, err.Error(), 500)
+// 				return
+// 			}
+// 			_, err = io.Copy(w, handle)
+// 			if err != nil {
+// 				http.Error(w, err.Error(), 500)
+// 			}
+// 		})
+// 	http.HandleFunc(
+// 		"/cspreport",
+// 		func(w http.ResponseWriter, r *http.Request) {
+// 			body, _ := ioutil.ReadAll(r.Body)
+// 			fmt.Println(string(body))
+// 		})
+//         http.Handle("/static/", http.FileServer(http.Dir("")))
+//         serveFile("favicon.ico", "image/ico")
+// 	fmt.Println(http.ListenAndServe(":3001", nil))
+// }
 
 
 func serveFile(filename, contentType string) {
