@@ -1,286 +1,895 @@
 package main
 
 import (
-	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"golang.org/x/crypto/blake2b"
+	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/nacl/sign"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
-	"sync"
-	"time"
+	"strconv"
 )
 
-var AUTHCODES = make(map[[16]byte]int64)
-var AUTHCODESMUX sync.Mutex
+const csp = "default-src 'none'; " +
+	"script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self'; " +
+	"font-src 'self'; " +
+	"report-uri http://localhost:3001/cspreport;"
 
-// It is encoded as:
-//
-//     address + newKey + newKeySig
-//
-// It has length keyChangeMsgLen.
-//
-type keyChangeMsg struct {
-	newKey    publicSigningKeyT
-	newKeySig authSigT
+type stateT struct {
+	fatalErr      error
+	proofOfWork   proofOfWorkState
+	friendlyNames [][]byte
+	members       map[uint64]struct{}
+	authCodes     []uint64
+	authUnique    uint64
 }
 
-const keyChangeMsgLen = pubKeyLen + authSigLen
+type proofOfWorkState struct {
+	difficulty uint8
+	unique     uint64
+	unused     []uint64
+}
 
-const authTimeOut = 5 * 60
-
-func validAuthCode(authCode authCodeT) error {
-	AUTHCODESMUX.Lock()
-	createdTime, ok := AUTHCODES[authCode]
-	delete(AUTHCODES, authCode)
-	AUTHCODESMUX.Unlock()
-
-	if !ok {
-		return errors.New("could not find auth code")
+func initState() stateT {
+	return stateT{
+		fatalErr: nil,
 	}
-	if time.Now().Unix()-createdTime > authTimeOut {
-		return errors.New("auth code out of date")
+}
+
+type outputT interface {
+	io(chan inputT)
+}
+
+func initOutput() outputT {
+	return startHttpServer{}
+}
+
+type startHttpServer struct{}
+
+type inputT interface {
+	update(stateT) (stateT, outputT)
+}
+
+func main() {
+	state := initState()
+	output := initOutput()
+	inputChannel := make(chan inputT)
+	for state.fatalErr == nil {
+		go output.io(inputChannel)
+		input := <-inputChannel
+		state, output = input.update(state)
+	}
+	fmt.Println(state.fatalErr)
+}
+
+const maxBodyLength = 16000
+
+type httpRequestT struct {
+	body         []byte
+	responseChan chan httpResponseT
+}
+
+type httpResponseT interface {
+	respond(http.ResponseWriter)
+}
+
+func parseRequest(body []byte) parsedRequestT {
+	if len(body) == 0 {
+		return badRequest{"empty body", 400}
+	}
+
+	switch body[0] {
+	case 1:
+		return parseMakeFriendlyName(body)
+	case 2:
+		return parseLookupName(body)
+	case 3:
+		return getProofOfWorkInfoRequest{}
+	case 4:
+		return parseAddAMember(body)
+	case 5:
+		return parseRemoveAMember(body)
+	case 6:
+		return parseChangeKey(body)
+	case 7:
+		return getAuthCodeRequest{}
+	case 8:
+		return parseSendMessage(body)
+	case 9:
+		return parseRetrieveMessage(body)
+	}
+
+	return badRequest{"bad route", 400}
+}
+
+func parseRemoveAMember(body []byte) parsedRequestT {
+	if len(body) < 138 {
+		return badRequest{"length of body is less than 138", 400}
+	}
+	idToken := parseIdToken(body)
+	memberToRemove, _ := binary.Uvarint(body[137:])
+	if memberToRemove == 0 {
+		return badRequest{"can't delete admin member", 400}
+	}
+	return removeMemberRequest{idToken, memberToRemove}
+}
+
+type removeMemberRequest struct {
+	idToken idTokenT
+	member  uint64
+}
+
+func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+	newAuthCodes, ok := validToken(r.idToken, state.authCodes)
+	if !ok {
+		return state, badResponse{"bad ID token", 400, httpResponseChan}
+	}
+	state.authCodes = newAuthCodes
+	if len(state.friendlyNames) == 0 {
+		state.fatalErr = errors.New("no \"admin\" user")
+		return state, doNothing{}
+	}
+	adminUser := state.friendlyNames[0]
+	if !equalBytes(r.idToken.publicSignKey, adminUser) {
+		return state, badResponse{"unauthorised", 401, httpResponseChan}
+	}
+	delete(state.members, r.member)
+	return state, deleteMember{r.member, httpResponseChan}
+}
+
+type deleteMember struct {
+	member  uint64
+	channel chan httpResponseT
+}
+
+func (d deleteMember) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	statement, err := database.Prepare("DELETE FROM members WHERE name=?")
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	_, err = statement.Exec(int(d.member))
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	d.channel <- goodHttpResponse([]byte{})
+}
+
+func parseChangeKey(body []byte) parsedRequestT {
+	if len(body) != 169 {
+		return badRequest{"length of body is not 169", 400}
+	}
+	idToken := parseIdToken(body)
+	newKey := body[137:]
+	return changeKeyRequest{idToken, newKey}
+}
+
+type changeKeyRequest struct {
+	idToken idTokenT
+	newKey  []byte
+}
+
+func (c changeKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+	newAuthCodes, ok := validToken(c.idToken, state.authCodes)
+	if !ok {
+		return state, badResponse{"bad ID token", 400, responseChan}
+	}
+	state.authCodes = newAuthCodes
+	senderId, ok := getMemberId(c.idToken.publicSignKey, state.friendlyNames)
+	if !ok {
+		return state, badResponse{"unknown sender", 400, responseChan}
+	}
+	state.friendlyNames[senderId] = c.newKey
+	return state, cacheNewKey{c.newKey, responseChan, senderId}
+}
+
+type cacheNewKey struct {
+	newKey   []byte
+	channel  chan httpResponseT
+	senderId int
+}
+
+func (c cacheNewKey) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	statement, err := database.Prepare("UPDATE friendlynames SET key=? WHERE rowid=?")
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	_, err = statement.Exec(c.newKey, c.senderId)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	c.channel <- goodHttpResponse([]byte{})
+}
+
+type getAuthCodeRequest struct{}
+
+func (getAuthCodeRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+	state.authUnique++
+	buf := make([]byte, 8)
+	_ = binary.PutUvarint(buf, state.authUnique)
+	outputs := []outputT{
+		cacheNewAuthUnique(buf),
+		sendAuthCode{buf, httpResponseChan}}
+	return state, outputsT(outputs)
+}
+
+type sendAuthCode struct {
+	code    []byte
+	channel chan httpResponseT
+}
+
+type cacheNewAuthUnique []byte
+
+func (c cacheNewAuthUnique) io(inputChannel chan inputT) {
+	err := ioutil.WriteFile("uniqueAuth", []byte(c), 0644)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+}
+
+func (s sendAuthCode) io(inputChannel chan inputT) {
+	s.channel <- goodHttpResponse(s.code)
+}
+
+func parseSendMessage(body []byte) parsedRequestT {
+	if len(body) < 178 {
+		return badRequest{"body less than 178 bytes", 400}
+	}
+	idToken := parseIdToken(body)
+	recipient := body[137:169]
+	return sendMessageRequest{idToken, recipient, body}
+}
+
+type sendMessageRequest struct {
+	idToken   idTokenT
+	recipient []byte
+	message   []byte
+}
+
+func getMemberId(key []byte, members [][]byte) (int, bool) {
+	for i, member := range members {
+		if equalBytes(member, key) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+	newAuthCodes, ok := validToken(s.idToken, state.authCodes)
+	if !ok {
+		return state, badResponse{"bad ID token", 400, responseChan}
+	}
+	state.authCodes = newAuthCodes
+	senderId, ok := getMemberId(s.idToken.publicSignKey, state.friendlyNames)
+	if !ok {
+		return state, badResponse{"unknown sender", 400, responseChan}
+	}
+	_, senderIsMember := state.members[uint64(senderId)]
+	recipientId, ok := getMemberId(s.recipient, state.friendlyNames)
+	if !ok {
+		return state, badResponse{"unknown recipient", 400, responseChan}
+	}
+	_, recipientIsMember := state.members[uint64(recipientId)]
+	if (!senderIsMember) && (!recipientIsMember) {
+		return state, badResponse{"neither sender nor recipient are members", 400, responseChan}
+	}
+	return state, sendMessage{recipientId, s.message}
+}
+
+type sendMessage struct {
+	recipient int
+	message   []byte
+}
+
+func (s sendMessage) io(inputChannel chan inputT) {
+	messagesDir := userMessagePath(int64(s.recipient))
+	err := os.MkdirAll(messagesDir, os.ModeDir)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	hash := sha256.Sum256(s.message)
+	filename := base64.URLEncoding.EncodeToString(hash[:])
+	filepath := messagesDir + "/" + filename
+	err = ioutil.WriteFile(filepath, s.message, 0644)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+}
+
+func parseRetrieveMessage(body []byte) parsedRequestT {
+	if len(body) != 137 {
+		return badRequest{"body not 137 bytes", 400}
+	}
+	idToken := parseIdToken(body)
+	return retrieveMessageRequest(idToken)
+}
+
+type retrieveMessageRequest idTokenT
+
+func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+	token := idTokenT(r)
+	newAuthCodes, ok := validToken(token, state.authCodes)
+	if !ok {
+		return state, badResponse{"bad ID token", 400, responseChan}
+	}
+	state.authCodes = newAuthCodes
+	return state, collectMessage{token.publicSignKey, responseChan}
+}
+
+type collectMessage struct {
+	addressee []byte
+	channel   chan httpResponseT
+}
+
+const inboxesDir = "inboxes"
+
+func userMessagePath(name int64) string {
+	nameString := strconv.FormatInt(name, 10)
+	return inboxesDir + "/" + nameString
+}
+
+func (c collectMessage) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	rows, err := database.Query("SELECT rowid FROM friendlynames WHERE key=?", c.addressee)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	if !rows.Next() {
+		c.channel <- badRequest{"no such key", 400}
+		return
+	}
+	var name int64
+	err = rows.Scan(&name)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
+	messagesDir := userMessagePath(name)
+	messageFileNames, err := ioutil.ReadDir(messagesDir)
+	if err != nil {
+		c.channel <- goodHttpResponse([]byte{0})
+		return
+	}
+	if len(messageFileNames) == 0 {
+		c.channel <- goodHttpResponse([]byte{0})
+		return
+	}
+	fileInfo := messageFileNames[0]
+	filename := fileInfo.Name()
+	filepath := messagesDir + "/" + filename
+
+	message, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	c.channel <- goodHttpResponse(append([]byte{0}, message...))
+	err = os.Remove(filepath)
+	if err != nil {
+		inputChannel <- fatalError{err}
+	}
+}
+
+type addAMemberRequest struct {
+	idToken idTokenT
+	name    uint64
+}
+
+func equalBytes(k1 []byte, k2 []byte) bool {
+	if len(k1) != len(k2) {
+		return false
+	}
+	for i, k := range k1 {
+		if k != k2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func validToken(token idTokenT, unused []uint64) ([]uint64, bool) {
+	var keyArr [32]byte
+	copy(keyArr[:], token.publicSignKey)
+	signed, ok := sign.Open([]byte{}, token.signature, &keyArr)
+	if !ok {
+		return unused, false
+	}
+	if !equalBytes(signed, token.messageHash) {
+		return unused, false
+	}
+	if !isAmember(token.authCode, unused) {
+		return unused, false
+	}
+	newUnused := removeItem(unused, token.authCode)
+	return newUnused, true
+}
+
+func (a addAMemberRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+	newAuthCodes, ok := validToken(a.idToken, state.authCodes)
+	if !ok {
+		return state, badResponse{"bad ID token", 400, responseChan}
+	}
+	state.authCodes = newAuthCodes
+	if len(state.friendlyNames) == 0 {
+		state.fatalErr = errors.New("no \"admin\" user")
+		return state, doNothing{}
+	}
+	adminUser := state.friendlyNames[0]
+	if !equalBytes(a.idToken.publicSignKey, adminUser) {
+		return state, badResponse{"unauthorised", 401, responseChan}
+	}
+	state.members[a.name] = struct{}{}
+	response := sendHttpResponse{
+		channel:  responseChan,
+		response: goodHttpResponse([]byte{}),
+	}
+	outputs := []outputT{cacheNewMember(a.name), response}
+	return state, outputsT(outputs)
+}
+
+type cacheNewMember string
+
+func (c cacheNewMember) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	statement, err := database.Prepare("INSERT INTO members (member) VALUES (?)")
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	_, err = statement.Exec(c)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+}
+
+type idTokenT struct {
+	publicSignKey []byte
+	authCode      uint64
+	signature     []byte
+	messageHash   []byte
+}
+
+func parseIdToken(body []byte) idTokenT {
+	authBytes := body[33:41]
+	authCode, _ := binary.Uvarint(authBytes)
+	message := append(
+		append(body[0:1], authBytes...), body[137:]...)
+	hash := sha256.Sum256(message)
+	hashSlice := hash[:]
+	return idTokenT{
+		publicSignKey: body[1:33],
+		authCode:      authCode,
+		signature:     body[41:137],
+		messageHash:   hashSlice,
+	}
+}
+
+func parseAddAMember(body []byte) parsedRequestT {
+	if len(body) < 138 {
+		return badRequest{"body less than 138 bytes", 400}
+	}
+	idToken := parseIdToken(body)
+	nameToAdd, _ := binary.Uvarint(body[137:])
+	return addAMemberRequest{
+		idToken: idToken,
+		name:    nameToAdd,
+	}
+}
+
+type getProofOfWorkInfoRequest struct{}
+
+type outputsT []outputT
+
+func encodeCounter(counter uint64) []byte {
+	buf := make([]byte, 8)
+	_ = binary.PutUvarint(buf, counter)
+	return buf
+}
+
+type cachePowUniqueT uint64
+
+func (c cachePowUniqueT) io(inputChannel chan inputT) {
+	buf := make([]byte, 8)
+	_ = binary.PutUvarint(buf, uint64(c))
+	err := ioutil.WriteFile("uniquePow", buf, 0644)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+}
+
+func trim(unused []uint64) []uint64 {
+	length := len(unused)
+	const maxUnusedPowCodesToKeep = 5000
+	tooMuch := length - maxUnusedPowCodesToKeep
+	if tooMuch > 0 {
+		return unused[tooMuch:]
+	}
+	return unused
+}
+
+func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+	response := goodHttpResponse(encodeCounter(state.proofOfWork.unique))
+	sendResponse := sendHttpResponse{
+		channel:  httpResponseChan,
+		response: response,
+	}
+	cachePow := cachePowUniqueT(state.proofOfWork.unique + 1)
+	outputs := []outputT{sendResponse, cachePow}
+	state.proofOfWork.unique += 1
+	state.proofOfWork.unused = append(state.proofOfWork.unused, state.proofOfWork.unique)
+	state.proofOfWork.unused = trim(state.proofOfWork.unused)
+	return state, outputsT(outputs)
+}
+
+func (os outputsT) io(inputChan chan inputT) {
+	for _, o := range os {
+		o.io(inputChan)
+	}
+}
+
+func (g goodHttpResponse) respond(w http.ResponseWriter) {
+	w.Write([]byte(g))
+}
+
+type parsedRequestT interface {
+	updateOnRequest(stateT, chan httpResponseT) (stateT, outputT)
+}
+
+type badRequest struct {
+	message string
+	code    int
+}
+
+type sendHttpResponse struct {
+	channel  chan httpResponseT
+	response httpResponseT
+}
+
+func (s sendHttpResponse) io(inputChan chan inputT) {
+	s.channel <- s.response
+}
+
+type goodHttpResponse []byte
+
+func (b badRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+	response := sendHttpResponse{
+		channel:  responseChan,
+		response: b,
+	}
+	return state, response
+}
+
+func (b badRequest) respond(w http.ResponseWriter) {
+	http.Error(w, b.message, b.code)
+}
+
+var okNameChars = map[byte]struct{}{
+	'.': struct{}{},
+	':': struct{}{},
+	'?': struct{}{},
+	'-': struct{}{},
+	'1': struct{}{},
+	'2': struct{}{},
+	'3': struct{}{},
+	'4': struct{}{},
+	'5': struct{}{},
+	'6': struct{}{},
+	'7': struct{}{},
+	'8': struct{}{},
+	'9': struct{}{},
+	'a': struct{}{},
+	'b': struct{}{},
+	'c': struct{}{},
+	'd': struct{}{},
+	'e': struct{}{},
+	'f': struct{}{},
+	'g': struct{}{},
+	'h': struct{}{},
+	'i': struct{}{},
+	'j': struct{}{},
+	'k': struct{}{},
+	'l': struct{}{},
+	'm': struct{}{},
+	'n': struct{}{},
+	'o': struct{}{},
+	'p': struct{}{},
+	'q': struct{}{},
+	'r': struct{}{},
+	's': struct{}{},
+	't': struct{}{},
+	'u': struct{}{},
+	'v': struct{}{},
+	'w': struct{}{},
+	'x': struct{}{},
+	'y': struct{}{},
+	'z': struct{}{}}
+
+func nameOk(candidate []byte) error {
+	if len(candidate) > 40 {
+		return errors.New("name longer than 40 bytes")
+	}
+	for _, char := range candidate {
+		if _, ok := okNameChars[char]; !ok {
+			return errors.New("bad character")
+		}
 	}
 	return nil
 }
 
-const nonceLen = 24
-const authCodeLen = 16
+type lookupNameT string
 
-type authCodeT = [authCodeLen]byte
-
-const pubKeyLen = 32
-
-type publicSigningKeyT [pubKeyLen]byte
-
-const msgSigLen = sign.Overhead + 32
-
-type msgSigT = [msgSigLen]byte
-
-const authSigLen = sign.Overhead + authCodeLen
-
-type authSigT = [authSigLen]byte
-
-const inboxesPath = "inboxes"
-
-func decodeKeyChangeMsg(body []byte) (keyChangeMsg, error) {
-	if len(body) != keyChangeMsgLen {
-		return *new(keyChangeMsg), errors.New(
-			"key change message wrong length")
-	}
-	var newKey publicSigningKeyT
-	copy(newKey[:], body[:pubKeyLen])
-	var newKeySig authSigT
-	copy(newKeySig[:], body[pubKeyLen:])
-	var newKeyArr [32]byte
-	copy(newKeyArr[:], newKey[:])
-	return keyChangeMsg{newKey, newKeySig}, nil
+type lookupNameRequest struct {
+	name    string
+	channel chan httpResponseT
 }
 
-const maxBlobLen = 16000
-const maxBodyLen = pubKeyLen + authCodeLen + msgSigLen +
-	maxBlobMsgLen
-const maxBlobMsgLen = pubKeyLen + nonceLen + maxBlobLen
-
-// All messages that are restricted to members only have this
-// structure:
-//
-//     sender public key + auth code + signature +
-//         everything else
-//
-func protectedErr(
-	w http.ResponseWriter, r *http.Request) (error, int) {
-	body := make([]byte, maxBodyLen)
-	n, err := r.Body.Read(body)
+func (l lookupNameRequest) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
 	if err != nil {
-		return err, 500
+		inputChannel <- fatalError{err}
+		return
 	}
-	body = body[:n]
-
-	// Check credentials.
-	const senderEnd = pubKeyLen
-	const authCodeEnd = senderEnd + authCodeLen
-	const sigEnd = authCodeEnd + msgSigLen
-
-	var sender publicSigningKeyT
-	copy(sender[:], body[:senderEnd])
-
-	var authCode authCodeT
-	copy(authCode[:], body[senderEnd:authCodeEnd])
-
-	var signature msgSigT
-	copy(signature[:], body[authCodeEnd:sigEnd])
-
-	everythingElse := body[sigEnd:]
-
-	if len(everythingElse) == 0 {
-		return errors.New("no message body"), 400
+	defer database.Close()
+	rows, err := database.Query("SELECT key FROM friendlynames WHERE name=?", l.name)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
 	}
-	expectedSigned := blake2b.Sum256(everythingElse)
-	fromArr := [32]byte(sender)
-	actualSigned, ok := sign.Open(
-		make([]byte, 0),
-		signature[:],
-		&fromArr)
+	if !rows.Next() {
+		l.channel <- badRequest{"no such name", 400}
+		return
+	}
+	key := make([]byte, 32)
+	err = rows.Scan(&key)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	l.channel <- goodHttpResponse(key)
+}
+
+func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+	return state, lookupNameRequest{string(name), httpResponseChan}
+}
+
+func parseLookupName(body []byte) parsedRequestT {
+	nameCandidate := body[1:]
+	err := nameOk(nameCandidate)
+	if err != nil {
+		return badRequest{"bad name: " + err.Error(), 400}
+	}
+	return lookupNameT(string(nameCandidate))
+}
+
+type proofOfWorkT struct {
+	server []byte
+	client []byte
+}
+
+type makeFriendlyNameRequest struct {
+	proofOfWork proofOfWorkT
+	newKey      []byte
+}
+
+func removeItem(items []uint64, item uint64) []uint64 {
+	newItems := make([]uint64, 0, len(items))
+	for _, oldItem := range items {
+		if oldItem == item {
+			continue
+		}
+		newItems = append(newItems, oldItem)
+	}
+	return newItems
+}
+
+func firstXareZero(bs [32]byte, x uint8) bool {
+	for i := 0; i < int(x); i++ {
+		if bs[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func isAmember(candidate uint64, of []uint64) bool {
+	for _, o := range of {
+		if candidate == o {
+			return true
+		}
+	}
+	return false
+}
+
+func keyExists(key []byte, keys [][]byte) bool {
+	for _, k := range keys {
+		if equalBytes(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, bool) {
+	serverCandidate, _ := binary.Uvarint(pow.server)
+	if !isAmember(serverCandidate, s.unused) {
+		return s, false
+	}
+	hash := sha256.Sum256(append(pow.server, pow.client...))
+	if !firstXareZero(hash, s.difficulty) {
+		return s, false
+	}
+	s.unused = removeItem(s.unused, serverCandidate)
+	return s, true
+}
+
+func (m makeFriendlyNameRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+	newPow, ok := checkProofOfWork(m.proofOfWork, state.proofOfWork)
 	if !ok {
-		return errors.New("bad signature"), 400
-	}
-	if err != nil {
-		return err, 400
-	}
-	for i, a := range actualSigned {
-		if a != expectedSigned[i] {
-			return errors.New("unexpected signature"), 400
-		}
-	}
-	err = validAuthCode(authCode)
-	if err != nil {
-		return err, 400
+		return state, badResponse{"bad proof of work", 400, httpResponseChan}
 	}
 
-	ok, err = isMember(sender)
-	if err != nil {
-		return err, 500
-	}
-	if !ok {
-		return errors.New("sender is not a member"), 400
+	if keyExists(m.newKey, state.friendlyNames) {
+		return state, badResponse{"key already used", 400, httpResponseChan}
 	}
 
-	meaning := everythingElse[0]
-
-	afterMeaning := everythingElse[1:]
-	switch meaning {
-	case 0:
-		return sendMsg(body, afterMeaning, sender, authCode)
-	case 1:
-		return receiveMsg(sender, w)
-	case 2:
-		return deleteMsg(sender, afterMeaning)
-	}
-	return errors.New("bad meaning code"), 400
+	state.friendlyNames = append(state.friendlyNames, m.newKey)
+	state.proofOfWork = newPow
+	return state, cacheNewKeyT{httpResponseChan, m.newKey}
 }
 
-func deleteMsg(sender publicSigningKeyT, body []byte) (error, int) {
-	if len(body) != 32 {
-		return errors.New("message hash must be 32 bytes"), 400
-	}
-	filename := base64.URLEncoding.EncodeToString(body)
-	path := makeInboxPath(sender[:]) + "/" + filename
-	err := os.Remove(path)
-	if err != nil {
-		return err, 400
-	}
-	return nil, 0
+type cacheNewKeyT struct {
+	channel chan httpResponseT
+	key     []byte
 }
 
-func receiveMsg(
-	sender publicSigningKeyT, w http.ResponseWriter) (error, int) {
-
-	inboxPath := makeInboxPath(sender[:])
-	files, err := ioutil.ReadDir(inboxPath)
-	if err != nil {
-		return err, 500
-	}
-	if len(files) == 0 {
-		return nil, 0
-	}
-	msgPath := inboxPath + "/" + files[0].Name()
-	handle, err := os.Open(msgPath)
-	if err != nil {
-		return err, 500
-	}
-	_, err = io.Copy(w, handle)
-	if err != nil {
-		return err, 500
-	}
-	return nil, 0
+type fatalError struct {
+	err error
 }
 
-func sendMsg(
-	original []byte,
-	body []byte,
-	sender publicSigningKeyT,
-	authCode authCodeT) (error, int) {
+type doNothing struct{}
 
-	// This type of message can be a blobMsg or a keyChangeMsg. It
-	// is encoded as:
-	//
-	//     meaning byte + recipient public key + remainder
-	//
-	meaningByte := body[0]
-	to := body[1:pubKeyLen]
-	msgHash := blake2b.Sum256(original)
-	newFileName := base64.URLEncoding.EncodeToString(msgHash[:])
-	endPath := makeInboxPath(to[:]) + "/" + newFileName
-	if meaningByte == 0 {
-		keyChange, err := decodeKeyChangeMsg(body[1+pubKeyLen:])
-		if err != nil {
-			return err, 400
-		}
-		fromArr := [32]byte(keyChange.newKey)
-		signed, ok := sign.Open(
-			make([]byte, 0),
-			keyChange.newKeySig[:],
-			&fromArr)
-		if !ok {
-			return errors.New("bad signature"), 400
-		}
-		if len(signed) != authCodeLen {
-			return errors.New("signed message wrong length"), 400
-		}
-		for i, s := range signed {
-			if s != authCode[i] {
-				return errors.New("unexpected signature"), 400
-			}
-		}
-		oldInboxPath := makeInboxPath(sender[:])
-		newInboxPath := makeInboxPath(keyChange.newKey[:])
-		err = os.Rename(oldInboxPath, newInboxPath)
-		if err != nil {
-			return err, 500
-		}
-	}
-	err := ioutil.WriteFile(endPath, original, 0600)
+func (doNothing) io(_ chan inputT) {}
+
+func (err fatalError) update(state stateT) (stateT, outputT) {
+	state.fatalErr = err.err
+	return state, doNothing{}
+}
+
+const dbFileName = "database.db"
+
+func (c cacheNewKeyT) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
 	if err != nil {
-		return err, 500
+		inputChannel <- fatalError{err}
+		return
 	}
-	return nil, 0
+	defer database.Close()
+	statement, err := database.Prepare("INSERT INTO friendlynames (key) VALUES (?)")
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	result, err := statement.Exec(c.key)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	username, err := result.LastInsertId()
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	c.channel <- newUsernameT(username)
 }
 
-func makeInboxPath(b []byte) string {
-	dirName := base64.URLEncoding.EncodeToString(b)
-	return inboxesPath + "/" + dirName
+type newUsernameT int64
+
+func (n newUsernameT) respond(w http.ResponseWriter) {
+	buf := make([]byte, 8)
+	_ = binary.PutUvarint(buf, uint64(n))
+	w.Write(buf)
 }
 
-const csp =
-	"default-src 'none'; " +
-	"script-src 'self'; " +
-	"style-src 'unsafe-inline'; " +
-	"img-src 'self'; " +
-	"report-uri http://localhost:3001/cspreport;"
+type badResponse struct {
+	message string
+	code    int
+	channel chan httpResponseT
+}
 
-func main() {
+func (b badResponse) io(inputChannel chan inputT) {
+	b.channel <- badRequest{b.message, b.code}
+}
+
+func parseMakeFriendlyName(body []byte) parsedRequestT {
+	if len(body) != 56 {
+		return badRequest{"body is not 56 bytes", 400}
+	}
+
+	proofOfWork := proofOfWorkT{
+		server: body[1:9],
+		client: body[9:25],
+	}
+
+	newName := body[57:]
+
+	err := nameOk(newName)
+	if err != nil {
+		return badRequest{"bad name: " + err.Error(), 400}
+	}
+
+	return makeFriendlyNameRequest{
+		proofOfWork: proofOfWork,
+		newKey:      body[25:57],
+	}
+}
+
+func (h httpRequestT) update(state stateT) (stateT, outputT) {
+	return parseRequest(h.body).updateOnRequest(state, h.responseChan)
+}
+
+func (startHttpServer) io(inputChan chan inputT) {
 	http.HandleFunc(
-		"/protected",
+		"/api",
 		func(w http.ResponseWriter, r *http.Request) {
-			err, errCode := protectedErr(w, r)
+			body := make([]byte, maxBodyLength)
+			_, err := r.Body.Read(body)
 			if err != nil {
-				http.Error(w, err.Error(), errCode)
+				http.Error(w, err.Error(), 400)
 				return
 			}
+			responseChan := make(chan httpResponseT)
+			inputChan <- httpRequestT{
+				body:         body,
+				responseChan: responseChan,
+			}
+			response := <-responseChan
+			response.respond(w)
 		})
 	http.HandleFunc(
 		"/",
 		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" {
-				http.NotFound(w, r)
-				return
-			}
-			// w.Header().Add("Content-Security-Policy", csp)
+			w.Header().Add("Content-Security-Policy", csp)
 			handle, err := os.Open("index.html")
 			if err != nil {
 				http.Error(w, err.Error(), 500)
@@ -297,15 +906,14 @@ func main() {
 			body, _ := ioutil.ReadAll(r.Body)
 			fmt.Println(string(body))
 		})
-        http.Handle("/static/", http.FileServer(http.Dir("")))
-        serveFile("favicon.ico", "image/ico")
+	http.Handle("/static/", http.FileServer(http.Dir("")))
+	serveFile("favicon.ico", "image/ico")
 	fmt.Println(http.ListenAndServe(":3001", nil))
 }
 
-
 func serveFile(filename, contentType string) {
 	http.HandleFunc(
-		"/" + filename,
+		"/"+filename,
 		func(w http.ResponseWriter, r *http.Request) {
 			handle, err := os.Open(filename)
 			if err != nil {
@@ -315,31 +923,4 @@ func serveFile(filename, contentType string) {
 			io.Copy(w, handle)
 			w.Header().Add("Content-Type", contentType)
 		})
-}
-
-func isMember(p publicSigningKeyT) (bool, error) {
-	inboxes, err := ioutil.ReadDir(inboxesPath)
-	if err != nil {
-		return false, err
-	}
-	encodedKey := base64.URLEncoding.EncodeToString(p[:])
-	for _, inbox := range inboxes {
-		if inbox.Name() == encodedKey {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func genAuthCode() ([authCodeLen]byte, error) {
-	authSlice := make([]byte, authCodeLen)
-	_, err := rand.Read(authSlice)
-	var authCode [authCodeLen]byte
-	if err != nil {
-		return authCode, err
-	}
-	for i, b := range authSlice {
-		authCode[i] = b
-	}
-	return authCode, nil
 }
