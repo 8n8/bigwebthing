@@ -59,33 +59,32 @@ type outputT interface {
 }
 
 func initOutputs() []outputT {
-	outputs := []outputT{startHttpServer{}, createDatabase{}, loadData{}}
+	outputs := []outputT{startHttpServer{}, loadData{}}
 	return outputs
 }
 
-type createDatabase struct{}
+const createMembers = `
+	CREATE TABLE IF NOT EXISTS members (name INTEGER UNIQUE NOT NULL);`
 
-const setupDb = `
-	CREATE TABLE IF NOT EXISTS members (name INTEGER);
-	CREATE TABLE IF NOT EXISTS friendlynames (key BLOB);`
+const createFriendlyNames = `
+	CREATE TABLE IF NOT EXISTS friendlynames (key BLOB UNIQUE NOT NULL);`
 
-func (createDatabase) io(inputChannel chan inputT) {
+func createDatabase() error {
 	database, err := sql.Open("sqlite3", dbFileName)
 	if err != nil {
-		inputChannel <- fatalError{err}
-		return
+		err = fmt.Errorf("could not open database: %v", err)
+		return err
 	}
 	defer database.Close()
-	statement, err := database.Prepare(setupDb)
+	_, err = database.Exec(createMembers)
 	if err != nil {
-		inputChannel <- fatalError{err}
-		return
+		return err
 	}
-	_, err = statement.Exec()
+	_, err = database.Exec(createFriendlyNames)
 	if err != nil {
-		inputChannel <- fatalError{err}
-		return
+		return err
 	}
+	return nil
 }
 
 type loadData struct{}
@@ -108,6 +107,7 @@ func loadFriendlyNames(database *sql.DB) ([][]byte, error) {
 	rows, err := database.Query("SELECT key FROM friendlynames")
 	var friendlyNames [][]byte
 	if err != nil {
+		err = fmt.Errorf("could not load friendlynames: %v", err)
 		return friendlyNames, err
 	}
 	for rows.Next() {
@@ -134,6 +134,12 @@ func loadUint64(filename string) (uint64, error) {
 }
 
 func (loadData) io(inputChannel chan inputT) {
+	err := createDatabase()
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
 	database, err := sql.Open("sqlite3", dbFileName)
 	if err != nil {
 		inputChannel <- fatalError{err}
@@ -155,14 +161,12 @@ func (loadData) io(inputChannel chan inputT) {
 
 	powCounter, err := loadUint64(uniquePowFileName)
 	if err != nil {
-		inputChannel <- fatalError{err}
-		return
+		powCounter = 0
 	}
 
 	authUnique, err := loadUint64(uniqueAuthFileName)
 	if err != nil {
-		inputChannel <- fatalError{err}
-		return
+		authUnique = 0
 	}
 
 	loaded := loadedData{
@@ -381,7 +385,7 @@ type cacheNewAuthUnique struct {
 	channel chan httpResponseT
 }
 
-const uniqueAuthFileName = "uniqueAuthCounter"
+const uniqueAuthFileName = dataDir + "/uniqueAuthCounter"
 
 func (c cacheNewAuthUnique) io(inputChannel chan inputT) {
 	err := ioutil.WriteFile(uniqueAuthFileName, c.auth, 0644)
@@ -674,7 +678,7 @@ func encodeCounter(counter uint64) []byte {
 
 type cachePowUniqueT uint64
 
-const uniquePowFileName = "uniqueProofOfWorkCounter"
+const uniquePowFileName = dataDir + "/uniqueProofOfWorkCounter"
 
 func (c cachePowUniqueT) io(inputChannel chan inputT) {
 	buf := make([]byte, 8)
@@ -860,7 +864,9 @@ func (err fatalError) update(state stateT) (stateT, []outputT) {
 	return state, []outputT{}
 }
 
-const dbFileName = "database.db"
+const dataDir = "data"
+
+const dbFileName = dataDir + "/database.db"
 
 func (c cacheNewKeyT) io(inputChannel chan inputT) {
 	database, err := sql.Open("sqlite3", dbFileName)
