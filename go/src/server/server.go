@@ -779,8 +779,8 @@ func parseLookupName(body []byte) parsedRequestT {
 }
 
 type proofOfWorkT struct {
-	server []byte
-	client []byte
+	Server []byte
+	Client []byte
 }
 
 type makeFriendlyNameRequest struct {
@@ -827,11 +827,11 @@ func keyExists(key []byte, keys [][]byte) bool {
 }
 
 func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, bool) {
-	serverCandidate, _ := binary.Uvarint(pow.server)
+	serverCandidate, _ := binary.Uvarint(pow.Server)
 	if !isAmember(serverCandidate, s.unused) {
 		return s, false
 	}
-	hash := sha256.Sum256(append(pow.server, pow.client...))
+	hash := sha256.Sum256(append(pow.Server, pow.Client...))
 	if !firstXareZero(hash, s.difficulty) {
 		return s, false
 	}
@@ -921,8 +921,8 @@ func parseMakeFriendlyName(body []byte) parsedRequestT {
 	}
 
 	proofOfWork := proofOfWorkT{
-		server: body[1:9],
-		client: body[9:25],
+		Server: body[1:9],
+		Client: body[9:25],
 	}
 
 	return makeFriendlyNameRequest{
