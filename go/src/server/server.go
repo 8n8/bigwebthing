@@ -38,9 +38,13 @@ type proofOfWorkState struct {
 	unused     []uint64
 }
 
+
+const powDifficulty = 15
+
+
 func initState() stateT {
 	pow := proofOfWorkState{
-		difficulty: 15,
+		difficulty: powDifficulty,
 		unique:     0,
 		unused:     []uint64{},
 	}
@@ -780,8 +784,8 @@ type proofOfWorkT struct {
 }
 
 type makeFriendlyNameRequest struct {
-	proofOfWork proofOfWorkT
-	newKey      []byte
+	ProofOfWork proofOfWorkT
+	NewKey      []byte
 }
 
 func removeItem(items []uint64, item uint64) []uint64 {
@@ -836,18 +840,18 @@ func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, b
 }
 
 func (m makeFriendlyNameRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
-	newPow, ok := checkProofOfWork(m.proofOfWork, state.proofOfWork)
+	newPow, ok := checkProofOfWork(m.ProofOfWork, state.proofOfWork)
 	if !ok {
 		return state, []outputT{badResponse{"bad proof of work", 400, httpResponseChan}}
 	}
 
-	if keyExists(m.newKey, state.friendlyNames) {
+	if keyExists(m.NewKey, state.friendlyNames) {
 		return state, []outputT{badResponse{"key already used", 400, httpResponseChan}}
 	}
 
-	state.friendlyNames = append(state.friendlyNames, m.newKey)
+	state.friendlyNames = append(state.friendlyNames, m.NewKey)
 	state.proofOfWork = newPow
-	return state, []outputT{cacheNewKeyT{httpResponseChan, m.newKey}}
+	return state, []outputT{cacheNewKeyT{httpResponseChan, m.NewKey}}
 }
 
 type cacheNewKeyT struct {
@@ -912,8 +916,8 @@ func (b badResponse) io(inputChannel chan inputT) {
 }
 
 func parseMakeFriendlyName(body []byte) parsedRequestT {
-	if len(body) != 56 {
-		return badRequest{"body is not 56 bytes", 400}
+	if len(body) != 57 {
+		return badRequest{"body is not 57 bytes", 400}
 	}
 
 	proofOfWork := proofOfWorkT{
@@ -922,8 +926,8 @@ func parseMakeFriendlyName(body []byte) parsedRequestT {
 	}
 
 	return makeFriendlyNameRequest{
-		proofOfWork: proofOfWork,
-		newKey:      body[25:57],
+		ProofOfWork: proofOfWork,
+		NewKey:      body[25:57],
 	}
 }
 
