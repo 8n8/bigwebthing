@@ -39,8 +39,18 @@ type proofOfWorkState struct {
 }
 
 func initState() stateT {
+	pow := proofOfWorkState{
+		difficulty: 15,
+		unique:     0,
+		unused:     []uint64{},
+	}
 	return stateT{
-		fatalErr: nil,
+		fatalErr:      nil,
+		proofOfWork:   pow,
+		friendlyNames: [][]byte{},
+		members:       make(map[uint64]struct{}),
+		authCodes:     []uint64{},
+		authUnique:    0,
 	}
 }
 
@@ -48,24 +58,153 @@ type outputT interface {
 	io(chan inputT)
 }
 
-func initOutput() outputT {
-	return startHttpServer{}
+func initOutputs() []outputT {
+	outputs := []outputT{startHttpServer{}, createDatabase{}, loadData{}}
+	return outputs
+}
+
+type createDatabase struct{}
+
+const setupDb = `
+	CREATE TABLE IF NOT EXISTS members (name INTEGER);
+	CREATE TABLE IF NOT EXISTS friendlynames (key BLOB);`
+
+func (createDatabase) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	statement, err := database.Prepare(setupDb)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	_, err = statement.Exec()
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+}
+
+type loadData struct{}
+
+func loadMembers(database *sql.DB) (map[uint64]struct{}, error) {
+	rows, err := database.Query("SELECT name FROM members")
+	members := make(map[uint64]struct{})
+	if err != nil {
+		return members, err
+	}
+	for rows.Next() {
+		var member uint64
+		rows.Scan(&member)
+		members[member] = struct{}{}
+	}
+	return members, nil
+}
+
+func loadFriendlyNames(database *sql.DB) ([][]byte, error) {
+	rows, err := database.Query("SELECT key FROM friendlynames")
+	var friendlyNames [][]byte
+	if err != nil {
+		return friendlyNames, err
+	}
+	for rows.Next() {
+		var name []byte
+		rows.Scan(&name)
+		friendlyNames = append(friendlyNames, name)
+	}
+	return friendlyNames, nil
+}
+
+func loadUint64(filename string) (uint64, error) {
+	raw, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return 0, err
+	}
+	if len(raw) != 8 {
+		return 0, errors.New("proof of work counter is not 8 byte")
+	}
+	asInt, n := binary.Uvarint(raw)
+	if n != 8 {
+		return 0, errors.New("did not read all of proof of work counter")
+	}
+	return asInt, nil
+}
+
+func (loadData) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+
+	members, err := loadMembers(database)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
+	friendlyNames, err := loadFriendlyNames(database)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
+	powCounter, err := loadUint64(uniquePowFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
+	authUnique, err := loadUint64(uniqueAuthFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
+	loaded := loadedData{
+		members:       members,
+		friendlyNames: friendlyNames,
+		powCounter:    powCounter,
+		authUnique:    authUnique,
+	}
+	inputChannel <- loaded
+}
+
+type loadedData struct {
+	members       map[uint64]struct{}
+	friendlyNames [][]byte
+	powCounter    uint64
+	authUnique    uint64
+}
+
+func (l loadedData) update(state stateT) (stateT, []outputT) {
+	state.members = l.members
+	state.friendlyNames = l.friendlyNames
+	state.proofOfWork.unique = l.powCounter
+	state.authUnique = l.authUnique
+	return state, []outputT{}
 }
 
 type startHttpServer struct{}
 
 type inputT interface {
-	update(stateT) (stateT, outputT)
+	update(stateT) (stateT, []outputT)
 }
 
 func main() {
 	state := initState()
-	output := initOutput()
+	outputs := initOutputs()
 	inputChannel := make(chan inputT)
 	for state.fatalErr == nil {
-		go output.io(inputChannel)
+		for _, output := range outputs {
+			go output.io(inputChannel)
+		}
 		input := <-inputChannel
-		state, output = input.update(state)
+		state, outputs = input.update(state)
 	}
 	fmt.Println(state.fatalErr)
 }
@@ -127,18 +266,18 @@ type removeMemberRequest struct {
 	member  uint64
 }
 
-func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	newAuthCodes, ok := validToken(r.idToken, state.authCodes)
 	if !ok {
-		return state, badResponse{"bad ID token", 400, httpResponseChan}
+		return state, []outputT{badResponse{"bad ID token", 400, httpResponseChan}}
 	}
 	state.authCodes = newAuthCodes
 	adminUser := state.friendlyNames[0]
 	if !equalBytes(r.idToken.publicSignKey, adminUser) {
-		return state, badResponse{"unauthorised", 401, httpResponseChan}
+		return state, []outputT{badResponse{"unauthorised", 401, httpResponseChan}}
 	}
 	delete(state.members, r.member)
-	return state, deleteMember{r.member, httpResponseChan}
+	return state, []outputT{deleteMember{r.member, httpResponseChan}}
 }
 
 type deleteMember struct {
@@ -180,18 +319,18 @@ type changeKeyRequest struct {
 	newKey  []byte
 }
 
-func (c changeKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+func (c changeKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	newAuthCodes, ok := validToken(c.idToken, state.authCodes)
 	if !ok {
-		return state, badResponse{"bad ID token", 400, responseChan}
+		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
 	senderId, ok := getMemberId(c.idToken.publicSignKey, state.friendlyNames)
 	if !ok {
-		return state, badResponse{"unknown sender", 400, responseChan}
+		return state, []outputT{badResponse{"unknown sender", 400, responseChan}}
 	}
 	state.friendlyNames[senderId] = c.newKey
-	return state, cacheNewKey{c.newKey, responseChan, senderId}
+	return state, []outputT{cacheNewKey{c.newKey, responseChan, senderId}}
 }
 
 type cacheNewKey struct {
@@ -222,14 +361,14 @@ func (c cacheNewKey) io(inputChannel chan inputT) {
 
 type getAuthCodeRequest struct{}
 
-func (getAuthCodeRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+func (getAuthCodeRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	state.authUnique++
 	buf := make([]byte, 8)
 	_ = binary.PutUvarint(buf, state.authUnique)
 	outputs := []outputT{
 		cacheNewAuthUnique{buf, httpResponseChan},
 		sendAuthCode{buf, httpResponseChan}}
-	return state, outputsT(outputs)
+	return state, outputs
 }
 
 type sendAuthCode struct {
@@ -242,8 +381,10 @@ type cacheNewAuthUnique struct {
 	channel chan httpResponseT
 }
 
+const uniqueAuthFileName = "uniqueAuthCounter"
+
 func (c cacheNewAuthUnique) io(inputChannel chan inputT) {
-	err := ioutil.WriteFile("uniqueAuth", c.auth, 0644)
+	err := ioutil.WriteFile(uniqueAuthFileName, c.auth, 0644)
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
@@ -279,26 +420,29 @@ func getMemberId(key []byte, members [][]byte) (int, bool) {
 	return 0, false
 }
 
-func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
+	bad := func(message string, code int) []outputT {
+		return []outputT{badResponse{message, code, responseChan}}
+	}
 	newAuthCodes, ok := validToken(s.idToken, state.authCodes)
 	if !ok {
-		return state, badResponse{"bad ID token", 400, responseChan}
+		return state, bad("bad ID token", 400)
 	}
 	state.authCodes = newAuthCodes
 	senderId, ok := getMemberId(s.idToken.publicSignKey, state.friendlyNames)
 	if !ok {
-		return state, badResponse{"unknown sender", 400, responseChan}
+		return state, bad("unknown sender", 400)
 	}
 	_, senderIsMember := state.members[uint64(senderId)]
 	recipientId, ok := getMemberId(s.recipient, state.friendlyNames)
 	if !ok {
-		return state, badResponse{"unknown recipient", 400, responseChan}
+		return state, bad("unknown recipient", 400)
 	}
 	_, recipientIsMember := state.members[uint64(recipientId)]
 	if (!senderIsMember) && (!recipientIsMember) {
-		return state, badResponse{"neither sender nor recipient are members", 400, responseChan}
+		return state, bad("neither sender nor recipient are members", 400)
 	}
-	return state, sendMessage{recipientId, s.message, responseChan}
+	return state, []outputT{sendMessage{recipientId, s.message, responseChan}}
 }
 
 type sendMessage struct {
@@ -335,14 +479,14 @@ func parseRetrieveMessage(body []byte) parsedRequestT {
 
 type retrieveMessageRequest idTokenT
 
-func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	token := idTokenT(r)
 	newAuthCodes, ok := validToken(token, state.authCodes)
 	if !ok {
-		return state, badResponse{"bad ID token", 400, responseChan}
+		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
-	return state, collectMessage{token.publicSignKey, responseChan}
+	return state, []outputT{collectMessage{token.publicSignKey, responseChan}}
 }
 
 type collectMessage struct {
@@ -440,19 +584,19 @@ func validToken(token idTokenT, unused []uint64) ([]uint64, bool) {
 	return newUnused, true
 }
 
-func (a addAMemberRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+func (a addAMemberRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	newAuthCodes, ok := validToken(a.idToken, state.authCodes)
 	if !ok {
-		return state, badResponse{"bad ID token", 400, responseChan}
+		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
 	if len(state.friendlyNames) == 0 {
 		state.fatalErr = errors.New("no \"admin\" user")
-		return state, doNothing{}
+		return state, []outputT{}
 	}
 	adminUser := state.friendlyNames[0]
 	if !equalBytes(a.idToken.publicSignKey, adminUser) {
-		return state, badResponse{"unauthorised", 401, responseChan}
+		return state, []outputT{badResponse{"unauthorised", 401, responseChan}}
 	}
 	state.members[a.name] = struct{}{}
 	response := sendHttpResponse{
@@ -530,10 +674,12 @@ func encodeCounter(counter uint64) []byte {
 
 type cachePowUniqueT uint64
 
+const uniquePowFileName = "uniqueProofOfWorkCounter"
+
 func (c cachePowUniqueT) io(inputChannel chan inputT) {
 	buf := make([]byte, 8)
 	_ = binary.PutUvarint(buf, uint64(c))
-	err := ioutil.WriteFile("uniquePow", buf, 0644)
+	err := ioutil.WriteFile(uniquePowFileName, buf, 0644)
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
@@ -550,7 +696,7 @@ func trim(unused []uint64) []uint64 {
 	return unused
 }
 
-func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	response := goodHttpResponse(encodeCounter(state.proofOfWork.unique))
 	sendResponse := sendHttpResponse{
 		channel:  httpResponseChan,
@@ -564,18 +710,12 @@ func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan 
 	return state, outputsT(outputs)
 }
 
-func (os outputsT) io(inputChan chan inputT) {
-	for _, o := range os {
-		o.io(inputChan)
-	}
-}
-
 func (g goodHttpResponse) respond(w http.ResponseWriter) {
 	w.Write([]byte(g))
 }
 
 type parsedRequestT interface {
-	updateOnRequest(stateT, chan httpResponseT) (stateT, outputT)
+	updateOnRequest(stateT, chan httpResponseT) (stateT, []outputT)
 }
 
 type badRequest struct {
@@ -594,12 +734,12 @@ func (s sendHttpResponse) io(inputChan chan inputT) {
 
 type goodHttpResponse []byte
 
-func (b badRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, outputT) {
+func (b badRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	response := sendHttpResponse{
 		channel:  responseChan,
 		response: b,
 	}
-	return state, response
+	return state, []outputT{response}
 }
 
 func (b badRequest) respond(w http.ResponseWriter) {
@@ -608,12 +748,12 @@ func (b badRequest) respond(w http.ResponseWriter) {
 
 type lookupNameT uint64
 
-func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	if len(state.friendlyNames) < int(name) {
-		return state, badResponse{"unknown name", 400, httpResponseChan}
+		return state, []outputT{badResponse{"unknown name", 400, httpResponseChan}}
 	}
 	key := state.friendlyNames[int(name)]
-	return state, nameLookupResponse{key, httpResponseChan}
+	return state, []outputT{nameLookupResponse{key, httpResponseChan}}
 }
 
 type nameLookupResponse struct {
@@ -691,19 +831,19 @@ func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, b
 	return s, true
 }
 
-func (m makeFriendlyNameRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+func (m makeFriendlyNameRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	newPow, ok := checkProofOfWork(m.proofOfWork, state.proofOfWork)
 	if !ok {
-		return state, badResponse{"bad proof of work", 400, httpResponseChan}
+		return state, []outputT{badResponse{"bad proof of work", 400, httpResponseChan}}
 	}
 
 	if keyExists(m.newKey, state.friendlyNames) {
-		return state, badResponse{"key already used", 400, httpResponseChan}
+		return state, []outputT{badResponse{"key already used", 400, httpResponseChan}}
 	}
 
 	state.friendlyNames = append(state.friendlyNames, m.newKey)
 	state.proofOfWork = newPow
-	return state, cacheNewKeyT{httpResponseChan, m.newKey}
+	return state, []outputT{cacheNewKeyT{httpResponseChan, m.newKey}}
 }
 
 type cacheNewKeyT struct {
@@ -715,13 +855,9 @@ type fatalError struct {
 	err error
 }
 
-type doNothing struct{}
-
-func (doNothing) io(_ chan inputT) {}
-
-func (err fatalError) update(state stateT) (stateT, outputT) {
+func (err fatalError) update(state stateT) (stateT, []outputT) {
 	state.fatalErr = err.err
-	return state, doNothing{}
+	return state, []outputT{}
 }
 
 const dbFileName = "database.db"
@@ -785,7 +921,7 @@ func parseMakeFriendlyName(body []byte) parsedRequestT {
 	}
 }
 
-func (h httpRequestT) update(state stateT) (stateT, outputT) {
+func (h httpRequestT) update(state stateT) (stateT, []outputT) {
 	return parseRequest(h.body).updateOnRequest(state, h.responseChan)
 }
 
