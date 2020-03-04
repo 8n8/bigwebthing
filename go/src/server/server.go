@@ -701,7 +701,7 @@ func trim(unused []uint64) []uint64 {
 }
 
 func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
-	response := goodHttpResponse(encodeCounter(state.proofOfWork.unique))
+	response := goodHttpResponse(append([]byte{state.proofOfWork.difficulty}, encodeCounter(state.proofOfWork.unique)...))
 	sendResponse := sendHttpResponse{
 		channel:  httpResponseChan,
 		response: response,
