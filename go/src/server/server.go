@@ -227,7 +227,7 @@ func (getAuthCodeRequest) updateOnRequest(state stateT, httpResponseChan chan ht
 	buf := make([]byte, 8)
 	_ = binary.PutUvarint(buf, state.authUnique)
 	outputs := []outputT{
-		cacheNewAuthUnique(buf),
+		cacheNewAuthUnique{buf, httpResponseChan},
 		sendAuthCode{buf, httpResponseChan}}
 	return state, outputsT(outputs)
 }
@@ -237,14 +237,18 @@ type sendAuthCode struct {
 	channel chan httpResponseT
 }
 
-type cacheNewAuthUnique []byte
+type cacheNewAuthUnique struct {
+	auth    []byte
+	channel chan httpResponseT
+}
 
 func (c cacheNewAuthUnique) io(inputChannel chan inputT) {
-	err := ioutil.WriteFile("uniqueAuth", []byte(c), 0644)
+	err := ioutil.WriteFile("uniqueAuth", c.auth, 0644)
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
 	}
+	c.channel <- goodHttpResponse([]byte{})
 }
 
 func (s sendAuthCode) io(inputChannel chan inputT) {
@@ -294,12 +298,13 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if (!senderIsMember) && (!recipientIsMember) {
 		return state, badResponse{"neither sender nor recipient are members", 400, responseChan}
 	}
-	return state, sendMessage{recipientId, s.message}
+	return state, sendMessage{recipientId, s.message, responseChan}
 }
 
 type sendMessage struct {
 	recipient int
 	message   []byte
+	channel   chan httpResponseT
 }
 
 func (s sendMessage) io(inputChannel chan inputT) {
@@ -317,6 +322,7 @@ func (s sendMessage) io(inputChannel chan inputT) {
 		inputChannel <- fatalError{err}
 		return
 	}
+	s.channel <- goodHttpResponse([]byte{})
 }
 
 func parseRetrieveMessage(body []byte) parsedRequestT {
