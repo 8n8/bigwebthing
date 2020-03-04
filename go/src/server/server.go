@@ -133,10 +133,6 @@ func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan
 		return state, badResponse{"bad ID token", 400, httpResponseChan}
 	}
 	state.authCodes = newAuthCodes
-	if len(state.friendlyNames) == 0 {
-		state.fatalErr = errors.New("no \"admin\" user")
-		return state, doNothing{}
-	}
 	adminUser := state.friendlyNames[0]
 	if !equalBytes(r.idToken.publicSignKey, adminUser) {
 		return state, badResponse{"unauthorised", 401, httpResponseChan}
@@ -604,102 +600,28 @@ func (b badRequest) respond(w http.ResponseWriter) {
 	http.Error(w, b.message, b.code)
 }
 
-var okNameChars = map[byte]struct{}{
-	'.': struct{}{},
-	':': struct{}{},
-	'?': struct{}{},
-	'-': struct{}{},
-	'1': struct{}{},
-	'2': struct{}{},
-	'3': struct{}{},
-	'4': struct{}{},
-	'5': struct{}{},
-	'6': struct{}{},
-	'7': struct{}{},
-	'8': struct{}{},
-	'9': struct{}{},
-	'a': struct{}{},
-	'b': struct{}{},
-	'c': struct{}{},
-	'd': struct{}{},
-	'e': struct{}{},
-	'f': struct{}{},
-	'g': struct{}{},
-	'h': struct{}{},
-	'i': struct{}{},
-	'j': struct{}{},
-	'k': struct{}{},
-	'l': struct{}{},
-	'm': struct{}{},
-	'n': struct{}{},
-	'o': struct{}{},
-	'p': struct{}{},
-	'q': struct{}{},
-	'r': struct{}{},
-	's': struct{}{},
-	't': struct{}{},
-	'u': struct{}{},
-	'v': struct{}{},
-	'w': struct{}{},
-	'x': struct{}{},
-	'y': struct{}{},
-	'z': struct{}{}}
+type lookupNameT uint64
 
-func nameOk(candidate []byte) error {
-	if len(candidate) > 40 {
-		return errors.New("name longer than 40 bytes")
+func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
+	if len(state.friendlyNames) < int(name) {
+		return state, badResponse{"unknown name", 400, httpResponseChan}
 	}
-	for _, char := range candidate {
-		if _, ok := okNameChars[char]; !ok {
-			return errors.New("bad character")
-		}
-	}
-	return nil
+	key := state.friendlyNames[int(name)]
+	return state, nameLookupResponse{key, httpResponseChan}
 }
 
-type lookupNameT string
-
-type lookupNameRequest struct {
-	name    string
+type nameLookupResponse struct {
+	key     []byte
 	channel chan httpResponseT
 }
 
-func (l lookupNameRequest) io(inputChannel chan inputT) {
-	database, err := sql.Open("sqlite3", dbFileName)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-	defer database.Close()
-	rows, err := database.Query("SELECT key FROM friendlynames WHERE name=?", l.name)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-	if !rows.Next() {
-		l.channel <- badRequest{"no such name", 400}
-		return
-	}
-	key := make([]byte, 32)
-	err = rows.Scan(&key)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-	l.channel <- goodHttpResponse(key)
-}
-
-func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, outputT) {
-	return state, lookupNameRequest{string(name), httpResponseChan}
+func (n nameLookupResponse) io(inputChannel chan inputT) {
+	n.channel <- goodHttpResponse(n.key)
 }
 
 func parseLookupName(body []byte) parsedRequestT {
-	nameCandidate := body[1:]
-	err := nameOk(nameCandidate)
-	if err != nil {
-		return badRequest{"bad name: " + err.Error(), 400}
-	}
-	return lookupNameT(string(nameCandidate))
+	name, _ := binary.Uvarint(body[1:])
+	return lookupNameT(name)
 }
 
 type proofOfWorkT struct {
@@ -849,13 +771,6 @@ func parseMakeFriendlyName(body []byte) parsedRequestT {
 	proofOfWork := proofOfWorkT{
 		server: body[1:9],
 		client: body[9:25],
-	}
-
-	newName := body[57:]
-
-	err := nameOk(newName)
-	if err != nil {
-		return badRequest{"bad name: " + err.Error(), 400}
 	}
 
 	return makeFriendlyNameRequest{
