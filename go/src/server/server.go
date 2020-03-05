@@ -282,9 +282,90 @@ func parseRequest(body []byte) parsedRequestT {
 		return parseRetrieveMessage(body)
 	case 10:
 		return parseWhitelistSomeone(body)
+	case 11:
+		return parseUnwhitelistSomeone(body)
 	}
 
 	return badRequest{"bad route", 400}
+}
+
+func parseUnwhitelistSomeone(body []byte) parsedRequestT {
+	if len(body) != 145 {
+		return badRequest{"length of body is not 145", 400}
+	}
+	idToken := parseIdToken(body)
+
+	name, n := binary.Uvarint(body[137:])
+	if n != 8 {
+		return badRequest{"could not read name", 400}
+	}
+	return unwhitelistRequest{
+		Name:    name,
+		IdToken: idToken,
+	}
+}
+
+type unwhitelistRequest struct {
+	Name    uint64
+	IdToken idTokenT
+}
+
+func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
+	bad := func(message string, code int) []outputT {
+		return []outputT{badResponse{message, code, responseChan}}
+	}
+	newAuthCodes, ok := validToken(u.IdToken, state.authCodes)
+	if !ok {
+		return state, bad("bad ID token", 400)
+	}
+	state.authCodes = newAuthCodes
+
+	senderIdInt, ok := getMemberId(u.IdToken.publicSignKey, state.friendlyNames)
+	if !ok {
+		return state, bad("unknown sender", 400)
+	}
+	senderId := uint64(senderIdInt)
+
+	whitelist, ok := state.whitelists[senderId]
+	if !ok {
+		return state, bad("already not whitelisted", 400)
+	}
+	_, ok = whitelist[u.Name]
+	if !ok {
+		return state, bad("already not whitelisted", 400)
+	}
+	delete(whitelist, u.Name)
+	state.whitelists[senderId] = whitelist
+	response := deleteWhitelistee{
+		Owner:    senderId,
+		ToRemove: u.Name,
+		Channel:  responseChan,
+	}
+	return state, []outputT{response}
+}
+
+type deleteWhitelistee struct {
+	Owner    uint64
+	ToRemove uint64
+	Channel  chan httpResponseT
+}
+
+const removeFromWhitelist = `
+	DELETE FROM whitelist WHERE owner=? AND sender=?;`
+
+func (d deleteWhitelistee) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	_, err = database.Exec(removeFromWhitelist, d.Owner, d.ToRemove)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	d.Channel <- goodHttpResponse([]byte{})
 }
 
 func parseWhitelistSomeone(body []byte) parsedRequestT {

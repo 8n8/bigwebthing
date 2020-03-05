@@ -99,7 +99,6 @@ The response is:
 11. (Free) Remove someone from whitelist
 + 0x0B
 + 136 bytes: identity token
-+ 24 bytes: proof of work
 + 8 bytes: name of person to remove from whitelist
 
 ### Client API
