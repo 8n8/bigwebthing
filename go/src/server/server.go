@@ -30,6 +30,7 @@ type stateT struct {
 	members       map[uint64]struct{}
 	authCodes     []uint64
 	authUnique    uint64
+	whitelists    map[uint64]map[uint64]struct{}
 }
 
 type proofOfWorkState struct {
@@ -38,9 +39,7 @@ type proofOfWorkState struct {
 	unused     []uint64
 }
 
-
 const powDifficulty = 15
-
 
 func initState() stateT {
 	pow := proofOfWorkState{
@@ -73,6 +72,9 @@ const createMembers = `
 const createFriendlyNames = `
 	CREATE TABLE IF NOT EXISTS friendlynames (key BLOB UNIQUE NOT NULL);`
 
+const createWhitelist = `
+	CREATE TABLE IF NOT EXISTS whitelist (owner INTEGER NOT NULL, sender INTEGER NOT NULL);`
+
 func createDatabase() error {
 	database, err := sql.Open("sqlite3", dbFileName)
 	if err != nil {
@@ -80,13 +82,11 @@ func createDatabase() error {
 		return err
 	}
 	defer database.Close()
-	_, err = database.Exec(createMembers)
-	if err != nil {
-		return err
-	}
-	_, err = database.Exec(createFriendlyNames)
-	if err != nil {
-		return err
+	for _, command := range []string{createMembers, createFriendlyNames, createWhitelist} {
+		_, err = database.Exec(command)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -120,6 +120,25 @@ func loadFriendlyNames(database *sql.DB) ([][]byte, error) {
 		friendlyNames = append(friendlyNames, name)
 	}
 	return friendlyNames, nil
+}
+
+func loadWhitelists(database *sql.DB) (map[uint64]map[uint64]struct{}, error) {
+	rows, err := database.Query("SELECT owner, sender FROM whitelist")
+	whitelists := make(map[uint64]map[uint64]struct{})
+	if err != nil {
+		return whitelists, err
+	}
+	for rows.Next() {
+		var owner, sender uint64
+		rows.Scan(&owner, &sender)
+		whitelist, ok := whitelists[owner]
+		if !ok {
+			whitelist = make(map[uint64]struct{})
+		}
+		whitelist[sender] = struct{}{}
+		whitelists[owner] = whitelist
+	}
+	return whitelists, nil
 }
 
 func loadUint64(filename string) (uint64, error) {
@@ -163,6 +182,12 @@ func (loadData) io(inputChannel chan inputT) {
 		return
 	}
 
+	whitelists, err := loadWhitelists(database)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
 	powCounter, err := loadUint64(uniquePowFileName)
 	if err != nil {
 		powCounter = 0
@@ -178,6 +203,7 @@ func (loadData) io(inputChannel chan inputT) {
 		friendlyNames: friendlyNames,
 		powCounter:    powCounter,
 		authUnique:    authUnique,
+		whitelists:    whitelists,
 	}
 	inputChannel <- loaded
 }
@@ -187,6 +213,7 @@ type loadedData struct {
 	friendlyNames [][]byte
 	powCounter    uint64
 	authUnique    uint64
+	whitelists    map[uint64]map[uint64]struct{}
 }
 
 func (l loadedData) update(state stateT) (stateT, []outputT) {
@@ -194,6 +221,7 @@ func (l loadedData) update(state stateT) (stateT, []outputT) {
 	state.friendlyNames = l.friendlyNames
 	state.proofOfWork.unique = l.powCounter
 	state.authUnique = l.authUnique
+	state.whitelists = l.whitelists
 	return state, []outputT{}
 }
 
@@ -252,9 +280,98 @@ func parseRequest(body []byte) parsedRequestT {
 		return parseSendMessage(body)
 	case 9:
 		return parseRetrieveMessage(body)
+	case 10:
+		return parseWhitelistSomeone(body)
 	}
 
 	return badRequest{"bad route", 400}
+}
+
+func parseWhitelistSomeone(body []byte) parsedRequestT {
+	if len(body) != 169 {
+		return badRequest{"length of body is not 168", 400}
+	}
+	idToken := parseIdToken(body)
+
+	proofOfWork := proofOfWorkT{
+		Server: body[137:145],
+		Client: body[145:161],
+	}
+	name, n := binary.Uvarint(body[161:])
+	if n != 8 {
+		return badRequest{"could not read name", 400}
+	}
+	return whitelistRequest{
+		ProofOfWork: proofOfWork,
+		Name:        name,
+		IdToken:     idToken,
+	}
+}
+
+type whitelistRequest struct {
+	ProofOfWork proofOfWorkT
+	Name        uint64
+	IdToken     idTokenT
+}
+
+func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
+	bad := func(message string, code int) []outputT {
+		return []outputT{badResponse{message, code, responseChan}}
+	}
+	newPow, ok := checkProofOfWork(w.ProofOfWork, state.proofOfWork)
+	if !ok {
+		return state, bad("bad proof of work", 400)
+	}
+	state.proofOfWork = newPow
+
+	newAuthCodes, ok := validToken(w.IdToken, state.authCodes)
+	if !ok {
+		return state, bad("bad ID token", 400)
+	}
+	state.authCodes = newAuthCodes
+
+	senderIdInt, ok := getMemberId(w.IdToken.publicSignKey, state.friendlyNames)
+	if !ok {
+		return state, bad("unknown sender", 400)
+	}
+	senderId := uint64(senderIdInt)
+
+	whitelist, ok := state.whitelists[senderId]
+	if !ok {
+		whitelist = make(map[uint64]struct{})
+	}
+	whitelist[w.Name] = struct{}{}
+	state.whitelists[senderId] = whitelist
+	response := addToWhitelist{
+		Owner:   senderId,
+		ToAdd:   w.Name,
+		Channel: responseChan,
+	}
+	return state, []outputT{response}
+}
+
+type addToWhitelist struct {
+	Owner   uint64
+	ToAdd   uint64
+	Channel chan httpResponseT
+}
+
+const cacheNewWhiteList = `
+	INSERT INTO whitelist (owner, sender) VALUES (?, ?);`
+
+func (a addToWhitelist) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	_, err = database.Exec(cacheNewWhiteList, a.Owner, a.ToAdd)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	a.Channel <- goodHttpResponse([]byte{})
 }
 
 func parseRemoveAMember(body []byte) parsedRequestT {
@@ -446,11 +563,25 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if !ok {
 		return state, bad("unknown recipient", 400)
 	}
+	recipientWhitelist, ok := state.whitelists[uint64(recipientId)]
+	if !ok {
+		recipientWhitelist = make(map[uint64]struct{})
+	}
+	_, ok = recipientWhitelist[uint64(senderId)]
+	if !ok {
+		return state, []outputT{hiddenError(responseChan)}
+	}
 	_, recipientIsMember := state.members[uint64(recipientId)]
 	if (!senderIsMember) && (!recipientIsMember) {
 		return state, bad("neither sender nor recipient are members", 400)
 	}
 	return state, []outputT{sendMessage{recipientId, s.message, responseChan}}
+}
+
+type hiddenError chan httpResponseT
+
+func (h hiddenError) io(inputChannel chan inputT) {
+	h <- goodHttpResponse([]byte{})
 }
 
 type sendMessage struct {
@@ -624,7 +755,7 @@ func (c cacheNewMember) io(inputChannel chan inputT) {
 		return
 	}
 	defer database.Close()
-	statement, err := database.Prepare("INSERT INTO members (member) VALUES (?)")
+	statement, err := database.Prepare("INSERT INTO members (member) VALUES (?);")
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
