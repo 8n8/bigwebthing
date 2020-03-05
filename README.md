@@ -49,7 +49,7 @@ Response is a string.
 
 2. (Free) Retrieve key for name
 + 0x02
-+ name - the name to look up
++ 8 bytes: name - the name to look up
 The response is the 32-byte public key attached to the name.
 
 3. (Free) Get proof of work difficulty and key
@@ -61,12 +61,12 @@ The response is:
 4. (Admin) Add a member
 + 0x04
 + 136 bytes: identity token for user 'admin'
-+ name of member to add
++ 8 bytes: name of member to add
 
 5. (Admin) Remove a member
 + 0x05
 + 136 bytes: identity token for admin user
-+ name of member to remove
++ 8 bytes: name of member to remove
 
 6. (Free) Change the key attached to a friendly name
 + 0x06
@@ -89,6 +89,18 @@ The response is a unique 16 bytes, that is, the server must never respond in the
 The response is:
 + 0x01 if there are messages or 0x00 if there aren't
 + the message - as in (8) above, if there is one
+
+10. (Free) Whitelist someone
++ 0x0A
++ 136 bytes: identity token
++ 24 bytes: proof of work
++ 8 bytes: name of person to whitelist
+
+11. (Free) Remove someone from whitelist
++ 0x0B
++ 136 bytes: identity token
++ 24 bytes: proof of work
++ 8 bytes: name of person to remove from whitelist
 
 ### Client API
 
