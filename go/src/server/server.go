@@ -28,7 +28,7 @@ func encodeInt(theInt int) []byte {
 	// for up to about 10^14, but this is enough for id numbers,
 	// since I'm not too bothered about having more than that
 	// number of users.
-	result := make([]byte, 6)
+	result := make([]byte, 8)
 	for i, _ := range result {
 		result[i] = byte((theInt >> (i * 8)) & 0xFF)
 	}
@@ -57,15 +57,15 @@ type stateT struct {
 	proofOfWork   proofOfWorkState
 	friendlyNames [][]byte
 	members       map[int]struct{}
-	authCodes     []uint64
-	authUnique    uint64
-	whitelists    map[uint64]map[uint64]struct{}
+	authCodes     []int
+	authUnique    int
+	whitelists    map[int]map[int]struct{}
 }
 
 type proofOfWorkState struct {
 	difficulty uint8
-	unique     uint64
-	unused     []uint64
+	unique     int
+	unused     []int
 }
 
 const powDifficulty = 15
@@ -74,14 +74,14 @@ func initState() stateT {
 	pow := proofOfWorkState{
 		difficulty: powDifficulty,
 		unique:     0,
-		unused:     []uint64{},
+		unused:     []int{},
 	}
 	return stateT{
 		fatalErr:      nil,
 		proofOfWork:   pow,
 		friendlyNames: [][]byte{},
 		members:       make(map[int]struct{}),
-		authCodes:     []uint64{},
+		authCodes:     []int{},
 		authUnique:    0,
 	}
 }
@@ -151,18 +151,18 @@ func loadFriendlyNames(database *sql.DB) ([][]byte, error) {
 	return friendlyNames, nil
 }
 
-func loadWhitelists(database *sql.DB) (map[uint64]map[uint64]struct{}, error) {
+func loadWhitelists(database *sql.DB) (map[int]map[int]struct{}, error) {
 	rows, err := database.Query("SELECT owner, sender FROM whitelist")
-	whitelists := make(map[uint64]map[uint64]struct{})
+	whitelists := make(map[int]map[int]struct{})
 	if err != nil {
 		return whitelists, err
 	}
 	for rows.Next() {
-		var owner, sender uint64
+		var owner, sender int
 		rows.Scan(&owner, &sender)
 		whitelist, ok := whitelists[owner]
 		if !ok {
-			whitelist = make(map[uint64]struct{})
+			whitelist = make(map[int]struct{})
 		}
 		whitelist[sender] = struct{}{}
 		whitelists[owner] = whitelist
@@ -170,7 +170,7 @@ func loadWhitelists(database *sql.DB) (map[uint64]map[uint64]struct{}, error) {
 	return whitelists, nil
 }
 
-func loadUint64(filename string) (uint64, error) {
+func loadInt(filename string) (int, error) {
 	raw, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return 0, err
@@ -178,11 +178,7 @@ func loadUint64(filename string) (uint64, error) {
 	if len(raw) != 8 {
 		return 0, errors.New("proof of work counter is not 8 byte")
 	}
-	asInt, n := binary.Uvarint(raw)
-	if n != 8 {
-		return 0, errors.New("did not read all of proof of work counter")
-	}
-	return asInt, nil
+	return decodeInt(raw), nil
 }
 
 func (loadData) io(inputChannel chan inputT) {
@@ -217,12 +213,12 @@ func (loadData) io(inputChannel chan inputT) {
 		return
 	}
 
-	powCounter, err := loadUint64(uniquePowFileName)
+	powCounter, err := loadInt(uniquePowFileName)
 	if err != nil {
 		powCounter = 0
 	}
 
-	authUnique, err := loadUint64(uniqueAuthFileName)
+	authUnique, err := loadInt(uniqueAuthFileName)
 	if err != nil {
 		authUnique = 0
 	}
@@ -240,9 +236,9 @@ func (loadData) io(inputChannel chan inputT) {
 type loadedData struct {
 	members       map[int]struct{}
 	friendlyNames [][]byte
-	powCounter    uint64
-	authUnique    uint64
-	whitelists    map[uint64]map[uint64]struct{}
+	powCounter    int
+	authUnique    int
+	whitelists    map[int]map[int]struct{}
 }
 
 func (l loadedData) update(state stateT) (stateT, []outputT) {
@@ -324,10 +320,7 @@ func parseUnwhitelistSomeone(body []byte) parsedRequestT {
 	}
 	idToken := parseIdToken(body)
 
-	name, n := binary.Uvarint(body[137:])
-	if n != 8 {
-		return badRequest{"could not read name", 400}
-	}
+	name := decodeInt(body[137:])
 	return unwhitelistRequest{
 		Name:    name,
 		IdToken: idToken,
@@ -335,7 +328,7 @@ func parseUnwhitelistSomeone(body []byte) parsedRequestT {
 }
 
 type unwhitelistRequest struct {
-	Name    uint64
+	Name    int
 	IdToken idTokenT
 }
 
@@ -349,11 +342,10 @@ func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan http
 	}
 	state.authCodes = newAuthCodes
 
-	senderIdInt, ok := getMemberId(u.IdToken.publicSignKey, state.friendlyNames)
+	senderId, ok := getMemberId(u.IdToken.publicSignKey, state.friendlyNames)
 	if !ok {
 		return state, bad("unknown sender", 400)
 	}
-	senderId := uint64(senderIdInt)
 
 	whitelist, ok := state.whitelists[senderId]
 	if !ok {
@@ -374,8 +366,8 @@ func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan http
 }
 
 type deleteWhitelistee struct {
-	Owner    uint64
-	ToRemove uint64
+	Owner    int
+	ToRemove int
 	Channel  chan httpResponseT
 }
 
@@ -407,10 +399,7 @@ func parseWhitelistSomeone(body []byte) parsedRequestT {
 		Server: body[137:145],
 		Client: body[145:161],
 	}
-	name, n := binary.Uvarint(body[161:])
-	if n != 8 {
-		return badRequest{"could not read name", 400}
-	}
+	name := decodeInt(body[161:])
 	return whitelistRequest{
 		ProofOfWork: proofOfWork,
 		Name:        name,
@@ -420,7 +409,7 @@ func parseWhitelistSomeone(body []byte) parsedRequestT {
 
 type whitelistRequest struct {
 	ProofOfWork proofOfWorkT
-	Name        uint64
+	Name        int
 	IdToken     idTokenT
 }
 
@@ -440,15 +429,14 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 	}
 	state.authCodes = newAuthCodes
 
-	senderIdInt, ok := getMemberId(w.IdToken.publicSignKey, state.friendlyNames)
+	senderId, ok := getMemberId(w.IdToken.publicSignKey, state.friendlyNames)
 	if !ok {
 		return state, bad("unknown sender", 400)
 	}
-	senderId := uint64(senderIdInt)
 
 	whitelist, ok := state.whitelists[senderId]
 	if !ok {
-		whitelist = make(map[uint64]struct{})
+		whitelist = make(map[int]struct{})
 	}
 	whitelist[w.Name] = struct{}{}
 	state.whitelists[senderId] = whitelist
@@ -461,8 +449,8 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 }
 
 type addToWhitelist struct {
-	Owner   uint64
-	ToAdd   uint64
+	Owner   int
+	ToAdd   int
 	Channel chan httpResponseT
 }
 
@@ -598,11 +586,10 @@ type getAuthCodeRequest struct{}
 
 func (getAuthCodeRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	state.authUnique++
-	buf := make([]byte, 8)
-	_ = binary.PutUvarint(buf, state.authUnique)
+	encoded := encodeInt(state.authUnique)
 	outputs := []outputT{
-		cacheNewAuthUnique{buf, httpResponseChan},
-		sendAuthCode{buf, httpResponseChan}}
+		cacheNewAuthUnique(encoded),
+		sendAuthCode{encoded, httpResponseChan}}
 	return state, outputs
 }
 
@@ -611,20 +598,16 @@ type sendAuthCode struct {
 	channel chan httpResponseT
 }
 
-type cacheNewAuthUnique struct {
-	auth    []byte
-	channel chan httpResponseT
-}
+type cacheNewAuthUnique []byte
 
 const uniqueAuthFileName = dataDir + "/uniqueAuthCounter"
 
 func (c cacheNewAuthUnique) io(inputChannel chan inputT) {
-	err := ioutil.WriteFile(uniqueAuthFileName, c.auth, 0644)
+	err := ioutil.WriteFile(uniqueAuthFileName, c, 0644)
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
 	}
-	c.channel <- goodHttpResponse([]byte{})
 }
 
 func (s sendAuthCode) io(inputChannel chan inputT) {
@@ -673,11 +656,11 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if !ok {
 		return state, bad("unknown recipient", 400)
 	}
-	recipientWhitelist, ok := state.whitelists[uint64(recipientId)]
+	recipientWhitelist, ok := state.whitelists[recipientId]
 	if !ok {
-		recipientWhitelist = make(map[uint64]struct{})
+		recipientWhitelist = make(map[int]struct{})
 	}
-	_, ok = recipientWhitelist[uint64(senderId)]
+	_, ok = recipientWhitelist[senderId]
 	if !ok {
 		return state, []outputT{hiddenError(responseChan)}
 	}
@@ -701,7 +684,7 @@ type sendMessage struct {
 }
 
 func (s sendMessage) io(inputChannel chan inputT) {
-	messagesDir := userMessagePath(int64(s.recipient))
+	messagesDir := userMessagePath(int(s.recipient))
 	err := os.MkdirAll(messagesDir, os.ModeDir)
 	if err != nil {
 		inputChannel <- fatalError{err}
@@ -735,45 +718,27 @@ func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan 
 		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
-	return state, []outputT{collectMessage{token.publicSignKey, responseChan}}
+	senderId, ok := getMemberId(token.publicSignKey, state.friendlyNames)
+	if !ok {
+		return state, []outputT{badResponse{"not a member", 400, responseChan}}
+	}
+	return state, []outputT{collectMessage{senderId, responseChan}}
 }
 
 type collectMessage struct {
-	addressee []byte
+	addressee int
 	channel   chan httpResponseT
 }
 
 const inboxesDir = "inboxes"
 
-func userMessagePath(name int64) string {
-	nameString := strconv.FormatInt(name, 10)
+func userMessagePath(name int) string {
+	nameString := strconv.FormatInt(int64(name), 10)
 	return inboxesDir + "/" + nameString
 }
 
 func (c collectMessage) io(inputChannel chan inputT) {
-	database, err := sql.Open("sqlite3", dbFileName)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-	defer database.Close()
-	rows, err := database.Query("SELECT rowid FROM friendlynames WHERE key=?", c.addressee)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-	if !rows.Next() {
-		c.channel <- badRequest{"no such key", 400}
-		return
-	}
-	var name int64
-	err = rows.Scan(&name)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-
-	messagesDir := userMessagePath(name)
+	messagesDir := userMessagePath(c.addressee)
 	messageFileNames, err := ioutil.ReadDir(messagesDir)
 	if err != nil {
 		c.channel <- goodHttpResponse([]byte{0})
@@ -816,7 +781,7 @@ func equalBytes(k1 []byte, k2 []byte) bool {
 	return true
 }
 
-func validToken(token idTokenT, unused []uint64) ([]uint64, bool) {
+func validToken(token idTokenT, unused []int) ([]int, bool) {
 	var keyArr [32]byte
 	copy(keyArr[:], token.publicSignKey)
 	signed, ok := sign.Open([]byte{}, token.signature, &keyArr)
@@ -879,14 +844,14 @@ func (c cacheNewMember) io(inputChannel chan inputT) {
 
 type idTokenT struct {
 	publicSignKey []byte
-	authCode      uint64
+	authCode      int
 	signature     []byte
 	messageHash   []byte
 }
 
 func parseIdToken(body []byte) idTokenT {
 	authBytes := body[33:41]
-	authCode, _ := binary.Uvarint(authBytes)
+	authCode := decodeInt(authBytes)
 	message := append(
 		append(body[0:1], authBytes...), body[137:]...)
 	hash := sha256.Sum256(message)
@@ -915,27 +880,19 @@ type getProofOfWorkInfoRequest struct{}
 
 type outputsT []outputT
 
-func encodeCounter(counter uint64) []byte {
-	buf := make([]byte, 8)
-	_ = binary.PutUvarint(buf, counter)
-	return buf
-}
-
-type cachePowUniqueT uint64
+type cachePowUniqueT int
 
 const uniquePowFileName = dataDir + "/uniqueProofOfWorkCounter"
 
 func (c cachePowUniqueT) io(inputChannel chan inputT) {
-	buf := make([]byte, 8)
-	_ = binary.PutUvarint(buf, uint64(c))
-	err := ioutil.WriteFile(uniquePowFileName, buf, 0644)
+	err := ioutil.WriteFile(uniquePowFileName, encodeInt(int(c)), 0644)
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
 	}
 }
 
-func trim(unused []uint64) []uint64 {
+func trim(unused []int) []int {
 	length := len(unused)
 	const maxUnusedPowCodesToKeep = 5000
 	tooMuch := length - maxUnusedPowCodesToKeep
@@ -946,7 +903,7 @@ func trim(unused []uint64) []uint64 {
 }
 
 func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
-	response := goodHttpResponse(append([]byte{state.proofOfWork.difficulty}, encodeCounter(state.proofOfWork.unique)...))
+	response := goodHttpResponse(append([]byte{state.proofOfWork.difficulty}, encodeInt(state.proofOfWork.unique)...))
 	sendResponse := sendHttpResponse{
 		channel:  httpResponseChan,
 		response: response,
@@ -995,7 +952,7 @@ func (b badRequest) respond(w http.ResponseWriter) {
 	http.Error(w, b.message, b.code)
 }
 
-type lookupNameT uint64
+type lookupNameT int
 
 func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
 	if len(state.friendlyNames) < int(name) {
@@ -1029,8 +986,8 @@ type makeFriendlyNameRequest struct {
 	NewKey      []byte
 }
 
-func removeItem(items []uint64, item uint64) []uint64 {
-	newItems := make([]uint64, 0, len(items))
+func removeItem(items []int, item int) []int {
+	newItems := make([]int, 0, len(items))
 	for _, oldItem := range items {
 		if oldItem == item {
 			continue
@@ -1049,7 +1006,7 @@ func firstXareZero(bs [32]byte, x uint8) bool {
 	return true
 }
 
-func isAmember(candidate uint64, of []uint64) bool {
+func isAmember(candidate int, of []int) bool {
 	for _, o := range of {
 		if candidate == o {
 			return true
@@ -1068,7 +1025,7 @@ func keyExists(key []byte, keys [][]byte) bool {
 }
 
 func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, bool) {
-	serverCandidate, _ := binary.Uvarint(pow.Server)
+	serverCandidate := decodeInt(pow.Server)
 	if !isAmember(serverCandidate, s.unused) {
 		return s, false
 	}
@@ -1138,12 +1095,10 @@ func (c cacheNewKeyT) io(inputChannel chan inputT) {
 	c.channel <- newUsernameT(username)
 }
 
-type newUsernameT int64
+type newUsernameT int
 
 func (n newUsernameT) respond(w http.ResponseWriter) {
-	buf := make([]byte, 8)
-	_ = binary.PutUvarint(buf, uint64(n))
-	w.Write(buf)
+	w.Write(encodeInt(int(n)))
 }
 
 type badResponse struct {
