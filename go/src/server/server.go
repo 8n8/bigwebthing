@@ -56,7 +56,7 @@ type stateT struct {
 	fatalErr      error
 	proofOfWork   proofOfWorkState
 	friendlyNames [][]byte
-	members       map[uint64]struct{}
+	members       map[int]struct{}
 	authCodes     []uint64
 	authUnique    uint64
 	whitelists    map[uint64]map[uint64]struct{}
@@ -80,7 +80,7 @@ func initState() stateT {
 		fatalErr:      nil,
 		proofOfWork:   pow,
 		friendlyNames: [][]byte{},
-		members:       make(map[uint64]struct{}),
+		members:       make(map[int]struct{}),
 		authCodes:     []uint64{},
 		authUnique:    0,
 	}
@@ -122,14 +122,14 @@ func createDatabase() error {
 
 type loadData struct{}
 
-func loadMembers(database *sql.DB) (map[uint64]struct{}, error) {
+func loadMembers(database *sql.DB) (map[int]struct{}, error) {
 	rows, err := database.Query("SELECT name FROM members")
-	members := make(map[uint64]struct{})
+	members := make(map[int]struct{})
 	if err != nil {
 		return members, err
 	}
 	for rows.Next() {
-		var member uint64
+		var member int
 		rows.Scan(&member)
 		members[member] = struct{}{}
 	}
@@ -238,7 +238,7 @@ func (loadData) io(inputChannel chan inputT) {
 }
 
 type loadedData struct {
-	members       map[uint64]struct{}
+	members       map[int]struct{}
 	friendlyNames [][]byte
 	powCounter    uint64
 	authUnique    uint64
@@ -489,7 +489,7 @@ func parseRemoveAMember(body []byte) parsedRequestT {
 		return badRequest{"length of body is less than 138", 400}
 	}
 	idToken := parseIdToken(body)
-	memberToRemove, _ := binary.Uvarint(body[137:])
+	memberToRemove := decodeInt(body[137:])
 	if memberToRemove == 0 {
 		return badRequest{"can't delete admin member", 400}
 	}
@@ -498,7 +498,7 @@ func parseRemoveAMember(body []byte) parsedRequestT {
 
 type removeMemberRequest struct {
 	idToken idTokenT
-	member  uint64
+	member  int
 }
 
 func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
@@ -516,7 +516,7 @@ func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan
 }
 
 type deleteMember struct {
-	member  uint64
+	member  int
 	channel chan httpResponseT
 }
 
@@ -668,7 +668,7 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if !ok {
 		return state, bad("unknown sender", 400)
 	}
-	_, senderIsMember := state.members[uint64(senderId)]
+	_, senderIsMember := state.members[senderId]
 	recipientId, ok := getMemberId(s.recipient, state.friendlyNames)
 	if !ok {
 		return state, bad("unknown recipient", 400)
@@ -681,7 +681,7 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if !ok {
 		return state, []outputT{hiddenError(responseChan)}
 	}
-	_, recipientIsMember := state.members[uint64(recipientId)]
+	_, recipientIsMember := state.members[recipientId]
 	if (!senderIsMember) && (!recipientIsMember) {
 		return state, bad("neither sender nor recipient are members", 400)
 	}
@@ -801,7 +801,7 @@ func (c collectMessage) io(inputChannel chan inputT) {
 
 type addAMemberRequest struct {
 	idToken idTokenT
-	name    uint64
+	name    int
 }
 
 func equalBytes(k1 []byte, k2 []byte) bool {
@@ -904,7 +904,7 @@ func parseAddAMember(body []byte) parsedRequestT {
 		return badRequest{"body less than 138 bytes", 400}
 	}
 	idToken := parseIdToken(body)
-	nameToAdd, _ := binary.Uvarint(body[137:])
+	nameToAdd := decodeInt(body[137:])
 	return addAMemberRequest{
 		idToken: idToken,
 		name:    nameToAdd,
