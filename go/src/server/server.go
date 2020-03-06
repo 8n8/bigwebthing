@@ -23,6 +23,35 @@ const csp = "default-src 'none'; " +
 	"font-src 'self'; " +
 	"report-uri http://localhost:3001/cspreport;"
 
+func encodeInt(theInt int) []byte {
+	// Most significant byte is the last one. It only works
+	// for up to about 10^14, but this is enough for id numbers,
+	// since I'm not too bothered about having more than that
+	// number of users.
+	result := make([]byte, 6)
+	for i, _ := range result {
+		result[i] = byte((theInt >> (i * 8)) & 0xFF)
+	}
+	return result
+}
+
+func intPower(base, power int) int {
+	result := 1
+	for i := 0; i < power; i++ {
+		result = result * base
+	}
+	return result
+}
+
+func decodeInt(bs []byte) int {
+	// Most significant byte should be the last one.
+	result := 0
+	for i, b := range bs {
+		result += int(b) * intPower(256, i)
+	}
+	return result
+}
+
 type stateT struct {
 	fatalErr      error
 	proofOfWork   proofOfWorkState
