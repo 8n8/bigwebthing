@@ -12,6 +12,7 @@ import Element.Input
 import Hex.Convert
 import Html
 import Html.Attributes
+import Http
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
@@ -23,7 +24,7 @@ import Set
 
 
 type Msg
-    = RetrievedHome String
+    = RetrievedHome Je.Value
     | RetrievedHash String
     | UpdatedLeft String
     | UpdatedEditor String
@@ -33,6 +34,40 @@ type Msg
     | ShowProgramCheckBox Bool
     | UpdatedDescription String
     | MakeNewProgram
+    | PowInfoResponse (Result Http.Error PowInfo)
+    | DoneProofOfWork String
+    | NewName (Result Http.Error Bytes.Bytes)
+
+
+urlRoot =
+    "http://localhost:3001"
+
+
+decodeInt : Bytes.Bytes -> Maybe Int
+decodeInt bs =
+    D.decode (D.signedInt32 Bytes.LE) bs
+
+
+requestName : Bytes.Bytes -> Bytes.Bytes -> Cmd Msg
+requestName publicSign proofOfWork =
+    let
+        body =
+            E.encode <| E.sequence [ E.unsignedInt8 1, E.bytes proofOfWork, E.bytes publicSign ]
+    in
+    Http.post
+        { url = urlRoot ++ "/api"
+        , body = Http.bytesBody "" body
+        , expect = Http.expectBytes NewName (D.bytes 8)
+        }
+
+
+getPowInfo : Cmd Msg
+getPowInfo =
+    Http.post
+        { url = urlRoot ++ "/api"
+        , body = Http.bytesBody "" <| E.encode <| E.unsignedInt8 3
+        , expect = Http.expectBytes PowInfoResponse decodePowInfo
+        }
 
 
 updatePrograms : Dict.Dict String Program -> Maybe ( Program, a ) -> Program -> Dict.Dict String Program
@@ -62,21 +97,25 @@ type alias Model =
     , toLookUp : List String
     , internalErr : Maybe String
     , editProgram : Bool
+    , getNameError : Maybe Http.Error
     }
 
 
 type alias Home =
     { biggestNonceBase : Int
-    , myKeys : Maybe MySecretKeys
+    , myKeys : Maybe MyKeys
+    , myName : Maybe Bytes.Bytes
     , outbox : List HumanMsg
     , programs : Dict.Dict String Program
     , pubKeys : Dict.Dict String PubKeys
     }
 
 
-type alias MySecretKeys =
-    { encrypt : Bytes.Bytes
-    , sign : Bytes.Bytes
+type alias MyKeys =
+    { secretEncrypt : Bytes.Bytes
+    , secretSign : Bytes.Bytes
+    , publicEncrypt : Bytes.Bytes
+    , publicSign : Bytes.Bytes
     }
 
 
@@ -93,6 +132,7 @@ initHome =
     , pubKeys = Dict.empty
     , biggestNonceBase = 0
     , myKeys = Nothing
+    , myName = Nothing
     }
 
 
@@ -116,12 +156,13 @@ viewHelp model =
         , Font.size 25
         ]
     <|
-        (if Dict.isEmpty model.home.programs then
-            []
+        showMyName model.home.myName
+            :: (if Dict.isEmpty model.home.programs then
+                    []
 
-         else
-            [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram) ]
-        )
+                else
+                    [ launcher (Dict.toList <| Dict.map (\_ p -> p.description) model.home.programs) (Maybe.map (hash << .code << Tuple.first) model.openProgram) ]
+               )
             ++ [ newProgramButton
                ]
             ++ (case model.openProgram of
@@ -137,6 +178,28 @@ viewHelp model =
                         , editDescription model.openProgram
                         ]
                )
+
+
+retrieving =
+    Element.text "retrieving..."
+
+
+showMyName : Maybe Bytes.Bytes -> Element.Element Msg
+showMyName maybeRawName =
+    Element.row []
+        [ Element.text "My username is: "
+        , case maybeRawName of
+            Nothing ->
+                retrieving
+
+            Just rawName ->
+                case decodeInt rawName of
+                    Nothing ->
+                        retrieving
+
+                    Just name ->
+                        Element.text <| String.fromInt name
+        ]
 
 
 editDescription : Maybe ( Program, a ) -> Element.Element Msg
@@ -2631,7 +2694,7 @@ decodeString bytes =
 jsonHumanMsg :
     { pubKeys : Dict.Dict String PubKeys
     , nonceBase : Int
-    , myKeys : MySecretKeys
+    , myKeys : MyKeys
     }
     -> Int
     -> HumanMsg
@@ -2658,10 +2721,10 @@ jsonHumanMsg { pubKeys, nonceBase, myKeys } msgCounter { to, document } =
             in
             case
                 ( ( b docBytes
-                  , b myKeys.sign
+                  , b myKeys.secretSign
                   , b <| makeNonce nonceBase msgCounter
                   )
-                , ( b myKeys.encrypt
+                , ( b myKeys.secretEncrypt
                   , b toKeys.encrypt
                   )
                 )
@@ -2739,16 +2802,31 @@ combineResultsHelp results accum =
 type alias MsgsToEncode =
     { msgs : List HumanMsg
     , pubKeys : Dict.Dict String PubKeys
-    , myKeys : MySecretKeys
+    , myKeys : MyKeys
     , nonceBase : Int
     }
 
 
-decodeSecretKeys : Jd.Decoder MySecretKeys
-decodeSecretKeys =
-    Jd.map2 MySecretKeys
-        (Jd.field "encrypt" decodeKey)
-        (Jd.field "sign" decodeKey)
+type alias HomeTop =
+    { rawB64Home : String
+    , exists : Bool
+    }
+
+
+decodeHomeTop : Jd.Decoder HomeTop
+decodeHomeTop =
+    Jd.map2 HomeTop
+        (Jd.field "home" Jd.string)
+        (Jd.field "exists" Jd.bool)
+
+
+decodeKeys : Jd.Decoder MyKeys
+decodeKeys =
+    Jd.map4 MyKeys
+        (Jd.field "secretencrypt" decodeKey)
+        (Jd.field "secretsign" decodeKey)
+        (Jd.field "publicencrypt" decodeKey)
+        (Jd.field "publicsign" decodeKey)
 
 
 decodeKey : Jd.Decoder Bytes.Bytes
@@ -2768,20 +2846,57 @@ decodeKeyHelp k =
 
 decodeHome : D.Decoder Home
 decodeHome =
-    D.map5 Home
+    map6 Home
         (D.unsignedInt32 Bytes.BE)
         decodeMyKeys
+        (D.map Just (D.bytes 8))
         (list decodeHumanMsg)
         (D.map programsToDict <| list decodeProgram)
         decodePubKeys
 
 
-decodeMyKeys : D.Decoder (Maybe MySecretKeys)
+decodeMyName : D.Decoder (Maybe Bytes.Bytes)
+decodeMyName =
+    D.andThen decodeMyNameHelp D.unsignedInt8
+
+
+decodeMyNameHelp : Int -> D.Decoder (Maybe Bytes.Bytes)
+decodeMyNameHelp i =
+    case i of
+        0 ->
+            D.succeed Nothing
+
+        _ ->
+            D.map Just (D.bytes 8)
+
+
+type alias PowInfo =
+    { difficulty : Int
+    , unique : Bytes.Bytes
+    }
+
+
+jsonEncodePowInfo : Int -> String -> Je.Value
+jsonEncodePowInfo difficulty unique =
+    Je.object
+        [ ( "difficulty", Je.int difficulty )
+        , ( "unique", Je.string unique )
+        ]
+
+
+decodePowInfo : D.Decoder PowInfo
+decodePowInfo =
+    D.map2 PowInfo
+        D.unsignedInt8
+        (D.bytes 8)
+
+
+decodeMyKeys : D.Decoder (Maybe MyKeys)
 decodeMyKeys =
     D.andThen decodeMyKeysHelp D.unsignedInt8
 
 
-decodeMyKeysHelp : Int -> D.Decoder (Maybe MySecretKeys)
+decodeMyKeysHelp : Int -> D.Decoder (Maybe MyKeys)
 decodeMyKeysHelp i =
     case i of
         0 ->
@@ -2789,9 +2904,11 @@ decodeMyKeysHelp i =
 
         _ ->
             D.map Just <|
-                D.map2 MySecretKeys
+                D.map4 MyKeys
                     (D.bytes 32)
                     (D.bytes 64)
+                    (D.bytes 32)
+                    (D.bytes 32)
 
 
 decodePubKeys : D.Decoder (Dict.Dict String PubKeys)
@@ -2813,17 +2930,19 @@ decodePubKey =
         (D.bytes 32)
 
 
-encodeSecretKeys : Maybe MySecretKeys -> E.Encoder
+encodeSecretKeys : Maybe MyKeys -> E.Encoder
 encodeSecretKeys maybeKeys =
     case maybeKeys of
         Nothing ->
             E.unsignedInt8 0
 
-        Just { encrypt, sign } ->
+        Just { publicEncrypt, publicSign, secretEncrypt, secretSign } ->
             E.sequence
                 [ E.unsignedInt8 1
-                , E.bytes encrypt
-                , E.bytes sign
+                , E.bytes secretEncrypt
+                , E.bytes secretSign
+                , E.bytes publicEncrypt
+                , E.bytes publicSign
                 ]
 
 
@@ -2852,10 +2971,21 @@ encodeHome h =
     E.sequence
         [ E.unsignedInt32 Bytes.BE h.biggestNonceBase
         , encodeSecretKeys h.myKeys
+        , encodeMyName h.myName
         , encodeHumanMsgs h.outbox
         , encodePrograms h.programs
         , encodePubKeys h.pubKeys
         ]
+
+
+encodeMyName : Maybe Bytes.Bytes -> E.Encoder
+encodeMyName maybeName =
+    case maybeName of
+        Nothing ->
+            E.unsignedInt8 0
+
+        Just name ->
+            E.bytes name
 
 
 encodeBytes : Bytes.Bytes -> E.Encoder

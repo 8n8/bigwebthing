@@ -21,6 +21,7 @@ const csp = "default-src 'none'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self'; " +
 	"font-src 'self'; " +
+	"connect-src 'self'; " +
 	"report-uri http://localhost:3001/cspreport;"
 
 func encodeInt(theInt int) []byte {
@@ -68,7 +69,7 @@ type proofOfWorkState struct {
 	unused     []int
 }
 
-const powDifficulty = 15
+const powDifficulty = 2
 
 func initState() stateT {
 	pow := proofOfWorkState{
@@ -390,16 +391,16 @@ func (d deleteWhitelistee) io(inputChannel chan inputT) {
 }
 
 func parseWhitelistSomeone(body []byte) parsedRequestT {
-	if len(body) != 169 {
-		return badRequest{"length of body is not 168", 400}
+	if len(body) != 161 {
+		return badRequest{"length of body is not 161", 400}
 	}
 	idToken := parseIdToken(body)
 
 	proofOfWork := proofOfWorkT{
 		Server: body[137:145],
-		Client: body[145:161],
+		Client: body[145:153],
 	}
-	name := decodeInt(body[161:])
+	name := decodeInt(body[153:])
 	return whitelistRequest{
 		ProofOfWork: proofOfWork,
 		Name:        name,
@@ -632,7 +633,9 @@ type sendMessageRequest struct {
 func getMemberId(key []byte, members [][]byte) (int, bool) {
 	for i, member := range members {
 		if equalBytes(member, key) {
-			return i, true
+			// The +1 is because the IDs are the rowid
+			// from the database, which count from 1.
+			return i + 1, true
 		}
 	}
 	return 0, false
@@ -910,8 +913,8 @@ func (getProofOfWorkInfoRequest) updateOnRequest(state stateT, httpResponseChan 
 	}
 	cachePow := cachePowUniqueT(state.proofOfWork.unique + 1)
 	outputs := []outputT{sendResponse, cachePow}
-	state.proofOfWork.unique += 1
 	state.proofOfWork.unused = append(state.proofOfWork.unused, state.proofOfWork.unique)
+	state.proofOfWork.unique += 1
 	state.proofOfWork.unused = trim(state.proofOfWork.unused)
 	return state, outputsT(outputs)
 }
@@ -1112,18 +1115,18 @@ func (b badResponse) io(inputChannel chan inputT) {
 }
 
 func parseMakeFriendlyName(body []byte) parsedRequestT {
-	if len(body) != 57 {
-		return badRequest{"body is not 57 bytes", 400}
+	if len(body) != 49 {
+		return badRequest{"body is not 49 bytes", 400}
 	}
 
 	proofOfWork := proofOfWorkT{
 		Server: body[1:9],
-		Client: body[9:25],
+		Client: body[9:17],
 	}
 
 	return makeFriendlyNameRequest{
 		ProofOfWork: proofOfWork,
-		NewKey:      body[25:57],
+		NewKey:      body[17:49],
 	}
 }
 
@@ -1136,11 +1139,12 @@ func (startHttpServer) io(inputChan chan inputT) {
 		"/api",
 		func(w http.ResponseWriter, r *http.Request) {
 			body := make([]byte, maxBodyLength)
-			_, err := r.Body.Read(body)
-			if err != nil {
+			n, err := r.Body.Read(body)
+			if err != nil && err != io.EOF {
 				http.Error(w, err.Error(), 400)
 				return
 			}
+			body = body[:n]
 			responseChan := make(chan httpResponseT)
 			inputChan <- httpRequestT{
 				body:         body,

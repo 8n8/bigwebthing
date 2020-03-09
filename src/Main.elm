@@ -27,10 +27,16 @@ cacheHomeHelp home =
             cacheHome base64str
 
 
+port doProofOfWork : Je.Value -> Cmd msg
+
+
+port doneProofOfWork : (String -> msg) -> Sub msg
+
+
 port requestHome : () -> Cmd msg
 
 
-port retrievedHome : (String -> msg) -> Sub msg
+port retrievedHome : (Je.Value -> msg) -> Sub msg
 
 
 port requestHash : String -> Cmd msg
@@ -64,9 +70,51 @@ main =
         }
 
 
+doProofOfWorkHelp : PowInfo -> Cmd Msg
+doProofOfWorkHelp powInfo =
+    case Base64.fromBytes powInfo.unique of
+        Nothing ->
+            Cmd.none
+
+        Just b64 ->
+            doProofOfWork (jsonEncodePowInfo powInfo.difficulty b64)
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        NewName (Ok newName) ->
+            let
+                oldHome =
+                    model.home
+
+                newHome =
+                    { oldHome | myName = Just newName }
+            in
+            ( { model | home = newHome }, cacheHomeHelp newHome )
+
+        NewName (Err err) ->
+            ( { model | getNameError = Just err }, Cmd.none )
+
+        DoneProofOfWork b64 ->
+            case Base64.toBytes b64 of
+                Nothing ->
+                    ( { model | internalErr = Just "Could not convert proof of work from Base64 to bytes." }, Cmd.none )
+
+                Just proofOfWork ->
+                    case ( model.home.myName, model.home.myKeys ) of
+                        ( Nothing, Just keys ) ->
+                            ( model, requestName keys.publicSign proofOfWork )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+        PowInfoResponse (Ok powInfo) ->
+            ( model, doProofOfWorkHelp powInfo )
+
+        PowInfoResponse (Err err) ->
+            ( { model | getNameError = Just err }, Cmd.none )
+
         ShowProgramCheckBox check ->
             ( { model | editProgram = check }, Cmd.none )
 
@@ -84,7 +132,7 @@ update msg model =
             )
 
         NewRawKeys rawKeys ->
-            case Jd.decodeValue decodeSecretKeys rawKeys of
+            case Jd.decodeValue decodeKeys rawKeys of
                 Err err ->
                     ( { model
                         | internalErr = Just <| Jd.errorToString err
@@ -105,23 +153,39 @@ update msg model =
                     in
                     case model.openProgram of
                         Nothing ->
-                            ( model, Cmd.none )
+                            ( newModel, cacheHomeHelp newHome )
 
                         Just ( program, _ ) ->
                             reRunProgram newModel program
 
         RetrievedHome rawHome ->
-            case Base64.toBytes rawHome of
-                Just bytes ->
-                    case D.decode decodeHome bytes of
-                        Nothing ->
-                            ( { model | internalErr = Just "Could not decode bytes for Home" }, Cmd.none )
+            case Jd.decodeValue decodeHomeTop rawHome of
+                Err err ->
+                    ( { model | internalErr = Just <| Jd.errorToString err }, Cmd.none )
 
-                        Just home ->
-                            ( { model | home = home }, Cmd.none )
+                Ok { rawB64Home, exists } ->
+                    if exists then
+                        case Base64.toBytes rawB64Home of
+                            Just bytes ->
+                                case D.decode decodeHome bytes of
+                                    Nothing ->
+                                        ( { model | internalErr = Just "Could not decode bytes for Home" }, Cmd.none )
 
-                Nothing ->
-                    ( { model | internalErr = Just "Could not convert base64 to bytes for Home" }, Cmd.none )
+                                    Just home ->
+                                        ( { model | home = home }
+                                        , case home.myName of
+                                            Nothing ->
+                                                getPowInfo
+
+                                            Just _ ->
+                                                Cmd.none
+                                        )
+
+                            Nothing ->
+                                ( { model | internalErr = Just "Could not convert base64 to bytes for Home" }, Cmd.none )
+
+                    else
+                        ( model, Cmd.batch [ getPowInfo, getSecretKeys () ] )
 
         RetrievedHash raw ->
             ( model, Cmd.none )
@@ -205,8 +269,9 @@ init _ =
       , toLookUp = []
       , internalErr = Nothing
       , editProgram = False
+      , getNameError = Nothing
       }
-    , requestHome ()
+    , Cmd.batch [ requestHome () ]
     )
 
 
@@ -270,4 +335,5 @@ subscriptions model =
         [ retrievedHome RetrievedHome
         , retrievedHash RetrievedHash
         , gotSecretKeys NewRawKeys
+        , doneProofOfWork DoneProofOfWork
         ]

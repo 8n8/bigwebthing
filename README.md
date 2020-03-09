@@ -25,7 +25,7 @@ The cost of the server is met by subscriptions. It is free to use the server to 
 Free APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes from the server, and find some more unique bytes that will create an sha256 hash with a number of the first bytes as zeros.  So a proof of work token is like this:
 
 + <8 unique bytes provided by the server>
-+ <16 calculated by the client>
++ <8 calculated by the client>
 
 The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty, that is, that the required initial number of bytes are zeros.
 
@@ -43,9 +43,9 @@ These are the types of messages that the server will accept:
 
 1. (Free) Make a friendly name for a public signing key:
 + 0x01
-+ 24 bytes: proof of work
++ 16 bytes: proof of work
 + 32 bytes: public signing key
-Response is a string.
+Response is an 8 byte name.
 
 2. (Free) Retrieve key for name
 + 0x02
@@ -56,7 +56,7 @@ The response is the 32-byte public key attached to the name.
 + 0x03
 The response is:
 + 1 byte: how many of the bytes at the start of the proof of work must be zeros (the difficulty)
-+ 16 bytes: unique, i.e. the server must never respond in the same way to this request
++ 8 bytes: unique, i.e. the server must never respond in the same way to this request
 
 4. (Admin) Add a member
 + 0x04
@@ -93,7 +93,7 @@ The response is:
 10. (Free) Whitelist someone
 + 0x0A
 + 136 bytes: identity token
-+ 24 bytes: proof of work
++ 16 bytes: proof of work
 + 8 bytes: name of person to whitelist
 
 11. (Free) Remove someone from whitelist

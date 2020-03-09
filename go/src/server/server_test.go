@@ -8,7 +8,7 @@ import (
 
 func TestMakeFriendlyNameParserSimpleOk(t *testing.T) {
 	powServer := []byte{2, 2, 2, 2, 2, 2, 2, 2}
-	powClient := []byte{3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}
+	powClient := []byte{3, 3, 3, 3, 3, 3, 3, 3}
 	powflat := append(powServer, powClient...)
 	newKey := make([]byte, 32)
 	for i, _ := range newKey {
@@ -57,7 +57,7 @@ func TestMakeFriendlyNameParserFuzz(t *testing.T) {
 
 func TestEncodeInt0(t *testing.T) {
 	got := encodeInt(0)
-	want := []byte{0, 0, 0, 0, 0, 0}
+	want := []byte{0, 0, 0, 0, 0, 0, 0, 0}
 	diff := cmp.Diff(got, want)
 	if diff != "" {
 		t.Errorf("diff %v", diff)
@@ -66,7 +66,7 @@ func TestEncodeInt0(t *testing.T) {
 
 func TestEncodeInt1(t *testing.T) {
 	got := encodeInt(1)
-	want := []byte{1, 0, 0, 0, 0, 0}
+	want := []byte{1, 0, 0, 0, 0, 0, 0, 0}
 	diff := cmp.Diff(got, want)
 	if diff != "" {
 		t.Errorf("got %v, but want %v", got, want)
