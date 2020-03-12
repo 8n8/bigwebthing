@@ -93,3 +93,22 @@ app.ports.doProofOfWork.subscribe(function(powInfo) {
       app.ports.doneProofOfWork.send(base64js.fromByteArray(pow));
   })
 });
+
+app.ports.makeIdToken.subscribe(function(idTokenInfo) {
+  const publicsign = new Uint8Array(base64js.toByteArray(idTokenInfo.publicsign));
+  const secretsign = new Uint8Array(base64js.toByteArray(idTokenInfo.secretsign));
+  let route = new ArrayBuffer(1);
+  (function() {
+    let routeView = new Uint8Array(route);
+    routeView = idTokenInfo.route;
+  })();
+  const authcode = new Uint8Array(base64js.toByteArray(idTokenInfo.authcode));
+  const message = new Uint8Array(base64js.toByteArray(idTokenInfo.message));
+  
+  const toSign = route.append(message.append(authcode));
+  crypto.subtle.digest('SHA-256', toSign).then(function(hash) {
+    const signature = nacl.sign(hash, secretsign);
+    const encodedIdToken = publicsign.append(authcode).append(signature);
+    app.ports.newIdToken.send(encodedIdToken);
+  });
+});

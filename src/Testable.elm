@@ -27,7 +27,7 @@ import Set
 
 type Msg
     = RetrievedHome Je.Value
-    | NewIdToken Je.Value
+    | NewIdToken String
     | AddNewContact
     | UpdateContactBox String
     | RetrievedHash String
@@ -41,8 +41,9 @@ type Msg
     | PowInfoResponse (Result Http.Error PowInfo)
     | DoneProofOfWork String
     | NewName (Result Http.Error Bytes.Bytes)
-    | KeyForName Int (Result Http.Error Bytes.Bytes)
+    | KeyForName (Result Http.Error Bytes.Bytes)
     | NewAuthCode (Result Http.Error Bytes.Bytes)
+    | Whitelisted (Result Http.Error ())
 
 
 urlRoot =
@@ -98,7 +99,7 @@ requestKeyFromServer name =
     Http.post
         { url = urlRoot ++ "/api"
         , body = Http.bytesBody "" <| E.encode <| E.sequence [ E.unsignedInt8 2, encodeInt name ]
-        , expect = Http.expectBytes (KeyForName name) (D.bytes 32)
+        , expect = Http.expectBytes KeyForName (D.bytes 32)
         }
 
 
@@ -156,10 +157,23 @@ type Model
         , addContactBox : Maybe Int
         , addContactErr : Maybe Http.Error
         , youTriedToAddYourselfToContacts : Bool
-        , newIdTokenHole : Maybe (Je.Value -> Model -> ( Model, Cmd Msg ))
+        , newIdTokenHole : Maybe (String -> Model -> ( Model, Cmd Msg ))
         , newProofOfWorkHole : Maybe (String -> Model -> ( Model, Cmd Msg ))
-        , newAuthCodeHole : Maybe (Bytes.Bytes -> Model -> ( Model, Cmd Msg ))
+        , newAuthCodeHole : Maybe (Result Http.Error Bytes.Bytes -> Model -> ( Model, Cmd Msg ))
+        , keyForNameHole : Maybe (Result Http.Error Bytes.Bytes -> Model -> ( Model, Cmd Msg ))
+        , newPowInfoHole : Maybe (Result Http.Error PowInfo -> Model -> ( Model, Cmd Msg ))
+        , prepareForWhitelist : PrepareForWhitelist
         }
+
+
+type alias PrepareForWhitelist =
+    { authCode : Maybe Bytes.Bytes
+    , name : Maybe Int
+    , powInfo : Maybe PowInfo
+    , pow : Maybe Bytes.Bytes
+    , idToken : Maybe Bytes.Bytes
+    , key : Maybe Bytes.Bytes
+    }
 
 
 type alias Home =

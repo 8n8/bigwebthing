@@ -1,11 +1,14 @@
 port module Main exposing (main)
 
 import Base64
+import Base64.Decode
 import Browser
+import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
 import Dict
 import Hex.Convert
+import Http
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
@@ -57,7 +60,7 @@ port sendMsg : Je.Value -> Cmd msg
 port makeIdToken : Je.Value -> Cmd msg
 
 
-port newIdToken : (Je.Value -> msg) -> Sub msg
+port newIdToken : (String -> msg) -> Sub msg
 
 
 port gotSecretKeys : (Je.Value -> msg) -> Sub msg
@@ -106,9 +109,320 @@ encodeTokenInfo m =
         ]
 
 
+{-| When a new contact is added, it goes like this:
+
+1.  look up key, request auth code, and request proof of
+    work information
+2.  construct proof of work
+3.  construct id token
+4.  send whitelist request
+5.  cache new contact
+
+-}
+updateAddNewContact : Model -> ( Model, Cmd Msg )
+updateAddNewContact (Model model) =
+    case ( model.addContactBox, model.home.myName ) of
+        ( Just contact, Just myName ) ->
+            case decodeInt myName of
+                Nothing ->
+                    ( Model { model | internalErr = Just "could not decode myName to an int" }, Cmd.none )
+
+                Just myNameInt ->
+                    if contact == myNameInt then
+                        ( Model { model | youTriedToAddYourselfToContacts = True, addContactBox = Nothing }, Cmd.none )
+
+                    else
+                        updateAddNewContactHelp contact (Model model)
+
+        ( Just contact, _ ) ->
+            ( Model { model | addContactBox = Nothing, youTriedToAddYourselfToContacts = False }, requestKeyFromServer contact )
+
+        _ ->
+            ( Model model, Cmd.none )
+
+
+updateAddNewContactHelp : Int -> Model -> ( Model, Cmd Msg )
+updateAddNewContactHelp contact (Model model) =
+    let
+        oldPrep =
+            model.prepareForWhitelist
+
+        prep =
+            { oldPrep | name = Just contact }
+    in
+    ( Model
+        { model
+            | newAuthCodeHole = Just authCodeHoleForWhitelist
+            , newPowInfoHole = Just newPowInfoHoleForWhitelist
+            , keyForNameHole = Just newKeyHoleForWhitelist
+            , prepareForWhitelist = prep
+        }
+    , Cmd.batch
+        [ requestKeyFromServer contact
+        , getAuthCode
+        , getPowInfo
+        ]
+    )
+
+
+newPowInfoHoleForWhitelist : Result Http.Error PowInfo -> Model -> ( Model, Cmd Msg )
+newPowInfoHoleForWhitelist httpResponse (Model model) =
+    case httpResponse of
+        Err err ->
+            ( Model { model | addContactErr = Just err }, Cmd.none )
+
+        Ok powInfo ->
+            let
+                prep =
+                    model.prepareForWhitelist
+
+                newPrep =
+                    { prep | powInfo = Just powInfo }
+
+                newModel =
+                    Model { model | prepareForWhitelist = newPrep }
+            in
+            whitelistStage2Cmd newModel
+
+
+newKeyHoleForWhitelist : Result Http.Error Bytes.Bytes -> Model -> ( Model, Cmd Msg )
+newKeyHoleForWhitelist httpResponse (Model model) =
+    case httpResponse of
+        Err err ->
+            ( Model { model | addContactErr = Just err }, Cmd.none )
+
+        Ok key ->
+            let
+                prep =
+                    model.prepareForWhitelist
+
+                newPrep =
+                    { prep | key = Just key }
+            in
+            whitelistStage2Cmd (Model { model | prepareForWhitelist = newPrep })
+
+
+whitelistStage2Cmd : Model -> ( Model, Cmd Msg )
+whitelistStage2Cmd (Model model) =
+    let
+        p =
+            model.prepareForWhitelist
+
+        newModel =
+            { model
+                | newIdTokenHole = Just idTokenHoleForWhitelist
+                , newProofOfWorkHole = Just powHoleForWhitelist
+            }
+    in
+    case ( ( p.powInfo, p.name, p.authCode ), model.home.myKeys ) of
+        ( _, Nothing ) ->
+            ( Model { model | internalErr = Just "can't continue with whitelisting without crypto keys" }, Cmd.none )
+
+        ( ( Just powInfo, Just name, Just authCode ), Just myKeys ) ->
+            let
+                powCmd =
+                    doProofOfWorkHelp powInfo
+
+                makeIdTokenCmd =
+                    makeIdTokenHelp
+                        { keys = myKeys
+                        , route = 10
+                        , authCode = authCode
+                        , message = E.encode <| encodeInt name
+                        }
+            in
+            ( Model newModel, Cmd.batch [ powCmd, makeIdTokenCmd ] )
+
+        _ ->
+            ( Model newModel, Cmd.none )
+
+
+idTokenHoleForWhitelist : String -> Model -> ( Model, Cmd Msg )
+idTokenHoleForWhitelist b64 (Model model) =
+    case Base64.Decode.decode Base64.Decode.bytes b64 of
+        Err err ->
+            ( Model { model | internalErr = Just <| "could not decode ID token from port: " ++ showB64Err err }, Cmd.none )
+
+        Ok idToken ->
+            let
+                prep =
+                    model.prepareForWhitelist
+
+                newPrep =
+                    { prep | idToken = Just idToken }
+
+                newModel =
+                    Model { model | prepareForWhitelist = newPrep }
+            in
+            sendWhitelistRequest newModel
+
+
+showB64Err : Base64.Decode.Error -> String
+showB64Err err =
+    case err of
+        Base64.Decode.ValidationError ->
+            "validation error"
+
+        Base64.Decode.InvalidByteSequence ->
+            "invalid byte sequence"
+
+
+sendWhitelistRequest : Model -> ( Model, Cmd Msg )
+sendWhitelistRequest (Model model) =
+    let
+        p =
+            model.prepareForWhitelist
+    in
+    case ( p.idToken, p.pow, p.name ) of
+        ( Just idToken, Just pow, Just name ) ->
+            let
+                httpBody =
+                    E.encode <|
+                        E.sequence
+                            [ E.unsignedInt8 10
+                            , E.bytes idToken
+                            , E.bytes pow
+                            , encodeInt name
+                            ]
+
+                request =
+                    Http.post
+                        { url = urlRoot ++ "/api"
+                        , body = Http.bytesBody "" httpBody
+                        , expect = Http.expectWhatever Whitelisted
+                        }
+            in
+            ( Model model, request )
+
+        _ ->
+            ( Model model, Cmd.none )
+
+
+powHoleForWhitelist : String -> Model -> ( Model, Cmd Msg )
+powHoleForWhitelist b64 (Model model) =
+    case ( Base64.Decode.decode Base64.Decode.bytes b64, model.home.myKeys ) of
+        ( Err err, _ ) ->
+            ( Model { model | internalErr = Just <| "could not decode proof of work from port: " ++ showB64Err err }, Cmd.none )
+
+        ( _, Nothing ) ->
+            ( Model { model | internalErr = Just "no crypto keys" }, Cmd.none )
+
+        ( Ok pow, Just myKeys ) ->
+            let
+                prep =
+                    model.prepareForWhitelist
+
+                newPrep =
+                    { prep | pow = Just pow }
+            in
+            whitelistStage2Cmd (Model { model | prepareForWhitelist = newPrep })
+
+
+authCodeHoleForWhitelist : Result Http.Error Bytes.Bytes -> Model -> ( Model, Cmd Msg )
+authCodeHoleForWhitelist httpResponse (Model model) =
+    case ( httpResponse, model.home.myKeys ) of
+        ( Err err, _ ) ->
+            ( whitelistClearHoles <|
+                Model { model | addContactErr = Just err }
+            , Cmd.none
+            )
+
+        ( _, Nothing ) ->
+            ( whitelistClearHoles <|
+                Model { model | internalErr = Just "no crypto keys" }
+            , Cmd.none
+            )
+
+        ( Ok authCode, Just myKeys ) ->
+            let
+                prep =
+                    model.prepareForWhitelist
+
+                newPrep =
+                    { prep | authCode = Just authCode }
+            in
+            whitelistStage2Cmd (Model { model | prepareForWhitelist = newPrep })
+
+
+whitelistClearHoles : Model -> Model
+whitelistClearHoles (Model model) =
+    let
+        emptyPrep =
+            { authCode = Nothing
+            , name = Nothing
+            , powInfo = Nothing
+            , pow = Nothing
+            , idToken = Nothing
+            , key = Nothing
+            }
+
+        newModel =
+            { model
+                | prepareForWhitelist = emptyPrep
+                , newPowInfoHole = Nothing
+                , keyForNameHole = Nothing
+                , newAuthCodeHole = Nothing
+                , newProofOfWorkHole = Nothing
+                , newIdTokenHole = Nothing
+            }
+    in
+    Model newModel
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg (Model model) =
     case msg of
+        Whitelisted (Err err) ->
+            ( whitelistClearHoles <|
+                Model { model | addContactErr = Just err }
+            , Cmd.none
+            )
+
+        Whitelisted (Ok ()) ->
+            case
+                ( model.prepareForWhitelist.name
+                , model.prepareForWhitelist.key
+                )
+            of
+                ( Just name, Just key ) ->
+                    let
+                        contacts =
+                            model.home.contacts
+
+                        newContacts =
+                            Dict.insert name key contacts
+
+                        home =
+                            model.home
+
+                        newHome =
+                            { home | contacts = newContacts }
+
+                        newModel =
+                            Model { model | home = newHome }
+                    in
+                    ( whitelistClearHoles newModel
+                    , cacheHomeHelp newHome
+                    )
+
+                ( Nothing, _ ) ->
+                    ( whitelistClearHoles <|
+                        Model
+                            { model
+                                | internalErr = Just "Successful whitelist response, but no name locally to add to contacts."
+                            }
+                    , Cmd.none
+                    )
+
+                ( _, Nothing ) ->
+                    ( whitelistClearHoles <|
+                        Model
+                            { model
+                                | internalErr = Just "Successful whitelist response, but no key locally to add to contacts."
+                            }
+                    , Cmd.none
+                    )
+
         NewIdToken rawToken ->
             case model.newIdTokenHole of
                 Nothing ->
@@ -117,48 +431,37 @@ update msg (Model model) =
                 Just updateOnNewToken ->
                     updateOnNewToken rawToken (Model model)
 
-        KeyForName name (Ok key) ->
-            ( Model model, getAuthCode )
+        KeyForName key ->
+            case model.keyForNameHole of
+                Nothing ->
+                    ( Model { model | internalErr = Just "unexpected key for name" }, Cmd.none )
 
-        NewAuthCode (Ok newAuthCode) ->
+                Just updateOnNewKey ->
+                    updateOnNewKey key (Model model)
+
+        NewAuthCode authCode ->
             case model.newAuthCodeHole of
                 Nothing ->
-                    ( Model { model | internalErr = Just "unexpected authentication code" }, Cmd.none )
+                    ( Model
+                        { model
+                            | internalErr = Just "unexpected authentication code"
+                        }
+                    , Cmd.none
+                    )
 
                 Just updateOnAuthCode ->
-                    updateOnAuthCode newAuthCode (Model model)
-
-        NewAuthCode (Err err) ->
-            ( Model model, Cmd.none )
-
-        KeyForName name (Err err) ->
-            ( Model { model | addContactErr = Just err }, Cmd.none )
+                    updateOnAuthCode authCode (Model model)
 
         AddNewContact ->
-            case ( model.addContactBox, model.home.myName ) of
-                ( Just contact, Just myName ) ->
-                    case decodeInt myName of
-                        Nothing ->
-                            ( Model { model | internalErr = Just "could not decode myName to an int" }, Cmd.none )
-
-                        Just myNameInt ->
-                            if contact == myNameInt then
-                                ( Model { model | youTriedToAddYourselfToContacts = True, addContactBox = Nothing }, Cmd.none )
-
-                            else
-                                ( Model { model | addContactBox = Nothing, youTriedToAddYourselfToContacts = False }, requestKeyFromServer contact )
-
-                ( Just contact, _ ) ->
-                    ( Model { model | addContactBox = Nothing, youTriedToAddYourselfToContacts = False }, requestKeyFromServer contact )
-
-                _ ->
-                    ( Model model, Cmd.none )
+            updateAddNewContact (Model model)
 
         UpdateContactBox newInfo ->
             case String.toInt newInfo of
                 Nothing ->
                     if newInfo == "" then
-                        ( Model { model | addContactBox = Nothing }, Cmd.none )
+                        ( Model { model | addContactBox = Nothing }
+                        , Cmd.none
+                        )
 
                     else
                         ( Model model, Cmd.none )
@@ -168,7 +471,9 @@ update msg (Model model) =
                         ( Model model, Cmd.none )
 
                     else
-                        ( Model { model | addContactBox = Just num }, Cmd.none )
+                        ( Model { model | addContactBox = Just num }
+                        , Cmd.none
+                        )
 
         NewName (Ok newName) ->
             let
@@ -178,7 +483,9 @@ update msg (Model model) =
                 newHome =
                     { oldHome | myName = Just newName }
             in
-            ( Model { model | home = newHome }, cacheHomeHelp newHome )
+            ( Model { model | home = newHome }
+            , cacheHomeHelp newHome
+            )
 
         NewName (Err err) ->
             ( Model { model | getNameError = Just err }, Cmd.none )
@@ -186,20 +493,16 @@ update msg (Model model) =
         DoneProofOfWork b64 ->
             case model.newProofOfWorkHole of
                 Nothing ->
-                    ( Model { model | internalErr = Just "unexpected proof of work" }, Cmd.none )
+                    ( Model
+                        { model
+                            | internalErr = Just "unexpected proof of work"
+                        }
+                    , Cmd.none
+                    )
 
                 Just processProofOfWork ->
                     processProofOfWork b64 (Model model)
 
-        -- case Base64.toBytes b64 of
-        --     Nothing ->
-        --         ( { model | internalErr = Just "Could not convert proof of work from Base64 to bytes." }, Cmd.none )
-        --     Just proofOfWork ->
-        --         case ( model.home.myName, model.home.myKeys ) of
-        --             ( Nothing, Just keys ) ->
-        --                 ( model, requestName keys.publicSign proofOfWork )
-        --             _ ->
-        --                 ( model, Cmd.none )
         PowInfoResponse (Ok powInfo) ->
             ( Model model, doProofOfWorkHelp powInfo )
 
@@ -209,7 +512,9 @@ update msg (Model model) =
         LaunchProgram programName ->
             case Dict.get programName model.home.programs of
                 Nothing ->
-                    ( Model { model | openProgram = Nothing }, Cmd.none )
+                    ( Model { model | openProgram = Nothing }
+                    , Cmd.none
+                    )
 
                 Just program ->
                     reRunProgram (Model model) program
@@ -250,7 +555,12 @@ update msg (Model model) =
         RetrievedHome rawHome ->
             case Jd.decodeValue decodeHomeTop rawHome of
                 Err err ->
-                    ( Model { model | internalErr = Just <| Jd.errorToString err }, Cmd.none )
+                    ( Model
+                        { model
+                            | internalErr = Just <| Jd.errorToString err
+                        }
+                    , Cmd.none
+                    )
 
                 Ok { rawB64Home, exists } ->
                     if exists then
@@ -366,6 +676,9 @@ init _ =
         , newIdTokenHole = Nothing
         , newProofOfWorkHole = Nothing
         , newAuthCodeHole = Nothing
+        , keyForNameHole = Nothing
+        , newPowInfoHole = Nothing
+        , prepareForWhitelist = { authCode = Nothing, name = Nothing, powInfo = Nothing, pow = Nothing, idToken = Nothing, key = Nothing }
         }
     , Cmd.batch [ requestHome () ]
     )

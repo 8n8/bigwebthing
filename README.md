@@ -36,7 +36,7 @@ Messages are sent to the server in HTTP requests. The server will not accept mes
 Some APIs are only accessible to certain users and must have an identity token as follows:
 + 32 bytes: public signing key of sender>
 + 8 bytes: authentication code downloaded from the server earlier>
-+ 96 bytes: signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(sha256hash(message + authCode)).>
++ 96 bytes: signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(sha256hash(route + message + authCode)).>
 So an identity token is 136 bytes long.
 
 These are the types of messages that the server will accept:
