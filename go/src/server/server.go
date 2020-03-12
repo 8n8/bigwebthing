@@ -633,9 +633,7 @@ type sendMessageRequest struct {
 func getMemberId(key []byte, members [][]byte) (int, bool) {
 	for i, member := range members {
 		if equalBytes(member, key) {
-			// The +1 is because the IDs are the rowid
-			// from the database, which count from 1.
-			return i + 1, true
+			return i, true
 		}
 	}
 	return 0, false
@@ -958,7 +956,7 @@ func (b badRequest) respond(w http.ResponseWriter) {
 type lookupNameT int
 
 func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
-	if len(state.friendlyNames) < int(name) {
+	if len(state.friendlyNames) <= int(name) {
 		return state, []outputT{badResponse{"unknown name", 400, httpResponseChan}}
 	}
 	key := state.friendlyNames[int(name)]
@@ -1095,7 +1093,8 @@ func (c cacheNewKeyT) io(inputChannel chan inputT) {
 		inputChannel <- fatalError{err}
 		return
 	}
-	c.channel <- newUsernameT(username)
+	// The -1 is because the database rowid starts from 1, not 0.
+	c.channel <- newUsernameT(username - 1)
 }
 
 type newUsernameT int

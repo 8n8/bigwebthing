@@ -54,6 +54,12 @@ port cacheHash : String -> Cmd msg
 port sendMsg : Je.Value -> Cmd msg
 
 
+port makeIdToken : Je.Value -> Cmd msg
+
+
+port newIdToken : (Je.Value -> msg) -> Sub msg
+
+
 port gotSecretKeys : (Je.Value -> msg) -> Sub msg
 
 
@@ -80,9 +86,90 @@ doProofOfWorkHelp powInfo =
             doProofOfWork (jsonEncodePowInfo powInfo.difficulty b64)
 
 
+makeIdTokenHelp : MakeIdTokenHelp -> Cmd Msg
+makeIdTokenHelp info =
+    makeIdToken <| encodeTokenInfo info
+
+
+encodeTokenInfo : MakeIdTokenHelp -> Je.Value
+encodeTokenInfo m =
+    let
+        e =
+            Je.string << toB64
+    in
+    Je.object
+        [ ( "publicsign", e <| m.keys.publicSign )
+        , ( "secretsign", e <| m.keys.secretSign )
+        , ( "route", e <| E.encode <| E.unsignedInt8 m.route )
+        , ( "authcode", e m.authCode )
+        , ( "message", e m.message )
+        ]
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
+update msg (Model model) =
     case msg of
+        NewIdToken rawToken ->
+            case model.newIdTokenHole of
+                Nothing ->
+                    ( Model { model | internalErr = Just "unexpected id token" }, Cmd.none )
+
+                Just updateOnNewToken ->
+                    updateOnNewToken rawToken (Model model)
+
+        KeyForName name (Ok key) ->
+            ( Model model, getAuthCode )
+
+        NewAuthCode (Ok newAuthCode) ->
+            case model.newAuthCodeHole of
+                Nothing ->
+                    ( Model { model | internalErr = Just "unexpected authentication code" }, Cmd.none )
+
+                Just updateOnAuthCode ->
+                    updateOnAuthCode newAuthCode (Model model)
+
+        NewAuthCode (Err err) ->
+            ( Model model, Cmd.none )
+
+        KeyForName name (Err err) ->
+            ( Model { model | addContactErr = Just err }, Cmd.none )
+
+        AddNewContact ->
+            case ( model.addContactBox, model.home.myName ) of
+                ( Just contact, Just myName ) ->
+                    case decodeInt myName of
+                        Nothing ->
+                            ( Model { model | internalErr = Just "could not decode myName to an int" }, Cmd.none )
+
+                        Just myNameInt ->
+                            if contact == myNameInt then
+                                ( Model { model | youTriedToAddYourselfToContacts = True, addContactBox = Nothing }, Cmd.none )
+
+                            else
+                                ( Model { model | addContactBox = Nothing, youTriedToAddYourselfToContacts = False }, requestKeyFromServer contact )
+
+                ( Just contact, _ ) ->
+                    ( Model { model | addContactBox = Nothing, youTriedToAddYourselfToContacts = False }, requestKeyFromServer contact )
+
+                _ ->
+                    ( Model model, Cmd.none )
+
+        UpdateContactBox newInfo ->
+            case String.toInt newInfo of
+                Nothing ->
+                    if newInfo == "" then
+                        ( Model { model | addContactBox = Nothing }, Cmd.none )
+
+                    else
+                        ( Model model, Cmd.none )
+
+                Just num ->
+                    if num < 0 then
+                        ( Model model, Cmd.none )
+
+                    else
+                        ( Model { model | addContactBox = Just num }, Cmd.none )
+
         NewName (Ok newName) ->
             let
                 oldHome =
@@ -91,52 +178,54 @@ update msg model =
                 newHome =
                     { oldHome | myName = Just newName }
             in
-            ( { model | home = newHome }, cacheHomeHelp newHome )
+            ( Model { model | home = newHome }, cacheHomeHelp newHome )
 
         NewName (Err err) ->
-            ( { model | getNameError = Just err }, Cmd.none )
+            ( Model { model | getNameError = Just err }, Cmd.none )
 
         DoneProofOfWork b64 ->
-            case Base64.toBytes b64 of
+            case model.newProofOfWorkHole of
                 Nothing ->
-                    ( { model | internalErr = Just "Could not convert proof of work from Base64 to bytes." }, Cmd.none )
+                    ( Model { model | internalErr = Just "unexpected proof of work" }, Cmd.none )
 
-                Just proofOfWork ->
-                    case ( model.home.myName, model.home.myKeys ) of
-                        ( Nothing, Just keys ) ->
-                            ( model, requestName keys.publicSign proofOfWork )
+                Just processProofOfWork ->
+                    processProofOfWork b64 (Model model)
 
-                        _ ->
-                            ( model, Cmd.none )
-
+        -- case Base64.toBytes b64 of
+        --     Nothing ->
+        --         ( { model | internalErr = Just "Could not convert proof of work from Base64 to bytes." }, Cmd.none )
+        --     Just proofOfWork ->
+        --         case ( model.home.myName, model.home.myKeys ) of
+        --             ( Nothing, Just keys ) ->
+        --                 ( model, requestName keys.publicSign proofOfWork )
+        --             _ ->
+        --                 ( model, Cmd.none )
         PowInfoResponse (Ok powInfo) ->
-            ( model, doProofOfWorkHelp powInfo )
+            ( Model model, doProofOfWorkHelp powInfo )
 
         PowInfoResponse (Err err) ->
-            ( { model | getNameError = Just err }, Cmd.none )
-
-        ShowProgramCheckBox check ->
-            ( { model | editProgram = check }, Cmd.none )
+            ( Model { model | getNameError = Just err }, Cmd.none )
 
         LaunchProgram programName ->
             case Dict.get programName model.home.programs of
                 Nothing ->
-                    ( { model | openProgram = Nothing }, Cmd.none )
+                    ( Model { model | openProgram = Nothing }, Cmd.none )
 
                 Just program ->
-                    reRunProgram model program
+                    reRunProgram (Model model) program
 
         LookupRaw hashes ->
-            ( { model | toLookUp = N.toList hashes }
+            ( Model { model | toLookUp = N.toList hashes }
             , Cmd.batch <| List.map requestHash <| N.toList hashes
             )
 
         NewRawKeys rawKeys ->
             case Jd.decodeValue decodeKeys rawKeys of
                 Err err ->
-                    ( { model
-                        | internalErr = Just <| Jd.errorToString err
-                      }
+                    ( Model
+                        { model
+                            | internalErr = Just <| Jd.errorToString err
+                        }
                     , Cmd.none
                     )
 
@@ -153,15 +242,15 @@ update msg model =
                     in
                     case model.openProgram of
                         Nothing ->
-                            ( newModel, cacheHomeHelp newHome )
+                            ( Model newModel, cacheHomeHelp newHome )
 
                         Just ( program, _ ) ->
-                            reRunProgram newModel program
+                            reRunProgram (Model newModel) program
 
         RetrievedHome rawHome ->
             case Jd.decodeValue decodeHomeTop rawHome of
                 Err err ->
-                    ( { model | internalErr = Just <| Jd.errorToString err }, Cmd.none )
+                    ( Model { model | internalErr = Just <| Jd.errorToString err }, Cmd.none )
 
                 Ok { rawB64Home, exists } ->
                     if exists then
@@ -169,10 +258,10 @@ update msg model =
                             Just bytes ->
                                 case D.decode decodeHome bytes of
                                     Nothing ->
-                                        ( { model | internalErr = Just "Could not decode bytes for Home" }, Cmd.none )
+                                        ( Model { model | internalErr = Just "Could not decode bytes for Home" }, Cmd.none )
 
                                     Just home ->
-                                        ( { model | home = home }
+                                        ( Model { model | home = home }
                                         , case home.myName of
                                             Nothing ->
                                                 getPowInfo
@@ -182,30 +271,30 @@ update msg model =
                                         )
 
                             Nothing ->
-                                ( { model | internalErr = Just "Could not convert base64 to bytes for Home" }, Cmd.none )
+                                ( Model { model | internalErr = Just "Could not convert base64 to bytes for Home" }, Cmd.none )
 
                     else
-                        ( model, Cmd.batch [ getPowInfo, getSecretKeys () ] )
+                        ( Model model, Cmd.batch [ getPowInfo, getSecretKeys () ] )
 
         RetrievedHash raw ->
-            ( model, Cmd.none )
+            ( Model model, Cmd.none )
 
         UpdatedLeft newLeftText ->
             case model.openProgram of
                 Nothing ->
-                    ( model, Cmd.none )
+                    ( Model model, Cmd.none )
 
                 Just ( program, _ ) ->
                     let
                         newProg =
                             { program | typedIn = newLeftText }
                     in
-                    reRunProgram model newProg
+                    reRunProgram (Model model) newProg
 
         UpdatedEditor newCode ->
             case model.openProgram of
                 Nothing ->
-                    ( model, Cmd.none )
+                    ( Model model, Cmd.none )
 
                 Just ( program, _ ) ->
                     let
@@ -221,12 +310,12 @@ update msg model =
                         newHome =
                             { oldHome | programs = newPrograms }
                     in
-                    reRunProgram { model | home = newHome } newProg
+                    reRunProgram (Model { model | home = newHome }) newProg
 
         UpdatedDescription newDescription ->
             case model.openProgram of
                 Nothing ->
-                    ( model, Cmd.none )
+                    ( Model model, Cmd.none )
 
                 Just ( program, doc ) ->
                     let
@@ -242,7 +331,7 @@ update msg model =
                         newHome =
                             { oldHome | programs = newPrograms }
                     in
-                    ( { model | home = newHome, openProgram = Just ( newProg, doc ) }, Cmd.none )
+                    ( Model { model | home = newHome, openProgram = Just ( newProg, doc ) }, Cmd.none )
 
         MakeNewProgram ->
             let
@@ -258,25 +347,32 @@ update msg model =
                 newHome =
                     { oldHome | programs = newPrograms }
             in
-            ( { model | home = newHome, openProgram = Just ( newProgram, Nothing ) }, Cmd.none )
+            ( Model { model | home = newHome, openProgram = Just ( newProgram, Nothing ) }, Cmd.none )
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { home = initHome
-      , openProgram = Nothing
-      , lookedUpBlob = Nothing
-      , toLookUp = []
-      , internalErr = Nothing
-      , editProgram = False
-      , getNameError = Nothing
-      }
+    ( Model
+        { home = initHome
+        , addContactBox = Nothing
+        , openProgram = Nothing
+        , lookedUpBlob = Nothing
+        , toLookUp = []
+        , internalErr = Nothing
+        , editProgram = False
+        , getNameError = Nothing
+        , addContactErr = Nothing
+        , youTriedToAddYourselfToContacts = False
+        , newIdTokenHole = Nothing
+        , newProofOfWorkHole = Nothing
+        , newAuthCodeHole = Nothing
+        }
     , Cmd.batch [ requestHome () ]
     )
 
 
 reRunProgram : Model -> Testable.Program -> ( Model, Cmd Msg )
-reRunProgram model program =
+reRunProgram (Model model) program =
     let
         ( p, doc, msgs ) =
             runProgram program model.home.programs
@@ -289,7 +385,7 @@ reRunProgram model program =
     in
     case model.home.myKeys of
         Nothing ->
-            ( { model | home = { oldHome | outbox = newOutbox }, openProgram = Just ( p, doc ) }
+            ( Model { model | home = { oldHome | outbox = newOutbox }, openProgram = Just ( p, doc ) }
             , getSecretKeys ()
             )
 
@@ -303,10 +399,11 @@ reRunProgram model program =
                     }
             of
                 Err err ->
-                    ( { model
-                        | internalErr = Just <| "error encoding messages: " ++ err
-                        , home = { oldHome | outbox = newOutbox }
-                      }
+                    ( Model
+                        { model
+                            | internalErr = Just <| "error encoding messages: " ++ err
+                            , home = { oldHome | outbox = newOutbox }
+                        }
                     , Cmd.none
                     )
 
@@ -318,10 +415,11 @@ reRunProgram model program =
                                 , biggestNonceBase = oldHome.biggestNonceBase + List.length msgs
                             }
                     in
-                    ( { model
-                        | home = newHome
-                        , openProgram = Just ( p, doc )
-                      }
+                    ( Model
+                        { model
+                            | home = newHome
+                            , openProgram = Just ( p, doc )
+                        }
                     , Cmd.batch
                         [ sendMsgs encodedMsgs
                         , cacheHomeHelp newHome
@@ -330,10 +428,11 @@ reRunProgram model program =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions model =
+subscriptions (Model model) =
     Sub.batch
         [ retrievedHome RetrievedHome
         , retrievedHash RetrievedHash
         , gotSecretKeys NewRawKeys
+        , newIdToken NewIdToken
         , doneProofOfWork DoneProofOfWork
         ]

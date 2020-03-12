@@ -75,7 +75,7 @@ The response is:
 
 7. (Free) Get code for authentication
 + 0x07
-The response is a unique 16 bytes, that is, the server must never respond in the same way to this request.
+The response is a unique 8 bytes, that is, the server must never respond in the same way to this request.
 
 8. (Paid) Send message
 + 0x08

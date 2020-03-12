@@ -1,6 +1,8 @@
 module Testable exposing (..)
 
 import Base64
+import Base64.Decode
+import Base64.Encode
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
@@ -25,18 +27,22 @@ import Set
 
 type Msg
     = RetrievedHome Je.Value
+    | NewIdToken Je.Value
+    | AddNewContact
+    | UpdateContactBox String
     | RetrievedHash String
     | UpdatedLeft String
     | UpdatedEditor String
     | LookupRaw (N.Nonempty String)
     | LaunchProgram String
     | NewRawKeys Je.Value
-    | ShowProgramCheckBox Bool
     | UpdatedDescription String
     | MakeNewProgram
     | PowInfoResponse (Result Http.Error PowInfo)
     | DoneProofOfWork String
     | NewName (Result Http.Error Bytes.Bytes)
+    | KeyForName Int (Result Http.Error Bytes.Bytes)
+    | NewAuthCode (Result Http.Error Bytes.Bytes)
 
 
 urlRoot =
@@ -46,6 +52,54 @@ urlRoot =
 decodeInt : Bytes.Bytes -> Maybe Int
 decodeInt bs =
     D.decode (D.signedInt32 Bytes.LE) bs
+
+
+encodeInt : Int -> E.Encoder
+encodeInt i =
+    E.sequence
+        [ E.unsignedInt32 Bytes.LE i
+        , E.unsignedInt8 0
+        , E.unsignedInt8 0
+        , E.unsignedInt8 0
+        , E.unsignedInt8 0
+        ]
+
+
+getAuthCode : Cmd Msg
+getAuthCode =
+    Http.post
+        { url = urlRoot ++ "/api"
+        , body = Http.bytesBody "" <| E.encode <| E.unsignedInt8 7
+        , expect = Http.expectBytes NewAuthCode (D.bytes 8)
+        }
+
+
+toB64 : Bytes.Bytes -> String
+toB64 bs =
+    Base64.Encode.encode <| Base64.Encode.bytes bs
+
+
+type alias SigningKeys =
+    { public : Bytes.Bytes
+    , secret : Bytes.Bytes
+    }
+
+
+type alias MakeIdTokenHelp =
+    { keys : MyKeys
+    , route : Int
+    , authCode : Bytes.Bytes
+    , message : Bytes.Bytes
+    }
+
+
+requestKeyFromServer : Int -> Cmd Msg
+requestKeyFromServer name =
+    Http.post
+        { url = urlRoot ++ "/api"
+        , body = Http.bytesBody "" <| E.encode <| E.sequence [ E.unsignedInt8 2, encodeInt name ]
+        , expect = Http.expectBytes (KeyForName name) (D.bytes 32)
+        }
 
 
 requestName : Bytes.Bytes -> Bytes.Bytes -> Cmd Msg
@@ -90,15 +144,22 @@ updatePrograms oldPrograms maybeOldProgram newProgram =
             Dict.insert newHash newProgram withoutOld
 
 
-type alias Model =
-    { home : Home
-    , openProgram : Maybe ( Program, Maybe Document )
-    , lookedUpBlob : Maybe ( Bytes.Bytes, Set.Set String )
-    , toLookUp : List String
-    , internalErr : Maybe String
-    , editProgram : Bool
-    , getNameError : Maybe Http.Error
-    }
+type Model
+    = Model
+        { home : Home
+        , openProgram : Maybe ( Program, Maybe Document )
+        , lookedUpBlob : Maybe ( Bytes.Bytes, Set.Set String )
+        , toLookUp : List String
+        , internalErr : Maybe String
+        , editProgram : Bool
+        , getNameError : Maybe Http.Error
+        , addContactBox : Maybe Int
+        , addContactErr : Maybe Http.Error
+        , youTriedToAddYourselfToContacts : Bool
+        , newIdTokenHole : Maybe (Je.Value -> Model -> ( Model, Cmd Msg ))
+        , newProofOfWorkHole : Maybe (String -> Model -> ( Model, Cmd Msg ))
+        , newAuthCodeHole : Maybe (Bytes.Bytes -> Model -> ( Model, Cmd Msg ))
+        }
 
 
 type alias Home =
@@ -107,6 +168,7 @@ type alias Home =
     , myName : Maybe Bytes.Bytes
     , outbox : List HumanMsg
     , programs : Dict.Dict String Program
+    , contacts : Dict.Dict Int Bytes.Bytes
     , pubKeys : Dict.Dict String PubKeys
     }
 
@@ -132,22 +194,69 @@ initHome =
     , pubKeys = Dict.empty
     , biggestNonceBase = 0
     , myKeys = Nothing
+    , contacts = Dict.empty
     , myName = Nothing
     }
 
 
 view : Model -> Html.Html Msg
-view model =
+view (Model model) =
     case model.internalErr of
         Nothing ->
-            Element.layout [] (viewHelp model)
+            Element.layout [] (viewHelp (Model model))
 
         Just err ->
             Element.layout [] (Element.text <| "internal error: " ++ err)
 
 
+showContacts : List Int -> Element.Element Msg
+showContacts contacts =
+    Element.text <| "My contacts: " ++ String.join ", " (List.map String.fromInt contacts)
+
+
+addContact : Maybe Int -> Maybe Http.Error -> Bool -> Element.Element Msg
+addContact boxNum err youTriedToAddYourself =
+    Element.column [] <|
+        [ Element.Input.text []
+            { onChange = UpdateContactBox
+            , text =
+                case boxNum of
+                    Just n ->
+                        String.fromInt n
+
+                    Nothing ->
+                        ""
+            , placeholder =
+                Just <|
+                    Element.Input.placeholder [] <|
+                        Element.text "Type their username"
+            , label =
+                Element.Input.labelAbove [ sansSerif ] <|
+                    Element.text "Add someone to your contacts"
+            }
+        , Element.Input.button []
+            { onPress = Just AddNewContact
+            , label = Element.text "Add new contact"
+            }
+        , case err of
+            Just (Http.BadStatus _) ->
+                Element.text "Error: not a member"
+
+            Just _ ->
+                Element.text "Error looking up member"
+
+            Nothing ->
+                Element.none
+        , if youTriedToAddYourself then
+            Element.text "you can't add yourself to your contacts"
+
+          else
+            Element.none
+        ]
+
+
 viewHelp : Model -> Element.Element Msg
-viewHelp model =
+viewHelp (Model model) =
     Element.column
         [ Element.width <| Element.fill
         , Element.padding 6
@@ -156,8 +265,11 @@ viewHelp model =
         , Font.size 25
         ]
     <|
-        showMyName model.home.myName
-            :: (if Dict.isEmpty model.home.programs then
+        [ showMyName model.home.myName
+        , showContacts <| Dict.keys model.home.contacts
+        , addContact model.addContactBox model.addContactErr model.youTriedToAddYourselfToContacts
+        ]
+            ++ (if Dict.isEmpty model.home.programs then
                     []
 
                 else
@@ -170,11 +282,11 @@ viewHelp model =
                         []
 
                     Just _ ->
-                        [ leftInput model
+                        [ leftInput (Model model)
                         , Element.text "The program output goes here:"
-                        , showRightDoc model
+                        , showRightDoc (Model model)
                         , Element.text "End of program output."
-                        , editor model
+                        , editor (Model model)
                         , editDescription model.openProgram
                         ]
                )
@@ -256,7 +368,7 @@ monospace =
 
 
 editor : Model -> Element.Element Msg
-editor model =
+editor (Model model) =
     case model.openProgram of
         Nothing ->
             Element.text "internal error: can't find program"
@@ -2601,14 +2713,13 @@ leftInput model =
                     Element.text "Type here"
         , label =
             Element.Input.labelAbove [ sansSerif ] <|
-                Element.text <|
-                    "Your input goes here:"
+                Element.text "Your input goes here:"
         , spellcheck = True
         }
 
 
 leftText : Model -> String
-leftText model =
+leftText (Model model) =
     case model.openProgram of
         Nothing ->
             "internal error: can't find program"
@@ -2618,7 +2729,7 @@ leftText model =
 
 
 showRightDoc : Model -> Element.Element Msg
-showRightDoc model =
+showRightDoc (Model model) =
     Element.el [ monospace ] <|
         case model.openProgram of
             Nothing ->
@@ -2846,12 +2957,13 @@ decodeKeyHelp k =
 
 decodeHome : D.Decoder Home
 decodeHome =
-    map6 Home
+    map7 Home
         (D.unsignedInt32 Bytes.BE)
         decodeMyKeys
         (D.map Just (D.bytes 8))
         (list decodeHumanMsg)
         (D.map programsToDict <| list decodeProgram)
+        decodeContacts
         decodePubKeys
 
 
@@ -2911,6 +3023,18 @@ decodeMyKeysHelp i =
                     (D.bytes 32)
 
 
+decodeContacts : D.Decoder (Dict.Dict Int Bytes.Bytes)
+decodeContacts =
+    D.map Dict.fromList <| list decodeContactHelp
+
+
+decodeContactHelp : D.Decoder ( Int, Bytes.Bytes )
+decodeContactHelp =
+    D.map2 (\a b -> ( a, b ))
+        (D.unsignedInt32 Bytes.BE)
+        (D.bytes 32)
+
+
 decodePubKeys : D.Decoder (Dict.Dict String PubKeys)
 decodePubKeys =
     D.map Dict.fromList <| list decodePubKeysHelp
@@ -2946,6 +3070,25 @@ encodeSecretKeys maybeKeys =
                 ]
 
 
+encodeContacts : Dict.Dict Int Bytes.Bytes -> E.Encoder
+encodeContacts contacts =
+    let
+        asList =
+            Dict.toList contacts
+    in
+    E.sequence <|
+        (E.unsignedInt32 Bytes.BE <| List.length asList)
+            :: List.map encodeContact asList
+
+
+encodeContact : ( Int, Bytes.Bytes ) -> E.Encoder
+encodeContact ( name, key ) =
+    E.sequence
+        [ E.unsignedInt32 Bytes.BE name
+        , E.bytes key
+        ]
+
+
 encodePubKeys : Dict.Dict String PubKeys -> E.Encoder
 encodePubKeys keys =
     let
@@ -2961,8 +3104,8 @@ encodePubKey : ( String, PubKeys ) -> E.Encoder
 encodePubKey ( name, { encrypt, sign } ) =
     E.sequence
         [ encodeSizedString name
-        , encodeBytes encrypt
-        , encodeBytes sign
+        , E.bytes encrypt
+        , E.bytes sign
         ]
 
 
@@ -2974,6 +3117,7 @@ encodeHome h =
         , encodeMyName h.myName
         , encodeHumanMsgs h.outbox
         , encodePrograms h.programs
+        , encodeContacts h.contacts
         , encodePubKeys h.pubKeys
         ]
 
@@ -3168,6 +3312,26 @@ map6 func decoderA decoderB decoderC decoderD decoderE decoderF =
         |> D.andThen (dmap decoderD)
         |> D.andThen (dmap decoderE)
         |> D.andThen (dmap decoderF)
+
+
+map7 :
+    (a -> b -> c -> d -> e -> f -> g -> result)
+    -> D.Decoder a
+    -> D.Decoder b
+    -> D.Decoder c
+    -> D.Decoder d
+    -> D.Decoder e
+    -> D.Decoder f
+    -> D.Decoder g
+    -> D.Decoder result
+map7 func decoderA decoderB decoderC decoderD decoderE decoderF decoderG =
+    D.map func decoderA
+        |> D.andThen (dmap decoderB)
+        |> D.andThen (dmap decoderC)
+        |> D.andThen (dmap decoderD)
+        |> D.andThen (dmap decoderE)
+        |> D.andThen (dmap decoderF)
+        |> D.andThen (dmap decoderG)
 
 
 dmap : D.Decoder a -> (a -> b) -> D.Decoder b
