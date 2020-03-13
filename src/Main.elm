@@ -2,6 +2,7 @@ port module Main exposing (main)
 
 import Base64
 import Base64.Decode
+import Base64.Encode
 import Browser
 import Bytes
 import Bytes.Decode as D
@@ -214,24 +215,34 @@ whitelistStage2Cmd (Model model) =
                 , newProofOfWorkHole = Just powHoleForWhitelist
             }
     in
-    case ( ( p.powInfo, p.name, p.authCode ), model.home.myKeys ) of
-        ( _, Nothing ) ->
+    case ( ( p.powInfo, p.name, p.authCode ), ( model.home.myKeys, p.pow, p.idToken ) ) of
+        ( _, ( Nothing, _, _ ) ) ->
             ( Model { model | internalErr = Just "can't continue with whitelisting without crypto keys" }, Cmd.none )
 
-        ( ( Just powInfo, Just name, Just authCode ), Just myKeys ) ->
-            let
-                powCmd =
-                    doProofOfWorkHelp powInfo
+        ( ( Just powInfo, _, _ ), ( _, Nothing, _ ) ) ->
+            ( Model newModel, doProofOfWorkHelp powInfo )
 
+        ( ( Just powInfo, Just name, Just authCode ), ( Just myKeys, Just pow, idToken ) ) ->
+            let
                 makeIdTokenCmd =
-                    makeIdTokenHelp
-                        { keys = myKeys
-                        , route = 10
-                        , authCode = authCode
-                        , message = E.encode <| encodeInt name
-                        }
+                    case idToken of
+                        Just _ ->
+                            Cmd.none
+
+                        Nothing ->
+                            makeIdTokenHelp
+                                { keys = myKeys
+                                , route = 10
+                                , authCode = authCode
+                                , message =
+                                    E.encode <|
+                                        E.sequence
+                                            [ E.bytes pow
+                                            , encodeInt name
+                                            ]
+                                }
             in
-            ( Model newModel, Cmd.batch [ powCmd, makeIdTokenCmd ] )
+            ( Model newModel, makeIdTokenCmd )
 
         _ ->
             ( Model newModel, Cmd.none )
@@ -369,6 +380,42 @@ whitelistClearHoles (Model model) =
     Model newModel
 
 
+powInfoHoleForMakeName : Result Http.Error PowInfo -> Model -> ( Model, Cmd Msg )
+powInfoHoleForMakeName httpResponse (Model model) =
+    case httpResponse of
+        Err err ->
+            ( Model { model | addContactErr = Just err }, Cmd.none )
+
+        Ok powInfo ->
+            let
+                newModel =
+                    { model
+                        | newProofOfWorkHole = Just powHoleForMakeName
+                        , newPowInfoHole = Nothing
+                    }
+            in
+            ( Model newModel
+            , doProofOfWorkHelp powInfo
+            )
+
+
+powHoleForMakeName : String -> Model -> ( Model, Cmd Msg )
+powHoleForMakeName b64 (Model model) =
+    case ( Base64.Decode.decode Base64.Decode.bytes b64, model.home.myKeys ) of
+        ( Err err, _ ) ->
+            ( Model { model | internalErr = Just <| "could not decode proof of work from port: " ++ showB64Err err }, Cmd.none )
+
+        ( _, Nothing ) ->
+            ( Model { model | internalErr = Just "no crypt keys" }, Cmd.none )
+
+        ( Ok pow, Just myKeys ) ->
+            let
+                newModel =
+                    { model | newProofOfWorkHole = Nothing }
+            in
+            ( Model newModel, requestName myKeys.publicSign pow )
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg (Model model) =
     case msg of
@@ -503,11 +550,13 @@ update msg (Model model) =
                 Just processProofOfWork ->
                     processProofOfWork b64 (Model model)
 
-        PowInfoResponse (Ok powInfo) ->
-            ( Model model, doProofOfWorkHelp powInfo )
+        PowInfoResponse powInfo ->
+            case model.newPowInfoHole of
+                Nothing ->
+                    ( Model { model | internalErr = Just "unexpected proof of work information" }, Cmd.none )
 
-        PowInfoResponse (Err err) ->
-            ( Model { model | getNameError = Just err }, Cmd.none )
+                Just powInfoProcessor ->
+                    powInfoProcessor powInfo (Model model)
 
         LaunchProgram programName ->
             case Dict.get programName model.home.programs of
@@ -568,10 +617,19 @@ update msg (Model model) =
                             Just bytes ->
                                 case D.decode decodeHome bytes of
                                     Nothing ->
-                                        ( Model { model | internalErr = Just "Could not decode bytes for Home" }, Cmd.none )
+                                        ( Model
+                                            { model
+                                                | internalErr = Just "Could not decode bytes for Home"
+                                            }
+                                        , Cmd.none
+                                        )
 
                                     Just home ->
-                                        ( Model { model | home = home }
+                                        ( Model
+                                            { model
+                                                | home = home
+                                                , newPowInfoHole = Just powInfoHoleForMakeName
+                                            }
                                         , case home.myName of
                                             Nothing ->
                                                 getPowInfo
@@ -584,7 +642,7 @@ update msg (Model model) =
                                 ( Model { model | internalErr = Just "Could not convert base64 to bytes for Home" }, Cmd.none )
 
                     else
-                        ( Model model, Cmd.batch [ getPowInfo, getSecretKeys () ] )
+                        ( Model { model | newPowInfoHole = Just powInfoHoleForMakeName }, Cmd.batch [ getPowInfo, getSecretKeys () ] )
 
         RetrievedHash raw ->
             ( Model model, Cmd.none )
