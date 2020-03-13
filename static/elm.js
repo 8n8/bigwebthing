@@ -42,9 +42,8 @@ function encodeInt(theInt) {
 }
 
 function isDifficult(hash, difficulty) {
-  const hashView = new Uint8Array(hash)
   for (let i = 0; i < difficulty; i++) {
-    if (hashView[i] != 0) {
+    if (hash[i] != 0) {
       return false
     }
   }
@@ -52,33 +51,33 @@ function isDifficult(hash, difficulty) {
 }
 
 function combine(a, b) {
-  let buf = new ArrayBuffer(16);
+  const lena = a.length;
+  const lenb = b.length;
+  let buf = new ArrayBuffer(lena + lenb);
   let combined = new Uint8Array(buf);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < lena; i++) {
     combined[i] = a[i]
   }  
-  const bView = new Uint8Array(b)
-  for (let i = 8; i < 16; i++) {
-    const bval = bView[i-8]
+  for (let i = lena; i < lena + lenb; i++) {
+    const bval = b[i-lena]
     combined[i] = bval
   }
   return combined
 }
 
 async function doHash(combined) {
-  return crypto.subtle.digest('SHA-256', combined)
+  return crypto.subtle.digest('SHA-512', combined);
 }
 
-async function proofOfWork(powInfo) {
+function proofOfWork(powInfo) {
   const unique = base64js.toByteArray(powInfo.unique)
   let buffer = new ArrayBuffer(8)
+  let bufferView = new Uint8Array(buffer)
   let counter = new Int32Array(buffer)
   while (true) {
-    const combined = combine(unique, buffer) 
-    const hash = await doHash(combined)
-    const hashbytes = new Uint8Array(hash)
+    const combined = combine(unique, bufferView)
+    const hash = nacl.hash(combined);
     if (isDifficult(hash, powInfo.difficulty)) {
-      console.log("done pow")
       return combined
     }
     counter[0] = counter[0] + 1;
@@ -86,29 +85,21 @@ async function proofOfWork(powInfo) {
 }
 
 app.ports.doProofOfWork.subscribe(function(powInfo) {
-  proofOfWork(powInfo).then(function(pow) {
-      console.log(pow);
-      const b64 = base64js.fromByteArray(pow);
-      console.log("base64Pow: " + b64)
-      app.ports.doneProofOfWork.send(base64js.fromByteArray(pow));
-  })
+  const pow = proofOfWork(powInfo)
+  const b64 = base64js.fromByteArray(pow);
+  app.ports.doneProofOfWork.send(base64js.fromByteArray(pow));
 });
 
 app.ports.makeIdToken.subscribe(function(idTokenInfo) {
   const publicsign = new Uint8Array(base64js.toByteArray(idTokenInfo.publicsign));
   const secretsign = new Uint8Array(base64js.toByteArray(idTokenInfo.secretsign));
-  let route = new ArrayBuffer(1);
-  (function() {
-    let routeView = new Uint8Array(route);
-    routeView = idTokenInfo.route;
-  })();
+  const route = new Uint8Array(base64js.toByteArray(idTokenInfo.route));
   const authcode = new Uint8Array(base64js.toByteArray(idTokenInfo.authcode));
   const message = new Uint8Array(base64js.toByteArray(idTokenInfo.message));
   
-  const toSign = route.append(message.append(authcode));
-  crypto.subtle.digest('SHA-256', toSign).then(function(hash) {
-    const signature = nacl.sign(hash, secretsign);
-    const encodedIdToken = publicsign.append(authcode).append(signature);
-    app.ports.newIdToken.send(encodedIdToken);
-  });
+  const toSign = combine(combine(route, message), authcode);
+  const hash = nacl.hash(toSign).slice(0, 32);
+  const signature = nacl.sign(hash, secretsign);
+  const encodedIdToken = combine(combine(publicsign, authcode), signature);
+  app.ports.newIdToken.send(base64js.fromByteArray(encodedIdToken));
 });
