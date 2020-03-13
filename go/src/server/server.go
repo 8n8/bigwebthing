@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/sha512"
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
@@ -435,10 +436,15 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 		return state, bad("unknown sender", 400)
 	}
 
+	if w.Name > len(state.friendlyNames) {
+		return state, bad("unknown invitee", 400)
+	}
+
 	whitelist, ok := state.whitelists[senderId]
 	if !ok {
 		whitelist = make(map[int]struct{})
 	}
+
 	whitelist[w.Name] = struct{}{}
 	state.whitelists[senderId] = whitelist
 	response := addToWhitelist{
@@ -591,6 +597,7 @@ func (getAuthCodeRequest) updateOnRequest(state stateT, httpResponseChan chan ht
 	outputs := []outputT{
 		cacheNewAuthUnique(encoded),
 		sendAuthCode{encoded, httpResponseChan}}
+	state.authCodes = append(state.authCodes, state.authUnique)
 	return state, outputs
 }
 
@@ -850,13 +857,25 @@ type idTokenT struct {
 	messageHash   []byte
 }
 
+func safeCombine(route byte, authBytes, message []byte) []byte {
+	messageLength := len(message)
+	result := make([]byte, messageLength+9)
+	result[0] = route
+	for i := 1; i < messageLength+1; i++ {
+		result[i] = message[i-1]
+	}
+	for i := 1 + messageLength; i < messageLength+9; i++ {
+		result[i] = authBytes[i-1-messageLength]
+	}
+	return result
+}
+
 func parseIdToken(body []byte) idTokenT {
 	authBytes := body[33:41]
 	authCode := decodeInt(authBytes)
-	message := append(
-		append(body[0:1], authBytes...), body[137:]...)
-	hash := sha256.Sum256(message)
-	hashSlice := hash[:]
+	message := safeCombine(body[0], authBytes, body[137:])
+	hash := sha512.Sum512(message)
+	hashSlice := hash[:32]
 	return idTokenT{
 		publicSignKey: body[1:33],
 		authCode:      authCode,
@@ -998,7 +1017,7 @@ func removeItem(items []int, item int) []int {
 	return newItems
 }
 
-func firstXareZero(bs [32]byte, x uint8) bool {
+func firstXareZero(bs [64]byte, x uint8) bool {
 	for i := 0; i < int(x); i++ {
 		if bs[i] != 0 {
 			return false
@@ -1030,7 +1049,7 @@ func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, b
 	if !isAmember(serverCandidate, s.unused) {
 		return s, false
 	}
-	hash := sha256.Sum256(append(pow.Server, pow.Client...))
+	hash := sha512.Sum512(append(pow.Server, pow.Client...))
 	if !firstXareZero(hash, s.difficulty) {
 		return s, false
 	}
