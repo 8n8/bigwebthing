@@ -22,7 +22,7 @@ The cost of the server is met by subscriptions. It is free to use the server to 
 
 ### Proof of work
 
-Free APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes from the server, and find some more unique bytes that will create an sha256 hash with a number of the first bytes as zeros.  So a proof of work token is like this:
+Free APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes from the server, and find some more unique bytes that will create an sha512 hash with a number of the first bytes as zeros.  So a proof of work token is like this:
 
 + <8 unique bytes provided by the server>
 + <8 calculated by the client>
