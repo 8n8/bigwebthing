@@ -41,9 +41,11 @@ function encodeInt(theInt) {
   let int
 }
 
+const powMax = 75
+
 function isDifficult(hash, difficulty) {
   for (let i = 0; i < difficulty; i++) {
-    if (hash[i] != 0) {
+    if (hash[i] > powMax) {
       return false
     }
   }
