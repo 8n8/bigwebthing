@@ -170,7 +170,7 @@ newPowInfoHoleForWhitelist : Result Http.Error PowInfo -> Model -> ( Model, Cmd 
 newPowInfoHoleForWhitelist httpResponse (Model model) =
     case httpResponse of
         Err err ->
-            ( Model { model | addContactErr = Just err }, Cmd.none )
+            ( Model { model | addContactErr = Just (showHttpError err) }, Cmd.none )
 
         Ok powInfo ->
             let
@@ -190,7 +190,7 @@ newKeyHoleForWhitelist : Result Http.Error Bytes.Bytes -> Model -> ( Model, Cmd 
 newKeyHoleForWhitelist httpResponse (Model model) =
     case httpResponse of
         Err err ->
-            ( Model { model | addContactErr = Just err }, Cmd.none )
+            ( Model { model | addContactErr = Just (showHttpError err) }, Cmd.none )
 
         Ok key ->
             let
@@ -334,7 +334,7 @@ authCodeHoleForWhitelist httpResponse (Model model) =
     case ( httpResponse, model.home.myKeys ) of
         ( Err err, _ ) ->
             ( whitelistClearHoles <|
-                Model { model | addContactErr = Just err }
+                Model { model | addContactErr = Just (showHttpError err) }
             , Cmd.none
             )
 
@@ -384,7 +384,7 @@ powInfoHoleForMakeName : Result Http.Error PowInfo -> Model -> ( Model, Cmd Msg 
 powInfoHoleForMakeName httpResponse (Model model) =
     case httpResponse of
         Err err ->
-            ( Model { model | addContactErr = Just err }, Cmd.none )
+            ( Model { model | addContactErr = Just (showHttpError err) }, Cmd.none )
 
         Ok powInfo ->
             let
@@ -397,6 +397,25 @@ powInfoHoleForMakeName httpResponse (Model model) =
             ( Model newModel
             , doProofOfWorkHelp powInfo
             )
+
+
+showHttpError : Http.Error -> String
+showHttpError err =
+    case err of
+        Http.BadUrl url ->
+            "bad url: " ++ url
+
+        Http.Timeout ->
+            "timeout"
+
+        Http.NetworkError ->
+            "network error"
+
+        Http.BadStatus code ->
+            "bad status code: " ++ String.fromInt code
+
+        Http.BadBody b ->
+            "bad body: " ++ b
 
 
 powHoleForMakeName : String -> Model -> ( Model, Cmd Msg )
@@ -421,7 +440,7 @@ update msg (Model model) =
     case msg of
         Whitelisted (Err err) ->
             ( whitelistClearHoles <|
-                Model { model | addContactErr = Just err }
+                Model { model | addContactErr = Just (showHttpError err) }
             , Cmd.none
             )
 

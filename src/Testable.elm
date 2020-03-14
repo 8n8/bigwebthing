@@ -155,7 +155,7 @@ type Model
         , editProgram : Bool
         , getNameError : Maybe Http.Error
         , addContactBox : Maybe Int
-        , addContactErr : Maybe Http.Error
+        , addContactErr : Maybe String
         , youTriedToAddYourselfToContacts : Bool
         , newIdTokenHole : Maybe (String -> Model -> ( Model, Cmd Msg ))
         , newProofOfWorkHole : Maybe (String -> Model -> ( Model, Cmd Msg ))
@@ -228,8 +228,8 @@ showContacts contacts =
     Element.text <| "My contacts: " ++ String.join ", " (List.map String.fromInt contacts)
 
 
-addContact : Maybe Int -> Maybe Http.Error -> Bool -> Element.Element Msg
-addContact boxNum err youTriedToAddYourself =
+addContact : Maybe Int -> Maybe String -> Bool -> Element.Element Msg
+addContact boxNum maybeErr youTriedToAddYourself =
     Element.column [] <|
         [ Element.Input.text []
             { onChange = UpdateContactBox
@@ -252,12 +252,9 @@ addContact boxNum err youTriedToAddYourself =
             { onPress = Just AddNewContact
             , label = Element.text "Add new contact"
             }
-        , case err of
-            Just (Http.BadStatus _) ->
-                Element.text "Error: not a member"
-
-            Just _ ->
-                Element.text "Error looking up member"
+        , case maybeErr of
+            Just err ->
+                Element.text err
 
             Nothing ->
                 Element.none
