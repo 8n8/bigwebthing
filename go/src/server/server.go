@@ -70,7 +70,7 @@ type proofOfWorkState struct {
 	unused     []int
 }
 
-const powDifficulty = 2
+const powDifficulty = 10
 
 func initState() stateT {
 	pow := proofOfWorkState{
@@ -436,7 +436,7 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 		return state, bad("unknown sender", 400)
 	}
 
-	if w.Name > len(state.friendlyNames) {
+	if w.Name >= len(state.friendlyNames) {
 		return state, bad("unknown invitee", 400)
 	}
 
@@ -1017,9 +1017,11 @@ func removeItem(items []int, item int) []int {
 	return newItems
 }
 
-func firstXareZero(bs [64]byte, x uint8) bool {
+const powMax = 75
+
+func firstXareOk(bs [64]byte, x uint8) bool {
 	for i := 0; i < int(x); i++ {
-		if bs[i] != 0 {
+		if bs[i] > powMax {
 			return false
 		}
 	}
@@ -1050,7 +1052,7 @@ func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, b
 		return s, false
 	}
 	hash := sha512.Sum512(append(pow.Server, pow.Client...))
-	if !firstXareZero(hash, s.difficulty) {
+	if !firstXareOk(hash, s.difficulty) {
 		return s, false
 	}
 	s.unused = removeItem(s.unused, serverCandidate)
