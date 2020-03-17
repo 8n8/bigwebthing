@@ -16,6 +16,38 @@ import List.Nonempty as N
 import Testable exposing (..)
 
 
+-- Client-to-client API
+-- ====================
+--
+-- Top-level API
+-- -------------
+--
+-- These are the message formats that are acceptable between clients.
+-- Remember (from the server API spec set out in the README), that
+-- the server already requires that messages between clients are
+-- signed by the sender, so extra authentication is not necessary.
+--
+-- 1. Request public encryption key:
+-- + 0x01
+--
+-- 2. Send public encryption key:
+-- + 0x02
+-- + 32 bytes: public encryption key
+--
+-- 3. Send encrypted blob:
+-- + 0x03
+-- + 8 bytes: nonce
+-- + the blob
+--
+--
+-- Sub-level API
+-- -------------
+--
+-- These are the message formats that are acceptable inside the
+-- encrypted blobs (see 3 above).
+-- ...
+
+
 sendMsgs : List Je.Value -> Cmd Msg
 sendMsgs msgs =
     Cmd.batch <| List.map sendMsg msgs
