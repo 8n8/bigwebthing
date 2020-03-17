@@ -183,7 +183,7 @@ type alias Home =
     , outbox : List HumanMsg
     , programs : Dict.Dict String Program
     , contacts : Dict.Dict Int Bytes.Bytes
-    , pubKeys : Dict.Dict String PubKeys
+    , encryptionKeys : Dict.Dict Int Bytes.Bytes
     }
 
 
@@ -195,17 +195,11 @@ type alias MyKeys =
     }
 
 
-type alias PubKeys =
-    { encrypt : Bytes.Bytes
-    , sign : Bytes.Bytes
-    }
-
-
 initHome : Home
 initHome =
     { outbox = []
     , programs = Dict.empty
-    , pubKeys = Dict.empty
+    , encryptionKeys = Dict.empty
     , biggestNonceBase = 0
     , myKeys = Nothing
     , contacts = Dict.empty
@@ -442,8 +436,8 @@ topProgramP filename programs =
         |. P.end
 
 
-runProgram : Program -> Dict.Dict String Program -> ( Program, Maybe Document, List HumanMsg )
-runProgram program allPrograms =
+runProgram : Program -> Dict.Dict String Program -> Int -> ( Program, Maybe Document, List HumanMsg )
+runProgram program allPrograms myName =
     case P.run (topProgramP (hash program.code) allPrograms) program.code of
         Err deadEnds ->
             ( program
@@ -457,7 +451,7 @@ runProgram program allPrograms =
                     ( program, Just <| SmallString ("type error: " ++ errMsg), [] )
 
                 Nothing ->
-                    runElfs allPrograms program atoms []
+                    runElfs allPrograms program atoms [] myName
 
 
 deadEndsToString : List P.DeadEnd -> String
@@ -1249,8 +1243,9 @@ runElfs :
     -> Program
     -> List (Located Atom)
     -> List ProgVal
+    -> Int
     -> ( Program, Maybe Document, List HumanMsg )
-runElfs allPrograms program elfs progStack =
+runElfs allPrograms program elfs progStack myName =
     let
         oldP =
             { program = program
@@ -1261,6 +1256,7 @@ runElfs allPrograms program elfs progStack =
             , blobs = []
             , internalError = Nothing
             , allPrograms = allPrograms
+            , myName = myName
             }
 
         newP =
@@ -1283,6 +1279,7 @@ type alias ProgramState =
     , outbox : List HumanMsg
     , blobs : List Blob
     , internalError : Maybe String
+    , myName : Int
     }
 
 
@@ -1379,6 +1376,9 @@ programProcessAtom { start, value, end } s =
 
                         Just strings ->
                             { s | stack = Pstring (String.concat strings) :: tack }
+
+                PsendMessage :: (Pint recipient) :: (Pstring message) :: tack ->
+                    { s | outbox = { from = s.myName, to = recipient, document = SmallString message } :: s.outbox }
 
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
@@ -1602,6 +1602,7 @@ standardTypes =
         , ( "runloop", [ Pbool True, Pbool False ] )
         , ( "listprograms", [ PlistPrograms ] )
         , ( "catstrings", [ PcatString ] )
+        , ( "sendmessage", [ PsendMessage ] )
         ]
 
 
@@ -1785,6 +1786,7 @@ standardLibrary =
         , ( "false", Pbool False )
         , ( "listprograms", PlistPrograms )
         , ( "catstrings", PcatString )
+        , ( "sendmessage", PsendMessage )
         ]
 
 
@@ -2316,6 +2318,22 @@ processAtom state atom =
                         [] ->
                             Err { message = "empty stack", state = state }
 
+                [ PsendMessage ] :: tack ->
+                    case tack of
+                        recipientCandidate :: messageCandidate :: ck ->
+                            if isSubType recipientCandidate [ PallInts ] then
+                                if isSubType messageCandidate [ PallStrings ] then
+                                    Ok { state | stack = ck }
+
+                                else
+                                    Err { message = "expecting a string, but got " ++ showTypeVal messageCandidate, state = state }
+
+                            else
+                                Err { message = "expecting an integer, but got " ++ showTypeVal recipientCandidate, state = state }
+
+                        _ ->
+                            Err { message = "expecting an integer and a string", state = state }
+
                 [ Pprint ] :: tack ->
                     case tack of
                         stringCandidate :: ack ->
@@ -2593,8 +2611,8 @@ processTypeAtom state atom =
 
 
 type alias HumanMsg =
-    { from : String
-    , to : String
+    { from : Int
+    , to : Int
     , document : Document
     }
 
@@ -2625,6 +2643,7 @@ type ProgVal
     | Pequal
     | PlistPrograms
     | PcatString
+    | PsendMessage
 
 
 showProgVal : ProgVal -> String
@@ -2711,6 +2730,9 @@ showProgVal p =
 
         PcatString ->
             "catstring"
+
+        PsendMessage ->
+            "sendmessage"
 
 
 leftInput : Model -> Element.Element Msg
@@ -2814,23 +2836,24 @@ decodeString bytes =
 
 
 jsonHumanMsg :
-    { pubKeys : Dict.Dict String PubKeys
+    { encryptionKeys : Dict.Dict Int Bytes.Bytes
+    , contacts : Dict.Dict Int Bytes.Bytes
     , nonceBase : Int
     , myKeys : MyKeys
     }
     -> Int
     -> HumanMsg
     -> Result String Je.Value
-jsonHumanMsg { pubKeys, nonceBase, myKeys } msgCounter { to, document } =
-    case Dict.get to pubKeys of
-        Nothing ->
-            Err <| "bad recipient: \"" ++ to ++ "\""
+jsonHumanMsg { encryptionKeys, contacts, nonceBase, myKeys } msgCounter { to, document } =
+    case ( Dict.get to encryptionKeys, Dict.get to contacts ) of
+        ( Nothing, _ ) ->
+            Err <| "no encryption key for \"" ++ String.fromInt to ++ "\""
 
-        Just toKeys ->
+        ( _, Nothing ) ->
+            Err <| String.fromInt to ++ " is not in your contacts"
+
+        ( Just toEncryptionKey, Just toSigningKey ) ->
             let
-                b =
-                    Base64.fromBytes
-
                 docBytes =
                     E.encode <| encodeDocument document
 
@@ -2840,41 +2863,19 @@ jsonHumanMsg { pubKeys, nonceBase, myKeys } msgCounter { to, document } =
                         , bad
                         , " to base64"
                         ]
+
+                e =
+                    Je.string << toB64
             in
-            case
-                ( ( b docBytes
-                  , b myKeys.secretSign
-                  , b <| makeNonce nonceBase msgCounter
-                  )
-                , ( b myKeys.secretEncrypt
-                  , b toKeys.encrypt
-                  )
-                )
-            of
-                ( ( Nothing, _, _ ), _ ) ->
-                    Err <| bad64 "document"
-
-                ( ( _, Nothing, _ ), _ ) ->
-                    Err <| bad64 "my secret signing key"
-
-                ( ( _, _, Nothing ), _ ) ->
-                    Err <| bad64 "nonce"
-
-                ( _, ( Nothing, _ ) ) ->
-                    Err <| bad64 "my secret encryption key"
-
-                ( _, ( _, Nothing ) ) ->
-                    Err <| bad64 "recipient key"
-
-                ( ( Just d, Just s, Just n ), ( Just e, Just t ) ) ->
-                    Ok <|
-                        Je.object
-                            [ ( "document", Je.string d )
-                            , ( "mySecretSign", Je.string s )
-                            , ( "mySecretEncrypt", Je.string e )
-                            , ( "toPublicEncrypt", Je.string t )
-                            , ( "nonce", Je.string n )
-                            ]
+            Ok <|
+                Je.object
+                    [ ( "document", e docBytes )
+                    , ( "mySecretSign", e myKeys.secretSign )
+                    , ( "mySecretEncrypt", e myKeys.secretEncrypt )
+                    , ( "toPublicSign", e toEncryptionKey )
+                    , ( "toPublicEncrypt", e toEncryptionKey )
+                    , ( "nonce", e <| makeNonce nonceBase msgCounter )
+                    ]
 
 
 makeNonce : Int -> Int -> Bytes.Bytes
@@ -2895,7 +2896,8 @@ encodeMsgs m =
     combineResults <|
         List.indexedMap
             (jsonHumanMsg
-                { pubKeys = m.pubKeys
+                { encryptionKeys = m.encryptionKeys
+                , contacts = m.contacts
                 , nonceBase = m.nonceBase
                 , myKeys = m.myKeys
                 }
@@ -2923,9 +2925,10 @@ combineResultsHelp results accum =
 
 type alias MsgsToEncode =
     { msgs : List HumanMsg
-    , pubKeys : Dict.Dict String PubKeys
+    , encryptionKeys : Dict.Dict Int Bytes.Bytes
     , myKeys : MyKeys
     , nonceBase : Int
+    , contacts : Dict.Dict Int Bytes.Bytes
     }
 
 
@@ -3046,22 +3049,15 @@ decodeContactHelp =
         (D.bytes 32)
 
 
-decodePubKeys : D.Decoder (Dict.Dict String PubKeys)
+decodePubKeys : D.Decoder (Dict.Dict Int Bytes.Bytes)
 decodePubKeys =
     D.map Dict.fromList <| list decodePubKeysHelp
 
 
-decodePubKeysHelp : D.Decoder ( String, PubKeys )
+decodePubKeysHelp : D.Decoder ( Int, Bytes.Bytes )
 decodePubKeysHelp =
     D.map2 (\a b -> ( a, b ))
-        sizedString
-        decodePubKey
-
-
-decodePubKey : D.Decoder PubKeys
-decodePubKey =
-    D.map2 PubKeys
-        (D.bytes 32)
+        (D.unsignedInt32 Bytes.BE)
         (D.bytes 32)
 
 
@@ -3100,7 +3096,7 @@ encodeContact ( name, key ) =
         ]
 
 
-encodePubKeys : Dict.Dict String PubKeys -> E.Encoder
+encodePubKeys : Dict.Dict Int Bytes.Bytes -> E.Encoder
 encodePubKeys keys =
     let
         asList =
@@ -3111,12 +3107,11 @@ encodePubKeys keys =
             :: List.map encodePubKey asList
 
 
-encodePubKey : ( String, PubKeys ) -> E.Encoder
-encodePubKey ( name, { encrypt, sign } ) =
+encodePubKey : ( Int, Bytes.Bytes ) -> E.Encoder
+encodePubKey ( name, key ) =
     E.sequence
-        [ encodeSizedString name
-        , E.bytes encrypt
-        , E.bytes sign
+        [ E.unsignedInt32 Bytes.BE name
+        , E.bytes key
         ]
 
 
@@ -3129,7 +3124,7 @@ encodeHome h =
         , encodeHumanMsgs h.outbox
         , encodePrograms h.programs
         , encodeContacts h.contacts
-        , encodePubKeys h.pubKeys
+        , encodePubKeys h.encryptionKeys
         ]
 
 
@@ -3192,8 +3187,8 @@ encodeInbox msgs =
 encodeHumanMsg : HumanMsg -> E.Encoder
 encodeHumanMsg { from, to, document } =
     E.sequence
-        [ encodeSizedString from
-        , encodeSizedString to
+        [ E.unsignedInt32 Bytes.BE from
+        , E.unsignedInt32 Bytes.BE to
         , encodeDocument document
         ]
 
@@ -3352,7 +3347,7 @@ dmap a b =
 
 decodeHumanMsg : D.Decoder HumanMsg
 decodeHumanMsg =
-    D.map3 HumanMsg sizedString sizedString decodeDocument
+    D.map3 HumanMsg (D.unsignedInt32 Bytes.BE) (D.unsignedInt32 Bytes.BE) decodeDocument
 
 
 decodeDocument : D.Decoder Document

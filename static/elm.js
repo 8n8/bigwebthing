@@ -92,6 +92,15 @@ app.ports.doProofOfWork.subscribe(function(powInfo) {
   app.ports.doneProofOfWork.send(base64js.fromByteArray(pow));
 });
 
+function makeIdToken(route, message, authcode, secretsign) {
+  const publicsign = nacl.sign.keyPair.fromSecretKey(secretsign).secretKey
+  const toSign = combine(combine(route, message), authcode)
+  const hash = nacl.hash(toSign).slice(0, 32)
+  const signature = nacl.sign(hash, secretsign)
+  const encodedIdToken = combine(combine(publicsign, authcode), signature)
+  return encodedIdToken
+}
+
 app.ports.makeIdToken.subscribe(function(idTokenInfo) {
   const publicsign = new Uint8Array(base64js.toByteArray(idTokenInfo.publicsign));
   const secretsign = new Uint8Array(base64js.toByteArray(idTokenInfo.secretsign));
@@ -99,9 +108,40 @@ app.ports.makeIdToken.subscribe(function(idTokenInfo) {
   const authcode = new Uint8Array(base64js.toByteArray(idTokenInfo.authcode));
   const message = new Uint8Array(base64js.toByteArray(idTokenInfo.message));
   
-  const toSign = combine(combine(route, message), authcode);
-  const hash = nacl.hash(toSign).slice(0, 32);
-  const signature = nacl.sign(hash, secretsign);
-  const encodedIdToken = combine(combine(publicsign, authcode), signature);
+  const encodedIdToken = makeIdToken(route, message, authcode, publicsign);
   app.ports.newIdToken.send(base64js.fromByteArray(encodedIdToken));
+});
+
+function makeRoute(route) {
+  array = new ArrayBuffer(1)
+  view = new Uint8Array(array)
+  view = route
+  return view
+}
+
+const apiUrl = 'http://localhost:3001/api'
+
+app.ports.sendMsg.subscribe(function(msg) {
+  const document = base64js.toByteArray(msg.document)
+  const mySecretSign = base64js.toByteArray(msg.mySecretSign)
+  const myPublicSign = nacl.sign.keyPair.fromSecretKey(mySecretSign).secretKey
+  const mySecretEncrypt = base64js.toByteArray(msg.mySecretEncrypt)
+  const toPublicSign = base64js.toByteArray(msg.toPublicSign)
+  const nonce = base64js.toByteArray(msg.nonce)
+
+  fetch(apiUrl, {body: makeRoute(7)}).then(function(response) {
+    if (!response.ok) {
+      console.log("could not get auth code: ", response)
+      return
+    }
+    const authCode = response.arrayBuffer();
+    const route = makeRoute(8)
+    const idToken = makeIdToken(route, document, authCode, mySecretSign)
+    const encoded = combine(route, combine(idToken, combine(toPublicSign, document)))
+    fetch(apiUrl, {body: encoded}).then(function(msgResponse) {
+      if (!response.ok) {
+        console.log("could not send message: ", response)
+      }
+    })
+  })
 });

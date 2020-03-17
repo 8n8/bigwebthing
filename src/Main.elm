@@ -764,57 +764,64 @@ init _ =
 reRunProgram : Model -> Testable.Program -> ( Model, Cmd Msg )
 reRunProgram (Model model) program =
     let
-        ( p, doc, msgs ) =
-            runProgram program model.home.programs
-
         oldHome =
             model.home
-
-        newOutbox =
-            model.home.outbox ++ msgs
     in
-    case model.home.myKeys of
-        Nothing ->
-            ( Model { model | home = { oldHome | outbox = newOutbox }, openProgram = Just ( p, doc ) }
-            , getSecretKeys ()
-            )
+    case ( model.home.myKeys, model.home.myName ) of
+        ( Nothing, _ ) ->
+            ( Model model, getSecretKeys () )
 
-        Just myKeys ->
-            case
-                encodeMsgs
-                    { msgs = newOutbox
-                    , pubKeys = model.home.pubKeys
-                    , myKeys = myKeys
-                    , nonceBase = model.home.biggestNonceBase
-                    }
-            of
-                Err err ->
-                    ( Model
-                        { model
-                            | internalErr = Just <| "error encoding messages: " ++ err
-                            , home = { oldHome | outbox = newOutbox }
-                        }
-                    , Cmd.none
-                    )
+        ( _, Nothing ) ->
+            ( Model { model | internalErr = Just "I don't have a name" }, Cmd.none )
 
-                Ok encodedMsgs ->
+        ( Just myKeys, Just nameBytes ) ->
+            case decodeInt nameBytes of
+                Nothing ->
+                    ( Model { model | internalErr = Just <| "error decoding my name" }, Cmd.none )
+
+                Just myName ->
                     let
+                        ( p, doc, msgs ) =
+                            runProgram program model.home.programs myName
+
+                        newOutbox =
+                            oldHome.outbox ++ msgs
+
                         newHome =
                             { oldHome
                                 | outbox = newOutbox
                                 , biggestNonceBase = oldHome.biggestNonceBase + List.length msgs
                             }
+
+                        msgsResult =
+                            encodeMsgs
+                                { msgs = newOutbox
+                                , encryptionKeys = model.home.encryptionKeys
+                                , contacts = model.home.contacts
+                                , myKeys = myKeys
+                                , nonceBase = model.home.biggestNonceBase
+                                }
                     in
-                    ( Model
-                        { model
-                            | home = newHome
-                            , openProgram = Just ( p, doc )
-                        }
-                    , Cmd.batch
-                        [ sendMsgs encodedMsgs
-                        , cacheHomeHelp newHome
-                        ]
-                    )
+                    case msgsResult of
+                        Err err ->
+                            ( Model
+                                { model
+                                    | internalErr = Just <| "error encoding messages: " ++ err
+                                }
+                            , Cmd.none
+                            )
+
+                        Ok encodedMsgs ->
+                            ( Model
+                                { model
+                                    | home = newHome
+                                    , openProgram = Just ( p, doc )
+                                }
+                            , Cmd.batch
+                                [ sendMsgs encodedMsgs
+                                , cacheHomeHelp newHome
+                                ]
+                            )
 
 
 subscriptions : Model -> Sub Msg
