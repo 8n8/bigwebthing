@@ -62,6 +62,7 @@ type stateT struct {
 	authCodes     []int
 	authUnique    int
 	whitelists    map[int]map[int]struct{}
+	encryptionKeys map[int][]byte
 }
 
 type proofOfWorkState struct {
@@ -106,6 +107,9 @@ const createFriendlyNames = `
 const createWhitelist = `
 	CREATE TABLE IF NOT EXISTS whitelist (owner INTEGER NOT NULL, sender INTEGER NOT NULL);`
 
+const createEncryptionKeys = `
+	CREATE TABLE IF NOT EXISTS encryptionkeys (owner INTEGER UNIQUE NOT NULL, key BLOB UNIQUE NOT NULL);`
+
 func createDatabase() error {
 	database, err := sql.Open("sqlite3", dbFileName)
 	if err != nil {
@@ -113,7 +117,7 @@ func createDatabase() error {
 		return err
 	}
 	defer database.Close()
-	for _, command := range []string{createMembers, createFriendlyNames, createWhitelist} {
+	for _, command := range []string{createMembers, createFriendlyNames, createWhitelist, createEncryptionKeys} {
 		_, err = database.Exec(command)
 		if err != nil {
 			return err
@@ -172,6 +176,21 @@ func loadWhitelists(database *sql.DB) (map[int]map[int]struct{}, error) {
 	return whitelists, nil
 }
 
+func loadEncryptionKeys(database *sql.DB) (map[int][]byte, error) {
+	rows, err := database.Query("SELECT owner, key FROM encryptionkeys")
+	keys := make(map[int][]byte)
+	if err != nil {
+		return keys, err
+	}
+	for rows.Next() {
+		var owner int
+		key := make([]byte, 32)
+		rows.Scan(&owner, &key)
+		keys[owner] = key
+	}
+	return keys, nil
+}
+
 func loadInt(filename string) (int, error) {
 	raw, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -215,6 +234,12 @@ func (loadData) io(inputChannel chan inputT) {
 		return
 	}
 
+	encryptionKeys, err := loadEncryptionKeys(database)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+
 	powCounter, err := loadInt(uniquePowFileName)
 	if err != nil {
 		powCounter = 0
@@ -225,12 +250,14 @@ func (loadData) io(inputChannel chan inputT) {
 		authUnique = 0
 	}
 
+
 	loaded := loadedData{
 		members:       members,
 		friendlyNames: friendlyNames,
 		powCounter:    powCounter,
 		authUnique:    authUnique,
 		whitelists:    whitelists,
+		encryptionKeys: encryptionKeys,
 	}
 	inputChannel <- loaded
 }
@@ -241,6 +268,7 @@ type loadedData struct {
 	powCounter    int
 	authUnique    int
 	whitelists    map[int]map[int]struct{}
+	encryptionKeys map[int][]byte
 }
 
 func (l loadedData) update(state stateT) (stateT, []outputT) {
@@ -311,9 +339,65 @@ func parseRequest(body []byte) parsedRequestT {
 		return parseWhitelistSomeone(body)
 	case 11:
 		return parseUnwhitelistSomeone(body)
+	case 12:
+		return parseUploadEncryptionKey(body)
 	}
 
 	return badRequest{"bad route", 400}
+}
+
+type uploadEncryptionKeyRequest struct {
+	Owner int
+	SignedKey []byte
+}
+
+func parseUploadEncryptionKey(body []byte) parsedRequestT {
+	if len(body) != 105 {
+		return badRequest{"length of body is not 105", 400}
+	}
+	name := decodeInt(body[1:9])
+	return uploadEncryptionKeyRequest{
+		Owner: name,
+		SignedKey: body[9:],
+	}
+}
+
+func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
+
+	if u.Owner >= len(state.friendlyNames) {
+		return state, []outputT{badResponse{"who are you?", 400, responseChan}}
+	}
+
+	signingKey := state.friendlyNames[u.Owner]
+	var signingKeyArr [32]byte
+	copy(signingKeyArr[:], signingKey)
+	_, okSignature := sign.Open(make([]byte, 0), u.SignedKey, &signingKeyArr)
+	if !okSignature {
+		return state, []outputT{badResponse{"bad signature", 400, responseChan}}
+	}
+	state.encryptionKeys[u.Owner] = u.SignedKey
+	return state, []outputT{cacheNewEncryptionKey(u), sendHttpResponse{responseChan, goodHttpResponse(make([]byte, 0))}}
+}
+
+type cacheNewEncryptionKey uploadEncryptionKeyRequest
+
+func (c cacheNewEncryptionKey) io(inputChannel chan inputT) {
+	database, err := sql.Open("sqlite3", dbFileName)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	defer database.Close()
+	statement, err := database.Prepare("INSERT INTO encryptionkeys (owner, key) VALUES (?, ?);")
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
+	_, err = statement.Exec(c.Owner, c.SignedKey)
+	if err != nil {
+		inputChannel <- fatalError{err}
+		return
+	}
 }
 
 func parseUnwhitelistSomeone(body []byte) parsedRequestT {
@@ -1099,7 +1183,7 @@ func (c cacheNewKeyT) io(inputChannel chan inputT) {
 		return
 	}
 	defer database.Close()
-	statement, err := database.Prepare("INSERT INTO friendlynames (key) VALUES (?)")
+	statement, err := database.Prepare("INSERT INTO friendlynames (key) VALUES (?);")
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
