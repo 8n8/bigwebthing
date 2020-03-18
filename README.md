@@ -101,6 +101,16 @@ The response is:
 + 136 bytes: identity token
 + 8 bytes: name of person to remove from whitelist
 
+12. (Free) Upload encryption key
++ 0x0C
++ 8 bytes: uploader name
++ 96 bytes: signed public encryption key
+
+13. (Free) Download public encryption key
++ 0x0D
++ 8 bytes: name of owner of key
+The response is the 32-byte public encryption key.
+
 ### Client API
 
 Messages are encrypted and decrypted on the client, so that the server can't read them.

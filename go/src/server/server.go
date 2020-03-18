@@ -55,13 +55,13 @@ func decodeInt(bs []byte) int {
 }
 
 type stateT struct {
-	fatalErr      error
-	proofOfWork   proofOfWorkState
-	friendlyNames [][]byte
-	members       map[int]struct{}
-	authCodes     []int
-	authUnique    int
-	whitelists    map[int]map[int]struct{}
+	fatalErr       error
+	proofOfWork    proofOfWorkState
+	friendlyNames  [][]byte
+	members        map[int]struct{}
+	authCodes      []int
+	authUnique     int
+	whitelists     map[int]map[int]struct{}
 	encryptionKeys map[int][]byte
 }
 
@@ -250,24 +250,23 @@ func (loadData) io(inputChannel chan inputT) {
 		authUnique = 0
 	}
 
-
 	loaded := loadedData{
-		members:       members,
-		friendlyNames: friendlyNames,
-		powCounter:    powCounter,
-		authUnique:    authUnique,
-		whitelists:    whitelists,
+		members:        members,
+		friendlyNames:  friendlyNames,
+		powCounter:     powCounter,
+		authUnique:     authUnique,
+		whitelists:     whitelists,
 		encryptionKeys: encryptionKeys,
 	}
 	inputChannel <- loaded
 }
 
 type loadedData struct {
-	members       map[int]struct{}
-	friendlyNames [][]byte
-	powCounter    int
-	authUnique    int
-	whitelists    map[int]map[int]struct{}
+	members        map[int]struct{}
+	friendlyNames  [][]byte
+	powCounter     int
+	authUnique     int
+	whitelists     map[int]map[int]struct{}
 	encryptionKeys map[int][]byte
 }
 
@@ -341,13 +340,15 @@ func parseRequest(body []byte) parsedRequestT {
 		return parseUnwhitelistSomeone(body)
 	case 12:
 		return parseUploadEncryptionKey(body)
+	case 13:
+		return parseDownloadEncryptionKey(body)
 	}
 
 	return badRequest{"bad route", 400}
 }
 
 type uploadEncryptionKeyRequest struct {
-	Owner int
+	Owner     int
 	SignedKey []byte
 }
 
@@ -357,9 +358,27 @@ func parseUploadEncryptionKey(body []byte) parsedRequestT {
 	}
 	name := decodeInt(body[1:9])
 	return uploadEncryptionKeyRequest{
-		Owner: name,
+		Owner:     name,
 		SignedKey: body[9:],
 	}
+}
+
+type encryptionKeyRequest int
+
+func parseDownloadEncryptionKey(body []byte) parsedRequestT {
+	if len(body) != 9 {
+		return badRequest{"length of body is not 9", 400}
+	}
+	name := decodeInt(body[1:])
+	return encryptionKeyRequest(name)
+}
+
+func (e encryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
+	key, ok := state.encryptionKeys[int(e)]
+	if !ok {
+		return state, []outputT{badResponse{"no key", 400, responseChan}}
+	}
+	return state, []outputT{sendHttpResponse{responseChan, goodHttpResponse(key)}}
 }
 
 func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
