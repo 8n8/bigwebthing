@@ -18,7 +18,6 @@ import Json.Encode as Je
 import List.Nonempty as N
 
 
-
 -- Client-to-client API
 -- ====================
 --
@@ -85,7 +84,7 @@ main =
 view : Model -> Html.Html Msg
 view model =
     Element.layout [] <|
-        Element.column []
+        Element.column [ Element.padding 12 ]
             [ Element.map Editor <| Editor.view model.editor
 
             -- , Retriever.view model.retriever

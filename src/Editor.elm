@@ -73,6 +73,7 @@ type Msg
     | AddNewContact
     | UpdateContactBox String
     | RetrievedEditorInfo Je.Value
+    | UpdatedDescription String
 
 
 toB64 : Bytes.Bytes -> String
@@ -97,17 +98,21 @@ type alias RawEditorInfo =
 
 decodeEditorCache : String -> Result String Cache
 decodeEditorCache rawString =
-    case Base64.Decode.decode Base64.Decode.bytes rawString of
-        Err err ->
-            Err <| "could not decode editor cache base64: " ++ showB64Error err
+    if rawString == "There is no cache!" then
+        Ok { newContacts = [], programs = [] }
 
-        Ok rawBytes ->
-            case D.decode cacheDecoder rawBytes of
-                Nothing ->
-                    Err "could not decode editor cache"
+    else
+        case Base64.Decode.decode Base64.Decode.bytes rawString of
+            Err err ->
+                Err <| "could not decode editor cache base64: " ++ showB64Error err
 
-                Just cache ->
-                    Ok cache
+            Ok rawBytes ->
+                case D.decode cacheDecoder rawBytes of
+                    Nothing ->
+                        Err "could not decode editor cache"
+
+                    Just cache ->
+                        Ok cache
 
 
 showB64Error : Base64.Decode.Error -> String
@@ -264,6 +269,33 @@ update msg model =
                                 newProgram =
                                     { program | code = newCode }
 
+                                newName =
+                                    hash newCode
+
+                                newPrograms =
+                                    Dict.remove programName <|
+                                        Dict.insert newName newProgram model.programs
+
+                                newModel =
+                                    { model | programs = newPrograms, openProgram = Just newName }
+                            in
+                            ( newModel, cacheModel newModel )
+
+        UpdatedDescription newDescription ->
+            case model.openProgram of
+                Nothing ->
+                    ( { model | internalError = Just UpdatedProgramButNoOpenProgram }, Cmd.none )
+
+                Just programName ->
+                    case Dict.get programName model.programs of
+                        Nothing ->
+                            ( { model | internalError = Just UpdatedProgramButNoProgram }, Cmd.none )
+
+                        Just program ->
+                            let
+                                newProgram =
+                                    { program | description = newDescription }
+
                                 newPrograms =
                                     Dict.insert programName newProgram model.programs
 
@@ -321,7 +353,7 @@ update msg model =
                             newModel =
                                 { model | addContactBox = Just number }
                         in
-                        ( newModel, cacheModel newModel )
+                        ( newModel, Cmd.none )
 
 
 hash : String -> String
@@ -330,17 +362,61 @@ hash s =
 
 
 view : Model -> Element.Element Msg
-view { myName, myContacts, addContactBox, addContactError, programs, openProgram } =
-    Element.column []
-        [ myUsernameIs myName
-        , myContactsAre myContacts
-        , addNewContact addContactBox addContactError
-        , chooseAProgram programs openProgram
-        , makeNewProgram
-        , programOutput openProgram programs myContacts myName
-        , myInput openProgram programs
-        , programCode openProgram programs
-        ]
+view { internalError, newContacts, myName, myContacts, addContactBox, addContactError, programs, openProgram } =
+    case internalError of
+        Just err ->
+            Element.text <| "internal error: " ++ showInternalError err
+
+        Nothing ->
+            Element.column [ Element.spacing 20, Font.size 25 ]
+                [ myUsernameIs myName
+                , myContactsAre myContacts
+                , waitingContacts newContacts
+                , addNewContact addContactBox addContactError
+                , chooseAProgram programs openProgram
+                , makeNewProgram
+                , programOutput openProgram programs myContacts myName
+                , myInput openProgram programs
+                , editDescription openProgram programs
+                , programCode openProgram programs
+                ]
+
+
+showInternalError : InternalError -> String
+showInternalError error =
+    case error of
+        UpdatedUserInputButNoOpenProgram ->
+            "updated user input but no open program"
+
+        UpdatedUserInputButNoProgram ->
+            "updated user input but no program"
+
+        UpdatedProgramButNoOpenProgram ->
+            "updated program but no open program"
+
+        UpdatedProgramButNoProgram ->
+            "updated program but no program"
+
+        BadCache err ->
+            "bad cache: " ++ showB64Error err
+
+        BadDecodeCache err ->
+            "bad decode cache: " ++ err
+
+        BadEditorCacheDecode jsonError ->
+            "bad editor cache decoder: " ++ Jd.errorToString jsonError
+
+
+waitingContacts : List Int -> Element.Element Msg
+waitingContacts contacts =
+    case contacts of
+        [] ->
+            Element.none
+
+        oneOrMore ->
+            Element.text <|
+                "Contacts waiting to be added: "
+                    ++ (String.join ", " <| List.map String.fromInt oneOrMore)
 
 
 port cachePort : String -> Cmd msg
@@ -388,12 +464,18 @@ encodeContacts contacts =
 
 
 encodeProgram : Truelang.Program -> E.Encoder
-encodeProgram { code, description, userInput } =
+encodeProgram { code, inbox, description, userInput } =
     E.sequence
         [ encodeSizedString code
         , encodeSizedString description
+        , encodeHumanMsgs inbox
         , encodeSizedString userInput
         ]
+
+
+encodeHumanMsgs : List HumanMsg -> E.Encoder
+encodeHumanMsgs msgs =
+    encodeList msgs encodeHumanMsg
 
 
 encodeSizedString : String -> E.Encoder
@@ -402,6 +484,32 @@ encodeSizedString str =
         [ E.unsignedInt32 Bytes.BE (E.getStringWidth str)
         , E.string str
         ]
+
+
+encodeHumanMsg : HumanMsg -> E.Encoder
+encodeHumanMsg { from, to, document } =
+    E.sequence
+        [ E.unsignedInt32 Bytes.BE from
+        , E.unsignedInt32 Bytes.BE to
+        , encodeDocument document
+        ]
+
+
+encodeDocument : Truelang.Document -> E.Encoder
+encodeDocument doc =
+    case doc of
+        Truelang.Ordering docs ->
+            E.sequence <|
+                [ E.unsignedInt8 2
+                , E.unsignedInt32 Bytes.BE <| List.length docs
+                ]
+                    ++ List.map encodeDocument docs
+
+        Truelang.SmallString s ->
+            E.sequence <|
+                [ E.unsignedInt8 3
+                , encodeSizedString s
+                ]
 
 
 encodeList : List a -> (a -> E.Encoder) -> E.Encoder
@@ -414,6 +522,27 @@ encodeList toEncode elementEncoder =
 encodePrograms : List Truelang.Program -> E.Encoder
 encodePrograms programs =
     encodeList programs encodeProgram
+
+
+editDescription : Maybe String -> Dict.Dict String Truelang.Program -> Element.Element Msg
+editDescription maybeOpenProgram programs =
+    case maybeOpenProgram of
+        Nothing ->
+            Element.none
+
+        Just programName ->
+            case Dict.get programName programs of
+                Nothing ->
+                    Element.text "Internal error: can't find program"
+
+                Just program ->
+                    Element.Input.multiline [ monospace ]
+                        { onChange = UpdatedDescription
+                        , text = program.description
+                        , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type description here"
+                        , label = Element.Input.labelAbove [ sansSerif ] <| Element.text "Program description:"
+                        , spellcheck = True
+                        }
 
 
 myInput : Maybe String -> Dict.Dict String Truelang.Program -> Element.Element Msg
@@ -520,17 +649,20 @@ makeNewProgram =
 
 chooseAProgram : Dict.Dict String Truelang.Program -> Maybe String -> Element.Element Msg
 chooseAProgram programs maybeOpenProgram =
-    Element.Input.radio []
+    Element.Input.radio [ Element.spacing 12 ]
         { onChange = LaunchProgram
         , selected = maybeOpenProgram
         , label =
             Element.Input.labelAbove [] <|
-                Element.text "Choose a program"
+                Element.text "Choose a program:"
         , options = Dict.values <| Dict.map programRadio programs
         }
 
 
-programRadio : String -> Truelang.Program -> Element.Input.Option String Msg
+programRadio :
+    String
+    -> Truelang.Program
+    -> Element.Input.Option String Msg
 programRadio name { description } =
     Element.Input.option name (programRadioView name description)
 
@@ -538,7 +670,7 @@ programRadio name { description } =
 programRadioView : String -> String -> Element.Element Msg
 programRadioView name description =
     Element.column []
-        [ Element.text name
+        [ Element.el [ monospace ] <| Element.text name
         , Element.paragraph [] [ Element.text description ]
         ]
 
@@ -565,7 +697,7 @@ addNewContact boxContents maybeError =
                         Element.text "Type their username"
             , label =
                 Element.Input.labelAbove [ sansSerif ] <|
-                    Element.text "Add someone to your contacts"
+                    Element.text "Add someone to your contacts:"
             }
         , Element.Input.button []
             { onPress = Just AddNewContact
@@ -584,15 +716,23 @@ myContactsAre : List Int -> Element.Element Msg
 myContactsAre contacts =
     Element.text <|
         "My contacts: "
-            ++ String.join ", " (List.map String.fromInt contacts)
+            ++ (case contacts of
+                    [] ->
+                        "you haven't got any yet"
+
+                    oneOrMore ->
+                        String.join ", " <| List.map String.fromInt oneOrMore
+               )
 
 
 myUsernameIs : Maybe Int -> Element.Element Msg
 myUsernameIs maybeMyName =
     Element.text <|
-        case maybeMyName of
-            Nothing ->
-                "you haven't got one yet"
+        "My username: "
+            ++ (case maybeMyName of
+                    Nothing ->
+                        "you haven't got one yet"
 
-            Just nameInt ->
-                String.fromInt nameInt
+                    Just nameInt ->
+                        String.fromInt nameInt
+               )
