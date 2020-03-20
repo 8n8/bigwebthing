@@ -1,4 +1,4 @@
-module Truelang exposing (Document(..), Program, runProgram)
+module Truelang exposing (runProgram)
 
 import Dict
 import Maybe.Extra
@@ -6,61 +6,42 @@ import Parser as P exposing ((|.), (|=))
 import Result.Extra
 import SHA256
 import Set
+import Utils
 
 
 runProgram :
     String
-    -> Dict.Dict String Program
+    -> Dict.Dict String Utils.Program
     -> Int
-    -> ( Maybe Document, List HumanMsg )
+    -> ( Maybe Utils.Document, List Utils.HumanMsg )
 runProgram programName allPrograms myName =
     case Dict.get programName allPrograms of
         Nothing ->
-            ( Just <| SmallString <| "internal error: no such program \"" ++ programName ++ "\"", [] )
+            ( Just <| Utils.SmallString <| "internal error: no such program \"" ++ programName ++ "\"", [] )
 
         Just program ->
             case P.run (topProgramP (hash program.code) allPrograms) program.code of
                 Err deadEnds ->
-                    ( Just <| SmallString <| deadEndsToString deadEnds
+                    ( Just <| Utils.SmallString <| deadEndsToString deadEnds
                     , []
                     )
 
                 Ok atoms ->
                     case runTypeChecks atoms { initEltState | position = { start = initEltState.position.start, end = initEltState.position.end, file = hash program.code } } of
                         Just errMsg ->
-                            ( Just <| SmallString ("type error: " ++ errMsg), [] )
+                            ( Just <| Utils.SmallString ("type error: " ++ errMsg), [] )
 
                         Nothing ->
                             runElfs allPrograms program atoms [] myName
 
 
-type alias HumanMsg =
-    { from : Int
-    , to : Int
-    , document : Document
-    }
-
-
-type Document
-    = Ordering (List Document)
-    | SmallString String
-
-
-type alias Program =
-    { code : String
-    , description : String
-    , inbox : List HumanMsg
-    , userInput : String
-    }
-
-
 runElfs :
-    Dict.Dict String Program
-    -> Program
+    Dict.Dict String Utils.Program
+    -> Utils.Program
     -> List (Located Atom)
     -> List ProgVal
     -> Int
-    -> ( Maybe Document, List HumanMsg )
+    -> ( Maybe Utils.Document, List Utils.HumanMsg )
 runElfs allPrograms program elfs progStack myName =
     let
         oldP =
@@ -82,7 +63,7 @@ runElfs allPrograms program elfs progStack myName =
             ( newP.rightDoc, newP.outbox )
 
         Just err ->
-            ( Just <| SmallString ("internal error: " ++ err), oldP.outbox )
+            ( Just <| Utils.SmallString ("internal error: " ++ err), oldP.outbox )
 
 
 initEltState =
@@ -133,7 +114,7 @@ deadEndToString deadEnd =
         ]
 
 
-topProgramP : String -> Dict.Dict String Program -> P.Parser (List (Located Atom))
+topProgramP : String -> Dict.Dict String Utils.Program -> P.Parser (List (Located Atom))
 topProgramP filename programs =
     P.succeed identity
         |= programP filename programs
@@ -696,14 +677,14 @@ problemToString problem =
             "bad repeat"
 
 
-programP : String -> Dict.Dict String Program -> P.Parser (List (Located Atom))
+programP : String -> Dict.Dict String Utils.Program -> P.Parser (List (Located Atom))
 programP filename programs =
     P.loop [] (programHelpP filename programs)
 
 
 programHelpP :
     String
-    -> Dict.Dict String Program
+    -> Dict.Dict String Utils.Program
     -> List (Located Atom)
     -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
 programHelpP filename programs p =
@@ -717,12 +698,12 @@ programHelpP filename programs p =
 
 
 type alias ProgramState =
-    { program : Program
-    , allPrograms : Dict.Dict String Program
+    { program : Utils.Program
+    , allPrograms : Dict.Dict String Utils.Program
     , defs : Dict.Dict String ProgVal
     , stack : List ProgVal
-    , rightDoc : Maybe Document
-    , outbox : List HumanMsg
+    , rightDoc : Maybe Utils.Document
+    , outbox : List Utils.HumanMsg
     , internalError : Maybe String
     , myName : Int
     }
@@ -801,7 +782,7 @@ programProcessAtom { start, value, end } s =
                             { s | stack = Pstring (String.concat strings) :: tack }
 
                 PsendMessage :: (Pint recipient) :: (Pstring message) :: tack ->
-                    { s | outbox = { from = s.myName, to = recipient, document = SmallString message } :: s.outbox }
+                    { s | outbox = { from = s.myName, to = recipient, document = Utils.SmallString message } :: s.outbox }
 
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
@@ -1055,7 +1036,7 @@ getBlock v =
             Nothing
 
 
-elementP : Dict.Dict String Program -> String -> P.Parser Atom
+elementP : Dict.Dict String Utils.Program -> String -> P.Parser Atom
 elementP programs filename =
     P.oneOf
         [ runBlockP
@@ -1079,7 +1060,7 @@ located filename parser =
         |. whiteSpaceP
 
 
-importHelpP : Dict.Dict String Program -> P.Parser (List (Located Atom))
+importHelpP : Dict.Dict String Utils.Program -> P.Parser (List (Located Atom))
 importHelpP programs =
     P.andThen (importHelpHelpP programs) importP
 
@@ -1137,17 +1118,17 @@ matchPath pathsCandidate toSwitchOn =
                     Ok <| Tuple.second chosen
 
 
-print : Maybe Document -> String -> Document
+print : Maybe Utils.Document -> String -> Utils.Document
 print doc s =
     case doc of
-        Just (Ordering ds) ->
-            Ordering <| ds ++ [ SmallString s ]
+        Just (Utils.Ordering ds) ->
+            Utils.Ordering <| ds ++ [ Utils.SmallString s ]
 
-        Just (SmallString oldS) ->
-            Ordering [ SmallString oldS, SmallString s ]
+        Just (Utils.SmallString oldS) ->
+            Utils.Ordering [ Utils.SmallString oldS, Utils.SmallString s ]
 
         Nothing ->
-            SmallString s
+            Utils.SmallString s
 
 
 showTypeStack : List Type -> String
@@ -1373,7 +1354,7 @@ typeLangP filename =
     P.loop [] (typeLangHelpP filename)
 
 
-programBlockP : String -> Dict.Dict String Program -> P.Parser Atom
+programBlockP : String -> Dict.Dict String Utils.Program -> P.Parser Atom
 programBlockP filename programs =
     P.succeed Block
         |. P.token "{"
@@ -1479,7 +1460,7 @@ hashBody =
     P.getChompedString <| P.succeed () |. hashCharsP
 
 
-importHelpHelpP : Dict.Dict String Program -> String -> P.Parser (List (Located Atom))
+importHelpHelpP : Dict.Dict String Utils.Program -> String -> P.Parser (List (Located Atom))
 importHelpHelpP programs toImport =
     case Dict.get toImport programs of
         Nothing ->

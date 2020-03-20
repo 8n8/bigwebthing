@@ -10,12 +10,14 @@ import Bytes.Encode as E
 import Dict
 import Editor
 import Element
+import Generator
 import Hex.Convert
 import Html
 import Http
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
+
 
 
 -- Client-to-client API
@@ -32,11 +34,11 @@ import List.Nonempty as N
 -- 1. Request public encryption key:
 -- + 0x01
 --
--- 2. Send public encryption key:
+-- 2. Public encryption key:
 -- + 0x02
 -- + 32 bytes: public encryption key
 --
--- 3. Send encrypted blob:
+-- 3. Encrypted blob:
 -- + 0x03
 -- + 8 bytes: nonce
 -- + the blob
@@ -52,20 +54,20 @@ import List.Nonempty as N
 
 type Msg
     = Editor Editor.Msg
+    | Generator Generator.Msg
 
 
 
 -- | Retriever Retriever.Msg
--- | Generator Generator.Msg
 -- | Sender Sender.Msg
 -- | Importer Importer.Msg
 
 
 type alias Model =
     { editor : Editor.Model
+    , generator : Generator.Model
 
     -- , retriever : Retriever.Model
-    -- , generator : Generator.Model
     -- , sender : Sender.Model
     -- , importer : Importer.Model
     }
@@ -86,9 +88,9 @@ view model =
     Element.layout [] <|
         Element.column [ Element.padding 12 ]
             [ Element.map Editor <| Editor.view model.editor
+            , Element.map Generator <| Generator.view model.generator
 
             -- , Retriever.view model.retriever
-            -- , Generator.view model.generator
             -- , Sender.view model.sender
             -- , Importer.view model.impporter
             ]
@@ -133,12 +135,22 @@ update globalMsg globalModel =
             in
             ( { globalModel | editor = newModel }, Cmd.map Editor command )
 
+        Generator msg ->
+            let
+                ( newModel, command ) =
+                    Generator.update msg globalModel.generator
+            in
+            ( { globalModel | generator = newModel }, Cmd.map Generator command )
+
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { editor = Editor.initModel }, Cmd.batch [ Cmd.map Editor Editor.initCmd ] )
+    ( { editor = Editor.initModel, generator = Generator.initModel }, Cmd.batch [ Cmd.map Editor Editor.initCmd, Cmd.map Generator Generator.initCmd ] )
 
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    Sub.map Editor Editor.subscriptions
+    Sub.batch
+        [ Sub.map Editor Editor.subscriptions
+        , Sub.map Generator Generator.subscriptions
+        ]

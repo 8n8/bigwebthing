@@ -1,4 +1,12 @@
-port module Editor exposing (Model, Msg, initCmd, initModel, subscriptions, update, view)
+port module Editor exposing
+    ( Model
+    , Msg
+    , initCmd
+    , initModel
+    , subscriptions
+    , update
+    , view
+    )
 
 import Base64.Decode
 import Base64.Encode
@@ -13,6 +21,7 @@ import Json.Decode as Jd
 import Json.Encode as Je
 import SHA256
 import Truelang
+import Utils
 
 
 type alias Model =
@@ -20,7 +29,7 @@ type alias Model =
     , myContacts : List Int
     , addContactBox : Maybe Int
     , addContactError : Maybe AddContactError
-    , programs : Dict.Dict String Truelang.Program
+    , programs : Dict.Dict String Utils.Program
     , openProgram : Maybe String
     , internalError : Maybe InternalError
     , newContacts : List Int
@@ -96,121 +105,17 @@ type alias RawEditorInfo =
     }
 
 
-decodeEditorCache : String -> Result String Cache
-decodeEditorCache rawString =
-    if rawString == "There is no cache!" then
-        Ok { newContacts = [], programs = [] }
-
-    else
-        case Base64.Decode.decode Base64.Decode.bytes rawString of
-            Err err ->
-                Err <| "could not decode editor cache base64: " ++ showB64Error err
-
-            Ok rawBytes ->
-                case D.decode cacheDecoder rawBytes of
-                    Nothing ->
-                        Err "could not decode editor cache"
-
-                    Just cache ->
-                        Ok cache
-
-
-showB64Error : Base64.Decode.Error -> String
-showB64Error error =
-    case error of
-        Base64.Decode.ValidationError ->
-            "validation error"
-
-        Base64.Decode.InvalidByteSequence ->
-            "invalid byte sequence"
-
-
-sizedString : D.Decoder String
-sizedString =
-    D.unsignedInt32 Bytes.BE
-        |> D.andThen D.string
-
-
-decodeHumanMsg : D.Decoder HumanMsg
-decodeHumanMsg =
-    D.map3 HumanMsg (D.unsignedInt32 Bytes.BE) (D.unsignedInt32 Bytes.BE) decodeDocument
-
-
-type alias HumanMsg =
-    { from : Int
-    , to : Int
-    , document : Truelang.Document
-    }
-
-
-decodeDocument : D.Decoder Truelang.Document
-decodeDocument =
-    D.andThen decodeDocumentHelp D.unsignedInt8
-
-
-decodeDocumentHelp : Int -> D.Decoder Truelang.Document
-decodeDocumentHelp typeNum =
-    case typeNum of
-        0 ->
-            decodeOrdering
-
-        1 ->
-            D.map Truelang.SmallString sizedString
-
-        _ ->
-            D.fail
-
-
-decodeOrdering : D.Decoder Truelang.Document
-decodeOrdering =
-    D.map Truelang.Ordering (list decodeDocument)
-
-
-cacheDecoder : D.Decoder Cache
-cacheDecoder =
-    D.map2 Cache
-        (list (D.unsignedInt32 Bytes.BE))
-        (list decodeProgram)
-
-
-decodeProgram : D.Decoder Truelang.Program
-decodeProgram =
-    D.map4 Truelang.Program
-        sizedString
-        sizedString
-        (list decodeHumanMsg)
-        sizedString
-
-
-{-| Pinched from the Bytes documentation.
--}
-list : D.Decoder a -> D.Decoder (List a)
-list decoder =
-    D.unsignedInt32 Bytes.BE
-        |> D.andThen
-            (\len -> D.loop ( len, [] ) (listStep decoder))
-
-
-{-| Pinched from the Bytes documentation.
--}
-listStep :
-    D.Decoder a
-    -> ( Int, List a )
-    -> D.Decoder (D.Step ( Int, List a ) (List a))
-listStep decoder ( n, xs ) =
-    if n <= 0 then
-        D.succeed (D.Done xs)
-
-    else
-        D.map (\x -> D.Loop ( n - 1, x :: xs )) decoder
-
-
-combinePrograms : Dict.Dict String Truelang.Program -> List Truelang.Program -> Dict.Dict String Truelang.Program
+combinePrograms :
+    Dict.Dict String Utils.Program
+    -> List Utils.Program
+    -> Dict.Dict String Utils.Program
 combinePrograms oldPrograms newPrograms =
-    Dict.union oldPrograms (Dict.fromList <| List.map plusHash newPrograms)
+    Dict.union oldPrograms <|
+        Dict.fromList <|
+            List.map plusHash newPrograms
 
 
-plusHash : Truelang.Program -> ( String, Truelang.Program )
+plusHash : Utils.Program -> ( String, Utils.Program )
 plusHash program =
     ( hash program.code, program )
 
@@ -221,25 +126,57 @@ update msg model =
         RetrievedEditorInfo jsonValue ->
             case Jd.decodeValue editorInfoDecoder jsonValue of
                 Err err ->
-                    ( { model | internalError = Just <| BadEditorCacheDecode err }, Cmd.none )
+                    ( { model
+                        | internalError =
+                            Just <|
+                                BadEditorCacheDecode err
+                      }
+                    , Cmd.none
+                    )
 
                 Ok raw ->
-                    case decodeEditorCache raw.editorCache of
+                    case Utils.decodeEditorCache raw.editorCache of
                         Err err ->
-                            ( { model | internalError = Just <| BadDecodeCache err }, Cmd.none )
+                            ( { model
+                                | internalError =
+                                    Just <|
+                                        BadDecodeCache err
+                              }
+                            , Cmd.none
+                            )
 
                         Ok { newContacts, programs } ->
-                            ( { model | programs = combinePrograms model.programs programs, newContacts = model.newContacts ++ newContacts }, Cmd.none )
+                            ( { model
+                                | programs =
+                                    combinePrograms
+                                        model.programs
+                                        programs
+                                , newContacts =
+                                    model.newContacts ++ newContacts
+                              }
+                            , Cmd.none
+                            )
 
         UpdatedUserInput newUserInput ->
             case model.openProgram of
                 Nothing ->
-                    ( { model | internalError = Just UpdatedUserInputButNoOpenProgram }, Cmd.none )
+                    ( { model
+                        | internalError =
+                            Just UpdatedUserInputButNoOpenProgram
+                      }
+                    , Cmd.none
+                    )
 
                 Just programName ->
                     case Dict.get programName model.programs of
                         Nothing ->
-                            ( { model | internalError = Just UpdatedUserInputButNoProgram }, Cmd.none )
+                            ( { model
+                                | internalError =
+                                    Just
+                                        UpdatedUserInputButNoProgram
+                              }
+                            , Cmd.none
+                            )
 
                         Just program ->
                             let
@@ -368,7 +305,7 @@ view { internalError, newContacts, myName, myContacts, addContactBox, addContact
             Element.text <| "internal error: " ++ showInternalError err
 
         Nothing ->
-            Element.column [ Element.spacing 20, Font.size 25 ]
+            Element.column [ Element.spacing 20, Utils.fontSize ]
                 [ myUsernameIs myName
                 , myContactsAre myContacts
                 , waitingContacts newContacts
@@ -398,7 +335,7 @@ showInternalError error =
             "updated program but no program"
 
         BadCache err ->
-            "bad cache: " ++ showB64Error err
+            "bad cache: " ++ Utils.showB64Error err
 
         BadDecodeCache err ->
             "bad decode cache: " ++ err
@@ -430,25 +367,19 @@ cacheModel model =
         |> cachePort
 
 
-type alias Cache =
-    { newContacts : List Int
-    , programs : List Truelang.Program
-    }
-
-
-modelToCache : Model -> Cache
+modelToCache : Model -> Utils.Cache
 modelToCache { newContacts, programs } =
     { newContacts = newContacts
     , programs = Dict.values programs
     }
 
 
-encodeCache : Cache -> Bytes.Bytes
+encodeCache : Utils.Cache -> Bytes.Bytes
 encodeCache cache =
     E.encode <| cacheEncoder cache
 
 
-cacheEncoder : Cache -> E.Encoder
+cacheEncoder : Utils.Cache -> E.Encoder
 cacheEncoder { newContacts, programs } =
     E.sequence
         [ encodeContacts newContacts
@@ -463,53 +394,19 @@ encodeContacts contacts =
             :: List.map (E.unsignedInt32 Bytes.BE) contacts
 
 
-encodeProgram : Truelang.Program -> E.Encoder
+encodeProgram : Utils.Program -> E.Encoder
 encodeProgram { code, inbox, description, userInput } =
     E.sequence
-        [ encodeSizedString code
-        , encodeSizedString description
+        [ Utils.encodeSizedString code
+        , Utils.encodeSizedString description
         , encodeHumanMsgs inbox
-        , encodeSizedString userInput
+        , Utils.encodeSizedString userInput
         ]
 
 
-encodeHumanMsgs : List HumanMsg -> E.Encoder
+encodeHumanMsgs : List Utils.HumanMsg -> E.Encoder
 encodeHumanMsgs msgs =
-    encodeList msgs encodeHumanMsg
-
-
-encodeSizedString : String -> E.Encoder
-encodeSizedString str =
-    E.sequence
-        [ E.unsignedInt32 Bytes.BE (E.getStringWidth str)
-        , E.string str
-        ]
-
-
-encodeHumanMsg : HumanMsg -> E.Encoder
-encodeHumanMsg { from, to, document } =
-    E.sequence
-        [ E.unsignedInt32 Bytes.BE from
-        , E.unsignedInt32 Bytes.BE to
-        , encodeDocument document
-        ]
-
-
-encodeDocument : Truelang.Document -> E.Encoder
-encodeDocument doc =
-    case doc of
-        Truelang.Ordering docs ->
-            E.sequence <|
-                [ E.unsignedInt8 2
-                , E.unsignedInt32 Bytes.BE <| List.length docs
-                ]
-                    ++ List.map encodeDocument docs
-
-        Truelang.SmallString s ->
-            E.sequence <|
-                [ E.unsignedInt8 3
-                , encodeSizedString s
-                ]
+    encodeList msgs Utils.encodeHumanMsg
 
 
 encodeList : List a -> (a -> E.Encoder) -> E.Encoder
@@ -519,12 +416,12 @@ encodeList toEncode elementEncoder =
             :: List.map elementEncoder toEncode
 
 
-encodePrograms : List Truelang.Program -> E.Encoder
+encodePrograms : List Utils.Program -> E.Encoder
 encodePrograms programs =
     encodeList programs encodeProgram
 
 
-editDescription : Maybe String -> Dict.Dict String Truelang.Program -> Element.Element Msg
+editDescription : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
 editDescription maybeOpenProgram programs =
     case maybeOpenProgram of
         Nothing ->
@@ -540,12 +437,12 @@ editDescription maybeOpenProgram programs =
                         { onChange = UpdatedDescription
                         , text = program.description
                         , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type description here"
-                        , label = Element.Input.labelAbove [ sansSerif ] <| Element.text "Program description:"
+                        , label = Element.Input.labelAbove [ Utils.sansSerif ] <| Element.text "Program description:"
                         , spellcheck = True
                         }
 
 
-myInput : Maybe String -> Dict.Dict String Truelang.Program -> Element.Element Msg
+myInput : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
 myInput maybeOpenProgram programs =
     case maybeOpenProgram of
         Nothing ->
@@ -561,12 +458,12 @@ myInput maybeOpenProgram programs =
                         { onChange = UpdatedUserInput
                         , text = program.userInput
                         , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type here"
-                        , label = Element.Input.labelAbove [ sansSerif ] <| Element.text "Your input goes here:"
+                        , label = Element.Input.labelAbove [ Utils.sansSerif ] <| Element.text "Your input goes here:"
                         , spellcheck = True
                         }
 
 
-programCode : Maybe String -> Dict.Dict String Truelang.Program -> Element.Element Msg
+programCode : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
 programCode maybeOpenProgram programs =
     case maybeOpenProgram of
         Nothing ->
@@ -586,15 +483,10 @@ programCode maybeOpenProgram programs =
                                 Element.Input.placeholder [] <|
                                     Element.text "Type program here"
                         , label =
-                            Element.Input.labelAbove [ sansSerif ] <|
+                            Element.Input.labelAbove [ Utils.sansSerif ] <|
                                 Element.text "Program code:"
                         , spellcheck = False
                         }
-
-
-sansSerif : Element.Attribute Msg
-sansSerif =
-    Font.family [ Font.typeface "Ubuntu" ]
 
 
 monospace : Element.Attribute Msg
@@ -604,7 +496,7 @@ monospace =
 
 programOutput :
     Maybe String
-    -> Dict.Dict String Truelang.Program
+    -> Dict.Dict String Utils.Program
     -> List Int
     -> Maybe Int
     -> Element.Element Msg
@@ -629,13 +521,13 @@ programOutput maybeOpenProgram programs contacts maybeMyName =
                     displayDocument output
 
 
-displayDocument : Truelang.Document -> Element.Element Msg
+displayDocument : Utils.Document -> Element.Element Msg
 displayDocument document =
     case document of
-        Truelang.Ordering documents ->
+        Utils.Ordering documents ->
             Element.column [] <| List.map displayDocument documents
 
-        Truelang.SmallString s ->
+        Utils.SmallString s ->
             Element.text s
 
 
@@ -647,7 +539,7 @@ makeNewProgram =
         }
 
 
-chooseAProgram : Dict.Dict String Truelang.Program -> Maybe String -> Element.Element Msg
+chooseAProgram : Dict.Dict String Utils.Program -> Maybe String -> Element.Element Msg
 chooseAProgram programs maybeOpenProgram =
     Element.Input.radio [ Element.spacing 12 ]
         { onChange = LaunchProgram
@@ -661,7 +553,7 @@ chooseAProgram programs maybeOpenProgram =
 
 programRadio :
     String
-    -> Truelang.Program
+    -> Utils.Program
     -> Element.Input.Option String Msg
 programRadio name { description } =
     Element.Input.option name (programRadioView name description)
@@ -696,7 +588,7 @@ addNewContact boxContents maybeError =
                     Element.Input.placeholder [] <|
                         Element.text "Type their username"
             , label =
-                Element.Input.labelAbove [ sansSerif ] <|
+                Element.Input.labelAbove [ Utils.sansSerif ] <|
                     Element.text "Add someone to your contacts:"
             }
         , Element.Input.button []
