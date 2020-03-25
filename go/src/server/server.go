@@ -726,17 +726,17 @@ func (s sendAuthCode) io(inputChannel chan inputT) {
 }
 
 func parseSendMessage(body []byte) parsedRequestT {
-	if len(body) < 178 {
-		return badRequest{"body less than 178 bytes", 400}
+	if len(body) < 146 {
+		return badRequest{"body less than 146 bytes", 400}
 	}
 	idToken := parseIdToken(body)
-	recipient := body[137:169]
+	recipient := decodeInt(body[137:145])
 	return sendMessageRequest{idToken, recipient, body}
 }
 
 type sendMessageRequest struct {
 	idToken   idTokenT
-	recipient []byte
+	recipient int
 	message   []byte
 }
 
@@ -763,11 +763,10 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 		return state, bad("unknown sender", 400)
 	}
 	_, senderIsMember := state.members[senderId]
-	recipientId, ok := getMemberId(s.recipient, state.friendlyNames)
-	if !ok {
+        if s.recipient >= len(state.friendlyNames) {
 		return state, bad("unknown recipient", 400)
-	}
-	recipientWhitelist, ok := state.whitelists[recipientId]
+        }
+	recipientWhitelist, ok := state.whitelists[s.recipient]
 	if !ok {
 		recipientWhitelist = make(map[int]struct{})
 	}
@@ -775,11 +774,11 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if !ok {
 		return state, []outputT{hiddenError(responseChan)}
 	}
-	_, recipientIsMember := state.members[recipientId]
+	_, recipientIsMember := state.members[s.recipient]
 	if (!senderIsMember) && (!recipientIsMember) {
 		return state, bad("neither sender nor recipient are members", 400)
 	}
-	return state, []outputT{sendMessage{recipientId, s.message, responseChan}}
+	return state, []outputT{sendMessage{s.recipient, s.message, responseChan}}
 }
 
 type hiddenError chan httpResponseT

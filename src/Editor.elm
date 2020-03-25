@@ -351,6 +351,7 @@ waitingContacts contacts =
             Element.none
 
         oneOrMore ->
+            Element.el [Utils.sansSerif] <|
             Element.text <|
                 "Contacts waiting to be added: "
                     ++ (String.join ", " <| List.map String.fromInt oneOrMore)
@@ -506,7 +507,7 @@ programOutput maybeOpenProgram programs contacts maybeMyName =
             Element.none
 
         ( _, Nothing ) ->
-            Element.text "no username, so can't run program"
+            Element.el [monospace] <|Element.text "no username, so can't run program"
 
         ( Just programName, Just myName ) ->
             let
@@ -533,7 +534,7 @@ displayDocument document =
 
 makeNewProgram : Element.Element Msg
 makeNewProgram =
-    Element.Input.button []
+    Element.Input.button [Utils.sansSerif]
         { onPress = Just MakeNewProgram
         , label = Element.text "Make new program"
         }
@@ -545,7 +546,7 @@ chooseAProgram programs maybeOpenProgram =
         { onChange = LaunchProgram
         , selected = maybeOpenProgram
         , label =
-            Element.Input.labelAbove [] <|
+            Element.Input.labelAbove [Utils.sansSerif] <|
                 Element.text "Choose a program:"
         , options = Dict.values <| Dict.map programRadio programs
         }
@@ -563,7 +564,7 @@ programRadioView : String -> String -> Element.Element Msg
 programRadioView name description =
     Element.column []
         [ Element.el [ monospace ] <| Element.text name
-        , Element.paragraph [] [ Element.text description ]
+        , Element.paragraph [Utils.sansSerif] [ Element.text description ]
         ]
 
 
@@ -574,7 +575,7 @@ type AddContactError
 addNewContact : Maybe Int -> Maybe AddContactError -> Element.Element Msg
 addNewContact boxContents maybeError =
     Element.column [] <|
-        [ Element.Input.text []
+        [ Element.Input.text [monospace]
             { onChange = UpdateContactBox
             , text =
                 case boxContents of
@@ -585,13 +586,13 @@ addNewContact boxContents maybeError =
                         ""
             , placeholder =
                 Just <|
-                    Element.Input.placeholder [] <|
+                    Element.Input.placeholder [monospace] <|
                         Element.text "Type their username"
             , label =
                 Element.Input.labelAbove [ Utils.sansSerif ] <|
                     Element.text "Add someone to your contacts:"
             }
-        , Element.Input.button []
+        , Element.Input.button [Utils.sansSerif]
             { onPress = Just AddNewContact
             , label = Element.text "Add new contact"
             }
@@ -606,6 +607,7 @@ addNewContact boxContents maybeError =
 
 myContactsAre : List Int -> Element.Element Msg
 myContactsAre contacts =
+    Element.el [Utils.sansSerif] <|
     Element.text <|
         "My contacts: "
             ++ (case contacts of
@@ -619,6 +621,7 @@ myContactsAre contacts =
 
 myUsernameIs : Maybe Int -> Element.Element Msg
 myUsernameIs maybeMyName =
+    Element.el [Utils.sansSerif] <|
     Element.text <|
         "My username: "
             ++ (case maybeMyName of

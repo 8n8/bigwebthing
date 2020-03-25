@@ -97,8 +97,7 @@ initModel =
     }
 
 
-initCmd =
-    getGeneratorData ()
+initCmd = Cmd.none
 
 
 port gotGeneratorData : (Je.Value -> msg) -> Sub msg
@@ -120,18 +119,12 @@ update msg model =
         GotGeneratorData rawB64 ->
             case decodeCache rawB64 of
                 Err err ->
-                    let
-                        _ =
-                            Debug.log "decodeCache error" ""
-                    in
                     ( { model | internalError = Just err }
                     , Cmd.none
                     )
 
                 Ok cache ->
                     let
-                        _ =
-                            Debug.log "good cache" ""
 
                         allMessages =
                             makeMessages cache

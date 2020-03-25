@@ -34,10 +34,10 @@ The server checks that the first part is indeed something that it recently gave 
 Messages are sent to the server in HTTP requests. The server will not accept messages greater than 16KB.
 
 Some APIs are only accessible to certain users and must have an identity token as follows:
-+ 32 bytes: public signing key of sender>
-+ 8 bytes: authentication code downloaded from the server earlier>
-+ 96 bytes: signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(sha256hash(route + message + authCode)).>
-So an identity token is 136 bytes long.
++ 8 bytes: ID of sender
++ 8 bytes: authentication code downloaded from the server earlier
++ 96 bytes: signature. This is the signed SHA512[:32] hash of the message prepended to the authentication code above. To be clear it is signature(sha512hash[:32](route + message + authCode)).
+So an identity token is 112 bytes long.
 
 These are the types of messages that the server will accept:
 
@@ -60,17 +60,17 @@ The response is:
 
 4. (Admin) Add a member
 + 0x04
-+ 136 bytes: identity token for user 'admin'
++ 112 bytes: identity token for user 'admin'
 + 8 bytes: name of member to add
 
 5. (Admin) Remove a member
 + 0x05
-+ 136 bytes: identity token for admin user
++ 112 bytes: identity token for admin user
 + 8 bytes: name of member to remove
 
 6. (Free) Change the key attached to a friendly name
 + 0x06
-+ 136 bytes: identity token (using the old key)
++ 112 bytes: identity token (using the old key)
 + 32 bytes: new key
 
 7. (Free) Get code for authentication
@@ -79,26 +79,26 @@ The response is a unique 8 bytes, that is, the server must never respond in the 
 
 8. (Paid) Send message
 + 0x08
-+ 136 bytes: identity token
-+ 32 bytes: recipient public key
++ 112 bytes: identity token
++ 8 bytes: recipient id
 + message
 
 9. (Paid) Retrieve message
 + 0x09
-+ 136 bytes: identity token
++ 112 bytes: identity token
 The response is:
 + 0x01 if there are messages or 0x00 if there aren't
 + the message - as in (8) above, if there is one
 
 10. (Free) Whitelist someone
 + 0x0A
-+ 136 bytes: identity token
++ 112 bytes: identity token
 + 16 bytes: proof of work
 + 8 bytes: name of person to whitelist
 
 11. (Free) Remove someone from whitelist
 + 0x0B
-+ 136 bytes: identity token
++ 112 bytes: identity token
 + 8 bytes: name of person to remove from whitelist
 
 12. (Free) Upload encryption key
@@ -109,7 +109,7 @@ The response is:
 13. (Free) Download public encryption key
 + 0x0D
 + 8 bytes: name of owner of key
-The response is the 32-byte public encryption key.
+The response is the 96-byte signed public encryption key.
 
 ### Client API
 

@@ -11,7 +11,7 @@ import SHA256
 
 sansSerif : Element.Attribute msg
 sansSerif =
-    Font.family [ Font.typeface "Ubuntu" ]
+    Font.family [ Font.typeface "EB Garamond" ]
 
 
 fontSize =
@@ -59,6 +59,19 @@ receiptDecoder =
 
 encodeDocument : Document -> E.Encoder
 encodeDocument doc =
+    let
+        bytes = E.encode <| encodeDocumentHelp doc
+        length = Bytes.width bytes
+    in
+        E.sequence
+            [ E.unsignedInt32 Bytes.BE length
+            , E.bytes bytes
+            ]
+     
+
+
+encodeDocumentHelp : Document -> E.Encoder
+encodeDocumentHelp doc =
     case doc of
         Ordering docs ->
             E.sequence <|

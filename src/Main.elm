@@ -17,44 +17,13 @@ import Http
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
-
-
-
--- Client-to-client API
--- ====================
---
--- Top-level API
--- -------------
---
--- These are the message formats that are acceptable between clients.
--- Remember (from the server API spec set out in the README), that
--- the server already requires that messages between clients are
--- signed by the sender, so extra authentication is not necessary.
---
--- 1. Request public encryption key:
--- + 0x01
---
--- 2. Public encryption key:
--- + 0x02
--- + 32 bytes: public encryption key
---
--- 3. Encrypted blob:
--- + 0x03
--- + 8 bytes: nonce
--- + the blob
---
---
--- Sub-level API
--- -------------
---
--- These are the message formats that are acceptable inside the
--- encrypted blobs (see 3 above).
--- ...
+import Communicator
 
 
 type Msg
     = Editor Editor.Msg
     | Generator Generator.Msg
+    | Communicator Communicator.Msg
 
 
 
@@ -66,7 +35,7 @@ type Msg
 type alias Model =
     { editor : Editor.Model
     , generator : Generator.Model
-
+    , communicator : Communicator.Model
     -- , retriever : Retriever.Model
     -- , sender : Sender.Model
     -- , importer : Importer.Model
@@ -89,6 +58,7 @@ view model =
         Element.column [ Element.padding 12 ]
             [ Element.map Editor <| Editor.view model.editor
             , Element.map Generator <| Generator.view model.generator
+            , Element.map Communicator <| Communicator.view model.communicator
 
             -- , Retriever.view model.retriever
             -- , Sender.view model.sender
@@ -142,10 +112,25 @@ update globalMsg globalModel =
             in
             ( { globalModel | generator = newModel }, Cmd.map Generator command )
 
+        Communicator msg ->
+            let
+                (newModel, command) =
+                    Communicator.update msg globalModel.communicator
+            in
+                ({globalModel | communicator = newModel}, Cmd.map Communicator command)
+
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { editor = Editor.initModel, generator = Generator.initModel }, Cmd.batch [ Cmd.map Editor Editor.initCmd, Cmd.map Generator Generator.initCmd ] )
+    ( { editor = Editor.initModel
+      , generator = Generator.initModel
+      , communicator = Communicator.initModel
+      }
+    , Cmd.batch
+        [ Cmd.map Editor Editor.initCmd
+        , Cmd.map Generator Generator.initCmd
+        , Cmd.map Communicator Communicator.initCmd
+        ] )
 
 
 subscriptions : Model -> Sub Msg
@@ -153,4 +138,5 @@ subscriptions _ =
     Sub.batch
         [ Sub.map Editor Editor.subscriptions
         , Sub.map Generator Generator.subscriptions
+        , Sub.map Communicator Communicator.subscriptions
         ]
