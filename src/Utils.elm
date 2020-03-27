@@ -7,6 +7,8 @@ import Bytes.Decode as D
 import Bytes.Encode as E
 import Element
 import Element.Font as Font
+import Json.Decode as Jd
+import Json.Encode as Je
 import SHA256
 
 
@@ -24,23 +26,44 @@ hash s =
     SHA256.toBase64 <| SHA256.fromString s
 
 
-decodeReceipts : String -> Result String (List Receipt)
-decodeReceipts rawB64 =
-    if rawB64 == "There are no receipts!" then
-        Ok []
+combineResult : List (Result a b) -> Result a (List b)
+combineResult results =
+    List.foldr combineHelp (Ok []) results
 
-    else
-        case Base64.Decode.decode Base64.Decode.bytes rawB64 of
-            Err err ->
-                Err <| "could not decode receipts base64: " ++ showB64Error err
 
-            Ok rawBytes ->
-                case D.decode receiptsDecoder rawBytes of
-                    Nothing ->
-                        Err "could not decode receipts cache"
+combineHelp : Result a b -> Result a (List b) -> Result a (List b)
+combineHelp result accum =
+    case ( result, accum ) of
+        ( Ok b, Ok bs ) ->
+            Ok <| b :: bs
 
-                    Just receipts ->
-                        Ok receipts
+        ( Ok _, Err a ) ->
+            Err a
+
+        ( Err a, _ ) ->
+            Err a
+
+
+decodeReceipts : List String -> Result String (List Receipt)
+decodeReceipts raw =
+    combineResult <| List.map decodeReceipt raw
+
+
+decodeReceipt : String -> Result String Receipt
+decodeReceipt rawB64 =
+    case Base64.Decode.decode Base64.Decode.bytes rawB64 of
+        Err err ->
+            Err <|
+                "could not decode receipt base64: "
+                    ++ showB64Error err
+
+        Ok rawBytes ->
+            case D.decode receiptDecoder rawBytes of
+                Nothing ->
+                    Err "could not decode receipt bytes"
+
+                Just receipt ->
+                    Ok receipt
 
 
 type alias Receipt =

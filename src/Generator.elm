@@ -31,7 +31,7 @@ type Msg
 type alias RawCache =
     { editorCache : String
     , myName : Int
-    , receipts : String
+    , receipts : List String
     }
 
 
@@ -56,7 +56,7 @@ rawCacheDecoder =
     Jd.map3 RawCache
         (Jd.field "editorCache" Jd.string)
         (Jd.field "myName" Jd.int)
-        (Jd.field "receipts" Jd.string)
+        (Jd.field "receipts" (Jd.list Jd.string))
 
 
 decodeCache : Je.Value -> Result String Cache
