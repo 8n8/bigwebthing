@@ -763,9 +763,9 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 		return state, bad("unknown sender", 400)
 	}
 	_, senderIsMember := state.members[senderId]
-        if s.recipient >= len(state.friendlyNames) {
+	if s.recipient >= len(state.friendlyNames) {
 		return state, bad("unknown recipient", 400)
-        }
+	}
 	recipientWhitelist, ok := state.whitelists[s.recipient]
 	if !ok {
 		recipientWhitelist = make(map[int]struct{})

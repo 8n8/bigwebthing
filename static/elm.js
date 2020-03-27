@@ -27,7 +27,7 @@ app.ports.getEditorInfo.subscribe(function() {
   });
 });
 
-app.ports.cachePort.subscribe(function(editorCache) {
+app.ports.cacheEditorInfo.subscribe(function(editorCache) {
   localforage.setItem('editorCache', base64js.toByteArray(editorCache))
 });
 
@@ -281,7 +281,8 @@ const msgInDontCare = 1
 async function sendMessage(message, keys, myName) {
     switch (message.type) {
         case whiteListSomeone:
-            return await sendWhitelistRequest(message.msg, keys, myName)
+            const err =  await sendWhitelistRequest(message.msg, keys, myName)
+            return [null, err]
         case sendThis:
             return await sendClientToClient(message.msg, keys, myName)
     }
@@ -408,21 +409,36 @@ function makeIdToken(route, message, authCode, secretSign, myName) {
     return combine(encodeInt(myName), combine(authCode, signature))
 }
 
-async function sendWhitelistRequest(message, keys, myName) {
+async function updateContacts(whitelistee) {
+    const [response, err] = apiRequest(combine(oneByte(2), encodeInt(whitelistee)))
+    if (err !== "") {
+        return err
+    }
+    let signingKeys = localforage.getItem('signingKeys')
+    signingKeys[whitelistee] = response
+    await localforage.setItem('signingKeys', signingKeys)
+    return ""
+}
+
+async function sendWhitelistRequest(whitelistee, keys, myName) {
     let [powInfo, err] = await getPowInfo()
     if (err !== "") {
-        return [{}, err]
+        return err
     }
     const pow = proofOfWork(powInfo)
     let authCode;
     [authCode, err] = await getAuthCode()
     const idToken = makeIdToken(
-        10, combine(pow, message), authCode, keys.signing.secret, myName)
+        10, combine(pow, whitelistee), authCode, keys.signing.secret, myName)
     const request = combine(
-        oneByte(10), combine(idToken, combine(pow, message)))
+        oneByte(10), combine(idToken, combine(pow, whitelistee)))
     let response
     [response, err] = await apiRequest(request)
-    return [{type: msgInDontCare}, err]
+    if (err !== "") {
+        return err
+    }
+    const updateContactsErr = await updateContacts(whitelistee)    
+    return updateContactsErr
 }
 
 
@@ -434,7 +450,9 @@ async function sendMessages(messages, keys, myName) {
         if (err !== "") {
             return [[], err]
         }
-        responses.push(response)
+        if (response !== null) {
+            responses.push(response)
+        }
     }
     return [responses, ""]
 }
@@ -685,7 +703,9 @@ async function communicateMain() {
     cacheLeftovers(leftOvers)
 
     const cacheErr = await cacheMessages(unpacked)
-    return cacheErr
+    if (cacheErr !== "") {
+        return cacheErr
+    }
 }
 
 
@@ -792,6 +812,28 @@ app.ports.communicate.subscribe(function() {
             app.ports.communicationError.send(err)
         }
     })
+})
+
+const nullInbox = "There is no inbox!"
+
+app.ports.getImporterInfo.subscribe(function() {
+    localforage.getItem('editorCache').then(function(rawEditorCache) {
+        let editorCache = nullCache
+        if (editorCache !== null) {
+            editorCache = base64js.fromByteArray(rawEditorCache);
+        }
+        localforage.getItem('inbox').then(function(rawInbox) {
+            let inbox = nullInbox
+            if (rawInbox !== null) {
+                inbox = base64js.fromByteArray(rawInbox)
+            }
+            app.ports.gotImporterInfo({editorCache: editorCache, inbox: inbox})
+        })
+    })
+})
+
+app.ports.clearInbox.subscribe(function () {
+    localforage.removeItem('inbox')
 })
 
 // This is the end of the function that contains this whole module.

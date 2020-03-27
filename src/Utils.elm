@@ -1,6 +1,7 @@
 module Utils exposing (..)
 
 import Base64.Decode
+import Base64.Encode
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
@@ -16,6 +17,11 @@ sansSerif =
 
 fontSize =
     Font.size 25
+
+
+hash : String -> String
+hash s =
+    SHA256.toBase64 <| SHA256.fromString s
 
 
 decodeReceipts : String -> Result String (List Receipt)
@@ -60,14 +66,16 @@ receiptDecoder =
 encodeDocument : Document -> E.Encoder
 encodeDocument doc =
     let
-        bytes = E.encode <| encodeDocumentHelp doc
-        length = Bytes.width bytes
+        bytes =
+            E.encode <| encodeDocumentHelp doc
+
+        length =
+            Bytes.width bytes
     in
-        E.sequence
-            [ E.unsignedInt32 Bytes.BE length
-            , E.bytes bytes
-            ]
-     
+    E.sequence
+        [ E.unsignedInt32 Bytes.BE length
+        , E.bytes bytes
+        ]
 
 
 encodeDocumentHelp : Document -> E.Encoder
@@ -101,19 +109,82 @@ type alias Cache =
     }
 
 
+encodeCache : Cache -> Bytes.Bytes
+encodeCache cache =
+    E.encode <| cacheEncoder cache
+
+
+encodeContacts : List Int -> E.Encoder
+encodeContacts contacts =
+    E.sequence <|
+        (E.unsignedInt32 Bytes.BE <| List.length contacts)
+            :: List.map (E.unsignedInt32 Bytes.BE) contacts
+
+
+encodeProgram : Program -> E.Encoder
+encodeProgram { code, versions } =
+    E.sequence
+        [ encodeSizedString code
+        , encodeList versions encodeVersion
+        ]
+
+
+encodeHumanMsgs : List HumanMsg -> E.Encoder
+encodeHumanMsgs msgs =
+    encodeList msgs encodeHumanMsg
+
+
+encodeList : List a -> (a -> E.Encoder) -> E.Encoder
+encodeList toEncode elementEncoder =
+    E.sequence <|
+        (E.unsignedInt32 Bytes.BE <| List.length toEncode)
+            :: List.map elementEncoder toEncode
+
+
+toB64 : Bytes.Bytes -> String
+toB64 bs =
+    Base64.Encode.encode <| Base64.Encode.bytes bs
+
+
+encodePrograms : List Program -> E.Encoder
+encodePrograms programs =
+    encodeList programs encodeProgram
+
+
+cacheEncoder : Cache -> E.Encoder
+cacheEncoder { newContacts, programs } =
+    E.sequence
+        [ encodeContacts newContacts
+        , encodePrograms programs
+        ]
+
+
 type alias Program =
     { code : String
-    , description : String
-    , inbox : List HumanMsg
+    , versions : List Version
+    }
+
+
+type alias Version =
+    { description : String
     , userInput : String
+    , author : Int
     }
 
 
 type alias HumanMsg =
-    { from : Int
-    , to : Int
-    , document : Document
+    { to : Int
+    , code : String
+    , version : Version
     }
+
+
+hashHumanMsg : HumanMsg -> Bytes.Bytes
+hashHumanMsg humanMsg =
+    SHA256.toBytes <|
+        SHA256.fromBytes <|
+            E.encode <|
+                encodeHumanMsg humanMsg
 
 
 type Document
@@ -136,11 +207,20 @@ hashDocument document =
 
 
 encodeHumanMsg : HumanMsg -> E.Encoder
-encodeHumanMsg { from, to, document } =
+encodeHumanMsg { to, code, version } =
     E.sequence
-        [ E.unsignedInt32 Bytes.BE from
-        , E.unsignedInt32 Bytes.BE to
-        , encodeDocument document
+        [ E.unsignedInt32 Bytes.BE to
+        , encodeSizedString code
+        , encodeVersion version
+        ]
+
+
+encodeVersion : Version -> E.Encoder
+encodeVersion { description, userInput, author } =
+    E.sequence
+        [ encodeSizedString description
+        , encodeSizedString userInput
+        , E.unsignedInt32 Bytes.BE author
         ]
 
 
@@ -172,11 +252,9 @@ cacheDecoder =
 
 decodeProgram : D.Decoder Program
 decodeProgram =
-    D.map4 Program
+    D.map2 Program
         sizedString
-        sizedString
-        (list decodeHumanMsg)
-        sizedString
+        (list decodeVersion)
 
 
 sizedString : D.Decoder String
@@ -187,7 +265,18 @@ sizedString =
 
 decodeHumanMsg : D.Decoder HumanMsg
 decodeHumanMsg =
-    D.map3 HumanMsg (D.unsignedInt32 Bytes.BE) (D.unsignedInt32 Bytes.BE) decodeDocument
+    D.map3 HumanMsg
+        (D.unsignedInt32 Bytes.BE)
+        sizedString
+        decodeVersion
+
+
+decodeVersion : D.Decoder Version
+decodeVersion =
+    D.map3 Version
+        sizedString
+        sizedString
+        (D.unsignedInt32 Bytes.BE)
 
 
 decodeDocument : D.Decoder Document

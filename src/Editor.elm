@@ -72,6 +72,8 @@ type InternalError
     | BadCache Base64.Decode.Error
     | BadDecodeCache String
     | BadEditorCacheDecode Jd.Error
+    | NewUserInputButNoUsername String
+    | NewDescriptionButNoUsername
 
 
 type Msg
@@ -83,11 +85,6 @@ type Msg
     | UpdateContactBox String
     | RetrievedEditorInfo Je.Value
     | UpdatedDescription String
-
-
-toB64 : Bytes.Bytes -> String
-toB64 bs =
-    Base64.Encode.encode <| Base64.Encode.bytes bs
 
 
 editorInfoDecoder : Jd.Decoder RawEditorInfo
@@ -117,7 +114,7 @@ combinePrograms oldPrograms newPrograms =
 
 plusHash : Utils.Program -> ( String, Utils.Program )
 plusHash program =
-    ( hash program.code, program )
+    ( Utils.hash program.code, program )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -179,17 +176,35 @@ update msg model =
                             )
 
                         Just program ->
-                            let
-                                newProgram =
-                                    { program | userInput = newUserInput }
+                            case model.myName of
+                                Nothing ->
+                                    ( { model | internalError = Just <| NewUserInputButNoUsername "no username" }, Cmd.none )
 
-                                newPrograms =
-                                    Dict.insert programName newProgram model.programs
+                                Just myName ->
+                                    let
+                                        version : Utils.Version
+                                        version =
+                                            { description = "", userInput = newUserInput, author = myName }
 
-                                newModel =
-                                    { model | programs = newPrograms }
-                            in
-                            ( newModel, cacheModel newModel )
+                                        versions : List Utils.Version
+                                        versions =
+                                            [ version ]
+
+                                        newProgram =
+                                            case program.versions of
+                                                [] ->
+                                                    { program | versions = versions }
+
+                                                v :: ersions ->
+                                                    { program | versions = { v | userInput = newUserInput } :: ersions }
+
+                                        newPrograms =
+                                            Dict.insert programName newProgram model.programs
+
+                                        newModel =
+                                            { model | programs = newPrograms }
+                                    in
+                                    ( newModel, cacheModel newModel )
 
         UpdatedProgramEditor newCode ->
             case model.openProgram of
@@ -207,7 +222,7 @@ update msg model =
                                     { program | code = newCode }
 
                                 newName =
-                                    hash newCode
+                                    Utils.hash newCode
 
                                 newPrograms =
                                     Dict.remove programName <|
@@ -229,25 +244,35 @@ update msg model =
                             ( { model | internalError = Just UpdatedProgramButNoProgram }, Cmd.none )
 
                         Just program ->
-                            let
-                                newProgram =
-                                    { program | description = newDescription }
+                            case model.myName of
+                                Nothing ->
+                                    ( { model | internalError = Just NewDescriptionButNoUsername }, Cmd.none )
 
-                                newPrograms =
-                                    Dict.insert programName newProgram model.programs
+                                Just myName ->
+                                    let
+                                        newProgram =
+                                            case program.versions of
+                                                [] ->
+                                                    { program | versions = [ { description = newDescription, userInput = "", author = myName } ] }
 
-                                newModel =
-                                    { model | programs = newPrograms }
-                            in
-                            ( newModel, cacheModel newModel )
+                                                v :: ersions ->
+                                                    { program | versions = { v | description = newDescription } :: ersions }
+
+                                        newPrograms =
+                                            Dict.insert programName newProgram model.programs
+
+                                        newModel =
+                                            { model | programs = newPrograms }
+                                    in
+                                    ( newModel, cacheModel newModel )
 
         MakeNewProgram ->
             let
                 newProgram =
-                    { code = "", description = "New program", inbox = [], userInput = "" }
+                    { code = "", versions = [] }
 
                 name =
-                    hash newProgram.code
+                    Utils.hash newProgram.code
 
                 newPrograms =
                     Dict.insert name newProgram model.programs
@@ -291,11 +316,6 @@ update msg model =
                                 { model | addContactBox = Just number }
                         in
                         ( newModel, Cmd.none )
-
-
-hash : String -> String
-hash s =
-    SHA256.toBase64 <| SHA256.fromString s
 
 
 view : Model -> Element.Element Msg
@@ -343,6 +363,12 @@ showInternalError error =
         BadEditorCacheDecode jsonError ->
             "bad editor cache decoder: " ++ Jd.errorToString jsonError
 
+        NewUserInputButNoUsername err ->
+            "new user input but no username: " ++ err
+
+        NewDescriptionButNoUsername ->
+            "new description but no username"
+
 
 waitingContacts : List Int -> Element.Element Msg
 waitingContacts contacts =
@@ -351,21 +377,21 @@ waitingContacts contacts =
             Element.none
 
         oneOrMore ->
-            Element.el [Utils.sansSerif] <|
-            Element.text <|
-                "Contacts waiting to be added: "
-                    ++ (String.join ", " <| List.map String.fromInt oneOrMore)
+            Element.el [ Utils.sansSerif ] <|
+                Element.text <|
+                    "Contacts waiting to be added: "
+                        ++ (String.join ", " <| List.map String.fromInt oneOrMore)
 
 
-port cachePort : String -> Cmd msg
+port cacheEditorInfo : String -> Cmd msg
 
 
 cacheModel : Model -> Cmd msg
 cacheModel model =
     modelToCache model
-        |> encodeCache
-        |> toB64
-        |> cachePort
+        |> Utils.encodeCache
+        |> Utils.toB64
+        |> cacheEditorInfo
 
 
 modelToCache : Model -> Utils.Cache
@@ -373,53 +399,6 @@ modelToCache { newContacts, programs } =
     { newContacts = newContacts
     , programs = Dict.values programs
     }
-
-
-encodeCache : Utils.Cache -> Bytes.Bytes
-encodeCache cache =
-    E.encode <| cacheEncoder cache
-
-
-cacheEncoder : Utils.Cache -> E.Encoder
-cacheEncoder { newContacts, programs } =
-    E.sequence
-        [ encodeContacts newContacts
-        , encodePrograms programs
-        ]
-
-
-encodeContacts : List Int -> E.Encoder
-encodeContacts contacts =
-    E.sequence <|
-        (E.unsignedInt32 Bytes.BE <| List.length contacts)
-            :: List.map (E.unsignedInt32 Bytes.BE) contacts
-
-
-encodeProgram : Utils.Program -> E.Encoder
-encodeProgram { code, inbox, description, userInput } =
-    E.sequence
-        [ Utils.encodeSizedString code
-        , Utils.encodeSizedString description
-        , encodeHumanMsgs inbox
-        , Utils.encodeSizedString userInput
-        ]
-
-
-encodeHumanMsgs : List Utils.HumanMsg -> E.Encoder
-encodeHumanMsgs msgs =
-    encodeList msgs Utils.encodeHumanMsg
-
-
-encodeList : List a -> (a -> E.Encoder) -> E.Encoder
-encodeList toEncode elementEncoder =
-    E.sequence <|
-        (E.unsignedInt32 Bytes.BE <| List.length toEncode)
-            :: List.map elementEncoder toEncode
-
-
-encodePrograms : List Utils.Program -> E.Encoder
-encodePrograms programs =
-    encodeList programs encodeProgram
 
 
 editDescription : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
@@ -436,7 +415,13 @@ editDescription maybeOpenProgram programs =
                 Just program ->
                     Element.Input.multiline [ monospace ]
                         { onChange = UpdatedDescription
-                        , text = program.description
+                        , text =
+                            case program.versions of
+                                [] ->
+                                    ""
+
+                                v :: _ ->
+                                    v.description
                         , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type description here"
                         , label = Element.Input.labelAbove [ Utils.sansSerif ] <| Element.text "Program description:"
                         , spellcheck = True
@@ -457,7 +442,13 @@ myInput maybeOpenProgram programs =
                 Just program ->
                     Element.Input.multiline [ monospace ]
                         { onChange = UpdatedUserInput
-                        , text = program.userInput
+                        , text =
+                            case program.versions of
+                                [] ->
+                                    ""
+
+                                v :: _ ->
+                                    v.userInput
                         , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type here"
                         , label = Element.Input.labelAbove [ Utils.sansSerif ] <| Element.text "Your input goes here:"
                         , spellcheck = True
@@ -507,7 +498,7 @@ programOutput maybeOpenProgram programs contacts maybeMyName =
             Element.none
 
         ( _, Nothing ) ->
-            Element.el [monospace] <|Element.text "no username, so can't run program"
+            Element.el [ monospace ] <| Element.text "no username, so can't run program"
 
         ( Just programName, Just myName ) ->
             let
@@ -534,7 +525,7 @@ displayDocument document =
 
 makeNewProgram : Element.Element Msg
 makeNewProgram =
-    Element.Input.button [Utils.sansSerif]
+    Element.Input.button [ Utils.sansSerif ]
         { onPress = Just MakeNewProgram
         , label = Element.text "Make new program"
         }
@@ -546,7 +537,7 @@ chooseAProgram programs maybeOpenProgram =
         { onChange = LaunchProgram
         , selected = maybeOpenProgram
         , label =
-            Element.Input.labelAbove [Utils.sansSerif] <|
+            Element.Input.labelAbove [ Utils.sansSerif ] <|
                 Element.text "Choose a program:"
         , options = Dict.values <| Dict.map programRadio programs
         }
@@ -556,7 +547,16 @@ programRadio :
     String
     -> Utils.Program
     -> Element.Input.Option String Msg
-programRadio name { description } =
+programRadio name program =
+    let
+        description =
+            case program.versions of
+                [] ->
+                    ""
+
+                v :: _ ->
+                    v.description
+    in
     Element.Input.option name (programRadioView name description)
 
 
@@ -564,7 +564,7 @@ programRadioView : String -> String -> Element.Element Msg
 programRadioView name description =
     Element.column []
         [ Element.el [ monospace ] <| Element.text name
-        , Element.paragraph [Utils.sansSerif] [ Element.text description ]
+        , Element.paragraph [ Utils.sansSerif ] [ Element.text description ]
         ]
 
 
@@ -575,7 +575,7 @@ type AddContactError
 addNewContact : Maybe Int -> Maybe AddContactError -> Element.Element Msg
 addNewContact boxContents maybeError =
     Element.column [] <|
-        [ Element.Input.text [monospace]
+        [ Element.Input.text [ monospace ]
             { onChange = UpdateContactBox
             , text =
                 case boxContents of
@@ -586,13 +586,13 @@ addNewContact boxContents maybeError =
                         ""
             , placeholder =
                 Just <|
-                    Element.Input.placeholder [monospace] <|
+                    Element.Input.placeholder [ monospace ] <|
                         Element.text "Type their username"
             , label =
                 Element.Input.labelAbove [ Utils.sansSerif ] <|
                     Element.text "Add someone to your contacts:"
             }
-        , Element.Input.button [Utils.sansSerif]
+        , Element.Input.button [ Utils.sansSerif ]
             { onPress = Just AddNewContact
             , label = Element.text "Add new contact"
             }
@@ -607,27 +607,27 @@ addNewContact boxContents maybeError =
 
 myContactsAre : List Int -> Element.Element Msg
 myContactsAre contacts =
-    Element.el [Utils.sansSerif] <|
-    Element.text <|
-        "My contacts: "
-            ++ (case contacts of
-                    [] ->
-                        "you haven't got any yet"
+    Element.el [ Utils.sansSerif ] <|
+        Element.text <|
+            "My contacts: "
+                ++ (case contacts of
+                        [] ->
+                            "you haven't got any yet"
 
-                    oneOrMore ->
-                        String.join ", " <| List.map String.fromInt oneOrMore
-               )
+                        oneOrMore ->
+                            String.join ", " <| List.map String.fromInt oneOrMore
+                   )
 
 
 myUsernameIs : Maybe Int -> Element.Element Msg
 myUsernameIs maybeMyName =
-    Element.el [Utils.sansSerif] <|
-    Element.text <|
-        "My username: "
-            ++ (case maybeMyName of
-                    Nothing ->
-                        "you haven't got one yet"
+    Element.el [ Utils.sansSerif ] <|
+        Element.text <|
+            "My username: "
+                ++ (case maybeMyName of
+                        Nothing ->
+                            "you haven't got one yet"
 
-                    Just nameInt ->
-                        String.fromInt nameInt
-               )
+                        Just nameInt ->
+                            String.fromInt nameInt
+                   )

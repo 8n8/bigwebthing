@@ -7,6 +7,7 @@ import Browser
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
+import Communicator
 import Dict
 import Editor
 import Element
@@ -14,31 +15,24 @@ import Generator
 import Hex.Convert
 import Html
 import Http
+import Importer
 import Json.Decode as Jd
 import Json.Encode as Je
 import List.Nonempty as N
-import Communicator
 
 
 type Msg
     = Editor Editor.Msg
     | Generator Generator.Msg
     | Communicator Communicator.Msg
-
-
-
--- | Retriever Retriever.Msg
--- | Sender Sender.Msg
--- | Importer Importer.Msg
+    | Importer Importer.Msg
 
 
 type alias Model =
     { editor : Editor.Model
     , generator : Generator.Model
     , communicator : Communicator.Model
-    -- , retriever : Retriever.Model
-    -- , sender : Sender.Model
-    -- , importer : Importer.Model
+    , importer : Importer.Model
     }
 
 
@@ -56,43 +50,15 @@ view : Model -> Html.Html Msg
 view model =
     Element.layout [] <|
         Element.column [ Element.padding 12 ]
-            [ Element.map Editor <| Editor.view model.editor
-            , Element.map Generator <| Generator.view model.generator
-            , Element.map Communicator <| Communicator.view model.communicator
-
-            -- , Retriever.view model.retriever
-            -- , Sender.view model.sender
-            -- , Importer.view model.impporter
+            [ Element.map Editor <|
+                Editor.view model.editor
+            , Element.map Generator <|
+                Generator.view model.generator
+            , Element.map Communicator <|
+                Communicator.view model.communicator
+            , Element.map Importer <|
+                Importer.view model.importer
             ]
-
-
-showB64Err : Base64.Decode.Error -> String
-showB64Err err =
-    case err of
-        Base64.Decode.ValidationError ->
-            "validation error"
-
-        Base64.Decode.InvalidByteSequence ->
-            "invalid byte sequence"
-
-
-showHttpError : Http.Error -> String
-showHttpError err =
-    case err of
-        Http.BadUrl url ->
-            "bad url: " ++ url
-
-        Http.Timeout ->
-            "timeout"
-
-        Http.NetworkError ->
-            "network error"
-
-        Http.BadStatus code ->
-            "bad status code: " ++ String.fromInt code
-
-        Http.BadBody b ->
-            "bad body: " ++ b
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -103,21 +69,36 @@ update globalMsg globalModel =
                 ( newModel, command ) =
                     Editor.update msg globalModel.editor
             in
-            ( { globalModel | editor = newModel }, Cmd.map Editor command )
+            ( { globalModel | editor = newModel }
+            , Cmd.map Editor command
+            )
 
         Generator msg ->
             let
                 ( newModel, command ) =
                     Generator.update msg globalModel.generator
             in
-            ( { globalModel | generator = newModel }, Cmd.map Generator command )
+            ( { globalModel | generator = newModel }
+            , Cmd.map Generator command
+            )
 
         Communicator msg ->
             let
-                (newModel, command) =
+                ( newModel, command ) =
                     Communicator.update msg globalModel.communicator
             in
-                ({globalModel | communicator = newModel}, Cmd.map Communicator command)
+            ( { globalModel | communicator = newModel }
+            , Cmd.map Communicator command
+            )
+
+        Importer msg ->
+            let
+                ( newModel, command ) =
+                    Importer.update msg globalModel.importer
+            in
+            ( { globalModel | importer = newModel }
+            , Cmd.map Importer command
+            )
 
 
 init : () -> ( Model, Cmd Msg )
@@ -125,12 +106,15 @@ init _ =
     ( { editor = Editor.initModel
       , generator = Generator.initModel
       , communicator = Communicator.initModel
+      , importer = Importer.initModel
       }
     , Cmd.batch
         [ Cmd.map Editor Editor.initCmd
         , Cmd.map Generator Generator.initCmd
         , Cmd.map Communicator Communicator.initCmd
-        ] )
+        , Cmd.map Importer Importer.initCmd
+        ]
+    )
 
 
 subscriptions : Model -> Sub Msg
@@ -139,4 +123,5 @@ subscriptions _ =
         [ Sub.map Editor Editor.subscriptions
         , Sub.map Generator Generator.subscriptions
         , Sub.map Communicator Communicator.subscriptions
+        , Sub.map Importer Importer.subscriptions
         ]

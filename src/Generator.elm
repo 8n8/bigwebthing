@@ -97,7 +97,8 @@ initModel =
     }
 
 
-initCmd = Cmd.none
+initCmd =
+    Cmd.none
 
 
 port gotGeneratorData : (Je.Value -> msg) -> Sub msg
@@ -125,7 +126,6 @@ update msg model =
 
                 Ok cache ->
                     let
-
                         allMessages =
                             makeMessages cache
                     in
@@ -148,7 +148,7 @@ hasBeenSent receipts message =
 receiptMatchesMessage : Utils.HumanMsg -> Utils.Receipt -> Bool
 receiptMatchesMessage message receipt =
     (message.to == receipt.recipient)
-        && (Utils.hashDocument message.document == receipt.hash)
+        && (Utils.hashHumanMsg message == receipt.hash)
 
 
 makeMessages : Cache -> List Utils.MsgOut

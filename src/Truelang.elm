@@ -147,7 +147,6 @@ type ProgVal
     | Pequal
     | PlistPrograms
     | PcatString
-    | PsendMessage
 
 
 type alias Type =
@@ -203,7 +202,6 @@ standardLibrary =
         , ( "false", Pbool False )
         , ( "listprograms", PlistPrograms )
         , ( "catstrings", PcatString )
-        , ( "sendmessage", PsendMessage )
         ]
 
 
@@ -253,7 +251,6 @@ standardTypes =
         , ( "runloop", [ Pbool True, Pbool False ] )
         , ( "listprograms", [ PlistPrograms ] )
         , ( "catstrings", [ PcatString ] )
-        , ( "sendmessage", [ PsendMessage ] )
         ]
 
 
@@ -465,22 +462,6 @@ processAtom state atom =
 
                         [] ->
                             Err { message = "empty stack", state = state }
-
-                [ PsendMessage ] :: tack ->
-                    case tack of
-                        recipientCandidate :: messageCandidate :: ck ->
-                            if isSubType recipientCandidate [ PallInts ] then
-                                if isSubType messageCandidate [ PallStrings ] then
-                                    Ok { state | stack = ck }
-
-                                else
-                                    Err { message = "expecting a string, but got " ++ showTypeVal messageCandidate, state = state }
-
-                            else
-                                Err { message = "expecting an integer, but got " ++ showTypeVal recipientCandidate, state = state }
-
-                        _ ->
-                            Err { message = "expecting an integer and a string", state = state }
 
                 [ Pprint ] :: tack ->
                     case tack of
@@ -780,9 +761,6 @@ programProcessAtom { start, value, end } s =
 
                         Just strings ->
                             { s | stack = Pstring (String.concat strings) :: tack }
-
-                PsendMessage :: (Pint recipient) :: (Pstring message) :: tack ->
-                    { s | outbox = { from = s.myName, to = recipient, document = Utils.SmallString message } :: s.outbox }
 
                 _ ->
                     { s | internalError = Just "not a block on top of stack, or couldn't run it" }
@@ -1298,9 +1276,6 @@ showProgVal p =
 
         PcatString ->
             "catstring"
-
-        PsendMessage ->
-            "sendmessage"
 
 
 typeUnion : Type -> Type -> Type
