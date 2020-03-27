@@ -494,7 +494,7 @@ function decodeChunk(rawChunk) {
     }
     return [{
         counter: decodeInt(rawChunk.chunk.slice(0,4)),
-        totalChunks: decodeInt(rawChunk..chunk.slice(4,8)),
+        totalChunks: decodeInt(rawChunk.chunk.slice(4,8)),
         totalHash: rawChunk.chunk.slice(8, 40),
         chunk: rawChunk.chunk.slice(40),
         author: rawChunk.author}, ""]
@@ -544,7 +544,7 @@ function joinChunks(chunks, used) {
     const hash = nacl.hash(assembled).slice(0, 32)
     if (!equalBytes(hash, chunks[0].totalHash)) {
         return [[], "assembled chunk did not match expected hash"]
-    ]
+    }
     const encodedAuthor = encodeInt(chunks[0].author)
     return [combine(encodedAuthor, assembled), ""]
 }
