@@ -302,6 +302,12 @@ function constructCtoCMessage(chunk, recipient, keys, authCode, myName) {
 
 // A message chunk is like this:
 // + 1 byte: 0x01 for a normal message, 0x00 for a receipt
+//
+// If it is a receipt, then the rest of it is:
+// + 4 bytes: the recipient ID
+// + 96 bytes: signature of message hash (sha512[:32])
+//
+// And if it is a normal message chunk:
 // + 4 bytes: 32-bit int counter, starting at 0
 // + 4 bytes: total number of chunks in message
 // + 32 bytes: hash of complete message
@@ -373,7 +379,7 @@ async function sendClientToClient(message, keys, myName) {
         const withNonce = combine(nonce, encryptedChunk)
 
         const subMsg = constructCtoCMessage(
-            encryptedChunk, message.to, keys, authCode, myName)
+            withNonce, message.to, keys, authCode, myName)
 
         const [response, err] = await apiRequest(subMsg)
         if (err !== "") {
@@ -485,11 +491,54 @@ function equalBytes(a, b) {
 }
 
 
-function decodeChunk(rawChunk) {
+async function cacheReceipt(validReceipt) {
+    let receipts = await localforage.getItem('receipts')
+    if (receipts === null) {
+        receipts = []
+    }
+    receipts.push(validReceipt)
+    await localforage.setItem('receipts', receipts)
+}
+
+
+async lookupSigningKey(author) {
+    const keys = await localforage.getItem('signingKeys')
+    return keys[author]
+}
+
+
+async function validateReceipt(rawChunk) {
+    const author = decodeInt(rawChunk.slice(1, 5))
+    const key = lookupSigningKey(author)
+    if (key === null) {
+        return [null, "no key for author"]
+    }
+    const signed = nacl.sign.open(rawChunk(5), key)
+    if (signed === null) {
+        return [null, "bad signature"]
+    }
+    const combined = combine(rawChunk.slice(1,5), rawChunk(5), signed)
+    return [combined, ""]
+}
+
+
+async function decodeChunk(rawChunk) {
     const chunkLength = rawChunk.chunk.length
     if (chunkLength < 41) {
-        return [{}, "chunk is only " + chunkLength + " bytes long, but should be at least 41" ] 
+        return [{}, "chunk is only " + chunkLength + " bytes long, but should be at least 41", null] 
     }
+
+    if (rawChunk[0] === 0) {
+        const [validReceipt, receiptErr] = validateReceipt(rawChunk)
+        if (receiptErr !== "") {
+            return [null, null, receiptErr]
+        }
+        await cacheReceipt(validReceipt)
+        return [null, true, ""]
+    }
+
+    rawChunk = rawChunk.slice(1)
+
     return [{
         counter: decodeInt(rawChunk.chunk.slice(0,4)),
         totalChunks: decodeInt(rawChunk.chunk.slice(4,8)),
@@ -503,9 +552,12 @@ function decodeChunks(rawChunks) {
     let decoded = []
     const chunksLength = chunks.length
     for (let i = 0; i < chunksLength; i++) {
-        const [decoded, err] = decodeChunk(rawChunks[i])
+        const [decoded, isReceipt, err] = decodeChunk(rawChunks[i])
         if (err !== "") {
             return [[], err]
+        }
+        if (isReceipt) {
+            continue
         }
         decoded.push(decoded)
     }
@@ -533,7 +585,23 @@ function sortChunks(chunks) {
     return chunks
 }
 
-function joinChunks(chunks, used) {
+async function sendReceipt(hash, author, keys, myName) {
+    const signature = nacl.sign(hash, keys.signing.secret)
+    const combined = combine(oneByte(0), combine(encodeInt(author), signature))
+    const theirEncryptionKey = await getEncryptionKey(author, keys.signing.secret)
+    const nonce = makeNonce()
+    const encryptedChunk = nacl.box(combined, nonce, theirEncryptionKey, keys.encryption.secret)
+    const withNonce = combine(nonce, encryptedChunk)
+    const [authCode, authErr] = await getAuthCode()
+    if (authErr !== "") {
+        return authErr
+    }
+    comst msg = constructCToCMessage(withNonce, author, keys, authCode, myName)
+    const [response, sendErr] = await apiRequest(msg)
+    return sendErr
+}
+
+async function joinChunks(chunks, used) {
     const chunksLength = chunks.length
     let assembled = chunks[0].chunk
     for (let i = 1; i < chunksLength; i++) {
@@ -543,7 +611,14 @@ function joinChunks(chunks, used) {
     if (!equalBytes(hash, chunks[0].totalHash)) {
         return [[], "assembled chunk did not match expected hash"]
     }
-    const encodedAuthor = encodeInt(chunks[0].author)
+
+    const author = chunks[0].author
+    const receiptErr = await sendReceipt(hash, author)
+    if (receiptErr !== "") {
+        return [null, receiptErr]
+    }
+
+    const encodedAuthor = encodeInt(author)
     return [combine(encodedAuthor, assembled), ""]
 }
 
@@ -565,13 +640,13 @@ function chunksAllThere(sortedChunks) {
 }
 
 
-function unpackOneDownload(i, decodedDownloads, keys) {
+async function unpackOneDownload(i, decodedDownloads, keys) {
     const start = decodedDownloads(i)
     if (start.counter !== 0) {
         return [[], used, ""]
     }
     
-    if (start.totalChunks === 0) {
+    if (start.totalChunks === 1) {
         chunkHash = nacl.hash(start.chunk)
         if (!equalBytes(chunkHash, start.totalHash)) {
             return [[], Set(), "single-chunk message with bad hash"]
@@ -587,7 +662,7 @@ function unpackOneDownload(i, decodedDownloads, keys) {
     }
 
     const sortedChunks = sortChunks(relevantChunks)
-    if (chunksAllThere(sortedChunks))
+    if (!chunksAllThere(sortedChunks))
         return [[], Set(), ""]
     }
     const [completeMessage, joinErr] = joinChunks(sortedChunks)
@@ -595,14 +670,14 @@ function unpackOneDownload(i, decodedDownloads, keys) {
 }
 
 
-function unpackDownloads(rawDownloads, keys) {
+async function unpackDownloads(rawDownloads, keys) {
     const numDownloads = rawDownloads.length
     const [decodedDownloads, err] = decodeChunks(rawDownloads)
     let allUnpacked = []
     let used = Set()
     for (let i = 0; i < numDownloads; i++) {
         let unpacked, err;
-        [unpacked, used, err] = unpackOneDownload(i, decodedDownloads, keys, used)
+        [unpacked, used, err] = await unpackOneDownload(i, decodedDownloads, keys, used)
         if (err !== "") {
             return [[], [], err]
         }
@@ -693,7 +768,7 @@ async function communicateMain() {
 
     const oldLeftovers = await readOldLeftovers()
 
-    const [unpacked, leftOvers, unpackErr] = unpackDownloads(combine(decryptedDownloads, oldLeftovers), keys)
+    const [unpacked, leftOvers, unpackErr] = await unpackDownloads(combine(decryptedDownloads, oldLeftovers), keys)
     if (unpackErr !== "") {
         return unpackErr
     }

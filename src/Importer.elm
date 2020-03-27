@@ -114,8 +114,7 @@ inboxDecoder =
 
 decodeMsgIn : D.Decoder Utils.HumanMsg
 decodeMsgIn =
-    decodeAuthor
-        |> D.andThen decodeMsgInHelp
+    decodeAuthor |> D.andThen decodeMsgInHelp
 
 
 decodeAuthor : D.Decoder Int
