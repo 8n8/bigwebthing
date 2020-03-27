@@ -301,6 +301,7 @@ function constructCtoCMessage(chunk, recipient, keys, authCode, myName) {
 
 
 // A message chunk is like this:
+// + 1 byte: 0x01 for a normal message, 0x00 for a receipt
 // + 4 bytes: 32-bit int counter, starting at 0
 // + 4 bytes: total number of chunks in message
 // + 32 bytes: hash of complete message
@@ -316,9 +317,7 @@ function chopMessageIntoChunks(message) {
         const chunkStart = i * chunkLength
         const chunkEnd = (i + 1) * chunkLength
         const chunkBase = message.slice(chunkStart, chunkEnd)
-        const combined = combine(
-            chunkNum,
-            combine(numChunksBytes, combine(hash, chunkBase)))
+        const combined = combine(oneByte(1), combine(chunkNum, combine(numChunksBytes, combine(hash, chunkBase))))
         chunks.push(combined)
     }
     return chunks;
@@ -382,7 +381,6 @@ async function sendClientToClient(message, keys, myName) {
         }
     }
     return [ { type: msgInDontCare }, "" ]
-    
 }
 
 
