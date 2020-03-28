@@ -70,7 +70,7 @@ const sendThis = 2
 function decodeHumanMsg(raw, pos) {
     const rawLength = raw.length
     if (rawLength < 13) {
-        return [{}, pos, "human message is less than 13 bytes long"]
+        return [{}, "human message is less than 13 bytes long"]
     }
     const from = decodeInt(raw.slice(pos, pos+4))
     pos += 4
@@ -79,15 +79,16 @@ function decodeHumanMsg(raw, pos) {
     const documentLength = decodeInt(raw.slice(pos, pos+4))
     pos += 4
     if (rawLength < 12 + documentLength) {
-        return [{}, pos, "raw is shorter than given document length"]
+        return [{}, "raw is shorter than given document length"]
     }
     const document = raw.slice(pos, pos + documentLength)
     pos += 12 + documentLength
-    return [{type: sendThis, msg: {to: to, from: from, document: document}}, pos, ""]
+    return [{type: sendThis, msg: {to: to, from: from, document: document}}, ""]
 }
 
 
-function parseMessage(raw, pos) {
+function parseMessage(raw) {
+    let pos = 0
     const messageType = raw[0]
     pos += 1
     let message = {}
@@ -98,13 +99,13 @@ function parseMessage(raw, pos) {
             pos += 4
             message =
                 {type: whitelistSomeone, msg: whitelistee}
-            return [message, pos, ""]
+            return [message, ""]
 
         case sendThis:
             return decodeHumanMsg(raw, pos);
     }
 
-    return [{}, pos, "bad message type: " + messageType]
+    return [{}, "bad message type: " + messageType]
 }
 
 
@@ -113,28 +114,22 @@ function decodeMessages(raw) {
         return [[], ""]
     }
 
-    const rawLength = raw.length
-
-    if (rawLength < 4) {
-        return [[], "raw messages is less than 4 bytes long"]
-    }
-
     let messages = []
-    for (let pos = 4; pos < rawLength; pos++) {
-        let message, err
-        [message, pos, err] = parseMessage(raw, pos) 
+    const rawLength = raw.length
+    for (let i = 0; i < rawLength; i++) {
+        const rawMessage = raw[i]
+        [message, err] = parseMessage(rawMessage)
         if (err !== "") {
             return [[], err]
         }
-        messages.push(message)
+        messages.push(message)    
     }
-
     return [messages, ""]
 }
 
 
 async function readMessagesFromCache() {
-    const raw = await localforage.getItem('generatedMessages')
+    const raw = await localforage.getItem('outbox')
     return decodeMessages(raw)
 }
 
@@ -907,6 +902,16 @@ app.ports.getImporterInfo.subscribe(function() {
 
 app.ports.clearInbox.subscribe(function () {
     localforage.removeItem('inbox')
+})
+
+app.ports.sendMessagePort.subscribe(function(rawB64) {
+    localforage.getItem('outbox').then(function(outbox) {
+        if (outbox === null) {
+            outbox = []
+        }
+        outbox.push(base64js.toByteArray(rawB64))
+        localforage.setItem('outbox', outbox)
+    })
 })
 
 // This is the end of the function that contains this whole module.

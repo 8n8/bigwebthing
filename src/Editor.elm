@@ -27,6 +27,8 @@ import Utils
 type alias Model =
     { myName : Maybe Int
     , myContacts : List Int
+    , sendToBox : Maybe Int
+    , sendToError : Maybe SendMessageError
     , addContactBox : Maybe Int
     , addContactError : Maybe AddContactError
     , programs : Dict.Dict String Utils.Program
@@ -61,6 +63,8 @@ initModel =
     , openProgram = Nothing
     , internalError = Nothing
     , newContacts = []
+    , sendToBox = Nothing
+    , sendToError = Nothing
     }
 
 
@@ -74,6 +78,7 @@ type InternalError
     | BadEditorCacheDecode Jd.Error
     | NewUserInputButNoUsername String
     | NewDescriptionButNoUsername
+    | SendMessageButBadOpenProgram
 
 
 type Msg
@@ -85,6 +90,8 @@ type Msg
     | UpdateContactBox String
     | RetrievedEditorInfo Je.Value
     | UpdatedDescription String
+    | UpdatedRecipientBox String
+    | SendMessage
 
 
 editorInfoDecoder : Jd.Decoder RawEditorInfo
@@ -115,6 +122,39 @@ combinePrograms oldPrograms newPrograms =
 plusHash : Utils.Program -> ( String, Utils.Program )
 plusHash program =
     ( Utils.hash program.code, program )
+
+
+sendMessage : String -> Utils.Version -> Int -> Cmd Msg
+sendMessage code version recipient =
+    let
+        humanMsg = {to = recipient, code = code, version = version}
+        msgOut = Utils.SendThis humanMsg
+        encodedBytes = E.encode <| encodeMessage msgOut
+        encodedB64 = Base64.Encode.encode <| Base64.Encode.bytes encodedBytes
+    in
+        sendMessagePort encodedB64
+
+
+port sendMessagePort : String -> Cmd msg
+
+
+encodeMessage : Utils.MsgOut -> E.Encoder
+encodeMessage message =
+    case message of
+        Utils.MakeMyName ->
+            E.unsignedInt8 0
+
+        Utils.WhitelistSomeone id ->
+            E.sequence
+                [ E.unsignedInt8 1
+                , E.unsignedInt32 Bytes.BE id
+                ]
+
+        Utils.SendThis humanMsg ->
+            E.sequence
+                [ E.unsignedInt8 2
+                , Utils.encodeHumanMsg humanMsg
+                ]
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -297,6 +337,42 @@ update msg model =
                     in
                     ( newModel, cacheModel newModel )
 
+        SendMessage ->
+            case model.sendToBox of
+                Nothing ->
+                    (model, Cmd.none)
+                Just recipient ->
+                    case model.openProgram of
+                        Nothing ->
+                            (model, Cmd.none)
+                        Just programName ->
+                            case Dict.get programName model.programs of
+                                Nothing ->
+                                    ( { model | internalError = Just SendMessageButBadOpenProgram }, Cmd.none)
+                                Just program ->
+                                    case program.versions of
+                                        [] ->
+                                            ( { model | sendToError = Just NothingHereToSend }, Cmd.none)
+                                        v :: _ ->
+                                            ( model, sendMessage program.code v recipient )
+
+        UpdatedRecipientBox candidate ->
+            case String.toInt candidate of
+                Nothing ->
+                    if candidate == "" then
+                        ( { model | sendToBox = Nothing }, Cmd.none)
+                    else
+                        (model, Cmd.none)
+                Just number ->
+                    if number < 0 then
+                        ( model, Cmd.none)
+                    else
+                        let
+                            newModel = 
+                                { model | sendToBox = Just number }
+                        in
+                            (newModel, Cmd.none)
+
         UpdateContactBox candidate ->
             case String.toInt candidate of
                 Nothing ->
@@ -319,7 +395,7 @@ update msg model =
 
 
 view : Model -> Element.Element Msg
-view { internalError, newContacts, myName, myContacts, addContactBox, addContactError, programs, openProgram } =
+view { internalError, newContacts, myName, myContacts, addContactBox, addContactError, programs, openProgram, sendToBox, sendToError} =
     case internalError of
         Just err ->
             Element.text <| "internal error: " ++ showInternalError err
@@ -336,7 +412,41 @@ view { internalError, newContacts, myName, myContacts, addContactBox, addContact
                 , myInput openProgram programs
                 , editDescription openProgram programs
                 , programCode openProgram programs
+                , sendItTo sendToBox sendToError
                 ]
+
+
+type SendMessageError
+    = YouCantSendToYourself
+    | NothingHereToSend
+
+
+sendItTo : Maybe Int -> Maybe SendMessageError -> Element.Element Msg
+sendItTo boxContents maybeError =
+    Element.column [] <|
+        [ Element.Input.text []
+            { onChange = UpdatedRecipientBox
+            , text = case boxContents of
+                        Just n -> String.fromInt n
+                        Nothing -> ""
+            , placeholder = Just <| Element.Input.placeholder [] <|
+                              Element.text "Type their username"
+            , label =
+                Element.Input.labelAbove [] <|
+                 Element.text "Send this to someone else:"
+            }
+        , Element.Input.button []
+            { onPress = Just SendMessage
+            , label = Element.text "Send"
+            }
+        , case maybeError of
+            Nothing ->
+                Element.none
+            Just YouCantSendToYourself ->
+                Element.text "you can't send messages to yourself"
+            Just NothingHereToSend ->
+                Element.text "there is nothing here to send"
+        ]
 
 
 showInternalError : InternalError -> String
@@ -368,6 +478,9 @@ showInternalError error =
 
         NewDescriptionButNoUsername ->
             "new description but no username"
+
+        SendMessageButBadOpenProgram ->
+            "tried to send message but bad open program"
 
 
 waitingContacts : List Int -> Element.Element Msg
