@@ -3,28 +3,42 @@
 
 var app = Elm.Main.init({node: document.getElementById('main')});
 
-app.ports.getEditorInfo.subscribe(function() {
-  localforage.getItem('editorCache').then(function(rawEditorCache) {
+
+async function getEditorInfo() {
+    const rawEditorCache = await localforage.getItem('editorCache')
     let editorCache = nullCache
     if (editorCache !== null) {
-      editorCache = base64js.fromByteArray(rawEditorCache);
+        editorCache = base64js.fromByteArray(rawEditorCache);
     }
 
-    localforage.getItem('myName').then(function(rawMyName) {
-      let myName = -1
-      if (rawMyName !== null) {
-         myName = rawMyName
-      }
-      localforage.getItem('signingKeys').then(function(signingKeys) {
-        let myContacts = [];
-        if (signingKeys !== null) {
-          myContacts = signingKeys.keys();
+    const keys = await getCryptoKeys()
+
+    let myName = await localforage.getItem('myName')
+    if (myName === null) {
+        let myNameErr;
+        [myName, myNameErr] = await sendMakeMyName(keys)
+        if (myNameErr !== "") {
+            return [{}, myNameErr]
+    }
+    const signingKeys = await localforage.getItem('signingKeys')
+    let myContacts = [];
+    if (signingKeys !== null) {
+        myContacts = signingKeys.keys();
+    }
+    const toSend = {myName: myName, editorCache: editorCache, myContacts: myContacts}
+    return [toSend, ""]
+}
+
+
+app.ports.getEditorInfo.subscribe(function() {
+    getEditorInfo().then(function(infoOrErr) {
+        const [info, err] = infoOrErr
+        if (err !== "") {
+            console.log("could not get username")
+            return
         }
-        const toSend = {myName: myName, editorCache: editorCache, myContacts: myContacts}
-        app.ports.retrievedEditorInfo.send(toSend);
-      }) 
-    })
-  });
+        app.ports.retrievedEditorInfo.send(info);
+    }) 
 });
 
 app.ports.cacheEditorInfo.subscribe(function(editorCache) {
