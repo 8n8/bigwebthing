@@ -11,7 +11,6 @@ import Communicator
 import Dict
 import Editor
 import Element
-import Generator
 import Hex.Convert
 import Html
 import Http
@@ -23,14 +22,12 @@ import List.Nonempty as N
 
 type Msg
     = Editor Editor.Msg
-    | Generator Generator.Msg
     | Communicator Communicator.Msg
     | Importer Importer.Msg
 
 
 type alias Model =
     { editor : Editor.Model
-    , generator : Generator.Model
     , communicator : Communicator.Model
     , importer : Importer.Model
     }
@@ -52,8 +49,6 @@ view model =
         Element.column [ Element.padding 12 ]
             [ Element.map Editor <|
                 Editor.view model.editor
-            , Element.map Generator <|
-                Generator.view model.generator
             , Element.map Communicator <|
                 Communicator.view model.communicator
             , Element.map Importer <|
@@ -71,15 +66,6 @@ update globalMsg globalModel =
             in
             ( { globalModel | editor = newModel }
             , Cmd.map Editor command
-            )
-
-        Generator msg ->
-            let
-                ( newModel, command ) =
-                    Generator.update msg globalModel.generator
-            in
-            ( { globalModel | generator = newModel }
-            , Cmd.map Generator command
             )
 
         Communicator msg ->
@@ -104,13 +90,11 @@ update globalMsg globalModel =
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { editor = Editor.initModel
-      , generator = Generator.initModel
       , communicator = Communicator.initModel
       , importer = Importer.initModel
       }
     , Cmd.batch
         [ Cmd.map Editor Editor.initCmd
-        , Cmd.map Generator Generator.initCmd
         , Cmd.map Communicator Communicator.initCmd
         , Cmd.map Importer Importer.initCmd
         ]
@@ -121,7 +105,6 @@ subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
         [ Sub.map Editor Editor.subscriptions
-        , Sub.map Generator Generator.subscriptions
         , Sub.map Communicator Communicator.subscriptions
         , Sub.map Importer Importer.subscriptions
         ]
