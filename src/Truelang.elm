@@ -13,23 +13,21 @@ runProgram :
     String
     -> Dict.Dict String Utils.Program
     -> Int
-    -> ( Maybe Utils.Document, List Utils.HumanMsg )
+    -> Maybe Utils.Document
 runProgram programName allPrograms myName =
     case Dict.get programName allPrograms of
         Nothing ->
-            ( Just <| Utils.SmallString <| "internal error: no such program \"" ++ programName ++ "\"", [] )
+            Just <| Utils.SmallString <| "internal error: no such program \"" ++ programName ++ "\""
 
         Just program ->
             case P.run (topProgramP (hash program.code) allPrograms) program.code of
                 Err deadEnds ->
-                    ( Just <| Utils.SmallString <| deadEndsToString deadEnds
-                    , []
-                    )
+                    Just <| Utils.SmallString <| deadEndsToString deadEnds
 
                 Ok atoms ->
                     case runTypeChecks atoms { initEltState | position = { start = initEltState.position.start, end = initEltState.position.end, file = hash program.code } } of
                         Just errMsg ->
-                            ( Just <| Utils.SmallString ("type error: " ++ errMsg), [] )
+                            Just <| Utils.SmallString ("type error: " ++ errMsg)
 
                         Nothing ->
                             runElfs allPrograms program atoms [] myName
@@ -41,7 +39,7 @@ runElfs :
     -> List (Located Atom)
     -> List ProgVal
     -> Int
-    -> ( Maybe Utils.Document, List Utils.HumanMsg )
+    -> Maybe Utils.Document
 runElfs allPrograms program elfs progStack myName =
     let
         oldP =
@@ -49,7 +47,6 @@ runElfs allPrograms program elfs progStack myName =
             , defs = standardLibrary
             , stack = progStack
             , rightDoc = Nothing
-            , outbox = []
             , internalError = Nothing
             , allPrograms = allPrograms
             , myName = myName
@@ -60,10 +57,10 @@ runElfs allPrograms program elfs progStack myName =
     in
     case newP.internalError of
         Nothing ->
-            ( newP.rightDoc, newP.outbox )
+            newP.rightDoc
 
         Just err ->
-            ( Just <| Utils.SmallString ("internal error: " ++ err), oldP.outbox )
+            Just <| Utils.SmallString ("internal error: " ++ err)
 
 
 initEltState =
@@ -684,7 +681,6 @@ type alias ProgramState =
     , defs : Dict.Dict String ProgVal
     , stack : List ProgVal
     , rightDoc : Maybe Utils.Document
-    , outbox : List Utils.HumanMsg
     , internalError : Maybe String
     , myName : Int
     }

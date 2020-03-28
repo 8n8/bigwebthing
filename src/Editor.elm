@@ -127,12 +127,19 @@ plusHash program =
 sendMessage : String -> Utils.Version -> Int -> Cmd Msg
 sendMessage code version recipient =
     let
-        humanMsg = {to = recipient, code = code, version = version}
-        msgOut = Utils.SendThis humanMsg
-        encodedBytes = E.encode <| encodeMessage msgOut
-        encodedB64 = Base64.Encode.encode <| Base64.Encode.bytes encodedBytes
+        humanMsg =
+            { to = recipient, code = code, version = version }
+
+        msgOut =
+            Utils.SendThis humanMsg
+
+        encodedBytes =
+            E.encode <| encodeMessage msgOut
+
+        encodedB64 =
+            Base64.Encode.encode <| Base64.Encode.bytes encodedBytes
     in
-        sendMessagePort encodedB64
+    sendMessagePort encodedB64
 
 
 port sendMessagePort : String -> Cmd msg
@@ -340,19 +347,23 @@ update msg model =
         SendMessage ->
             case model.sendToBox of
                 Nothing ->
-                    (model, Cmd.none)
+                    ( model, Cmd.none )
+
                 Just recipient ->
                     case model.openProgram of
                         Nothing ->
-                            (model, Cmd.none)
+                            ( model, Cmd.none )
+
                         Just programName ->
                             case Dict.get programName model.programs of
                                 Nothing ->
-                                    ( { model | internalError = Just SendMessageButBadOpenProgram }, Cmd.none)
+                                    ( { model | internalError = Just SendMessageButBadOpenProgram }, Cmd.none )
+
                                 Just program ->
                                     case program.versions of
                                         [] ->
-                                            ( { model | sendToError = Just NothingHereToSend }, Cmd.none)
+                                            ( { model | sendToError = Just NothingHereToSend }, Cmd.none )
+
                                         v :: _ ->
                                             ( model, sendMessage program.code v recipient )
 
@@ -360,18 +371,21 @@ update msg model =
             case String.toInt candidate of
                 Nothing ->
                     if candidate == "" then
-                        ( { model | sendToBox = Nothing }, Cmd.none)
+                        ( { model | sendToBox = Nothing }, Cmd.none )
+
                     else
-                        (model, Cmd.none)
+                        ( model, Cmd.none )
+
                 Just number ->
                     if number < 0 then
-                        ( model, Cmd.none)
+                        ( model, Cmd.none )
+
                     else
                         let
-                            newModel = 
+                            newModel =
                                 { model | sendToBox = Just number }
                         in
-                            (newModel, Cmd.none)
+                        ( newModel, Cmd.none )
 
         UpdateContactBox candidate ->
             case String.toInt candidate of
@@ -395,7 +409,7 @@ update msg model =
 
 
 view : Model -> Element.Element Msg
-view { internalError, newContacts, myName, myContacts, addContactBox, addContactError, programs, openProgram, sendToBox, sendToError} =
+view { internalError, newContacts, myName, myContacts, addContactBox, addContactError, programs, openProgram, sendToBox, sendToError } =
     case internalError of
         Just err ->
             Element.text <| "internal error: " ++ showInternalError err
@@ -426,14 +440,20 @@ sendItTo boxContents maybeError =
     Element.column [] <|
         [ Element.Input.text []
             { onChange = UpdatedRecipientBox
-            , text = case boxContents of
-                        Just n -> String.fromInt n
-                        Nothing -> ""
-            , placeholder = Just <| Element.Input.placeholder [] <|
-                              Element.text "Type their username"
+            , text =
+                case boxContents of
+                    Just n ->
+                        String.fromInt n
+
+                    Nothing ->
+                        ""
+            , placeholder =
+                Just <|
+                    Element.Input.placeholder [] <|
+                        Element.text "Type their username"
             , label =
                 Element.Input.labelAbove [] <|
-                 Element.text "Send this to someone else:"
+                    Element.text "Send this to someone else:"
             }
         , Element.Input.button []
             { onPress = Just SendMessage
@@ -442,8 +462,10 @@ sendItTo boxContents maybeError =
         , case maybeError of
             Nothing ->
                 Element.none
+
             Just YouCantSendToYourself ->
                 Element.text "you can't send messages to yourself"
+
             Just NothingHereToSend ->
                 Element.text "there is nothing here to send"
         ]
@@ -615,7 +637,7 @@ programOutput maybeOpenProgram programs contacts maybeMyName =
 
         ( Just programName, Just myName ) ->
             let
-                ( maybeOutput, _ ) =
+                maybeOutput =
                     Truelang.runProgram programName programs myName
             in
             case maybeOutput of
