@@ -17,7 +17,7 @@ port getImporterInfo : () -> Cmd msg
 port gotImporterInfo : (Je.Value -> msg) -> Sub msg
 
 
-port cacheEditorInfo : String -> Cmd msg
+port cacheEditorInfoImporter : String -> Cmd msg
 
 
 port clearInbox : () -> Cmd msg
@@ -42,8 +42,7 @@ type Msg
 
 
 initCmd : Cmd Msg
-initCmd =
-    getImporterInfo ()
+initCmd = Cmd.none
 
 
 initModel : Model
@@ -67,7 +66,7 @@ update msg model =
         GotImporterInfo jsonValue ->
             case Jd.decodeValue rawImporterInfoDecoder jsonValue of
                 Err err ->
-                    ( { model | internalError = Just <| Jd.errorToString err }, Cmd.none )
+                    ( { model | internalError = Just <| "could not decode Importer JSON: " ++ Jd.errorToString err }, Cmd.none )
 
                 Ok { editorCache, inbox } ->
                     case ( Utils.decodeEditorCache editorCache, decodeInbox inbox ) of
@@ -181,14 +180,14 @@ insertMessage { code, version } oldPrograms =
 
 cacheEditorCache : Utils.Cache -> Cmd msg
 cacheEditorCache cache =
-    cacheEditorInfo <| Utils.toB64 <| Utils.encodeCache cache
+    cacheEditorInfoImporter <| Utils.toB64 <| Utils.encodeCache cache
 
 
 view : Model -> Element.Element Msg
 view model =
     case model.internalError of
         Just err ->
-            Element.text err
+            Element.text <| "internal error: " ++ err
 
         Nothing ->
             Element.Input.button []
@@ -206,5 +205,5 @@ type alias RawImporterJson =
 rawImporterInfoDecoder : Jd.Decoder RawImporterJson
 rawImporterInfoDecoder =
     Jd.map2 RawImporterJson
-        Jd.string
-        Jd.string
+        (Jd.field "editorCache" Jd.string)
+        (Jd.field "inbox" Jd.string)

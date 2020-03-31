@@ -71,7 +71,7 @@ type proofOfWorkState struct {
 	unused     []int
 }
 
-const powDifficulty = 10
+const powDifficulty = 85
 
 func initState() stateT {
 	pow := proofOfWorkState{
@@ -86,6 +86,7 @@ func initState() stateT {
 		members:       make(map[int]struct{}),
 		authCodes:     []int{},
 		authUnique:    0,
+		encryptionKeys: make(map[int][]byte),
 	}
 }
 
@@ -276,6 +277,7 @@ func (l loadedData) update(state stateT) (stateT, []outputT) {
 	state.proofOfWork.unique = l.powCounter
 	state.authUnique = l.authUnique
 	state.whitelists = l.whitelists
+	state.encryptionKeys = l.encryptionKeys
 	return state, []outputT{}
 }
 
@@ -384,6 +386,7 @@ func (e encryptionKeyRequest) updateOnRequest(state stateT, responseChan chan ht
 func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 
 	if u.Owner >= len(state.friendlyNames) {
+		fmt.Println("owner: ", u.Owner)
 		return state, []outputT{badResponse{"who are you?", 400, responseChan}}
 	}
 
@@ -393,6 +396,10 @@ func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan c
 	_, okSignature := sign.Open(make([]byte, 0), u.SignedKey, &signingKeyArr)
 	if !okSignature {
 		return state, []outputT{badResponse{"bad signature", 400, responseChan}}
+	}
+	_, keyExists := state.encryptionKeys[u.Owner]
+        if keyExists {
+		return state, []outputT{sendHttpResponse{responseChan, goodHttpResponse([]byte("key already uploaded"))}}
 	}
 	state.encryptionKeys[u.Owner] = u.SignedKey
 	return state, []outputT{cacheNewEncryptionKey(u), sendHttpResponse{responseChan, goodHttpResponse(make([]byte, 0))}}
@@ -441,18 +448,13 @@ func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan http
 	bad := func(message string, code int) []outputT {
 		return []outputT{badResponse{message, code, responseChan}}
 	}
-	newAuthCodes, ok := validToken(u.IdToken, state.authCodes)
+	newAuthCodes, ok := validToken(u.IdToken, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, bad("bad ID token", 400)
 	}
 	state.authCodes = newAuthCodes
 
-	senderId, ok := getMemberId(u.IdToken.publicSignKey, state.friendlyNames)
-	if !ok {
-		return state, bad("unknown sender", 400)
-	}
-
-	whitelist, ok := state.whitelists[senderId]
+	whitelist, ok := state.whitelists[u.IdToken.senderId]
 	if !ok {
 		return state, bad("already not whitelisted", 400)
 	}
@@ -461,9 +463,9 @@ func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan http
 		return state, bad("already not whitelisted", 400)
 	}
 	delete(whitelist, u.Name)
-	state.whitelists[senderId] = whitelist
+	state.whitelists[u.IdToken.senderId] = whitelist
 	response := deleteWhitelistee{
-		Owner:    senderId,
+		Owner:    u.IdToken.senderId,
 		ToRemove: u.Name,
 		Channel:  responseChan,
 	}
@@ -528,30 +530,25 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 	}
 	state.proofOfWork = newPow
 
-	newAuthCodes, ok := validToken(w.IdToken, state.authCodes)
+	newAuthCodes, ok := validToken(w.IdToken, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, bad("bad ID token", 400)
 	}
 	state.authCodes = newAuthCodes
 
-	senderId, ok := getMemberId(w.IdToken.publicSignKey, state.friendlyNames)
-	if !ok {
-		return state, bad("unknown sender", 400)
-	}
-
 	if w.Name >= len(state.friendlyNames) {
 		return state, bad("unknown invitee", 400)
 	}
 
-	whitelist, ok := state.whitelists[senderId]
+	whitelist, ok := state.whitelists[w.IdToken.senderId]
 	if !ok {
 		whitelist = make(map[int]struct{})
 	}
 
 	whitelist[w.Name] = struct{}{}
-	state.whitelists[senderId] = whitelist
+	state.whitelists[w.IdToken.senderId] = whitelist
 	response := addToWhitelist{
-		Owner:   senderId,
+		Owner:   w.IdToken.senderId,
 		ToAdd:   w.Name,
 		Channel: responseChan,
 	}
@@ -600,13 +597,12 @@ type removeMemberRequest struct {
 }
 
 func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
-	newAuthCodes, ok := validToken(r.idToken, state.authCodes)
+	newAuthCodes, ok := validToken(r.idToken, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, []outputT{badResponse{"bad ID token", 400, httpResponseChan}}
 	}
 	state.authCodes = newAuthCodes
-	adminUser := state.friendlyNames[0]
-	if !equalBytes(r.idToken.publicSignKey, adminUser) {
+	if r.idToken.senderId != 0 {
 		return state, []outputT{badResponse{"unauthorised", 401, httpResponseChan}}
 	}
 	delete(state.members, r.member)
@@ -653,17 +649,13 @@ type changeKeyRequest struct {
 }
 
 func (c changeKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
-	newAuthCodes, ok := validToken(c.idToken, state.authCodes)
+	newAuthCodes, ok := validToken(c.idToken, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
-	senderId, ok := getMemberId(c.idToken.publicSignKey, state.friendlyNames)
-	if !ok {
-		return state, []outputT{badResponse{"unknown sender", 400, responseChan}}
-	}
-	state.friendlyNames[senderId] = c.newKey
-	return state, []outputT{cacheNewKey{c.newKey, responseChan, senderId}}
+	state.friendlyNames[c.idToken.senderId] = c.newKey
+	return state, []outputT{cacheNewKey{c.newKey, responseChan, c.idToken.senderId}}
 }
 
 type cacheNewKey struct {
@@ -753,16 +745,12 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	bad := func(message string, code int) []outputT {
 		return []outputT{badResponse{message, code, responseChan}}
 	}
-	newAuthCodes, ok := validToken(s.idToken, state.authCodes)
+	newAuthCodes, ok := validToken(s.idToken, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, bad("bad ID token", 400)
 	}
 	state.authCodes = newAuthCodes
-	senderId, ok := getMemberId(s.idToken.publicSignKey, state.friendlyNames)
-	if !ok {
-		return state, bad("unknown sender", 400)
-	}
-	_, senderIsMember := state.members[senderId]
+	_, senderIsMember := state.members[s.idToken.senderId]
 	if s.recipient >= len(state.friendlyNames) {
 		return state, bad("unknown recipient", 400)
 	}
@@ -770,7 +758,7 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if !ok {
 		recipientWhitelist = make(map[int]struct{})
 	}
-	_, ok = recipientWhitelist[senderId]
+	_, ok = recipientWhitelist[s.idToken.senderId]
 	if !ok {
 		return state, []outputT{hiddenError(responseChan)}
 	}
@@ -812,8 +800,8 @@ func (s sendMessage) io(inputChannel chan inputT) {
 }
 
 func parseRetrieveMessage(body []byte) parsedRequestT {
-	if len(body) != 137 {
-		return badRequest{"body not 137 bytes", 400}
+	if len(body) != 113 {
+		return badRequest{"body not 113 bytes", 400}
 	}
 	idToken := parseIdToken(body)
 	return retrieveMessageRequest(idToken)
@@ -823,16 +811,12 @@ type retrieveMessageRequest idTokenT
 
 func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	token := idTokenT(r)
-	newAuthCodes, ok := validToken(token, state.authCodes)
+	newAuthCodes, ok := validToken(token, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
-	senderId, ok := getMemberId(token.publicSignKey, state.friendlyNames)
-	if !ok {
-		return state, []outputT{badResponse{"not a member", 400, responseChan}}
-	}
-	return state, []outputT{collectMessage{senderId, responseChan}}
+	return state, []outputT{collectMessage{token.senderId, responseChan}}
 }
 
 type collectMessage struct {
@@ -891,9 +875,13 @@ func equalBytes(k1 []byte, k2 []byte) bool {
 	return true
 }
 
-func validToken(token idTokenT, unused []int) ([]int, bool) {
+func validToken(token idTokenT, unused []int, friendlyNames [][]byte) ([]int, bool) {
+	if token.senderId >= len(friendlyNames) {
+		return unused, false
+	}
+	senderKey := friendlyNames[token.senderId]
 	var keyArr [32]byte
-	copy(keyArr[:], token.publicSignKey)
+	copy(keyArr[:], senderKey)
 	signed, ok := sign.Open([]byte{}, token.signature, &keyArr)
 	if !ok {
 		return unused, false
@@ -909,7 +897,7 @@ func validToken(token idTokenT, unused []int) ([]int, bool) {
 }
 
 func (a addAMemberRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
-	newAuthCodes, ok := validToken(a.idToken, state.authCodes)
+	newAuthCodes, ok := validToken(a.idToken, state.authCodes, state.friendlyNames)
 	if !ok {
 		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
 	}
@@ -918,8 +906,7 @@ func (a addAMemberRequest) updateOnRequest(state stateT, responseChan chan httpR
 		state.fatalErr = errors.New("no \"admin\" user")
 		return state, []outputT{}
 	}
-	adminUser := state.friendlyNames[0]
-	if !equalBytes(a.idToken.publicSignKey, adminUser) {
+	if a.idToken.senderId != 0 {
 		return state, []outputT{badResponse{"unauthorised", 401, responseChan}}
 	}
 	state.members[a.name] = struct{}{}
@@ -953,7 +940,7 @@ func (c cacheNewMember) io(inputChannel chan inputT) {
 }
 
 type idTokenT struct {
-	publicSignKey []byte
+	senderId int
 	authCode      int
 	signature     []byte
 	messageHash   []byte
@@ -973,15 +960,16 @@ func safeCombine(route byte, authBytes, message []byte) []byte {
 }
 
 func parseIdToken(body []byte) idTokenT {
-	authBytes := body[33:41]
+	authBytes := body[9:17]
 	authCode := decodeInt(authBytes)
-	message := safeCombine(body[0], authBytes, body[137:])
+	message := safeCombine(body[0], authBytes, body[113:])
 	hash := sha512.Sum512(message)
 	hashSlice := hash[:32]
+	senderId := decodeInt(body[1:9])
 	return idTokenT{
-		publicSignKey: body[1:33],
+		senderId: senderId,
 		authCode:      authCode,
-		signature:     body[41:137],
+		signature:     body[17:113],
 		messageHash:   hashSlice,
 	}
 }
@@ -1119,11 +1107,9 @@ func removeItem(items []int, item int) []int {
 	return newItems
 }
 
-const powMax = 75
-
-func firstXareOk(bs [64]byte, x uint8) bool {
-	for i := 0; i < int(x); i++ {
-		if bs[i] > powMax {
+func firstXareOk(bs []byte) bool {
+	for i := 0; i < 32; i++ {
+		if bs[i] < powDifficulty {
 			return false
 		}
 	}
@@ -1154,7 +1140,7 @@ func checkProofOfWork(pow proofOfWorkT, s proofOfWorkState) (proofOfWorkState, b
 		return s, false
 	}
 	hash := sha512.Sum512(append(pow.Server, pow.Client...))
-	if !firstXareOk(hash, s.difficulty) {
+	if !firstXareOk(hash[0:32]) {
 		return s, false
 	}
 	s.unused = removeItem(s.unused, serverCandidate)

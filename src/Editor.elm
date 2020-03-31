@@ -195,6 +195,8 @@ update msg model =
                                     combinePrograms
                                         model.programs
                                         programs
+                                , myName = Just raw.myName
+                                , myContacts = raw.myContacts
                                 , newContacts =
                                     model.newContacts ++ newContacts
                               }
