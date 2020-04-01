@@ -42,7 +42,8 @@ type Msg
 
 
 initCmd : Cmd Msg
-initCmd = Cmd.none
+initCmd =
+    Cmd.none
 
 
 initModel : Model

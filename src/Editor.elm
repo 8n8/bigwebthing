@@ -20,6 +20,7 @@ import Element.Input
 import Json.Decode as Jd
 import Json.Encode as Je
 import SHA256
+import Set
 import Truelang
 import Utils
 
@@ -147,9 +148,12 @@ port sendMessagePort : String -> Cmd msg
 
 whitelistSomeone : Int -> Cmd Msg
 whitelistSomeone username =
-    sendMessagePort <| Base64.Encode.encode <|
-        Base64.Encode.bytes <| E.encode <| encodeMessage <|
-        Utils.WhitelistSomeone username
+    sendMessagePort <|
+        Base64.Encode.encode <|
+            Base64.Encode.bytes <|
+                E.encode <|
+                    encodeMessage <|
+                        Utils.WhitelistSomeone username
 
 
 encodeMessage : Utils.MsgOut -> E.Encoder
@@ -169,6 +173,21 @@ encodeMessage message =
                 [ E.unsignedInt8 2
                 , Utils.encodeHumanMsg humanMsg
                 ]
+
+
+removeAdded : List Int -> List Int -> List Int -> List Int
+removeAdded oldNewContacts newNewContacts myContacts =
+    let
+        setOld =
+            Set.fromList oldNewContacts
+
+        setNew =
+            Set.fromList newNewContacts
+
+        setMy =
+            Set.fromList myContacts
+    in
+    List.sort <| Set.toList <| Set.diff (Set.union setOld setNew) setMy
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -205,7 +224,10 @@ update msg model =
                                 , myName = Just raw.myName
                                 , myContacts = raw.myContacts
                                 , newContacts =
-                                    model.newContacts ++ newContacts
+                                    removeAdded
+                                        model.newContacts
+                                        newContacts
+                                        raw.myContacts
                               }
                             , Cmd.none
                             )
@@ -347,11 +369,15 @@ update msg model =
                     ( model, Cmd.none )
 
                 Just newContact ->
-                    let
-                        newModel =
-                            { model | newContacts = newContact :: model.newContacts }
-                    in
-                    ( newModel, Cmd.batch [cacheModel newModel, whitelistSomeone newContact] )
+                    if List.member newContact model.myContacts then
+                        ( { model | addContactError = Just AlreadyAContact }, Cmd.none )
+
+                    else
+                        let
+                            newModel =
+                                { model | newContacts = newContact :: model.newContacts }
+                        in
+                        ( newModel, Cmd.batch [ cacheModel newModel, whitelistSomeone newContact ] )
 
         SendMessage ->
             case model.sendToBox of
@@ -714,6 +740,7 @@ programRadioView name description =
 
 type AddContactError
     = YouTriedToAddYourself
+    | AlreadyAContact
 
 
 addNewContact : Maybe Int -> Maybe AddContactError -> Element.Element Msg
@@ -746,6 +773,9 @@ addNewContact boxContents maybeError =
 
             Just YouTriedToAddYourself ->
                 Element.text "you can't add yourself to your contacts"
+
+            Just AlreadyAContact ->
+                Element.text "already in your contacts"
         ]
 
 
