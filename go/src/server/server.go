@@ -71,7 +71,7 @@ type proofOfWorkState struct {
 	unused     []int
 }
 
-const powDifficulty = 85
+const powDifficulty = 80
 
 func initState() stateT {
 	pow := proofOfWorkState{
@@ -386,7 +386,6 @@ func (e encryptionKeyRequest) updateOnRequest(state stateT, responseChan chan ht
 func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 
 	if u.Owner >= len(state.friendlyNames) {
-		fmt.Println("owner: ", u.Owner)
 		return state, []outputT{badResponse{"who are you?", 400, responseChan}}
 	}
 
@@ -448,9 +447,9 @@ func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan http
 	bad := func(message string, code int) []outputT {
 		return []outputT{badResponse{message, code, responseChan}}
 	}
-	newAuthCodes, ok := validToken(u.IdToken, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, bad("bad ID token", 400)
+	newAuthCodes, err := validToken(u.IdToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, bad("bad ID token: " + err.Error(), 400)
 	}
 	state.authCodes = newAuthCodes
 
@@ -497,16 +496,16 @@ func (d deleteWhitelistee) io(inputChannel chan inputT) {
 }
 
 func parseWhitelistSomeone(body []byte) parsedRequestT {
-	if len(body) != 161 {
-		return badRequest{"length of body is not 161", 400}
+	if len(body) != 137 {
+		return badRequest{"length of body is not 137", 400}
 	}
 	idToken := parseIdToken(body)
 
 	proofOfWork := proofOfWorkT{
-		Server: body[137:145],
-		Client: body[145:153],
+		Server: body[113:121],
+		Client: body[121:129],
 	}
-	name := decodeInt(body[153:])
+	name := decodeInt(body[129:])
 	return whitelistRequest{
 		ProofOfWork: proofOfWork,
 		Name:        name,
@@ -530,9 +529,9 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 	}
 	state.proofOfWork = newPow
 
-	newAuthCodes, ok := validToken(w.IdToken, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, bad("bad ID token", 400)
+	newAuthCodes, err := validToken(w.IdToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, bad("bad ID token: " + err.Error(), 400)
 	}
 	state.authCodes = newAuthCodes
 
@@ -597,9 +596,9 @@ type removeMemberRequest struct {
 }
 
 func (r removeMemberRequest) updateOnRequest(state stateT, httpResponseChan chan httpResponseT) (stateT, []outputT) {
-	newAuthCodes, ok := validToken(r.idToken, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, []outputT{badResponse{"bad ID token", 400, httpResponseChan}}
+	newAuthCodes, err := validToken(r.idToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, []outputT{badResponse{"bad ID token: " + err.Error(), 400, httpResponseChan}}
 	}
 	state.authCodes = newAuthCodes
 	if r.idToken.senderId != 0 {
@@ -649,9 +648,9 @@ type changeKeyRequest struct {
 }
 
 func (c changeKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
-	newAuthCodes, ok := validToken(c.idToken, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
+	newAuthCodes, err := validToken(c.idToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, []outputT{badResponse{"bad ID token: " + err.Error(), 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
 	state.friendlyNames[c.idToken.senderId] = c.newKey
@@ -745,9 +744,9 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	bad := func(message string, code int) []outputT {
 		return []outputT{badResponse{message, code, responseChan}}
 	}
-	newAuthCodes, ok := validToken(s.idToken, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, bad("bad ID token", 400)
+	newAuthCodes, err := validToken(s.idToken, state.authCodes, state.friendlyNames)
+	if err != nil  {
+		return state, bad("bad ID token: " + err.Error(), 400)
 	}
 	state.authCodes = newAuthCodes
 	_, senderIsMember := state.members[s.idToken.senderId]
@@ -811,9 +810,9 @@ type retrieveMessageRequest idTokenT
 
 func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	token := idTokenT(r)
-	newAuthCodes, ok := validToken(token, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
+	newAuthCodes, err := validToken(token, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, []outputT{badResponse{"bad ID token: " + err.Error(), 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
 	return state, []outputT{collectMessage{token.senderId, responseChan}}
@@ -875,31 +874,31 @@ func equalBytes(k1 []byte, k2 []byte) bool {
 	return true
 }
 
-func validToken(token idTokenT, unused []int, friendlyNames [][]byte) ([]int, bool) {
+func validToken(token idTokenT, unused []int, friendlyNames [][]byte) ([]int, error) {
 	if token.senderId >= len(friendlyNames) {
-		return unused, false
+		return unused, errors.New("unknown sender")
 	}
 	senderKey := friendlyNames[token.senderId]
 	var keyArr [32]byte
 	copy(keyArr[:], senderKey)
 	signed, ok := sign.Open([]byte{}, token.signature, &keyArr)
 	if !ok {
-		return unused, false
+		return unused, errors.New("bad signature")
 	}
 	if !equalBytes(signed, token.messageHash) {
-		return unused, false
+		return unused, errors.New("bad signature hash")
 	}
 	if !isAmember(token.authCode, unused) {
-		return unused, false
+		return unused, errors.New("bad auth code")
 	}
 	newUnused := removeItem(unused, token.authCode)
-	return newUnused, true
+	return newUnused, nil
 }
 
 func (a addAMemberRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
-	newAuthCodes, ok := validToken(a.idToken, state.authCodes, state.friendlyNames)
-	if !ok {
-		return state, []outputT{badResponse{"bad ID token", 400, responseChan}}
+	newAuthCodes, err := validToken(a.idToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, []outputT{badResponse{"bad ID token :" + err.Error(), 400, responseChan}}
 	}
 	state.authCodes = newAuthCodes
 	if len(state.friendlyNames) == 0 {
@@ -946,7 +945,7 @@ type idTokenT struct {
 	messageHash   []byte
 }
 
-func safeCombine(route byte, authBytes, message []byte) []byte {
+func safeCombine(route byte, message, authBytes []byte) []byte {
 	messageLength := len(message)
 	result := make([]byte, messageLength+9)
 	result[0] = route
@@ -961,8 +960,9 @@ func safeCombine(route byte, authBytes, message []byte) []byte {
 
 func parseIdToken(body []byte) idTokenT {
 	authBytes := body[9:17]
+	powAndWhitelistee := body[113:]
 	authCode := decodeInt(authBytes)
-	message := safeCombine(body[0], authBytes, body[113:])
+	message := safeCombine(body[0], powAndWhitelistee, authBytes)
 	hash := sha512.Sum512(message)
 	hashSlice := hash[:32]
 	senderId := decodeInt(body[1:9])

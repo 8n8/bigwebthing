@@ -145,6 +145,13 @@ sendMessage code version recipient =
 port sendMessagePort : String -> Cmd msg
 
 
+whitelistSomeone : Int -> Cmd Msg
+whitelistSomeone username =
+    sendMessagePort <| Base64.Encode.encode <|
+        Base64.Encode.bytes <| E.encode <| encodeMessage <|
+        Utils.WhitelistSomeone username
+
+
 encodeMessage : Utils.MsgOut -> E.Encoder
 encodeMessage message =
     case message of
@@ -154,7 +161,7 @@ encodeMessage message =
         Utils.WhitelistSomeone id ->
             E.sequence
                 [ E.unsignedInt8 1
-                , E.unsignedInt32 Bytes.BE id
+                , E.unsignedInt32 Bytes.LE id
                 ]
 
         Utils.SendThis humanMsg ->
@@ -344,7 +351,7 @@ update msg model =
                         newModel =
                             { model | newContacts = newContact :: model.newContacts }
                     in
-                    ( newModel, cacheModel newModel )
+                    ( newModel, Cmd.batch [cacheModel newModel, whitelistSomeone newContact] )
 
         SendMessage ->
             case model.sendToBox of

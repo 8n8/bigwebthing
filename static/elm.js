@@ -85,6 +85,14 @@
     return result;
   }
 
+  function decodeInt32(fourBytes) {
+    let result = 0
+    for (let i = 0; i < 4; i++) {
+      result += fourBytes[i] * Math.pow(256, i);
+    }
+    return result
+  }
+
   function parseMessage(raw) {
     let pos = 0;
     const messageType = raw[0];
@@ -93,7 +101,7 @@
 
     switch (messageType) {
       case whitelistSomeone:
-        const whitelistee = decodeInt(raw.slice(pos, pos + 4));
+        const whitelistee = decodeInt32(raw.slice(pos, pos + 4));
         pos += 4;
         message = { type: whitelistSomeone, msg: whitelistee };
         return [message, ""];
@@ -113,9 +121,10 @@
     let messages = [];
     const rawLength = raw.length;
     for (let i = 0; i < rawLength; i++) {
-      const rawMessage = (raw[i][(message, err)] = parseMessage(rawMessage));
-      if (err !== "") {
-        return [[], err];
+      const rawMessage = raw[i]
+      const [message, parseErr] = parseMessage(rawMessage);
+      if (parseErr !== "") {
+        return [[], parseErr];
       }
       messages.push(message);
     }
@@ -273,7 +282,7 @@
 
   async function sendMessage(message, keys, myName) {
     switch (message.type) {
-      case whiteListSomeone:
+      case whitelistSomeone:
         const err = await sendWhitelistRequest(message.msg, keys, myName);
         return [null, err];
       case sendThis:
@@ -412,7 +421,9 @@
 
   function makeIdToken(route, message, authCode, secretSign, myName) {
     const toSign = combine(oneByte(route), combine(message, authCode));
+    console.log("toSign: ", toSign)
     const hash = nacl.hash(toSign).slice(0, 32);
+    console.log("hash", hash)
     const signature = nacl.sign(hash, secretSign);
     return combine(encodeInt(myName), combine(authCode, signature));
   }
@@ -440,15 +451,16 @@
     [authCode, err] = await getAuthCode();
     const idToken = makeIdToken(
       10,
-      combine(pow, whitelistee),
+      combine(pow, encodeInt(whitelistee)),
       authCode,
       keys.signing.secret,
       myName
     );
     const request = combine(
       oneByte(10),
-      combine(idToken, combine(pow, whitelistee))
+      combine(idToken, combine(pow, encodeInt(whitelistee)))
     );
+    console.log(request)
     let response;
     [response, err] = await apiRequest(request);
     if (err !== "") {
@@ -786,7 +798,6 @@
   //    cache
   //
   async function communicateMain() {
-    debugger
     const [messages, readMsgErr] = await readMessagesFromCache();
     if (readMsgErr !== "") {
       return readMsgErr;
