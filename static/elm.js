@@ -21,7 +21,11 @@
     const signingKeys = await localforage.getItem("signingKeys");
     let myContacts = [];
     if (signingKeys !== null) {
-      myContacts = signingKeys.keys();
+      const myContactsStr = Object.keys(signingKeys);
+      const lenContacts = myContactsStr.length
+      for (let i = 0; i < lenContacts; i++) {
+        myContacts.push(parseInt(myContactsStr[i]))
+      }
     }
     const toSend = {
       myName: myName,
@@ -31,7 +35,7 @@
     return [toSend, ""];
   }
 
-  app.ports.getEditorInfo.subscribe(function () {
+  function sendEditorInfo() {
     getEditorInfo().then(function (infoOrErr) {
       const [info, err] = infoOrErr;
       if (err !== "") {
@@ -40,6 +44,10 @@
       }
       app.ports.retrievedEditorInfo.send(info);
     });
+  }
+
+  app.ports.getEditorInfo.subscribe(function () {
+    sendEditorInfo();
   });
 
   app.ports.cacheEditorInfo.subscribe(function (editorCache) {
@@ -421,23 +429,23 @@
 
   function makeIdToken(route, message, authCode, secretSign, myName) {
     const toSign = combine(oneByte(route), combine(message, authCode));
-    console.log("toSign: ", toSign)
     const hash = nacl.hash(toSign).slice(0, 32);
-    console.log("hash", hash)
     const signature = nacl.sign(hash, secretSign);
     return combine(encodeInt(myName), combine(authCode, signature));
   }
 
   async function updateContacts(whitelistee) {
-    const [response, err] = apiRequest(
-      combine(oneByte(2), encodeInt(whitelistee))
-    );
+    const [response, err] = await apiRequest(combine(oneByte(2), encodeInt(whitelistee)));
     if (err !== "") {
       return err;
     }
-    let signingKeys = localforage.getItem("signingKeys");
+    let signingKeys = await localforage.getItem("signingKeys");
+    if (signingKeys === null) {
+        signingKeys = {}
+    }
     signingKeys[whitelistee] = response;
     await localforage.setItem("signingKeys", signingKeys);
+    sendEditorInfo()
     return "";
   }
 
@@ -460,7 +468,6 @@
       oneByte(10),
       combine(idToken, combine(pow, encodeInt(whitelistee)))
     );
-    console.log(request)
     let response;
     [response, err] = await apiRequest(request);
     if (err !== "") {
@@ -819,6 +826,8 @@
     if (responseErr !== "") {
       return responseErr;
     }
+
+    await localforage.removeItem('outbox')
 
     const [rawDownloads, downloadErr] = await downloadNewMessages(keys, myName);
     if (downloadErr !== "") {
