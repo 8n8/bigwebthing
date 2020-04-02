@@ -131,6 +131,8 @@ sendMessage code version recipient =
         humanMsg =
             { to = recipient, code = code, version = version }
 
+        _ = Debug.log "humanMsg" humanMsg
+
         msgOut =
             Utils.SendThis humanMsg
 
@@ -163,6 +165,7 @@ encodeMessage message =
             E.unsignedInt8 0
 
         Utils.WhitelistSomeone id ->
+            let _ = Debug.log "id" id in
             E.sequence
                 [ E.unsignedInt8 1
                 , E.unsignedInt32 Bytes.LE id
@@ -372,34 +375,49 @@ update msg model =
                     if List.member newContact model.myContacts then
                         ( { model | addContactError = Just AlreadyAContact }, Cmd.none )
 
-                    else
-                        let
-                            newModel =
-                                { model | newContacts = newContact :: model.newContacts }
-                        in
-                        ( newModel, Cmd.batch [ cacheModel newModel, whitelistSomeone newContact ] )
+                    else case model.myName of
+                        Nothing -> ( { model | addContactError = Just NoUsername }, Cmd.none)
+
+                        Just myName ->
+                         if myName == newContact then
+                             ( { model | addContactError = Just YouTriedToAddYourself }, Cmd.none)
+                         else
+                         let
+                             newModel =
+                                 { model | newContacts = newContact :: model.newContacts, addContactBox = Nothing, addContactError = Nothing }
+                         in
+                         ( newModel, Cmd.batch [ cacheModel newModel, whitelistSomeone newContact ] )
 
         SendMessage ->
+            let _ = Debug.log "SendMessage" "" in
             case model.sendToBox of
                 Nothing ->
+                    let _ = Debug.log "model.sendToBox" "Nothing" in
                     ( model, Cmd.none )
 
                 Just recipient ->
+                    let _ = Debug.log "recipient" recipient in
                     case model.openProgram of
                         Nothing ->
+                            let _ = Debug.log "model.openProgram" "Nothing" in
                             ( model, Cmd.none )
 
                         Just programName ->
+                            let _ = Debug.log "model.openProgram: " programName in
                             case Dict.get programName model.programs of
                                 Nothing ->
+                                    let _ = Debug.log "Dict.get prog... Nothing ->" "" in
                                     ( { model | internalError = Just SendMessageButBadOpenProgram }, Cmd.none )
 
                                 Just program ->
+                                    let _ = Debug.log "Dict.get prog... Just program" "" in
                                     case program.versions of
                                         [] ->
+                                            let _ = Debug.log "[]" "" in
                                             ( { model | sendToError = Just NothingHereToSend }, Cmd.none )
 
                                         v :: _ ->
+                                            let _ = Debug.log "v :: _ ->" "" in
                                             ( model, sendMessage program.code v recipient )
 
         UpdatedRecipientBox candidate ->
@@ -461,7 +479,7 @@ view { internalError, newContacts, myName, myContacts, addContactBox, addContact
                 , myInput openProgram programs
                 , editDescription openProgram programs
                 , programCode openProgram programs
-                , sendItTo sendToBox sendToError
+                , sendItTo sendToBox sendToError openProgram
                 ]
 
 
@@ -470,8 +488,15 @@ type SendMessageError
     | NothingHereToSend
 
 
-sendItTo : Maybe Int -> Maybe SendMessageError -> Element.Element Msg
-sendItTo boxContents maybeError =
+sendItTo : Maybe Int -> Maybe SendMessageError -> Maybe String -> Element.Element Msg
+sendItTo boxContents maybeError openProgram =
+    case openProgram of
+        Nothing -> Element.none
+        Just _ -> sendItToHelp boxContents maybeError
+
+
+sendItToHelp : Maybe Int -> Maybe SendMessageError -> Element.Element Msg
+sendItToHelp boxContents maybeError =
     Element.column [] <|
         [ Element.Input.text []
             { onChange = UpdatedRecipientBox
@@ -741,6 +766,7 @@ programRadioView name description =
 type AddContactError
     = YouTriedToAddYourself
     | AlreadyAContact
+    | NoUsername
 
 
 addNewContact : Maybe Int -> Maybe AddContactError -> Element.Element Msg
@@ -776,6 +802,9 @@ addNewContact boxContents maybeError =
 
             Just AlreadyAContact ->
                 Element.text "already in your contacts"
+
+            Just NoUsername ->
+                Element.text "no username"
         ]
 
 

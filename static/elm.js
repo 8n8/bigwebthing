@@ -109,6 +109,7 @@
 
     switch (messageType) {
       case whitelistSomeone:
+        debugger
         const whitelistee = decodeInt32(raw.slice(pos, pos + 4));
         pos += 4;
         message = { type: whitelistSomeone, msg: whitelistee };
@@ -356,6 +357,7 @@
   }
 
   async function getEncryptionKey(username, signingKey) {
+    debugger
     const request = combine(oneByte(13), encodeInt(username));
     const [response, responseErr] = apiRequest(request);
     if (responseErr !== "") {
@@ -373,10 +375,25 @@
     return [encryptionKey, ""];
   }
 
+  async function getRecipientSigningKey(recipient) {
+    const signingKeys = await localforage.getItem("signingKeys")
+    if (signingKeys === null) {
+      return [null, "there are no signing keys"]
+    }
+    const key = signingKeys[recipient]
+    if (key === null) {
+      return [null, "no signing key for recipient " + recipient]
+    }
+    return [key, ""]
+  }
+
   async function sendClientToClient(message, keys, myName) {
     const chunks = chopMessageIntoChunks(message.document);
     const chunksLength = chunks.length;
     const signingKey = await getRecipientSigningKey(message.to);
+    if (signingKey === null) {
+      return [{}, "can't find signing key for recipient " + message.to]
+    }
     const encryptionKey = await getEncryptionKey(message.to, signingKey);
 
     for (let i = 0; i < chunksLength; i++) {
@@ -966,6 +983,7 @@
     //   + 4 bytes: length of message
     //   + 4 bytes: sender
     //   + message
+    console.log("top of communicate port")
     communicateMain().then(function (err) {
       if (err !== "") {
         app.ports.communicationError.send(err);
