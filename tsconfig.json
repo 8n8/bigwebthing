@@ -1,0 +1,13 @@
+{
+	"compilerOptions": {
+		"outDir": "./static",
+		"target": "es6",
+		"strict": true,
+		"noUnusedParameters": true,
+		"noUnusedLocals": true,
+		"noFallthroughCasesInSwitch": true,
+		"strictFunctionTypes": true
+	},
+	"include": [ "./tsSrc/**/*" ],
+	"moduleResolution": "node"
+}
