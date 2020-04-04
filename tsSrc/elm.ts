@@ -274,8 +274,8 @@
   }
 
   async function getCryptoKeys(): Promise<Keys> {
-    const keysKey = "cryptokeys";
-    let keys = await localGet(keysKey);
+    const keysKey: string = "cryptokeys";
+    let keys: Keys = await localGet(keysKey);
     if (keys === null) {
       keys = createCryptoKeys();
       localSet(keysKey, keys);
@@ -287,13 +287,13 @@
   function combine(a: Uint8Array, b: Uint8Array): Uint8Array {
     const lena: number = a.length;
     const lenb: number = b.length;
-    let buf = new ArrayBuffer(lena + lenb);
+    let buf: ArrayBuffer = new ArrayBuffer(lena + lenb);
     let combined: Uint8Array = new Uint8Array(buf);
     for (let i = 0; i < lena; i++) {
       combined[i] = a[i];
     }
     for (let i = lena; i < lena + lenb; i++) {
-      const bval = b[i - lena];
+      const bval: number = b[i - lena];
       combined[i] = bval;
     }
     return combined;
@@ -314,13 +314,13 @@
   }
 
   function proofOfWork(powInfo: PowInfo): Uint8Array {
-    const unique = powInfo.unique;
-    let buffer = new ArrayBuffer(8);
-    let bufferView = new Uint8Array(buffer);
-    let counter = new Int32Array(buffer);
+    const unique: Uint8Array = powInfo.unique;
+    let buffer: ArrayBuffer = new ArrayBuffer(8);
+    let bufferView: Uint8Array = new Uint8Array(buffer);
+    let counter: Int32Array = new Int32Array(buffer);
     while (true) {
-      const combined = combine(unique, bufferView);
-      const hash = sha512(combined).slice(0, 32);
+      const combined: Uint8Array = combine(unique, bufferView);
+      const hash: Uint8Array = sha512(combined).slice(0, 32);
       if (isDifficult(hash, powInfo.difficulty)) {
         return combined;
       }
@@ -333,8 +333,8 @@
     pow: Uint8Array,
     publicSigningKey: Uint8Array
   ): Uint8Array {
-    let buffer = new ArrayBuffer(49);
-    let bufferView = new Uint8Array(buffer);
+    let buffer: ArrayBuffer = new ArrayBuffer(49);
+    let bufferView: Uint8Array = new Uint8Array(buffer);
     bufferView[0] = 1;
     for (let i = 0; i < 16; i++) {
       bufferView[i + 1] = pow[i];
@@ -348,14 +348,14 @@
   async function apiRequest(
     requestBody: Uint8Array
   ): Promise<[Uint8Array, string]> {
-    const response = await fetch("/api", {
+    const response: Response = await fetch("/api", {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: requestBody,
     });
 
-    const body = await response.arrayBuffer();
-    const bodyArray = new Uint8Array(body);
+    const body: ArrayBuffer = await response.arrayBuffer();
+    const bodyArray: Uint8Array = new Uint8Array(body);
 
     if (!response.ok) {
       return [
@@ -372,7 +372,7 @@
 
   function arrToNums(arr: Uint8Array): number[] {
     let numbers: number[] = [];
-    const lenArr = arr.length;
+    const lenArr: number = arr.length;
     for (let i = 0; i < lenArr; i++) {
       numbers.push(arr[i]);
     }
@@ -382,9 +382,11 @@
   const nullPowInfo: PowInfo = { difficulty: 0, unique: nullUint8Array() };
 
   async function getPowInfo(): Promise<[PowInfo, string]> {
-    const [response, err] = await apiRequest(oneByte(3));
-    if (err !== "") {
-      return [nullPowInfo, err];
+    const [response, responseErr]: [Uint8Array, string] = await apiRequest(
+      oneByte(3)
+    );
+    if (responseErr !== "") {
+      return [nullPowInfo, responseErr];
     }
 
     if (response.length !== 9) {
@@ -394,7 +396,7 @@
       ];
     }
 
-    const powInfo = {
+    const powInfo: PowInfo = {
       difficulty: response[0],
       unique: response.slice(1),
     };
@@ -407,13 +409,14 @@
       return [0, err];
     }
     const pow: Uint8Array = proofOfWork(powInfo);
-    let request: Uint8Array = makeMakeMyNameRequest(
+    const request: Uint8Array = makeMakeMyNameRequest(
       pow,
       keys.signing.publicKey
     );
-    let response: Uint8Array;
-    [response, err] = await apiRequest(request);
-    if (err !== "") {
+    const [response, responseErr]: [Uint8Array, string] = await apiRequest(
+      request
+    );
+    if (responseErr !== "") {
       return [0, err];
     }
     if (response.length !== 8) {
@@ -448,14 +451,14 @@
     authCode: Uint8Array,
     myName: number
   ): Uint8Array {
-    const idToken = makeIdToken(
+    const idToken: Uint8Array = makeIdToken(
       8,
       combine(recipient, chunk),
       authCode,
       keys.signing.secretKey,
       myName
     );
-    const request = combine(
+    const request: Uint8Array = combine(
       oneByte(8),
       combine(idToken, combine(recipient, chunk))
     );
@@ -475,17 +478,17 @@
   // + 32 bytes: hash of complete message
   // + <= 15kB: chunk
   function chopMessageIntoChunks(message: Uint8Array): Uint8Array[] {
-    const chunkLength = 15000;
-    const hash = sha512(message);
-    const numChunks = Math.floor(message.length / chunkLength) + 1;
-    const numChunksBytes = encodeInt(numChunks);
-    let chunks = [];
+    const chunkLength: number = 15000;
+    const hash: Uint8Array = sha512(message);
+    const numChunks: number = Math.floor(message.length / chunkLength) + 1;
+    const numChunksBytes: Uint8Array = encodeInt(numChunks);
+    let chunks: Uint8Array[] = [];
     for (let i = 0; i < numChunks; i++) {
-      const chunkNum = encodeInt(i);
-      const chunkStart = i * chunkLength;
-      const chunkEnd = (i + 1) * chunkLength;
-      const chunkBase = message.slice(chunkStart, chunkEnd);
-      const combined = combine(
+      const chunkNum: Uint8Array = encodeInt(i);
+      const chunkStart: number = i * chunkLength;
+      const chunkEnd: number = (i + 1) * chunkLength;
+      const chunkBase: Uint8Array = message.slice(chunkStart, chunkEnd);
+      const combined: Uint8Array = combine(
         oneByte(1),
         combine(chunkNum, combine(numChunksBytes, combine(hash, chunkBase)))
       );
@@ -495,10 +498,10 @@
   }
 
   async function makeNonce(): Promise<Uint8Array> {
-    const counter = await localGet("noncecounter");
-    let buffer = new ArrayBuffer(24);
-    let uintArr = new Uint8Array(buffer);
-    let bufferView = new Int32Array(buffer);
+    const counter: number = await localGet("noncecounter");
+    let buffer: ArrayBuffer = new ArrayBuffer(24);
+    let uintArr: Uint8Array = new Uint8Array(buffer);
+    let bufferView: Int32Array = new Int32Array(buffer);
     bufferView[0] = counter;
     await localSet("noncecounter", counter + 1);
     return uintArr;
@@ -508,8 +511,10 @@
     username: number,
     signingKey: Uint8Array
   ): Promise<[Uint8Array, string]> {
-    const request = combine(oneByte(13), encodeInt(username));
-    const [response, responseErr] = await apiRequest(request);
+    const request: Uint8Array = combine(oneByte(13), encodeInt(username));
+    const [response, responseErr]: [Uint8Array, string] = await apiRequest(
+      request
+    );
     if (responseErr !== "") {
       return [nullUint8Array(), responseErr];
     }
@@ -517,7 +522,7 @@
     if (response.length !== 96) {
       return [nullUint8Array(), "signed encryption key is not 96 bytes long"];
     }
-    const encryptionKey = signOpen(response, signingKey);
+    const encryptionKey: Uint8Array | null = signOpen(response, signingKey);
     if (encryptionKey === null) {
       return [nullUint8Array(), "could not verify encryption key signature"];
     }
@@ -525,14 +530,18 @@
     return [encryptionKey, ""];
   }
 
+  interface SigningKeys {
+    [key: number]: Uint8Array;
+  }
+
   async function getRecipientSigningKey(
     recipient: number
   ): Promise<[Uint8Array, string]> {
-    const signingKeys = await localGet("signingKeys");
+    const signingKeys: SigningKeys = await localGet("signingKeys");
     if (signingKeys === null) {
       return [nullUint8Array(), "there are no signing keys"];
     }
-    const key = signingKeys[recipient];
+    const key: Uint8Array = signingKeys[recipient];
     if (key === null) {
       return [nullUint8Array(), "no signing key for recipient " + recipient];
     }
@@ -544,28 +553,31 @@
     keys: Keys,
     myName: number
   ): Promise<string> {
-    const chunks = chopMessageIntoChunks(message.document);
-    const chunksLength = chunks.length;
-    const [signingKey, signKeyErr] = await getRecipientSigningKey(message.to);
+    const chunks: Uint8Array[] = chopMessageIntoChunks(message.document);
+    const chunksLength: number = chunks.length;
+    const [signingKey, signKeyErr]: [
+      Uint8Array,
+      string
+    ] = await getRecipientSigningKey(message.to);
     if (signKeyErr !== "") {
       return signKeyErr;
     }
-    const [encryptionKey, encKeyErr] = await getEncryptionKey(
-      message.to,
-      signingKey
-    );
+    const [encryptionKey, encKeyErr]: [
+      Uint8Array,
+      string
+    ] = await getEncryptionKey(message.to, signingKey);
 
     if (encKeyErr !== "") {
       return encKeyErr;
     }
     for (let i = 0; i < chunksLength; i++) {
-      const [authCode, authErr] = await getAuthCode();
+      const [authCode, authErr]: [Uint8Array, string] = await getAuthCode();
       if (authErr !== "") {
         return authErr;
       }
 
-      const chunk = chunks[i];
-      const nonce = await makeNonce();
+      const chunk: Uint8Array = chunks[i];
+      const nonce: Uint8Array = await makeNonce();
       const encryptedChunk = box(
         chunk,
         nonce,
@@ -573,9 +585,9 @@
         keys.encryption.secretKey
       );
 
-      const withNonce = combine(nonce, encryptedChunk);
+      const withNonce: Uint8Array = combine(nonce, encryptedChunk);
 
-      const subMsg = constructCtoCMessage(
+      const subMsg: Uint8Array = constructCtoCMessage(
         withNonce,
         signingKey,
         keys,
@@ -583,8 +595,8 @@
         myName
       );
 
-      const response = await apiRequest(subMsg);
-      const err = response[1];
+      const response: [Uint8Array, string] = await apiRequest(subMsg);
+      const err: string = response[1];
       if (err !== "") {
         return err;
       }
@@ -593,16 +605,16 @@
   }
 
   async function getAuthCode(): Promise<[Uint8Array, string]> {
-    let buffer = new ArrayBuffer(1);
-    let request = new Uint8Array(buffer);
+    let buffer: ArrayBuffer = new ArrayBuffer(1);
+    let request: Uint8Array = new Uint8Array(buffer);
     request[0] = 7;
-    const [authCode, err] = await apiRequest(request);
+    const [authCode, err]: [Uint8Array, string] = await apiRequest(request);
     return [authCode, err];
   }
 
   function oneByte(route: number): Uint8Array {
-    let buffer = new ArrayBuffer(1);
-    let view = new Uint8Array(buffer);
+    let buffer: ArrayBuffer = new ArrayBuffer(1);
+    let view: Uint8Array = new Uint8Array(buffer);
     view[0] = route;
     return view;
   }
@@ -614,20 +626,23 @@
     secretSign: Uint8Array,
     myName: number
   ): Uint8Array {
-    const toSign = combine(oneByte(route), combine(message, authCode));
-    const hash = sha512(toSign).slice(0, 32);
-    const signature = sign(hash, secretSign);
+    const toSign: Uint8Array = combine(
+      oneByte(route),
+      combine(message, authCode)
+    );
+    const hash: Uint8Array = sha512(toSign).slice(0, 32);
+    const signature: Uint8Array = sign(hash, secretSign);
     return combine(encodeInt(myName), combine(authCode, signature));
   }
 
   async function updateContacts(whitelistee: number): Promise<string> {
-    const [response, err] = await apiRequest(
+    const [response, err]: [Uint8Array, string] = await apiRequest(
       combine(oneByte(2), encodeInt(whitelistee))
     );
     if (err !== "") {
       return err;
     }
-    let signingKeys = await localGet("signingKeys");
+    let signingKeys: SigningKeys = await localGet("signingKeys");
     if (signingKeys === null) {
       signingKeys = {};
     }
@@ -646,28 +661,28 @@
     if (powErr !== "") {
       return powErr;
     }
-    const pow = proofOfWork(powInfo);
-    const [authCode, authErr] = await getAuthCode();
+    const pow: Uint8Array = proofOfWork(powInfo);
+    const [authCode, authErr]: [Uint8Array, string] = await getAuthCode();
     if (authErr !== "") {
       return authErr;
     }
-    const idToken = makeIdToken(
+    const idToken: Uint8Array = makeIdToken(
       10,
       combine(pow, encodeInt(whitelistee)),
       authCode,
       keys.signing.secretKey,
       myName
     );
-    const request = combine(
+    const request: Uint8Array = combine(
       oneByte(10),
       combine(idToken, combine(pow, encodeInt(whitelistee)))
     );
-    const response = await apiRequest(request);
-    const apiErr = response[1];
+    const response: [Uint8Array, string] = await apiRequest(request);
+    const apiErr: string = response[1];
     if (apiErr !== "") {
       return apiErr;
     }
-    const updateContactsErr = await updateContacts(whitelistee);
+    const updateContactsErr: string = await updateContacts(whitelistee);
     return updateContactsErr;
   }
 
@@ -676,15 +691,11 @@
     keys: Keys,
     myName: number
   ): Promise<string> {
-    let responses = [];
-    const messagesLength = messages.length;
+    const messagesLength: number = messages.length;
     for (let i = 0; i < messagesLength; i++) {
-      const [response, err] = await sendMessage(messages[i], keys, myName);
-      if (err !== "") {
-        return err;
-      }
-      if (response !== null) {
-        responses.push(response);
+      const responseErr: string = await sendMessage(messages[i], keys, myName);
+      if (responseErr !== "") {
+        return responseErr;
       }
     }
     return "";
@@ -694,8 +705,8 @@
     used: Set<number>,
     rawDownloads: Decrypted[]
   ): Decrypted[] {
-    const numDownloads = rawDownloads.length;
-    let leftOvers = [];
+    const numDownloads: number = rawDownloads.length;
+    let leftOvers: Decrypted[] = [];
     for (let i = 0; i < numDownloads; i++) {
       if (used.has(i)) {
         continue;
@@ -706,8 +717,8 @@
   }
 
   function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-    const alength = a.length;
-    const blength = b.length;
+    const alength: number = a.length;
+    const blength: number = b.length;
     if (alength !== blength) {
       return false;
     }
@@ -721,7 +732,7 @@
   }
 
   async function cacheReceipt(validReceipt: Uint8Array): Promise<void> {
-    let receipts = await localGet("receipts");
+    let receipts: Uint8Array[] | null = await localGet("receipts");
     if (receipts === null) {
       receipts = [];
     }
@@ -729,24 +740,24 @@
     await localSet("receipts", receipts);
   }
 
-  async function lookupSigningKey(author: number): Promise<Uint8Array> {
-    const keys = await localGet("signingKeys");
+  async function lookupSigningKey(author: number): Promise<Uint8Array | null> {
+    const keys: SigningKeys = await localGet("signingKeys");
     return keys[author];
   }
 
   async function validateReceipt(
     rawChunk: Decrypted
   ): Promise<[Uint8Array, string]> {
-    const author = decodeInt(rawChunk.chunk.slice(1, 5));
-    const key = await lookupSigningKey(author);
+    const author: number = decodeInt(rawChunk.chunk.slice(1, 5));
+    const key: Uint8Array | null = await lookupSigningKey(author);
     if (key === null) {
       return [nullUint8Array(), "no key for author"];
     }
-    const signed = signOpen(rawChunk.chunk.slice(5), key);
+    const signed: Uint8Array | null = signOpen(rawChunk.chunk.slice(5), key);
     if (signed === null) {
       return [nullUint8Array(), "bad signature"];
     }
-    const combined = combine(
+    const combined: Uint8Array = combine(
       rawChunk.chunk.slice(1, 5),
       combine(rawChunk.chunk.slice(5), signed)
     );
@@ -792,7 +803,7 @@
       return [nullChunk, true, ""];
     }
 
-    const chunkNot0 = rawChunk.chunk.slice(1);
+    const chunkNot0: Uint8Array = rawChunk.chunk.slice(1);
 
     return [
       {
@@ -833,8 +844,8 @@
     decodedDownloads: Chunk[],
     totalHash: Uint8Array
   ): [Chunk[], Set<number>] {
-    const decodedLength = decodedDownloads.length;
-    let relevant = [];
+    const decodedLength: number = decodedDownloads.length;
+    let relevant: Chunk[] = [];
     let newUsed: Set<number> = new Set();
     for (let i = 0; i < decodedLength; i++) {
       const decoded: Chunk = decodedDownloads[i];
@@ -854,14 +865,14 @@
   }
 
   function encodeInt(theInt: number): Uint8Array {
-    let buffer = new ArrayBuffer(8);
-    let result = new Uint8Array(buffer);
+    let buffer: ArrayBuffer = new ArrayBuffer(8);
+    let result: Uint8Array = new Uint8Array(buffer);
 
     // The reason for only going up to 4, and not to 8 is that apparently when
     // you do bit shifts on numbers in JS, it uses 32-bit ints.  This'll do me
     // till I have 10^9 users!
     for (let i = 0; i < 4; i++) {
-      const r = (theInt >> (i * 8)) & 0xff;
+      const r: number = (theInt >> (i * 8)) & 0xff;
       result[i] = r;
     }
     return result;
@@ -873,39 +884,45 @@
     keys: Keys,
     myName: number
   ): Promise<string> {
-    const signature = sign(hash, keys.signing.secretKey);
-    const combined = combine(oneByte(0), combine(encodeInt(author), signature));
-    const [theirEncryptionKey, getEncKeyErr] = await getEncryptionKey(
-      author,
-      keys.signing.secretKey
+    const signature: Uint8Array = sign(hash, keys.signing.secretKey);
+    const combined: Uint8Array = combine(
+      oneByte(0),
+      combine(encodeInt(author), signature)
     );
+    const [theirEncryptionKey, getEncKeyErr]: [
+      Uint8Array,
+      string
+    ] = await getEncryptionKey(author, keys.signing.secretKey);
     if (getEncKeyErr !== "") {
       return getEncKeyErr;
     }
-    const nonce = await makeNonce();
+    const nonce: Uint8Array = await makeNonce();
     const encryptedChunk = box(
       combined,
       nonce,
       theirEncryptionKey,
       keys.encryption.secretKey
     );
-    const withNonce = combine(nonce, encryptedChunk);
-    const [authCode, authErr] = await getAuthCode();
+    const withNonce: Uint8Array = combine(nonce, encryptedChunk);
+    const [authCode, authErr]: [Uint8Array, string] = await getAuthCode();
     if (authErr !== "") {
       return authErr;
     }
-    const [signingKey, signKeyErr] = await getRecipientSigningKey(author);
+    const [signingKey, signKeyErr]: [
+      Uint8Array,
+      string
+    ] = await getRecipientSigningKey(author);
     if (signKeyErr !== "") {
       return signKeyErr;
     }
-    const msg = constructCtoCMessage(
+    const msg: Uint8Array = constructCtoCMessage(
       withNonce,
       signingKey,
       keys,
       authCode,
       myName
     );
-    const response = await apiRequest(msg);
+    const response: [Uint8Array, string] = await apiRequest(msg);
     return response[1];
   }
 
@@ -914,34 +931,34 @@
     keys: Keys,
     myName: number
   ): Promise<[Uint8Array, string]> {
-    const chunksLength = chunks.length;
-    let assembled = chunks[0].chunk;
+    const chunksLength: number = chunks.length;
+    let assembled: Uint8Array = chunks[0].chunk;
     for (let i = 1; i < chunksLength; i++) {
       assembled = combine(assembled, chunks[i].chunk);
     }
-    const hash = sha512(assembled).slice(0, 32);
+    const hash: Uint8Array = sha512(assembled).slice(0, 32);
     if (!equalBytes(hash, chunks[0].totalHash)) {
       return [nullUint8Array(), "assembled chunk did not match expected hash"];
     }
 
-    const author = chunks[0].author;
-    const receiptErr = await sendReceipt(hash, author, keys, myName);
+    const author: number = chunks[0].author;
+    const receiptErr: string = await sendReceipt(hash, author, keys, myName);
     if (receiptErr !== "") {
       return [nullUint8Array(), receiptErr];
     }
 
-    const encodedAuthor = encodeInt(author);
+    const encodedAuthor: Uint8Array = encodeInt(author);
     return [combine(encodedAuthor, assembled), ""];
   }
 
   function nullUint8Array(): Uint8Array {
-    let buf = new ArrayBuffer(0);
-    const view = new Uint8Array(buf);
+    let buf: ArrayBuffer = new ArrayBuffer(0);
+    const view: Uint8Array = new Uint8Array(buf);
     return view;
   }
 
   function chunksAllThere(sortedChunks: Chunk[]): boolean {
-    const chunksLength = sortedChunks.length;
+    const chunksLength: number = sortedChunks.length;
     if (chunksLength === 0) {
       return false;
     }
@@ -969,7 +986,7 @@
     }
 
     if (start.totalChunks === 1) {
-      const chunkHash = sha512(start.chunk);
+      const chunkHash: Uint8Array = sha512(start.chunk);
       if (!equalBytes(chunkHash, start.totalHash)) {
         return [
           nullUint8Array(),
@@ -980,12 +997,12 @@
       }
     }
 
-    const [relevantChunks, newUsed] = getRelevantChunks(
+    const [relevantChunks, newUsed]: [Chunk[], Set<number>] = getRelevantChunks(
       decodedDownloads,
       start.totalHash
     );
 
-    const relevantChunksLength = relevantChunks.length;
+    const relevantChunksLength: number = relevantChunks.length;
     if (relevantChunksLength === 0) {
       return [
         nullUint8Array(),
@@ -995,7 +1012,7 @@
       ];
     }
 
-    const sortedChunks = sortChunks(relevantChunks);
+    const sortedChunks: Chunk[] = sortChunks(relevantChunks);
     if (!chunksAllThere(sortedChunks)) {
       return [nullUint8Array(), new Set(), false, ""];
     }
@@ -1012,15 +1029,17 @@
     keys: Keys,
     myName: number
   ): Promise<[Uint8Array[], Decrypted[], string]> {
-    const numDownloads = rawDownloads.length;
-    const [decodedDownloads, decodeErr] = await decodeChunks(rawDownloads);
+    const numDownloads: number = rawDownloads.length;
+    const [decodedDownloads, decodeErr]: [Chunk[], string] = await decodeChunks(
+      rawDownloads
+    );
     if (decodeErr !== "") {
       return [[], [], decodeErr];
     }
     let allUnpacked: Uint8Array[] = [];
     let used: Set<number> = new Set();
     for (let i = 0; i < numDownloads; i++) {
-      let unpacked, unpackErr, done;
+      let unpacked: Uint8Array, unpackErr: string, done: boolean;
       [unpacked, used, done, unpackErr] = await unpackOneDownload(
         i,
         decodedDownloads,
@@ -1044,20 +1063,22 @@
   ): Promise<[Uint8Array[], string]> {
     const messages = [];
     while (true) {
-      const [authCode, authErr] = await getAuthCode();
+      const [authCode, authErr]: [Uint8Array, string] = await getAuthCode();
       if (authErr !== "") {
         return [[], authErr];
       }
 
-      const idToken = makeIdToken(
+      const idToken: Uint8Array = makeIdToken(
         9,
         nullUint8Array(),
         authCode,
         keys.signing.secretKey,
         myName
       );
-      const request = combine(oneByte(9), idToken);
-      const [response, apiErr] = await apiRequest(request);
+      const request: Uint8Array = combine(oneByte(9), idToken);
+      const [response, apiErr]: [Uint8Array, string] = await apiRequest(
+        request
+      );
       if (apiErr !== "") {
         return [[], apiErr];
       }
@@ -1075,14 +1096,20 @@
     keys: Keys,
     myName: number
   ): Promise<string> {
-    const signedKey = sign(keys.encryption.publicKey, keys.signing.secretKey);
-    const request = combine(oneByte(12), combine(encodeInt(myName), signedKey));
-    const response = await apiRequest(request);
+    const signedKey: Uint8Array = sign(
+      keys.encryption.publicKey,
+      keys.signing.secretKey
+    );
+    const request: Uint8Array = combine(
+      oneByte(12),
+      combine(encodeInt(myName), signedKey)
+    );
+    const response: [Uint8Array, string] = await apiRequest(request);
     return response[1];
   }
 
   async function getMyName(keys: Keys): Promise<[number, string]> {
-    let myName = await localGet("myName");
+    let myName: number | null = await localGet("myName");
     if (myName === null) {
       let myNameErr;
       [myName, myNameErr] = await sendMakeMyName(keys);
@@ -1106,31 +1133,37 @@
   //    cache
   //
   async function communicateMain() {
-    const [messages, readMsgErr] = await readMessagesFromCache();
+    const [messages, readMsgErr]: [
+      MsgOut[],
+      string
+    ] = await readMessagesFromCache();
     if (readMsgErr !== "") {
       return readMsgErr;
     }
 
-    const keys = await getCryptoKeys();
+    const keys: Keys = await getCryptoKeys();
 
-    const [myName, myNameErr] = await getMyName(keys);
+    const [myName, myNameErr]: [number, string] = await getMyName(keys);
     if (myNameErr !== "") {
       return myNameErr;
     }
 
-    const errUpCrypt = await uploadEncryptionKey(keys, myName);
+    const errUpCrypt: string = await uploadEncryptionKey(keys, myName);
     if (errUpCrypt !== "") {
       return errUpCrypt;
     }
 
-    const responseErr = await sendMessages(messages, keys, myName);
+    const responseErr: string = await sendMessages(messages, keys, myName);
     if (responseErr !== "") {
       return responseErr;
     }
 
     await localRemove("outbox");
 
-    const [rawDownloads, downloadErr] = await downloadNewMessages(keys, myName);
+    const [rawDownloads, downloadErr]: [
+      Uint8Array[],
+      string
+    ] = await downloadNewMessages(keys, myName);
     if (downloadErr !== "") {
       return downloadErr;
     }
@@ -1143,9 +1176,13 @@
       return decryptErr;
     }
 
-    const oldLeftovers = await readOldLeftovers();
+    const oldLeftovers: Decrypted[] = await readOldLeftovers();
 
-    const [unpacked, leftOvers, unpackErr] = await unpackDownloads(
+    const [unpacked, leftOvers, unpackErr]: [
+      Uint8Array[],
+      Decrypted[],
+      string
+    ] = await unpackDownloads(
       decryptedDownloads.concat(oldLeftovers),
       keys,
       myName
@@ -1156,7 +1193,7 @@
 
     cacheLeftovers(leftOvers);
 
-    const cacheErr = await cacheMessages(unpacked);
+    const cacheErr: string = await cacheMessages(unpacked);
     if (cacheErr !== "") {
       return cacheErr;
     }
@@ -1167,10 +1204,10 @@
     let rawOldMessages: Uint8Array = await localGet("inbox");
     let decodedMessages: Uint8Array[];
     if (rawOldMessages !== null) {
-      let err1: string;
-      [decodedMessages, err1] = decodeInbox(rawOldMessages);
-      if (err1 !== "") {
-        return err1;
+      let decodeErr: string;
+      [decodedMessages, decodeErr] = decodeInbox(rawOldMessages);
+      if (decodeErr !== "") {
+        return decodeErr;
       }
     } else {
       decodedMessages = [];
@@ -1179,27 +1216,27 @@
     if (newMessages.length === 0) {
       return "";
     }
-    const encoded = encodeMessages(combined);
+    const encoded: Uint8Array[] = encodeMessages(combined);
     await localSet("inbox", encoded);
     return "";
   }
 
   function decodeInbox(rawMessages: Uint8Array): [Uint8Array[], string] {
     let i = 0;
-    let messages = [];
-    const rawMessagesLength = rawMessages.length;
+    let messages: Uint8Array[] = [];
+    const rawMessagesLength: number = rawMessages.length;
     while (i < rawMessagesLength) {
       if (i + 4 >= rawMessagesLength) {
         return [[], "not enough bytes for message length"];
       }
 
-      const messageLength = decodeInt(rawMessages.slice(i, i + 4));
+      const messageLength: number = decodeInt(rawMessages.slice(i, i + 4));
       i += 4;
 
       if (i + messageLength >= rawMessagesLength) {
         return [[], "not enough bytes for message"];
       }
-      const message = rawMessages.slice(i, i + messageLength);
+      const message: Uint8Array = rawMessages.slice(i, i + messageLength);
       i += messageLength;
       messages.push(message);
     }
@@ -1207,13 +1244,13 @@
   }
 
   function encodeMessage(message: Uint8Array): Uint8Array {
-    const length = encodeInt(message.length);
+    const length: Uint8Array = encodeInt(message.length);
     return combine(length, message);
   }
 
   function encodeMessages(messages: Uint8Array[]): Uint8Array[] {
     const messagesLength: number = messages.length;
-    let encoded = [encodeMessage(messages[0])];
+    let encoded: Uint8Array[] = [encodeMessage(messages[0])];
     for (let i = 1; i < messagesLength; i++) {
       encoded.push(encodeMessage(messages[1]));
     }
@@ -1225,7 +1262,7 @@
   }
 
   async function readOldLeftovers(): Promise<Decrypted[]> {
-    let leftovers = await localGet("leftovers");
+    let leftovers: Decrypted[] | null = await localGet("leftovers");
     if (leftovers === null) {
       return [];
     }
@@ -1241,24 +1278,24 @@
     rawDownloads: Uint8Array[],
     keys: Keys
   ): Promise<[Decrypted[], string]> {
-    const lengthDownloads = rawDownloads.length;
-    const messages = [];
+    const lengthDownloads: number = rawDownloads.length;
+    const messages: Decrypted[] = [];
     for (let i = 0; i < lengthDownloads; i++) {
-      const download = rawDownloads[i];
+      const download: Uint8Array = rawDownloads[i];
       if (download.length < 122) {
         return [[], "raw message less than 122 bytes long"];
       }
-      const nonce = download.slice(121, 145);
-      const encryptedBlob = download.slice(145);
-      const author = decodeInt(download.slice(1, 9));
-      const [theirEncryptionKey, encKeyErr] = await getEncryptionKey(
-        author,
-        keys.signing.secretKey
-      );
+      const nonce: Uint8Array = download.slice(121, 145);
+      const encryptedBlob: Uint8Array = download.slice(145);
+      const author: number = decodeInt(download.slice(1, 9));
+      const [theirEncryptionKey, encKeyErr]: [
+        Uint8Array,
+        string
+      ] = await getEncryptionKey(author, keys.signing.secretKey);
       if (encKeyErr !== "") {
         return [[], encKeyErr];
       }
-      const chunk = boxOpen(
+      const chunk: Uint8Array | null = boxOpen(
         encryptedBlob,
         nonce,
         theirEncryptionKey,
@@ -1267,7 +1304,7 @@
       if (chunk === null) {
         return [[], "could not authenticate chunk"];
       }
-      const decrypted = {
+      const decrypted: Decrypted = {
         author: author,
         chunk: chunk,
       };
@@ -1282,7 +1319,6 @@
     //   + 4 bytes: length of message
     //   + 4 bytes: sender
     //   + message
-    console.log("top of communicate port");
     communicateMain().then(function (err) {
       if (err !== "") {
         app.ports.communicationError.send(err);
@@ -1290,16 +1326,16 @@
     });
   });
 
-  const nullInbox = "There is no inbox!";
+  const nullInbox: string = "There is no inbox!";
 
   app.ports.getImporterInfo.subscribe(function () {
     localGet("editorCache").then(function (rawEditorCache) {
-      let editorCache = nullCache;
+      let editorCache: string = nullCache;
       if (rawEditorCache !== null) {
         editorCache = fromBytes(rawEditorCache);
       }
       localGet("inbox").then(function (rawInbox) {
-        let inbox = nullInbox;
+        let inbox: string = nullInbox;
         if (rawInbox !== null) {
           inbox = fromBytes(rawInbox);
         }
@@ -1312,7 +1348,7 @@
   });
 
   app.ports.sendMessagePort.subscribe(function (rawB64: string): void {
-    localGet("outbox").then(function (outbox) {
+    localGet("outbox").then(function (outbox: Uint8Array[]) {
       if (outbox === null) {
         outbox = [];
       }

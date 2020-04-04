@@ -1,7 +1,7 @@
 {
 	"compilerOptions": {
 		"outDir": "./static",
-		"target": "es6",
+		"target": "es2017",
 		"strict": true,
 		"noUnusedParameters": true,
 		"noUnusedLocals": true,
