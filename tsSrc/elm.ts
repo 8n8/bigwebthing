@@ -117,7 +117,7 @@
     const keys: Keys = await getCryptoKeys();
 
     const [myName, myNameErr]: [number, string] = await getMyName(keys);
-    if (myNameErr !== null) {
+    if (myNameErr !== "") {
       return [nullEditorInfo, myNameErr];
     }
     const signingKeys: SignKeyPair = await localGet("signingKeys");
@@ -140,7 +140,7 @@
   function sendEditorInfo(): void {
     getEditorInfo().then(function (infoOrErr: [EditorInfo, string]) {
       const [info, err]: [EditorInfo, string] = infoOrErr;
-      if (err !== null) {
+      if (err !== "") {
         console.log(err);
         return;
       }
