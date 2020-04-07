@@ -24,9 +24,9 @@ port clearInbox : () -> Cmd msg
 
 
 type alias Model =
-    { programs : Dict.Dict String Utils.Program
-    , inbox : List MsgIn
+    { inbox : List MsgIn
     , internalError : Maybe String
+    , programs : Dict.Dict String Utils.Program
     }
 
 
@@ -83,38 +83,48 @@ update msg model =
                                     updatePrograms dEditorCache.programs dInbox
 
                                 newCache =
-                                    { dEditorCache | programs = newPrograms }
+                                    { dEditorCache | programs = Dict.values newPrograms }
                             in
-                            ( model, cacheEditorCache newCache )
+                            ( { model | programs = newPrograms }, cacheEditorCache newCache )
 
 
-decodeInbox : String -> Result String (List Utils.HumanMsg)
-decodeInbox rawB64 =
-    if rawB64 == "There is no inbox!" then
-        Ok []
-
-    else
-        case Base64.Decode.decode Base64.Decode.bytes rawB64 of
-            Err err ->
-                Err <| "could not decode inbox: " ++ Utils.showB64Error err
-
-            Ok rawBytes ->
-                case D.decode inboxDecoder rawBytes of
-                    Nothing ->
-                        Err "could not decode inbox bytes"
-
-                    Just inbox ->
-                        Ok inbox
+allOks : List (Result a b) -> Result a (List b)
+allOks results =
+    List.foldr allOksHelp (Ok []) results
 
 
-inboxDecoder : D.Decoder (List Utils.HumanMsg)
-inboxDecoder =
-    Utils.list decodeMsgIn
+allOksHelp : Result a b -> Result a (List b) -> Result a (List b)
+allOksHelp result accum =
+    case result of
+        Ok b ->
+            case accum of
+                Ok bs ->
+                    Ok <| b :: bs
+
+                Err err ->
+                    Err err
+
+        Err a ->
+            Err a
 
 
-decodeMsgIn : D.Decoder Utils.HumanMsg
-decodeMsgIn =
-    decodeAuthor |> D.andThen decodeMsgInHelp
+toBytes : String -> Result Base64.Decode.Error Bytes.Bytes
+toBytes b64 =
+    Base64.Decode.decode Base64.Decode.bytes b64
+
+
+decodeInbox : List String -> Result String (List SendThis)
+decodeInbox rawB64s =
+    case allOks <| List.map toBytes rawB64s of
+        Err err ->
+            Err <| "could not decode inbox: " ++ Utils.showB64Error err
+
+        Ok rawBytes ->
+            Ok <| Utils.justs <| List.map inboxDecodeHelp rawBytes
+
+
+inboxDecodeHelp rawMsgBytes =
+    D.decode decodeSendThis rawMsgBytes
 
 
 decodeAuthor : D.Decoder Int
@@ -122,22 +132,22 @@ decodeAuthor =
     D.map Tuple.second <|
         D.map2 (\a b -> ( a, b ))
             (D.bytes 4)
-            (D.unsignedInt32 Bytes.BE)
+            (D.unsignedInt32 Bytes.LE)
 
 
-decodeMsgInHelp : Int -> D.Decoder Utils.HumanMsg
-decodeMsgInHelp author =
-    Utils.decodeHumanMsg
-        |> D.andThen (checkAuthorsMatch author)
+type alias SendThis =
+    { from : Int
+    , code : String
+    , version : Utils.Version
+    }
 
 
-checkAuthorsMatch : Int -> Utils.HumanMsg -> D.Decoder Utils.HumanMsg
-checkAuthorsMatch author msg =
-    if author == msg.version.author then
-        D.succeed msg
-
-    else
-        D.fail
+decodeSendThis : D.Decoder SendThis
+decodeSendThis =
+    D.map3 SendThis
+        (D.unsignedInt32 Bytes.LE)
+        Utils.sizedString
+        Utils.decodeVersion
 
 
 programsToDict : List Utils.Program -> Dict.Dict String Utils.Program
@@ -145,19 +155,16 @@ programsToDict programs =
     Dict.fromList <| List.map (\p -> ( Utils.hash p.code, p )) programs
 
 
-updatePrograms : List Utils.Program -> List Utils.HumanMsg -> List Utils.Program
+updatePrograms : List Utils.Program -> List SendThis -> Dict.Dict String Utils.Program
 updatePrograms oldProgramsList inbox =
     let
         oldPrograms =
             programsToDict oldProgramsList
-
-        newPrograms =
-            List.foldr insertMessage oldPrograms inbox
     in
-    Dict.values newPrograms
+    List.foldr insertMessage oldPrograms inbox
 
 
-insertMessage : Utils.HumanMsg -> Dict.Dict String Utils.Program -> Dict.Dict String Utils.Program
+insertMessage : SendThis -> Dict.Dict String Utils.Program -> Dict.Dict String Utils.Program
 insertMessage { code, version } oldPrograms =
     let
         msgHash =
@@ -199,7 +206,7 @@ view model =
 
 type alias RawImporterJson =
     { editorCache : String
-    , inbox : String
+    , inbox : List String
     }
 
 
@@ -207,4 +214,4 @@ rawImporterInfoDecoder : Jd.Decoder RawImporterJson
 rawImporterInfoDecoder =
     Jd.map2 RawImporterJson
         (Jd.field "editorCache" Jd.string)
-        (Jd.field "inbox" Jd.string)
+        (Jd.field "inbox" <| Jd.list Jd.string)

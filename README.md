@@ -113,35 +113,64 @@ The response is the 96-byte signed public encryption key.
 
 ### Client API
 
-Messages are encrypted and decrypted on the client, so that the server can't read them.
+This is what happens to a message as it is sent and received:
 
-The encrypted blob must be no more than 16KB long. Before encryption and encoding it is one of:
+1. It starts as a Utils.MsgOut in Elm. MsgOut is defined as follows:
 
-1. a new public encryption key
-2. a new public signing key
-3. a chunk of a program
-4. a chunk of a document
+   type MsgOut
+       = MakeMyName
+       | WhitelistSomeone Int
+       | SendThis HumanMsg
 
-A chunk of a program or document contains:
+   (The first two are not mentioned further in this list. This is
+    about SendThis.)
+   
+   type alias HumanMsgHelp = 
+       { to : Int
+       , from : Int
+       , code : String
+       , version : Version
+       }
+   
+   type alias Version =
+       { description : String
+       , userInput : String
+       , author : Int
+       }
 
-1. the cryptographic hash of the whole
-2. the offset: 0 for the first chunk, 1 for the second, and so on
-3. whether the chunk is the final one
-4. the chunk body
+2. MsgOut 'SendThis' is encoded to bytes as follows:
+    + 0x02 indicator byte
+    + 4 bytes: recipient ID as little-endian integer
+    + the program code string
+    + the program description string
+    + 4 bytes: version author ID as little-endian integer
 
-A document contains:
+3. On the JS side, the message from (2) is parsed as follows:
+    + the recipient is extracted from bytes 1 to 5
+    + the document is extracted from bytes 5 to end
 
-1. a body and
-2. the name of the program that can open it.
+4. The document is chopped up into chunks. A chunk is like this:
+    + 0x01 (or 0x00 for a receipt)
+    + 4 bytes: chunk counter integer
+    + 4 bytes: total chunks in message
+    + 32 bytes: sha512[:32] of the whole document: to be clear, the version author ID, the program code and the program description
+    + <=15kB: the rest of the chunk
 
-A program contains:
+5. Each chunk is encrypted and prefixed with a 24-byte nonce.
 
-1. the code
-2. its name
-3. a description
-4. a version number
+6. The encrypted chunk is bundled up as follows:
+    + 0x08
+    + 112 bytes: ID token
+    + 8 bytes: the recipient ID
+    + the encrypted nonce and chunk
 
-The version number is an integer, starting at 0. All versions must be able to read data created by previous versions.
+7. The bundle is uploaded to the server, and downloaded by the other user. The server prepends it with a 1 or 0 byte depending on whether  there are any messages or not.
+
+8. The first two bytes are sliced off, because they are indicators and not needed any more.
+
+9. The chunk is decrypted
+
+10. The decrypted chunk is parsed.
 
 # Programs
 
@@ -149,11 +178,7 @@ A program can:
 
 1. Display a document.
 
-3. Read and delete messages sent to it from other people.
-
-3. Read user input. Text documents are displayed as editible text areas. A program can subscribe to be notified of any changes to the text area. A program can also prompt users for a file upload from the local file system.
-
-5. Send messages to other people.
+2. Read user input.
 
 # Spam
 

@@ -120,6 +120,12 @@
     if (myNameErr !== "") {
       return [nullEditorInfo, myNameErr];
     }
+
+    const errUpCrypt: string = await uploadEncryptionKey(keys, myName);
+    if (errUpCrypt !== "") {
+      return [nullEditorInfo, errUpCrypt];
+    }
+
     const signingKeys: SignKeyPair = await localGet("signingKeys");
     let myContacts: number[] = [];
     if (signingKeys !== null) {
@@ -156,10 +162,10 @@
     localSet("editorCache", toBytes(editorCache));
   });
 
-  app.ports.cacheEditorInfoImporter.subscribe(function (
-    editorCache: Uint8Array
-  ) {
-    localSet("editorCache", editorCache);
+  app.ports.cacheEditorInfoImporter.subscribe(function (editorCache: string) {
+    console.log("cacheEditorInfoImporter");
+    console.log("new cache: ", editorCache);
+    localSet("editorCache", toBytes(editorCache));
   });
 
   const whitelistSomeone: number = 1;
@@ -176,30 +182,17 @@
 
   interface SendThis {
     to: number;
-    from: number;
     document: Uint8Array;
   }
 
-  function decodeHumanMsg(raw: Uint8Array, pos: number): [MsgOut, string] {
+  function decodeHumanMsg(raw: Uint8Array): [MsgOut, string] {
     const rawLength: number = raw.length;
     if (rawLength < 13) {
       return [nullMsgOut, "human message is less than 13 bytes long"];
     }
-    const from: number = decodeInt(raw.slice(pos, pos + 4));
-    pos += 4;
-    const to: number = decodeInt(raw.slice(pos, pos + 4));
-    pos += 4;
-    const documentLength: number = decodeInt(raw.slice(pos, pos + 4));
-    pos += 4;
-    if (rawLength < 12 + documentLength) {
-      return [nullMsgOut, "raw is shorter than given document length"];
-    }
-    const document: Uint8Array = raw.slice(pos, pos + documentLength);
-    pos += 12 + documentLength;
-    return [
-      { type: "sendThis", msg: { to: to, from: from, document: document } },
-      "",
-    ];
+    const to: number = decodeInt32(raw.slice(1, 5));
+    const document: Uint8Array = raw.slice(5);
+    return [{ type: "sendThis", msg: { to: to, document: document } }, ""];
   }
 
   function decodeInt(eightBytes: Uint8Array): number {
@@ -235,7 +228,7 @@
       }
 
       case sendThis:
-        return decodeHumanMsg(raw, pos);
+        return decodeHumanMsg(raw);
     }
 
     return [nullMsgOut, "bad message type: " + messageType];
@@ -444,23 +437,30 @@
     }
   }
 
+  // The chunk is the nonce plus the encrypted message.
+  // The result is:
+  // + 112 bytes: idToken
+  // + 8 bytes: recipient
+  // + 24 bytes: nonce
+  // + <= 15kB: encrypted chunk
   function constructCtoCMessage(
     chunk: Uint8Array,
-    recipient: Uint8Array,
+    recipient: number,
     keys: Keys,
     authCode: Uint8Array,
     myName: number
   ): Uint8Array {
+    const recipientEncoded = encodeInt(recipient);
     const idToken: Uint8Array = makeIdToken(
       8,
-      combine(recipient, chunk),
+      combine(recipientEncoded, chunk),
       authCode,
       keys.signing.secretKey,
       myName
     );
     const request: Uint8Array = combine(
       oneByte(8),
-      combine(idToken, combine(recipient, chunk))
+      combine(idToken, combine(recipientEncoded, chunk))
     );
     return request;
   }
@@ -479,12 +479,12 @@
   // + <= 15kB: chunk
   function chopMessageIntoChunks(message: Uint8Array): Uint8Array[] {
     const chunkLength: number = 15000;
-    const hash: Uint8Array = sha512(message);
-    const numChunks: number = Math.floor(message.length / chunkLength) + 1;
-    const numChunksBytes: Uint8Array = encodeInt(numChunks);
+    const hash: Uint8Array = sha512(message).slice(0, 32);
+    const numChunks: number = Math.ceil(message.length / chunkLength);
+    const numChunksBytes: Uint8Array = encodeInt32(numChunks);
     let chunks: Uint8Array[] = [];
     for (let i = 0; i < numChunks; i++) {
-      const chunkNum: Uint8Array = encodeInt(i);
+      const chunkNum: Uint8Array = encodeInt32(i);
       const chunkStart: number = i * chunkLength;
       const chunkEnd: number = (i + 1) * chunkLength;
       const chunkBase: Uint8Array = message.slice(chunkStart, chunkEnd);
@@ -542,7 +542,7 @@
       return [nullUint8Array(), "there are no signing keys"];
     }
     const key: Uint8Array = signingKeys[recipient];
-    if (key === null) {
+    if (key === undefined) {
       return [nullUint8Array(), "no signing key for recipient " + recipient];
     }
     return [key, ""];
@@ -589,7 +589,7 @@
 
       const subMsg: Uint8Array = constructCtoCMessage(
         withNonce,
-        signingKey,
+        message.to,
         keys,
         authCode,
         myName
@@ -784,13 +784,13 @@
     rawChunk: Decrypted
   ): Promise<[Chunk, boolean, string]> {
     const chunkLength: number = rawChunk.chunk.length;
-    if (chunkLength < 41) {
+    if (chunkLength < 42) {
       return [
         nullChunk,
         false,
         "chunk is only " +
           chunkLength +
-          " bytes long, but should be at least 41",
+          " bytes long, but should be at least 42",
       ];
     }
 
@@ -807,8 +807,8 @@
 
     return [
       {
-        counter: decodeInt(chunkNot0.slice(0, 4)),
-        totalChunks: decodeInt(chunkNot0.slice(4, 8)),
+        counter: decodeInt32(chunkNot0.slice(0, 4)),
+        totalChunks: decodeInt32(chunkNot0.slice(4, 8)),
         totalHash: chunkNot0.slice(8, 40),
         chunk: chunkNot0.slice(40),
         author: rawChunk.author,
@@ -864,6 +864,15 @@
     return chunks;
   }
 
+  function encodeInt32(theInt: number): Uint8Array {
+    let buffer: ArrayBuffer = new ArrayBuffer(4);
+    let result: Uint8Array = new Uint8Array(buffer);
+    for (let i = 0; i < 4; i++) {
+      result[i] = (theInt >> (i * 8)) & 0xff;
+    }
+    return result;
+  }
+
   function encodeInt(theInt: number): Uint8Array {
     let buffer: ArrayBuffer = new ArrayBuffer(8);
     let result: Uint8Array = new Uint8Array(buffer);
@@ -908,16 +917,9 @@
     if (authErr !== "") {
       return authErr;
     }
-    const [signingKey, signKeyErr]: [
-      Uint8Array,
-      string
-    ] = await getRecipientSigningKey(author);
-    if (signKeyErr !== "") {
-      return signKeyErr;
-    }
     const msg: Uint8Array = constructCtoCMessage(
       withNonce,
-      signingKey,
+      author,
       keys,
       authCode,
       myName
@@ -986,7 +988,7 @@
     }
 
     if (start.totalChunks === 1) {
-      const chunkHash: Uint8Array = sha512(start.chunk);
+      const chunkHash: Uint8Array = sha512(start.chunk).slice(0, 32);
       if (!equalBytes(chunkHash, start.totalHash)) {
         return [
           nullUint8Array(),
@@ -995,6 +997,8 @@
           "single-chunk message with bad hash",
         ];
       }
+      const combined = combine(encodeInt32(start.author), start.chunk);
+      return [combined, new Set([i]), true, ""];
     }
 
     const [relevantChunks, newUsed]: [Chunk[], Set<number>] = getRelevantChunks(
@@ -1039,6 +1043,9 @@
     let allUnpacked: Uint8Array[] = [];
     let used: Set<number> = new Set();
     for (let i = 0; i < numDownloads; i++) {
+      if (used.has(i)) {
+        continue;
+      }
       let unpacked: Uint8Array, unpackErr: string, done: boolean;
       [unpacked, used, done, unpackErr] = await unpackOneDownload(
         i,
@@ -1086,7 +1093,7 @@
       if (response[0] === 0) {
         return [messages, ""];
       } else {
-        messages.push(response.slice(1));
+        messages.push(response.slice(2));
       }
     }
     return [messages, ""];
@@ -1148,11 +1155,6 @@
       return myNameErr;
     }
 
-    const errUpCrypt: string = await uploadEncryptionKey(keys, myName);
-    if (errUpCrypt !== "") {
-      return errUpCrypt;
-    }
-
     const responseErr: string = await sendMessages(messages, keys, myName);
     if (responseErr !== "") {
       return responseErr;
@@ -1201,60 +1203,16 @@
   }
 
   async function cacheMessages(newMessages: Uint8Array[]): Promise<string> {
-    let rawOldMessages: Uint8Array = await localGet("inbox");
-    let decodedMessages: Uint8Array[];
-    if (rawOldMessages !== null) {
-      let decodeErr: string;
-      [decodedMessages, decodeErr] = decodeInbox(rawOldMessages);
-      if (decodeErr !== "") {
-        return decodeErr;
-      }
-    } else {
-      decodedMessages = [];
-    }
-    const combined: Uint8Array[] = decodedMessages.concat(newMessages);
     if (newMessages.length === 0) {
       return "";
     }
-    const encoded: Uint8Array[] = encodeMessages(combined);
-    await localSet("inbox", encoded);
+    let oldMessages: Uint8Array[] = await localGet("inbox");
+    if (oldMessages === null) {
+      oldMessages = [];
+    }
+    const combined: Uint8Array[] = oldMessages.concat(newMessages);
+    await localSet("inbox", combined);
     return "";
-  }
-
-  function decodeInbox(rawMessages: Uint8Array): [Uint8Array[], string] {
-    let i = 0;
-    let messages: Uint8Array[] = [];
-    const rawMessagesLength: number = rawMessages.length;
-    while (i < rawMessagesLength) {
-      if (i + 4 >= rawMessagesLength) {
-        return [[], "not enough bytes for message length"];
-      }
-
-      const messageLength: number = decodeInt(rawMessages.slice(i, i + 4));
-      i += 4;
-
-      if (i + messageLength >= rawMessagesLength) {
-        return [[], "not enough bytes for message"];
-      }
-      const message: Uint8Array = rawMessages.slice(i, i + messageLength);
-      i += messageLength;
-      messages.push(message);
-    }
-    return [messages, ""];
-  }
-
-  function encodeMessage(message: Uint8Array): Uint8Array {
-    const length: Uint8Array = encodeInt(message.length);
-    return combine(length, message);
-  }
-
-  function encodeMessages(messages: Uint8Array[]): Uint8Array[] {
-    const messagesLength: number = messages.length;
-    let encoded: Uint8Array[] = [encodeMessage(messages[0])];
-    for (let i = 1; i < messagesLength; i++) {
-      encoded.push(encodeMessage(messages[1]));
-    }
-    return encoded;
   }
 
   async function cacheLeftovers(leftOvers: Decrypted[]) {
@@ -1280,18 +1238,36 @@
   ): Promise<[Decrypted[], string]> {
     const lengthDownloads: number = rawDownloads.length;
     const messages: Decrypted[] = [];
+    // One download is:
+    // + 0x08: the upload indicator byte
+    // + 112 bytes: identity token
+    // + 8 bytes: recipient ID
+    // + 24 bytes: nonce
+    //
+    // The rest is encrypted:
+    // + 4 bytes: int chunk counter
+    // + 4 bytes: int total chunks in message
+    // + 32 bytes: hash of complete message
+    // + all the rest: chunk
     for (let i = 0; i < lengthDownloads; i++) {
       const download: Uint8Array = rawDownloads[i];
-      if (download.length < 122) {
-        return [[], "raw message less than 122 bytes long"];
+      if (download.length < 146) {
+        return [[], "raw message less than 146 bytes long"];
       }
-      const nonce: Uint8Array = download.slice(121, 145);
-      const encryptedBlob: Uint8Array = download.slice(145);
-      const author: number = decodeInt(download.slice(1, 9));
+      const nonce: Uint8Array = download.slice(120, 144);
+      const encryptedBlob: Uint8Array = download.slice(144);
+      const author: number = decodeInt(download.slice(0, 8));
+      const [authorSignKey, authorKeyErr]: [
+        Uint8Array,
+        string
+      ] = await getRecipientSigningKey(author);
+      if (authorKeyErr !== "") {
+        return [[], authorKeyErr];
+      }
       const [theirEncryptionKey, encKeyErr]: [
         Uint8Array,
         string
-      ] = await getEncryptionKey(author, keys.signing.secretKey);
+      ] = await getEncryptionKey(author, authorSignKey);
       if (encKeyErr !== "") {
         return [[], encKeyErr];
       }
@@ -1316,7 +1292,6 @@
   app.ports.communicate.subscribe(function () {
     // When this has finished, all the incoming messages are saved
     // under 'inbox' in the cache, like this:
-    //   + 4 bytes: length of message
     //   + 4 bytes: sender
     //   + message
     communicateMain().then(function (err) {
@@ -1326,8 +1301,6 @@
     });
   });
 
-  const nullInbox: string = "There is no inbox!";
-
   app.ports.getImporterInfo.subscribe(function () {
     localGet("editorCache").then(function (rawEditorCache) {
       let editorCache: string = nullCache;
@@ -1335,9 +1308,14 @@
         editorCache = fromBytes(rawEditorCache);
       }
       localGet("inbox").then(function (rawInbox) {
-        let inbox: string = nullInbox;
+        let inboxBytes: Uint8Array[] = [];
         if (rawInbox !== null) {
-          inbox = fromBytes(rawInbox);
+          inboxBytes = rawInbox;
+        }
+        const inboxLength = inboxBytes.length;
+        let inbox: string[] = [];
+        for (let i = 0; i < inboxLength; i++) {
+          inbox.push(fromBytes(inboxBytes[i]));
         }
         app.ports.gotImporterInfo.send({
           editorCache: editorCache,

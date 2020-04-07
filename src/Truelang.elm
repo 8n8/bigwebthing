@@ -809,7 +809,7 @@ onePrettyUnused ( name, position ) =
 
 namesAndPositions : Set.Set String -> Dict.Dict String Position -> List ( String, Position )
 namesAndPositions unused positions =
-    justs <| List.map (makePosition positions) <| Set.toList unused
+    Utils.justs <| List.map (makePosition positions) <| Set.toList unused
 
 
 makePosition : Dict.Dict String Position -> String -> Maybe ( String, Position )
@@ -1112,21 +1112,6 @@ showTypeStack typestack =
         , String.join ", " <| List.map showTypeVal typestack
         , ">"
         ]
-
-
-justs : List (Maybe a) -> List a
-justs maybes =
-    List.foldr justsHelp [] maybes
-
-
-justsHelp : Maybe a -> List a -> List a
-justsHelp maybe accum =
-    case maybe of
-        Just a ->
-            a :: accum
-
-        Nothing ->
-            accum
 
 
 processTypeAtom : EltState -> TlAtom -> EltOut

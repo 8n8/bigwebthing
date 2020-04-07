@@ -81,7 +81,7 @@ receiptsDecoder =
 receiptDecoder : D.Decoder Receipt
 receiptDecoder =
     D.map3 Receipt
-        (D.unsignedInt32 Bytes.BE)
+        (D.unsignedInt32 Bytes.LE)
         (D.bytes 96)
         (D.bytes 32)
 
@@ -96,7 +96,7 @@ encodeDocument doc =
             Bytes.width bytes
     in
     E.sequence
-        [ E.unsignedInt32 Bytes.BE length
+        [ E.unsignedInt32 Bytes.LE length
         , E.bytes bytes
         ]
 
@@ -107,7 +107,7 @@ encodeDocumentHelp doc =
         Ordering docs ->
             E.sequence <|
                 [ E.unsignedInt8 2
-                , E.unsignedInt32 Bytes.BE <| List.length docs
+                , E.unsignedInt32 Bytes.LE <| List.length docs
                 ]
                     ++ List.map encodeDocument docs
 
@@ -121,7 +121,7 @@ encodeDocumentHelp doc =
 encodeSizedString : String -> E.Encoder
 encodeSizedString str =
     E.sequence
-        [ E.unsignedInt32 Bytes.BE (E.getStringWidth str)
+        [ E.unsignedInt32 Bytes.LE (E.getStringWidth str)
         , E.string str
         ]
 
@@ -140,8 +140,8 @@ encodeCache cache =
 encodeContacts : List Int -> E.Encoder
 encodeContacts contacts =
     E.sequence <|
-        (E.unsignedInt32 Bytes.BE <| List.length contacts)
-            :: List.map (E.unsignedInt32 Bytes.BE) contacts
+        (E.unsignedInt32 Bytes.LE <| List.length contacts)
+            :: List.map (E.unsignedInt32 Bytes.LE) contacts
 
 
 encodeProgram : Program -> E.Encoder
@@ -160,7 +160,7 @@ encodeHumanMsgs msgs =
 encodeList : List a -> (a -> E.Encoder) -> E.Encoder
 encodeList toEncode elementEncoder =
     E.sequence <|
-        (E.unsignedInt32 Bytes.BE <| List.length toEncode)
+        (E.unsignedInt32 Bytes.LE <| List.length toEncode)
             :: List.map elementEncoder toEncode
 
 
@@ -202,6 +202,21 @@ type alias HumanMsg =
     }
 
 
+justs : List (Maybe a) -> List a
+justs maybes =
+    List.foldr justsHelp [] maybes
+
+
+justsHelp : Maybe a -> List a -> List a
+justsHelp maybe accum =
+    case maybe of
+        Just a ->
+            a :: accum
+
+        Nothing ->
+            accum
+
+
 hashHumanMsg : HumanMsg -> Bytes.Bytes
 hashHumanMsg humanMsg =
     SHA256.toBytes <|
@@ -232,7 +247,7 @@ hashDocument document =
 encodeHumanMsg : HumanMsg -> E.Encoder
 encodeHumanMsg { to, code, version } =
     E.sequence
-        [ E.unsignedInt32 Bytes.BE to
+        [ E.unsignedInt32 Bytes.LE to
         , encodeSizedString code
         , encodeVersion version
         ]
@@ -243,7 +258,7 @@ encodeVersion { description, userInput, author } =
     E.sequence
         [ encodeSizedString description
         , encodeSizedString userInput
-        , E.unsignedInt32 Bytes.BE author
+        , E.unsignedInt32 Bytes.LE author
         ]
 
 
@@ -269,7 +284,7 @@ decodeEditorCache rawString =
 cacheDecoder : D.Decoder Cache
 cacheDecoder =
     D.map2 Cache
-        (list (D.unsignedInt32 Bytes.BE))
+        (list (D.unsignedInt32 Bytes.LE))
         (list decodeProgram)
 
 
@@ -282,16 +297,17 @@ decodeProgram =
 
 sizedString : D.Decoder String
 sizedString =
-    D.unsignedInt32 Bytes.BE
+    D.unsignedInt32 Bytes.LE
         |> D.andThen D.string
 
 
 decodeHumanMsg : D.Decoder HumanMsg
 decodeHumanMsg =
-    D.map3 HumanMsg
-        (D.unsignedInt32 Bytes.BE)
-        sizedString
-        decodeVersion
+    D.map (\{ to, code, version } -> { to = to, code = code, version = version }) <|
+        D.map3 HumanMsg
+            (D.unsignedInt32 Bytes.LE)
+            sizedString
+            decodeVersion
 
 
 decodeVersion : D.Decoder Version
@@ -299,7 +315,7 @@ decodeVersion =
     D.map3 Version
         sizedString
         sizedString
-        (D.unsignedInt32 Bytes.BE)
+        (D.unsignedInt32 Bytes.LE)
 
 
 decodeDocument : D.Decoder Document
@@ -329,7 +345,7 @@ decodeDocumentHelp typeNum =
 -}
 list : D.Decoder a -> D.Decoder (List a)
 list decoder =
-    D.unsignedInt32 Bytes.BE
+    D.unsignedInt32 Bytes.LE
         |> D.andThen
             (\len -> D.loop ( len, [] ) (listStep decoder))
 

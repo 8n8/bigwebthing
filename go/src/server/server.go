@@ -80,12 +80,12 @@ func initState() stateT {
 		unused:     []int{},
 	}
 	return stateT{
-		fatalErr:      nil,
-		proofOfWork:   pow,
-		friendlyNames: [][]byte{},
-		members:       make(map[int]struct{}),
-		authCodes:     []int{},
-		authUnique:    0,
+		fatalErr:       nil,
+		proofOfWork:    pow,
+		friendlyNames:  [][]byte{},
+		members:        make(map[int]struct{}),
+		authCodes:      []int{},
+		authUnique:     0,
 		encryptionKeys: make(map[int][]byte),
 	}
 }
@@ -397,7 +397,7 @@ func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan c
 		return state, []outputT{badResponse{"bad signature", 400, responseChan}}
 	}
 	_, keyExists := state.encryptionKeys[u.Owner]
-        if keyExists {
+	if keyExists {
 		return state, []outputT{sendHttpResponse{responseChan, goodHttpResponse([]byte("key already uploaded"))}}
 	}
 	state.encryptionKeys[u.Owner] = u.SignedKey
@@ -449,7 +449,7 @@ func (u unwhitelistRequest) updateOnRequest(state stateT, responseChan chan http
 	}
 	newAuthCodes, err := validToken(u.IdToken, state.authCodes, state.friendlyNames)
 	if err != nil {
-		return state, bad("bad ID token: " + err.Error(), 400)
+		return state, bad("bad ID token: "+err.Error(), 400)
 	}
 	state.authCodes = newAuthCodes
 
@@ -531,7 +531,7 @@ func (w whitelistRequest) updateOnRequest(state stateT, responseChan chan httpRe
 
 	newAuthCodes, err := validToken(w.IdToken, state.authCodes, state.friendlyNames)
 	if err != nil {
-		return state, bad("bad ID token: " + err.Error(), 400)
+		return state, bad("bad ID token: "+err.Error(), 400)
 	}
 	state.authCodes = newAuthCodes
 
@@ -717,11 +717,11 @@ func (s sendAuthCode) io(inputChannel chan inputT) {
 }
 
 func parseSendMessage(body []byte) parsedRequestT {
-	if len(body) < 146 {
-		return badRequest{"body less than 146 bytes", 400}
+	if len(body) < 122 {
+		return badRequest{"body less than 122 bytes", 400}
 	}
 	idToken := parseIdToken(body)
-	recipient := decodeInt(body[137:145])
+	recipient := decodeInt(body[113:121])
 	return sendMessageRequest{idToken, recipient, body}
 }
 
@@ -745,8 +745,8 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 		return []outputT{badResponse{message, code, responseChan}}
 	}
 	newAuthCodes, err := validToken(s.idToken, state.authCodes, state.friendlyNames)
-	if err != nil  {
-		return state, bad("bad ID token: " + err.Error(), 400)
+	if err != nil {
+		return state, bad("bad ID token: "+err.Error(), 400)
 	}
 	state.authCodes = newAuthCodes
 	_, senderIsMember := state.members[s.idToken.senderId]
@@ -782,7 +782,7 @@ type sendMessage struct {
 
 func (s sendMessage) io(inputChannel chan inputT) {
 	messagesDir := userMessagePath(int(s.recipient))
-	err := os.MkdirAll(messagesDir, os.ModeDir)
+	err := os.MkdirAll(messagesDir, 0755)
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
@@ -823,7 +823,7 @@ type collectMessage struct {
 	channel   chan httpResponseT
 }
 
-const inboxesDir = "inboxes"
+const inboxesDir = dataDir + "/inboxes"
 
 func userMessagePath(name int) string {
 	nameString := strconv.FormatInt(int64(name), 10)
@@ -850,7 +850,7 @@ func (c collectMessage) io(inputChannel chan inputT) {
 		inputChannel <- fatalError{err}
 		return
 	}
-	c.channel <- goodHttpResponse(append([]byte{0}, message...))
+	c.channel <- goodHttpResponse(append([]byte{1}, message...))
 	err = os.Remove(filepath)
 	if err != nil {
 		inputChannel <- fatalError{err}
@@ -939,10 +939,10 @@ func (c cacheNewMember) io(inputChannel chan inputT) {
 }
 
 type idTokenT struct {
-	senderId int
-	authCode      int
-	signature     []byte
-	messageHash   []byte
+	senderId    int
+	authCode    int
+	signature   []byte
+	messageHash []byte
 }
 
 func safeCombine(route byte, message, authBytes []byte) []byte {
@@ -967,10 +967,10 @@ func parseIdToken(body []byte) idTokenT {
 	hashSlice := hash[:32]
 	senderId := decodeInt(body[1:9])
 	return idTokenT{
-		senderId: senderId,
-		authCode:      authCode,
-		signature:     body[17:113],
-		messageHash:   hashSlice,
+		senderId:    senderId,
+		authCode:    authCode,
+		signature:   body[17:113],
+		messageHash: hashSlice,
 	}
 }
 
