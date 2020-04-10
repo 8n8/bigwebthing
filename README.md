@@ -143,6 +143,7 @@ This is what happens to a message as it is sent and received:
     + 4 bytes: recipient ID as little-endian integer
     + the program code string
     + the program description string
+    + the program user input string
     + 4 bytes: version author ID as little-endian integer
 
 3. On the JS side, the message from (2) is parsed as follows:
@@ -171,6 +172,10 @@ This is what happens to a message as it is sent and received:
 9. The chunk is decrypted
 
 10. The decrypted chunk is parsed.
+
+11. Assembled chunks are put in the inbox as follows:
+    + 4 bytes: sender ID
+    + a 'SendThis' message, except for the indicator byte and recipient ID
 
 # Programs
 

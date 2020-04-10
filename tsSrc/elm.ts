@@ -163,8 +163,6 @@
   });
 
   app.ports.cacheEditorInfoImporter.subscribe(function (editorCache: string) {
-    console.log("cacheEditorInfoImporter");
-    console.log("new cache: ", editorCache);
     localSet("editorCache", toBytes(editorCache));
   });
 
@@ -898,10 +896,19 @@
       oneByte(0),
       combine(encodeInt(author), signature)
     );
+
+    const [signingKey, signKeyErr]: [
+      Uint8Array,
+      string
+    ] = await getRecipientSigningKey(author);
+    if (signKeyErr !== "") {
+      return signKeyErr;
+    }
+
     const [theirEncryptionKey, getEncKeyErr]: [
       Uint8Array,
       string
-    ] = await getEncryptionKey(author, keys.signing.secretKey);
+    ] = await getEncryptionKey(author, signingKey);
     if (getEncKeyErr !== "") {
       return getEncKeyErr;
     }
@@ -949,7 +956,7 @@
       return [nullUint8Array(), receiptErr];
     }
 
-    const encodedAuthor: Uint8Array = encodeInt(author);
+    const encodedAuthor: Uint8Array = encodeInt32(author);
     return [combine(encodedAuthor, assembled), ""];
   }
 

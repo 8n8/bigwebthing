@@ -1242,24 +1242,27 @@ func (h httpRequestT) update(state stateT) (stateT, []outputT) {
 	return parseRequest(h.body).updateOnRequest(state, h.responseChan)
 }
 
+func httpApiHandler(inputChan chan inputT, w http.ResponseWriter, r *http.Request) {
+	readCloser := http.MaxBytesReader(w, r.Body, maxBodyLength)
+	body, err := ioutil.ReadAll(readCloser)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	responseChan := make(chan httpResponseT)
+	inputChan <- httpRequestT{
+		body:         body,
+		responseChan: responseChan,
+	}
+	response := <-responseChan
+	response.respond(w)
+}
+
 func (startHttpServer) io(inputChan chan inputT) {
 	http.HandleFunc(
 		"/api",
 		func(w http.ResponseWriter, r *http.Request) {
-			body := make([]byte, maxBodyLength)
-			n, err := r.Body.Read(body)
-			if err != nil && err != io.EOF {
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			body = body[:n]
-			responseChan := make(chan httpResponseT)
-			inputChan <- httpRequestT{
-				body:         body,
-				responseChan: responseChan,
-			}
-			response := <-responseChan
-			response.respond(w)
+			httpApiHandler(inputChan, w, r)
 		})
 	http.HandleFunc(
 		"/",
