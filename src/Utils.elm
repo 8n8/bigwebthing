@@ -5,6 +5,7 @@ import Base64.Encode
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
+import Dict
 import Element
 import Element.Font as Font
 import Json.Decode as Jd
@@ -29,6 +30,193 @@ hash s =
 combineResult : List (Result a b) -> Result a (List b)
 combineResult results =
     List.foldr combineHelp (Ok []) results
+
+
+onlyIfAllJust : List (Maybe a) -> Maybe (List a)
+onlyIfAllJust maybes =
+    List.foldr onlyIfAllJustHelp (Just []) maybes
+
+
+type alias Message =
+    { from : Int
+    , to : Int
+    , time : Int
+    , subject : String
+    , userInput : String
+    , code : Dict.Dict String String
+    , blobs : Dict.Dict String Bytes.Bytes
+    }
+
+
+type alias Draft =
+    { to : Maybe Int
+    , time : Int
+    , subject : String
+    , userInput : String
+    , code : Dict.Dict String String
+    , blobs : Dict.Dict String Bytes.Bytes
+    }
+
+
+encodeDraft : Draft -> E.Encoder
+encodeDraft { to, time, subject, userInput, code, blobs } =
+    E.sequence
+        [ encodeMaybe to (E.unsignedInt32 Bytes.LE)
+        , E.unsignedInt32 Bytes.LE time
+        , encodeSizedString subject
+        , encodeSizedString userInput
+        , encodeList (Dict.toList code) encodeCode
+        , encodeList (Dict.toList blobs) encodeBlob
+        ]
+
+
+decodeDraft : D.Decoder Draft
+decodeDraft =
+    map6 Draft
+        (decodeMaybe <| D.unsignedInt32 Bytes.LE)
+        (D.unsignedInt32 Bytes.LE)
+        sizedString
+        sizedString
+        (D.map Dict.fromList <| list decodeCode)
+        (D.map Dict.fromList <| list decodeBlob)
+
+
+encodeMaybe : Maybe a -> (a -> E.Encoder) -> E.Encoder
+encodeMaybe maybe encoder =
+    case maybe of
+        Nothing ->
+            E.unsignedInt8 0
+
+        Just value ->
+            E.sequence
+                [ E.unsignedInt8 1
+                , encoder value
+                ]
+
+
+decodeMaybe : D.Decoder a -> D.Decoder (Maybe a)
+decodeMaybe decoder =
+    D.andThen (decodeMaybeHelp decoder) D.unsignedInt8
+
+
+decodeMaybeHelp : D.Decoder a -> Int -> D.Decoder (Maybe a)
+decodeMaybeHelp decoder indicator =
+    if indicator == 0 then
+        D.succeed Nothing
+
+    else
+        D.map Just decoder
+
+
+encodeMessage : Message -> E.Encoder
+encodeMessage { to, from, time, subject, userInput, code, blobs } =
+    E.sequence
+        [ E.unsignedInt32 Bytes.LE to
+        , E.unsignedInt32 Bytes.LE from
+        , E.unsignedInt32 Bytes.LE time
+        , encodeSizedString subject
+        , encodeSizedString userInput
+        , encodeList (Dict.toList code) encodeCode
+        , encodeList (Dict.toList blobs) encodeBlob
+        ]
+
+
+encodeCode : ( String, String ) -> E.Encoder
+encodeCode ( name, code ) =
+    E.sequence
+        [ encodeSizedString name
+        , encodeSizedString code
+        ]
+
+
+encodeBlob : ( String, Bytes.Bytes ) -> E.Encoder
+encodeBlob ( name, blob ) =
+    E.sequence
+        [ encodeSizedString name
+        , encodeBytes blob
+        ]
+
+
+decodeMessage : D.Decoder Message
+decodeMessage =
+    map7 Message
+        (D.unsignedInt32 Bytes.LE)
+        (D.unsignedInt32 Bytes.LE)
+        (D.unsignedInt32 Bytes.LE)
+        sizedString
+        sizedString
+        (D.map Dict.fromList <| list decodeCode)
+        (D.map Dict.fromList <| list decodeBlob)
+
+
+decodeCode : D.Decoder ( String, String )
+decodeCode =
+    D.map2 (\a b -> ( a, b ))
+        sizedString
+        sizedString
+
+
+decodeBlob : D.Decoder ( String, Bytes.Bytes )
+decodeBlob =
+    D.map2 (\a b -> ( a, b ))
+        sizedString
+        decodeBytes
+
+
+map6 :
+    (a -> b -> c -> d -> e -> f -> result)
+    -> D.Decoder a
+    -> D.Decoder b
+    -> D.Decoder c
+    -> D.Decoder d
+    -> D.Decoder e
+    -> D.Decoder f
+    -> D.Decoder result
+map6 func decoderA decoderB decoderC decoderD decoderE decoderF =
+    D.map func decoderA
+        |> D.andThen (dmap decoderB)
+        |> D.andThen (dmap decoderC)
+        |> D.andThen (dmap decoderD)
+        |> D.andThen (dmap decoderE)
+        |> D.andThen (dmap decoderF)
+
+
+map7 :
+    (a -> b -> c -> d -> e -> f -> g -> result)
+    -> D.Decoder a
+    -> D.Decoder b
+    -> D.Decoder c
+    -> D.Decoder d
+    -> D.Decoder e
+    -> D.Decoder f
+    -> D.Decoder g
+    -> D.Decoder result
+map7 func decoderA decoderB decoderC decoderD decoderE decoderF decoderG =
+    D.map func decoderA
+        |> D.andThen (dmap decoderB)
+        |> D.andThen (dmap decoderC)
+        |> D.andThen (dmap decoderD)
+        |> D.andThen (dmap decoderE)
+        |> D.andThen (dmap decoderF)
+        |> D.andThen (dmap decoderG)
+
+
+dmap : D.Decoder a -> (a -> b) -> D.Decoder b
+dmap a b =
+    D.map b a
+
+
+onlyIfAllJustHelp : Maybe a -> Maybe (List a) -> Maybe (List a)
+onlyIfAllJustHelp maybe accum =
+    case ( maybe, accum ) of
+        ( Just b, Just bs ) ->
+            Just <| b :: bs
+
+        ( _, Nothing ) ->
+            Nothing
+
+        ( Nothing, _ ) ->
+            Nothing
 
 
 combineHelp : Result a b -> Result a (List b) -> Result a (List b)
@@ -174,6 +362,14 @@ encodePrograms programs =
     encodeList programs encodeProgram
 
 
+encodeBytes : Bytes.Bytes -> E.Encoder
+encodeBytes bytes =
+    E.sequence
+        [ E.unsignedInt32 Bytes.LE <| Bytes.width bytes
+        , E.bytes bytes
+        ]
+
+
 cacheEncoder : Cache -> E.Encoder
 cacheEncoder { newContacts, programs } =
     E.sequence
@@ -262,6 +458,34 @@ encodeVersion { description, userInput, author } =
         ]
 
 
+decodeInbox : List String -> Result String (List Message)
+decodeInbox rawMessages =
+    let
+        asBytes =
+            List.map (Base64.Decode.decode Base64.Decode.bytes) rawMessages
+    in
+    case combineResult asBytes of
+        Err err ->
+            Err <| "could not decode inbox base64: " ++ showB64Error err
+
+        Ok bytesList ->
+            decodeInboxHelp bytesList
+
+
+decodeInboxHelp : List Bytes.Bytes -> Result String (List Message)
+decodeInboxHelp rawMessages =
+    let
+        maybes =
+            List.map (D.decode decodeMessage) rawMessages
+    in
+    case onlyIfAllJust maybes of
+        Nothing ->
+            Err "could not decode inbox bytes"
+
+        Just messages ->
+            Ok messages
+
+
 decodeEditorCache : String -> Result String Cache
 decodeEditorCache rawString =
     if rawString == "There is no cache!" then
@@ -348,6 +572,11 @@ list decoder =
     D.unsignedInt32 Bytes.LE
         |> D.andThen
             (\len -> D.loop ( len, [] ) (listStep decoder))
+
+
+decodeBytes : D.Decoder Bytes.Bytes
+decodeBytes =
+    D.unsignedInt32 Bytes.LE |> D.andThen D.bytes
 
 
 {-| Pinched from the Bytes documentation.

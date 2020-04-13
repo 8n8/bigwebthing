@@ -21,21 +21,23 @@ import Json.Decode as Jd
 import Json.Encode as Je
 import SHA256
 import Set
+import Task
+import Time
 import Truelang
 import Utils
 
 
 type alias Model =
     { myName : Maybe Int
-    , myContacts : List Int
+    , myContacts : Set.Set Int
     , sendToBox : Maybe Int
-    , sendToError : Maybe SendMessageError
     , addContactBox : Maybe Int
-    , addContactError : Maybe AddContactError
-    , programs : Dict.Dict String Utils.Program
-    , openProgram : Maybe String
-    , internalError : Maybe InternalError
-    , newContacts : List Int
+    , addContactError : Maybe String
+    , messages : List Utils.Message
+    , openMessage : Maybe ( Utils.Message, Maybe ( String, String ) )
+    , drafts : List Utils.Draft
+    , openDraft : Maybe ( Utils.Draft, Maybe ( String, String ) )
+    , internalError : Maybe String
     }
 
 
@@ -46,7 +48,11 @@ port retrievedEditorInfo : (Je.Value -> msg) -> Sub msg
 
 
 subscriptions =
-    retrievedEditorInfo RetrievedEditorInfo
+    Sub.batch
+        [ retrievedEditorInfo RetrievedEditorInfo
+        , badWhitelist BadWhitelist
+        , goodWhitelist GoodWhitelist
+        ]
 
 
 initCmd : Cmd Msg
@@ -54,88 +60,63 @@ initCmd =
     getEditorInfo ()
 
 
+port whitelistPort : Int -> Cmd msg
+
+
 initModel : Model
 initModel =
     { myName = Nothing
-    , myContacts = []
+    , myContacts = Set.empty
     , addContactBox = Nothing
     , addContactError = Nothing
-    , programs = Dict.empty
-    , openProgram = Nothing
     , internalError = Nothing
-    , newContacts = []
     , sendToBox = Nothing
-    , sendToError = Nothing
+    , drafts = []
+    , messages = []
+    , openDraft = Nothing
+    , openMessage = Nothing
     }
 
 
-type InternalError
-    = UpdatedUserInputButNoOpenProgram
-    | UpdatedUserInputButNoProgram
-    | UpdatedProgramButNoOpenProgram
-    | UpdatedProgramButNoProgram
-    | BadCache Base64.Decode.Error
-    | BadDecodeCache String
-    | BadEditorCacheDecode Jd.Error
-    | NewUserInputButNoUsername String
-    | NewDescriptionButNoUsername
-    | SendMessageButBadOpenProgram
-
-
 type Msg
-    = UpdatedUserInput String
-    | UpdatedProgramEditor String
-    | MakeNewProgram
-    | LaunchProgram String
-    | AddNewContact
+    = AddNewContact
     | UpdateContactBox String
     | RetrievedEditorInfo Je.Value
-    | UpdatedDescription String
-    | UpdatedRecipientBox String
-    | SendMessage
+    | SendMessage Utils.Message
+    | GoodWhitelist Int
+    | BadWhitelist String
+    | CloseMessage Utils.Message
+    | UpdatedRecipient ( Utils.Draft, Maybe ( String, String ) ) String
+    | UpdatedDraft ( Utils.Draft, Maybe ( String, String ) )
+    | UpdatedMessageView ( Utils.Message, Maybe ( String, String ) )
+    | MakeNewModule Utils.Draft
+    | OpenDraft Utils.Draft
+    | MakeNewDraft
+    | TimeForNewDraft Time.Posix
 
 
 editorInfoDecoder : Jd.Decoder RawEditorInfo
 editorInfoDecoder =
-    Jd.map3 RawEditorInfo
+    Jd.map4 RawEditorInfo
         (Jd.field "myName" Jd.int)
         (Jd.field "myContacts" (Jd.list Jd.int))
-        (Jd.field "editorCache" Jd.string)
+        (Jd.field "inbox" (Jd.list Jd.string))
+        (Jd.field "drafts" (Jd.list Jd.string))
 
 
 type alias RawEditorInfo =
     { myName : Int
     , myContacts : List Int
-    , editorCache : String
+    , inbox : List String
+    , drafts : List String
     }
 
 
-combinePrograms :
-    Dict.Dict String Utils.Program
-    -> List Utils.Program
-    -> Dict.Dict String Utils.Program
-combinePrograms oldPrograms newPrograms =
-    Dict.union oldPrograms <|
-        Dict.fromList <|
-            List.map plusHash newPrograms
-
-
-plusHash : Utils.Program -> ( String, Utils.Program )
-plusHash program =
-    ( Utils.hash program.code, program )
-
-
-sendMessage : String -> Utils.Version -> Int -> Cmd Msg
-sendMessage code version recipient =
+sendMessage : Utils.Message -> Cmd Msg
+sendMessage message =
     let
-        humanMsg =
-            { to = recipient, code = code, version = version }
-
-        msgOut =
-            Utils.SendThis humanMsg
-
         encodedBytes =
-            E.encode <| encodeMessage msgOut
+            E.encode <| Utils.encodeMessage message
 
         encodedB64 =
             Base64.Encode.encode <| Base64.Encode.bytes encodedBytes
@@ -144,16 +125,6 @@ sendMessage code version recipient =
 
 
 port sendMessagePort : String -> Cmd msg
-
-
-whitelistSomeone : Int -> Cmd Msg
-whitelistSomeone username =
-    sendMessagePort <|
-        Base64.Encode.encode <|
-            Base64.Encode.bytes <|
-                E.encode <|
-                    encodeMessage <|
-                        Utils.WhitelistSomeone username
 
 
 encodeMessage : Utils.MsgOut -> E.Encoder
@@ -175,21 +146,6 @@ encodeMessage message =
                 ]
 
 
-removeAdded : List Int -> List Int -> List Int -> List Int
-removeAdded oldNewContacts newNewContacts myContacts =
-    let
-        setOld =
-            Set.fromList oldNewContacts
-
-        setNew =
-            Set.fromList newNewContacts
-
-        setMy =
-            Set.fromList myContacts
-    in
-    List.sort <| Set.toList <| Set.diff (Set.union setOld setNew) setMy
-
-
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
@@ -199,169 +155,32 @@ update msg model =
                     ( { model
                         | internalError =
                             Just <|
-                                BadEditorCacheDecode err
+                                "could not decode editor cache: "
+                                    ++ Jd.errorToString err
                       }
                     , Cmd.none
                     )
 
                 Ok raw ->
-                    case Utils.decodeEditorCache raw.editorCache of
+                    case Utils.decodeInbox raw.inbox of
                         Err err ->
                             ( { model
                                 | internalError =
                                     Just <|
-                                        BadDecodeCache err
+                                        "could not decode inbox: "
+                                            ++ err
                               }
                             , Cmd.none
                             )
 
-                        Ok { newContacts, programs } ->
+                        Ok messages ->
                             ( { model
-                                | programs =
-                                    combinePrograms
-                                        model.programs
-                                        programs
+                                | messages = messages
                                 , myName = Just raw.myName
-                                , myContacts = raw.myContacts
-                                , newContacts =
-                                    removeAdded
-                                        model.newContacts
-                                        newContacts
-                                        raw.myContacts
+                                , myContacts = Set.fromList raw.myContacts
                               }
                             , Cmd.none
                             )
-
-        UpdatedUserInput newUserInput ->
-            case model.openProgram of
-                Nothing ->
-                    ( { model
-                        | internalError =
-                            Just UpdatedUserInputButNoOpenProgram
-                      }
-                    , Cmd.none
-                    )
-
-                Just programName ->
-                    case Dict.get programName model.programs of
-                        Nothing ->
-                            ( { model
-                                | internalError =
-                                    Just
-                                        UpdatedUserInputButNoProgram
-                              }
-                            , Cmd.none
-                            )
-
-                        Just program ->
-                            case model.myName of
-                                Nothing ->
-                                    ( { model | internalError = Just <| NewUserInputButNoUsername "no username" }, Cmd.none )
-
-                                Just myName ->
-                                    let
-                                        version : Utils.Version
-                                        version =
-                                            { description = "", userInput = newUserInput, author = myName }
-
-                                        versions : List Utils.Version
-                                        versions =
-                                            [ version ]
-
-                                        newProgram =
-                                            case program.versions of
-                                                [] ->
-                                                    { program | versions = versions }
-
-                                                v :: ersions ->
-                                                    { program | versions = { v | userInput = newUserInput } :: ersions }
-
-                                        newPrograms =
-                                            Dict.insert programName newProgram model.programs
-
-                                        newModel =
-                                            { model | programs = newPrograms }
-                                    in
-                                    ( newModel, cacheModel newModel )
-
-        UpdatedProgramEditor newCode ->
-            case model.openProgram of
-                Nothing ->
-                    ( { model | internalError = Just UpdatedProgramButNoOpenProgram }, Cmd.none )
-
-                Just programName ->
-                    case Dict.get programName model.programs of
-                        Nothing ->
-                            ( { model | internalError = Just UpdatedProgramButNoProgram }, Cmd.none )
-
-                        Just program ->
-                            let
-                                newProgram =
-                                    { program | code = newCode }
-
-                                newName =
-                                    Utils.hash newCode
-
-                                newPrograms =
-                                    Dict.remove programName <|
-                                        Dict.insert newName newProgram model.programs
-
-                                newModel =
-                                    { model | programs = newPrograms, openProgram = Just newName }
-                            in
-                            ( newModel, cacheModel newModel )
-
-        UpdatedDescription newDescription ->
-            case model.openProgram of
-                Nothing ->
-                    ( { model | internalError = Just UpdatedProgramButNoOpenProgram }, Cmd.none )
-
-                Just programName ->
-                    case Dict.get programName model.programs of
-                        Nothing ->
-                            ( { model | internalError = Just UpdatedProgramButNoProgram }, Cmd.none )
-
-                        Just program ->
-                            case model.myName of
-                                Nothing ->
-                                    ( { model | internalError = Just NewDescriptionButNoUsername }, Cmd.none )
-
-                                Just myName ->
-                                    let
-                                        newProgram =
-                                            case program.versions of
-                                                [] ->
-                                                    { program | versions = [ { description = newDescription, userInput = "", author = myName } ] }
-
-                                                v :: ersions ->
-                                                    { program | versions = { v | description = newDescription } :: ersions }
-
-                                        newPrograms =
-                                            Dict.insert programName newProgram model.programs
-
-                                        newModel =
-                                            { model | programs = newPrograms }
-                                    in
-                                    ( newModel, cacheModel newModel )
-
-        MakeNewProgram ->
-            let
-                newProgram =
-                    { code = "", versions = [] }
-
-                name =
-                    Utils.hash newProgram.code
-
-                newPrograms =
-                    Dict.insert name newProgram model.programs
-
-                newModel =
-                    { model | programs = newPrograms, openProgram = Just name }
-            in
-            ( newModel, cacheModel newModel )
-
-        LaunchProgram programName ->
-            ( { model | openProgram = Just programName }, Cmd.none )
 
         AddNewContact ->
             case model.addContactBox of
@@ -369,76 +188,27 @@ update msg model =
                     ( model, Cmd.none )
 
                 Just newContact ->
-                    if List.member newContact model.myContacts then
-                        ( { model | addContactError = Just AlreadyAContact }, Cmd.none )
+                    if Set.member newContact model.myContacts then
+                        ( { model | addContactError = Just "Already a contact" }, Cmd.none )
 
                     else
                         case model.myName of
                             Nothing ->
-                                ( { model | addContactError = Just NoUsername }, Cmd.none )
+                                ( { model | addContactError = Just "No username" }, Cmd.none )
 
                             Just myName ->
                                 if myName == newContact then
-                                    ( { model | addContactError = Just YouTriedToAddYourself }, Cmd.none )
+                                    ( { model | addContactError = Just "You tried to add yourself" }, Cmd.none )
 
                                 else
                                     let
                                         newModel =
-                                            { model | newContacts = newContact :: model.newContacts, addContactBox = Nothing, addContactError = Nothing }
+                                            { model | addContactBox = Nothing, addContactError = Nothing }
                                     in
-                                    ( newModel, Cmd.batch [ cacheModel newModel, whitelistSomeone newContact ] )
+                                    ( newModel, whitelistPort newContact )
 
-        SendMessage ->
-            case model.sendToBox of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just recipient ->
-                    if not <| List.member recipient model.myContacts then
-                        ( { model | sendToError = Just <| NotAContact recipient }, Cmd.none )
-
-                    else
-                        case model.openProgram of
-                            Nothing ->
-                                ( model, Cmd.none )
-
-                            Just programName ->
-                                case Dict.get programName model.programs of
-                                    Nothing ->
-                                        ( { model | internalError = Just SendMessageButBadOpenProgram }, Cmd.none )
-
-                                    Just program ->
-                                        case program.versions of
-                                            [] ->
-                                                case model.myName of
-                                                    Nothing ->
-                                                        ( { model | sendToError = Just CantSendWithNoUsername }, Cmd.none )
-
-                                                    Just myName ->
-                                                        ( model, sendMessage program.code { description = "", userInput = "", author = myName } recipient )
-
-                                            v :: _ ->
-                                                ( model, sendMessage program.code v recipient )
-
-        UpdatedRecipientBox candidate ->
-            case String.toInt candidate of
-                Nothing ->
-                    if candidate == "" then
-                        ( { model | sendToBox = Nothing }, Cmd.none )
-
-                    else
-                        ( model, Cmd.none )
-
-                Just number ->
-                    if number < 0 then
-                        ( model, Cmd.none )
-
-                    else
-                        let
-                            newModel =
-                                { model | sendToBox = Just number }
-                        in
-                        ( newModel, Cmd.none )
+        SendMessage draft ->
+            ( model, sendMessage draft )
 
         UpdateContactBox candidate ->
             case String.toInt candidate of
@@ -460,231 +230,282 @@ update msg model =
                         in
                         ( newModel, Cmd.none )
 
+        GoodWhitelist newContact ->
+            ( { model | myContacts = Set.insert newContact model.myContacts }, Cmd.none )
+
+        BadWhitelist error ->
+            ( { model | addContactError = Just error }, Cmd.none )
+
+        CloseMessage message ->
+            ( { model | messages = message :: model.messages, openMessage = Nothing }, Cmd.none )
+
+        UpdatedMessageView openMessage ->
+            ( { model | openMessage = Just openMessage }, Cmd.none )
+
+        UpdatedRecipient ( draft, maybeOpenModule ) rawRecipient ->
+            let
+                newDraft =
+                    { draft | to = String.toInt rawRecipient }
+
+                newDrafts =
+                    newDraft :: model.drafts
+            in
+            ( { model | openDraft = Just ( newDraft, maybeOpenModule ) }, cacheDrafts newDrafts )
+
+        UpdatedDraft ( draft, maybeOpenModule ) ->
+            let
+                newDrafts =
+                    draft :: model.drafts
+            in
+            ( { model | openDraft = Just ( draft, maybeOpenModule ) }, cacheDrafts newDrafts )
+
+        MakeNewModule draft ->
+            ( { model | openDraft = Just ( draft, Just ( "", "" ) ) }, Cmd.none )
+
+        OpenDraft draft ->
+            ( { model | openDraft = Just ( draft, Nothing ) }, Cmd.none )
+
+        MakeNewDraft ->
+            ( model, Task.perform TimeForNewDraft Time.now )
+
+        TimeForNewDraft posixTime ->
+            ( { model | openDraft = Just ( { to = Nothing, time = Time.posixToMillis posixTime, subject = "", userInput = "", code = Dict.empty, blobs = Dict.empty }, Nothing ) }, Cmd.none )
+
+
+port badWhitelist : (String -> msg) -> Sub msg
+
+
+port cacheDraftsPort : Je.Value -> Cmd msg
+
+
+cacheDrafts : List Utils.Draft -> Cmd msg
+cacheDrafts messages =
+    cacheDraftsPort <| encodeDrafts messages
+
+
+encodeDrafts : List Utils.Draft -> Je.Value
+encodeDrafts drafts =
+    let
+        asBytes =
+            List.map (E.encode << Utils.encodeDraft) drafts
+
+        asStrings =
+            List.map (Base64.Encode.encode << Base64.Encode.bytes) asBytes
+    in
+    Je.list Je.string asStrings
+
+
+port goodWhitelist : (Int -> msg) -> Sub msg
+
 
 view : Model -> Element.Element Msg
-view { internalError, newContacts, myName, myContacts, addContactBox, addContactError, programs, openProgram, sendToBox, sendToError } =
-    case internalError of
+view model =
+    case model.internalError of
         Just err ->
-            Element.text <| "internal error: " ++ showInternalError err
+            Element.text <| "internal error: " ++ err
 
         Nothing ->
             Element.column [ Element.spacing 20, Utils.fontSize ]
-                [ myUsernameIs myName
-                , myContactsAre myContacts
-                , waitingContacts newContacts
-                , addNewContact addContactBox addContactError
-                , chooseAProgram programs openProgram
-                , makeNewProgram
-                , programOutput openProgram programs myContacts myName
-                , myInput openProgram programs
-                , editDescription openProgram programs
-                , programCode openProgram programs
-                , sendItTo sendToBox sendToError openProgram
+                [ myUsernameIs model.myName
+                , myContactsAre <| Set.toList model.myContacts
+                , addNewContact model.addContactBox model.addContactError
+                , viewMessages model.messages model.openMessage
+                , makeNewDraft
+                , editDrafts model.openDraft model.drafts
                 ]
 
 
-type SendMessageError
-    = YouCantSendToYourself
-    | NothingHereToSend
-    | CantSendWithNoUsername
-    | NotAContact Int
-
-
-sendItTo : Maybe Int -> Maybe SendMessageError -> Maybe String -> Element.Element Msg
-sendItTo boxContents maybeError openProgram =
-    case openProgram of
+viewMessages : List Utils.Message -> Maybe ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
+viewMessages messages maybeMessage =
+    case maybeMessage of
         Nothing ->
-            Element.none
+            messageChooser messages
 
-        Just _ ->
-            sendItToHelp boxContents maybeError
+        Just openMessage ->
+            viewMessage openMessage
 
 
-sendItToHelp : Maybe Int -> Maybe SendMessageError -> Element.Element Msg
-sendItToHelp boxContents maybeError =
-    Element.column [] <|
-        [ Element.Input.text []
-            { onChange = UpdatedRecipientBox
-            , text =
-                case boxContents of
-                    Just n ->
-                        String.fromInt n
+messageChooser : List Utils.Message -> Element.Element Msg
+messageChooser messages =
+    Element.column [] <| List.map messageChooserButton messages
 
-                    Nothing ->
-                        ""
-            , placeholder =
-                Just <|
-                    Element.Input.placeholder [] <|
-                        Element.text "Type their username"
-            , label =
-                Element.Input.labelAbove [] <|
-                    Element.text "Send this to someone else:"
-            }
-        , Element.Input.button []
-            { onPress = Just SendMessage
-            , label = Element.text "Send"
-            }
-        , case maybeError of
-            Nothing ->
-                Element.none
 
-            Just YouCantSendToYourself ->
-                Element.text "you can't send messages to yourself"
-
-            Just NothingHereToSend ->
-                Element.text "there is nothing here to send"
-
-            Just CantSendWithNoUsername ->
-                Element.text "can't send because no username"
-
-            Just (NotAContact id) ->
-                Element.text <| "can't send to " ++ String.fromInt id ++ " because they are not a contact"
+messageChooserButton : Utils.Message -> Element.Element Msg
+messageChooserButton message =
+    Element.column []
+        [ Element.text <| "Subject: " ++ message.subject
+        , Element.text <| "From: " ++ String.fromInt message.from
         ]
 
 
-showInternalError : InternalError -> String
-showInternalError error =
-    case error of
-        UpdatedUserInputButNoOpenProgram ->
-            "updated user input but no open program"
-
-        UpdatedUserInputButNoProgram ->
-            "updated user input but no program"
-
-        UpdatedProgramButNoOpenProgram ->
-            "updated program but no open program"
-
-        UpdatedProgramButNoProgram ->
-            "updated program but no program"
-
-        BadCache err ->
-            "bad cache: " ++ Utils.showB64Error err
-
-        BadDecodeCache err ->
-            "bad decode cache: " ++ err
-
-        BadEditorCacheDecode jsonError ->
-            "bad editor cache decoder: " ++ Jd.errorToString jsonError
-
-        NewUserInputButNoUsername err ->
-            "new user input but no username: " ++ err
-
-        NewDescriptionButNoUsername ->
-            "new description but no username"
-
-        SendMessageButBadOpenProgram ->
-            "tried to send message but bad open program"
+viewMessage : ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
+viewMessage ( message, maybeOpenModule ) =
+    Element.column []
+        [ closeMessage message
+        , Element.text <| "From: " ++ String.fromInt message.from
+        , Element.text <| "Subject: " ++ message.subject
+        , Element.text "User input:"
+        , Element.paragraph [] [ Element.text message.userInput ]
+        , viewCode ( message, maybeOpenModule )
+        ]
 
 
-waitingContacts : List Int -> Element.Element Msg
-waitingContacts contacts =
-    case contacts of
-        [] ->
-            Element.none
-
-        oneOrMore ->
-            Element.el [ Utils.sansSerif ] <|
-                Element.text <|
-                    "Contacts waiting to be added: "
-                        ++ (String.join ", " <| List.map String.fromInt oneOrMore)
+closeMessage : Utils.Message -> Element.Element Msg
+closeMessage message =
+    Element.Input.button []
+        { onPress = Just <| CloseMessage message
+        , label = Element.text "Back to inbox"
+        }
 
 
-port cacheEditorInfo : String -> Cmd msg
-
-
-cacheModel : Model -> Cmd msg
-cacheModel model =
-    modelToCache model
-        |> Utils.encodeCache
-        |> Utils.toB64
-        |> cacheEditorInfo
-
-
-modelToCache : Model -> Utils.Cache
-modelToCache { newContacts, programs } =
-    { newContacts = newContacts
-    , programs = Dict.values programs
-    }
-
-
-editDescription : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
-editDescription maybeOpenProgram programs =
-    case maybeOpenProgram of
+viewCode : ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
+viewCode ( message, maybeOpenModule ) =
+    case maybeOpenModule of
         Nothing ->
-            Element.none
+            Element.column [] <|
+                List.map (messageOpenModuleButton message) <|
+                    Dict.toList message.code
 
-        Just programName ->
-            case Dict.get programName programs of
-                Nothing ->
-                    Element.text "Internal error: can't find program"
-
-                Just program ->
-                    Element.Input.multiline [ monospace ]
-                        { onChange = UpdatedDescription
-                        , text =
-                            case program.versions of
-                                [] ->
-                                    ""
-
-                                v :: _ ->
-                                    v.description
-                        , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type description here"
-                        , label = Element.Input.labelAbove [ Utils.sansSerif ] <| Element.text "Program description:"
-                        , spellcheck = True
-                        }
+        Just ( moduleName, code ) ->
+            Element.column []
+                [ Element.text moduleName
+                , Element.paragraph [] [ Element.text code ]
+                ]
 
 
-myInput : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
-myInput maybeOpenProgram programs =
-    case maybeOpenProgram of
+messageOpenModuleButton : Utils.Message -> ( String, String ) -> Element.Element Msg
+messageOpenModuleButton message module_ =
+    Element.Input.button []
+        { onPress = Just <| UpdatedMessageView ( message, Just module_ )
+        , label = Element.text <| Tuple.first module_
+        }
+
+
+editDrafts : Maybe ( Utils.Draft, Maybe ( String, String ) ) -> List Utils.Draft -> Element.Element Msg
+editDrafts maybeOpenDraft drafts =
+    case maybeOpenDraft of
         Nothing ->
-            Element.none
+            draftChooser drafts
 
-        Just programName ->
-            case Dict.get programName programs of
+        Just openDraft ->
+            editDraft openDraft
+
+
+editDraft : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+editDraft draft =
+    Element.column []
+        [ toBox draft
+        , subjectBox draft
+        , userInputBox draft
+        , editCode draft
+        ]
+
+
+toBox : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+toBox ( draft, openModule ) =
+    Element.Input.text []
+        { onChange = UpdatedRecipient ( draft, openModule )
+        , text =
+            case draft.to of
                 Nothing ->
-                    Element.text "Internal error: can't find program"
+                    ""
 
-                Just program ->
-                    Element.Input.multiline [ monospace ]
-                        { onChange = UpdatedUserInput
-                        , text =
-                            case program.versions of
-                                [] ->
-                                    ""
-
-                                v :: _ ->
-                                    v.userInput
-                        , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type here"
-                        , label = Element.Input.labelAbove [ Utils.sansSerif ] <| Element.text "Your input goes here:"
-                        , spellcheck = True
-                        }
+                Just recipient ->
+                    String.fromInt recipient
+        , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type the recipient ID here"
+        , label = Element.Input.labelAbove [] <| Element.text "To:"
+        }
 
 
-programCode : Maybe String -> Dict.Dict String Utils.Program -> Element.Element Msg
-programCode maybeOpenProgram programs =
-    case maybeOpenProgram of
+subjectBox : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+subjectBox ( draft, openModule ) =
+    Element.Input.text []
+        { onChange = \t -> UpdatedDraft ( { draft | subject = t }, openModule )
+        , text = draft.subject
+        , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type the subject"
+        , label = Element.Input.labelAbove [] <| Element.text "Subject:"
+        }
+
+
+userInputBox : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+userInputBox ( draft, openModule ) =
+    Element.Input.multiline []
+        { onChange = \t -> UpdatedDraft ( { draft | userInput = t }, openModule )
+        , text = draft.userInput
+        , placeholder =
+            Just <|
+                Element.Input.placeholder [] <|
+                    Element.text "Type user input here"
+        , label =
+            Element.Input.labelAbove [] <|
+                Element.text "User input:"
+        , spellcheck = True
+        }
+
+
+editCode : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+editCode ( draft, openModule ) =
+    case openModule of
         Nothing ->
-            Element.none
+            Element.column [] <|
+                makeNewModuleButton draft
+                    :: (List.map (draftOpenModuleButton draft) <| Dict.toList draft.code)
 
-        Just programName ->
-            case Dict.get programName programs of
-                Nothing ->
-                    Element.text "Internal error: can't find program"
+        Just ( moduleName, code ) ->
+            Element.column []
+                [ Element.Input.text []
+                    { onChange = \n -> UpdatedDraft ( draft, Just ( n, code ) )
+                    , text = moduleName
+                    , placeholder =
+                        Just <|
+                            Element.Input.placeholder [] <|
+                                Element.text "Type module name here"
+                    , label =
+                        Element.Input.labelAbove [] <|
+                            Element.text "Module name"
+                    }
+                , Element.Input.multiline []
+                    { onChange = \c -> UpdatedDraft ( draft, Just ( moduleName, c ) )
+                    , text = code
+                    , placeholder =
+                        Just <|
+                            Element.Input.placeholder [] <|
+                                Element.text "Type your code here"
+                    , label =
+                        Element.Input.labelAbove [] <|
+                            Element.text "Module code"
+                    , spellcheck = False
+                    }
+                ]
 
-                Just program ->
-                    Element.Input.multiline [ monospace ]
-                        { onChange = UpdatedProgramEditor
-                        , text = program.code
-                        , placeholder =
-                            Just <|
-                                Element.Input.placeholder [] <|
-                                    Element.text "Type program here"
-                        , label =
-                            Element.Input.labelAbove [ Utils.sansSerif ] <|
-                                Element.text "Program code:"
-                        , spellcheck = False
-                        }
+
+makeNewModuleButton : Utils.Draft -> Element.Element Msg
+makeNewModuleButton draft =
+    Element.Input.button []
+        { onPress = Just <| MakeNewModule draft
+        , label = Element.text "New module"
+        }
+
+
+draftOpenModuleButton : Utils.Draft -> ( String, String ) -> Element.Element Msg
+draftOpenModuleButton draft ( name, code ) =
+    Element.Input.button []
+        { onPress = Just <| UpdatedDraft ( draft, Just ( name, code ) )
+        , label = Element.text name
+        }
+
+
+draftChooser : List Utils.Draft -> Element.Element Msg
+draftChooser drafts =
+    Element.column [] <| List.map showDraftButton drafts
+
+
+showDraftButton : Utils.Draft -> Element.Element Msg
+showDraftButton draft =
+    Element.Input.button []
+        { onPress = Just <| OpenDraft draft
+        , label = Element.text draft.subject
+        }
 
 
 monospace : Element.Attribute Msg
@@ -729,58 +550,15 @@ displayDocument document =
             Element.text s
 
 
-makeNewProgram : Element.Element Msg
-makeNewProgram =
-    Element.Input.button [ Utils.sansSerif ]
-        { onPress = Just MakeNewProgram
-        , label = Element.text "Make new program"
+makeNewDraft : Element.Element Msg
+makeNewDraft =
+    Element.Input.button []
+        { onPress = Just MakeNewDraft
+        , label = Element.text "Make new draft"
         }
 
 
-chooseAProgram : Dict.Dict String Utils.Program -> Maybe String -> Element.Element Msg
-chooseAProgram programs maybeOpenProgram =
-    Element.Input.radio [ Element.spacing 12 ]
-        { onChange = LaunchProgram
-        , selected = maybeOpenProgram
-        , label =
-            Element.Input.labelAbove [ Utils.sansSerif ] <|
-                Element.text "Choose a program:"
-        , options = Dict.values <| Dict.map programRadio programs
-        }
-
-
-programRadio :
-    String
-    -> Utils.Program
-    -> Element.Input.Option String Msg
-programRadio name program =
-    let
-        description =
-            case program.versions of
-                [] ->
-                    ""
-
-                v :: _ ->
-                    v.description
-    in
-    Element.Input.option name (programRadioView name description)
-
-
-programRadioView : String -> String -> Element.Element Msg
-programRadioView name description =
-    Element.column []
-        [ Element.el [ monospace ] <| Element.text name
-        , Element.paragraph [ Utils.sansSerif ] [ Element.text description ]
-        ]
-
-
-type AddContactError
-    = YouTriedToAddYourself
-    | AlreadyAContact
-    | NoUsername
-
-
-addNewContact : Maybe Int -> Maybe AddContactError -> Element.Element Msg
+addNewContact : Maybe Int -> Maybe String -> Element.Element Msg
 addNewContact boxContents maybeError =
     Element.column [] <|
         [ Element.Input.text [ monospace ]
@@ -808,14 +586,8 @@ addNewContact boxContents maybeError =
             Nothing ->
                 Element.none
 
-            Just YouTriedToAddYourself ->
-                Element.text "you can't add yourself to your contacts"
-
-            Just AlreadyAContact ->
-                Element.text "already in your contacts"
-
-            Just NoUsername ->
-                Element.text "no username"
+            Just error ->
+                Element.text error
         ]
 
 

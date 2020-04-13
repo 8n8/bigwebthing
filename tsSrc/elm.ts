@@ -97,22 +97,34 @@
 
   interface EditorInfo {
     myName: number;
-    editorCache: string;
+    inbox: string[];
+    drafts: string[];
     myContacts: number[];
   }
 
   const nullEditorInfo: EditorInfo = {
     myName: 0,
-    editorCache: "",
+    inbox: [],
     myContacts: [],
+    drafts: [],
   };
 
-  async function getEditorInfo(): Promise<[EditorInfo, string]> {
-    const rawEditorCache: Uint8Array | null = await localGet("editorCache");
-    let editorCache: string = nullCache;
-    if (rawEditorCache !== null) {
-      editorCache = fromBytes(rawEditorCache);
+  async function readMessages(key: string): Promise<string[]> {
+    let raw: Uint8Array[] | null = await localGet(key);
+    if (raw === null) {
+      raw = [];
     }
+    let messages: string[] = [];
+    const rawLength = raw.length;
+    for (let i = 0; i < rawLength; i++) {
+      messages.push(fromBytes(raw[i]));
+    }
+    return messages;
+  }
+
+  async function getEditorInfo(): Promise<[EditorInfo, string]> {
+    const inbox: string[] = await readMessages("inbox");
+    const drafts: string[] = await readMessages("drafts");
 
     const keys: Keys = await getCryptoKeys();
 
@@ -137,8 +149,9 @@
     }
     const toSend: EditorInfo = {
       myName: myName,
-      editorCache: editorCache,
+      inbox: inbox,
       myContacts: myContacts,
+      drafts: drafts,
     };
     return [toSend, ""];
   }
@@ -1330,6 +1343,49 @@
         });
       });
     });
+  });
+
+  app.ports.whitelistPort.subscribe(function (id: number): void {
+    handleWhitelistRequest(id).then(function (err: string) {
+      if (err !== "") {
+        app.ports.badWhitelist.send(err);
+      } else {
+        app.ports.goodWhitelist.send(id);
+      }
+    });
+  });
+
+  async function handleWhitelistRequest(id: number): Promise<string> {
+    const keys: Keys = await getCryptoKeys();
+    const [myName, myNameErr]: [number, string] = await getMyName(keys);
+    if (myNameErr !== "") {
+      return "could not get my name: " + myNameErr;
+    }
+    const whitelistErr: string = await sendWhitelistRequest(id, keys, myName);
+    if (whitelistErr !== "") {
+      return "bad whitelist request: " + whitelistErr;
+    }
+
+    const signingKey: [Uint8Array, string] = await getRecipientSigningKey(id);
+    if (signingKey[1] !== "") {
+      return signingKey[1];
+    }
+
+    const updateKeyError = await updateContacts(id);
+    return updateKeyError;
+  }
+
+  async function cacheDraftsHelp(rawB64: string[]): Promise<void> {
+    let asBytes: Uint8Array[] = [];
+    const numMessages = rawB64.length;
+    for (let i = 0; i < numMessages; i++) {
+      asBytes.push(toBytes(rawB64[i]));
+    }
+    await localSet("drafts", asBytes);
+  }
+
+  app.ports.cacheDraftsPort.subscribe(function (rawB64: string[]) {
+    cacheDraftsHelp(rawB64);
   });
 
   app.ports.sendMessagePort.subscribe(function (rawB64: string): void {
