@@ -17,6 +17,9 @@ import Dict
 import Element
 import Element.Font as Font
 import Element.Input
+import File
+import File.Download as Download
+import File.Select as Select
 import Json.Decode as Jd
 import Json.Encode as Je
 import SHA256
@@ -38,7 +41,12 @@ type alias Model =
     , drafts : List Utils.Draft
     , openDraft : Maybe ( Utils.Draft, Maybe ( String, String ) )
     , internalError : Maybe String
+    , outbox : List Utils.Message
+    , sendMessageError : Maybe String
     }
+
+
+port sendMessageError : (String -> msg) -> Sub msg
 
 
 port getEditorInfo : () -> Cmd msg
@@ -52,6 +60,7 @@ subscriptions =
         [ retrievedEditorInfo RetrievedEditorInfo
         , badWhitelist BadWhitelist
         , goodWhitelist GoodWhitelist
+        , sendMessageError SendMessageError
         ]
 
 
@@ -71,7 +80,9 @@ initModel =
     , addContactError = Nothing
     , internalError = Nothing
     , sendToBox = Nothing
+    , sendMessageError = Nothing
     , drafts = []
+    , outbox = []
     , messages = []
     , openDraft = Nothing
     , openMessage = Nothing
@@ -82,26 +93,34 @@ type Msg
     = AddNewContact
     | UpdateContactBox String
     | RetrievedEditorInfo Je.Value
-    | SendMessage Utils.Message
     | GoodWhitelist Int
     | BadWhitelist String
     | CloseMessage Utils.Message
+    | CloseDraft Utils.Draft
     | UpdatedRecipient ( Utils.Draft, Maybe ( String, String ) ) String
     | UpdatedDraft ( Utils.Draft, Maybe ( String, String ) )
     | UpdatedMessageView ( Utils.Message, Maybe ( String, String ) )
     | MakeNewModule Utils.Draft
-    | OpenDraft Utils.Draft
+    | OpenDraft Utils.Draft (List Utils.Draft)
+    | OpenMessage Utils.Message (List Utils.Message)
     | MakeNewDraft
     | TimeForNewDraft Time.Posix
+    | SendDraft Utils.Draft
+    | SendMessageError String
+    | ClickAddBlobButton Utils.Draft
+    | BlobSelected Utils.Draft File.File
+    | BlobLoaded String Utils.Draft Bytes.Bytes
+    | DownloadFile String Bytes.Bytes
 
 
 editorInfoDecoder : Jd.Decoder RawEditorInfo
 editorInfoDecoder =
-    Jd.map4 RawEditorInfo
+    Jd.map5 RawEditorInfo
         (Jd.field "myName" Jd.int)
         (Jd.field "myContacts" (Jd.list Jd.int))
         (Jd.field "inbox" (Jd.list Jd.string))
         (Jd.field "drafts" (Jd.list Jd.string))
+        (Jd.field "outbox" (Jd.list Jd.string))
 
 
 type alias RawEditorInfo =
@@ -109,6 +128,7 @@ type alias RawEditorInfo =
     , myContacts : List Int
     , inbox : List String
     , drafts : List String
+    , outbox : List String
     }
 
 
@@ -149,6 +169,42 @@ encodeMessage message =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        DownloadFile fileName blob ->
+            ( model
+            , Download.bytes fileName "application/octet-stream" blob
+            )
+
+        ClickAddBlobButton draft ->
+            ( model
+            , Select.file
+                [ "application/octet-stream" ]
+                (BlobSelected draft)
+            )
+
+        BlobSelected draft file ->
+            ( model
+            , Task.perform (BlobLoaded (File.name file) draft) <|
+                File.toBytes file
+            )
+
+        BlobLoaded blobName draft fileBytes ->
+            let
+                blobs =
+                    Dict.insert blobName fileBytes draft.blobs
+
+                newDraft =
+                    { draft | blobs = blobs }
+
+                newDrafts =
+                    newDraft :: model.drafts
+            in
+            ( { model | openDraft = Just ( newDraft, Nothing ) }
+            , cacheDrafts newDrafts
+            )
+
+        SendMessageError error ->
+            ( { model | sendMessageError = Just error }, Cmd.none )
+
         RetrievedEditorInfo jsonValue ->
             case Jd.decodeValue editorInfoDecoder jsonValue of
                 Err err ->
@@ -162,8 +218,8 @@ update msg model =
                     )
 
                 Ok raw ->
-                    case Utils.decodeInbox raw.inbox of
-                        Err err ->
+                    case ( Utils.decodeInbox raw.inbox, Utils.decodeDrafts raw.drafts, Utils.decodeInbox raw.outbox ) of
+                        ( Err err, _, _ ) ->
                             ( { model
                                 | internalError =
                                     Just <|
@@ -173,11 +229,26 @@ update msg model =
                             , Cmd.none
                             )
 
-                        Ok messages ->
+                        ( _, Err err, _ ) ->
+                            ( { model
+                                | internalError =
+                                    Just <|
+                                        "could not decode drafts: "
+                                            ++ err
+                              }
+                            , Cmd.none
+                            )
+
+                        ( _, _, Err err ) ->
+                            ( { model | internalError = Just <| "could not decode outbox: " ++ err }, Cmd.none )
+
+                        ( Ok messages, Ok drafts, Ok outbox ) ->
                             ( { model
                                 | messages = messages
+                                , drafts = drafts
                                 , myName = Just raw.myName
                                 , myContacts = Set.fromList raw.myContacts
+                                , outbox = outbox
                               }
                             , Cmd.none
                             )
@@ -206,9 +277,6 @@ update msg model =
                                             { model | addContactBox = Nothing, addContactError = Nothing }
                                     in
                                     ( newModel, whitelistPort newContact )
-
-        SendMessage draft ->
-            ( model, sendMessage draft )
 
         UpdateContactBox candidate ->
             case String.toInt candidate of
@@ -239,6 +307,9 @@ update msg model =
         CloseMessage message ->
             ( { model | messages = message :: model.messages, openMessage = Nothing }, Cmd.none )
 
+        CloseDraft draft ->
+            ( { model | drafts = draft :: model.drafts, openDraft = Nothing }, Cmd.none )
+
         UpdatedMessageView openMessage ->
             ( { model | openMessage = Just openMessage }, Cmd.none )
 
@@ -254,22 +325,111 @@ update msg model =
 
         UpdatedDraft ( draft, maybeOpenModule ) ->
             let
+                newCode =
+                    case maybeOpenModule of
+                        Nothing ->
+                            draft.code
+
+                        Just ( name, code ) ->
+                            case model.openDraft of
+                                Nothing ->
+                                    draft.code
+
+                                Just ( _, Nothing ) ->
+                                    draft.code
+
+                                Just ( _, Just ( oldName, oldCode ) ) ->
+                                    let
+                                        removedOld =
+                                            Dict.remove oldName draft.code
+                                    in
+                                    Dict.insert name code removedOld
+
+                newDraft =
+                    { draft | code = newCode }
+
                 newDrafts =
-                    draft :: model.drafts
+                    newDraft :: model.drafts
             in
-            ( { model | openDraft = Just ( draft, maybeOpenModule ) }, cacheDrafts newDrafts )
+            ( { model | openDraft = Just ( newDraft, maybeOpenModule ) }, cacheDrafts newDrafts )
 
         MakeNewModule draft ->
             ( { model | openDraft = Just ( draft, Just ( "", "" ) ) }, Cmd.none )
 
-        OpenDraft draft ->
-            ( { model | openDraft = Just ( draft, Nothing ) }, Cmd.none )
+        OpenDraft draft remainingDrafts ->
+            ( { model | openDraft = Just ( draft, Nothing ), drafts = remainingDrafts }, Cmd.none )
+
+        OpenMessage message remainingMessages ->
+            ( { model | openMessage = Just ( message, Nothing ), messages = remainingMessages }, Cmd.none )
 
         MakeNewDraft ->
             ( model, Task.perform TimeForNewDraft Time.now )
 
         TimeForNewDraft posixTime ->
             ( { model | openDraft = Just ( { to = Nothing, time = Time.posixToMillis posixTime, subject = "", userInput = "", code = Dict.empty, blobs = Dict.empty }, Nothing ) }, Cmd.none )
+
+        SendDraft draft ->
+            case makeMessage draft model.myName of
+                Err err ->
+                    ( { model | sendMessageError = Just err }
+                    , Cmd.none
+                    )
+
+                Ok message ->
+                    let
+                        newOutbox =
+                            message :: model.outbox
+                    in
+                    ( { model
+                        | openDraft = Nothing
+                        , outbox = message :: model.outbox
+                      }
+                    , Cmd.batch
+                        [ sendMessage message, cacheOutbox newOutbox ]
+                    )
+
+
+port cacheOutboxPort : Je.Value -> Cmd msg
+
+
+cacheOutbox : List Utils.Message -> Cmd Msg
+cacheOutbox outbox =
+    cacheOutboxPort <| encodeOutbox outbox
+
+
+encodeOutbox : List Utils.Message -> Je.Value
+encodeOutbox outbox =
+    let
+        asBytes =
+            List.map (E.encode << Utils.encodeMessage) outbox
+
+        asStrings =
+            List.map
+                (Base64.Encode.encode << Base64.Encode.bytes)
+                asBytes
+    in
+    Je.list Je.string asStrings
+
+
+makeMessage : Utils.Draft -> Maybe Int -> Result String Utils.Message
+makeMessage { to, time, subject, userInput, code, blobs } maybeMyName =
+    case ( to, maybeMyName ) of
+        ( Nothing, _ ) ->
+            Err "can't send because no recipient"
+
+        ( _, Nothing ) ->
+            Err "can't send because you have no username"
+
+        ( Just to_, Just myName ) ->
+            Ok
+                { from = myName
+                , to = to_
+                , time = time
+                , subject = subject
+                , userInput = userInput
+                , code = code
+                , blobs = blobs
+                }
 
 
 port badWhitelist : (String -> msg) -> Sub msg
@@ -327,11 +487,25 @@ viewMessages messages maybeMessage =
 
 messageChooser : List Utils.Message -> Element.Element Msg
 messageChooser messages =
-    Element.column [] <| List.map messageChooserButton messages
+    Element.column [] <| List.indexedMap (messageChooserButton messages) messages
 
 
-messageChooserButton : Utils.Message -> Element.Element Msg
-messageChooserButton message =
+messageChooserButton : List Utils.Message -> Int -> Utils.Message -> Element.Element Msg
+messageChooserButton messages index message =
+    let
+        before =
+            List.take index messages
+
+        after =
+            List.drop (index + 1) messages
+    in
+    Element.Input.button []
+        { onPress = Just <| OpenMessage message <| before ++ after
+        , label = messageChooserLabel message
+        }
+
+
+messageChooserLabel message =
     Element.column []
         [ Element.text <| "Subject: " ++ message.subject
         , Element.text <| "From: " ++ String.fromInt message.from
@@ -347,7 +521,34 @@ viewMessage ( message, maybeOpenModule ) =
         , Element.text "User input:"
         , Element.paragraph [] [ Element.text message.userInput ]
         , viewCode ( message, maybeOpenModule )
+        , viewBlobs message.blobs
         ]
+
+
+viewBlobs : Dict.Dict String Bytes.Bytes -> Element.Element Msg
+viewBlobs blobs =
+    Element.column [] <|
+        List.map viewBlob <|
+            Dict.toList blobs
+
+
+viewBlob : ( String, Bytes.Bytes ) -> Element.Element Msg
+viewBlob ( blobName, blob ) =
+    Element.row []
+        [ Element.text blobName
+        , Element.Input.button []
+            { onPress = Just <| DownloadFile blobName blob
+            , label = Element.text "Download"
+            }
+        ]
+
+
+closeDraft : Utils.Draft -> Element.Element Msg
+closeDraft draft =
+    Element.Input.button []
+        { onPress = Just <| CloseDraft draft
+        , label = Element.text "Back to drafts"
+        }
 
 
 closeMessage : Utils.Message -> Element.Element Msg
@@ -363,12 +564,17 @@ viewCode ( message, maybeOpenModule ) =
     case maybeOpenModule of
         Nothing ->
             Element.column [] <|
-                List.map (messageOpenModuleButton message) <|
+                (List.map (messageOpenModuleButton message) <|
                     Dict.toList message.code
+                )
 
         Just ( moduleName, code ) ->
             Element.column []
-                [ Element.text moduleName
+                [ Element.Input.button []
+                    { onPress = Just <| UpdatedMessageView ( message, Nothing )
+                    , label = Element.text "Back to modules"
+                    }
+                , Element.text moduleName
                 , Element.paragraph [] [ Element.text code ]
                 ]
 
@@ -394,11 +600,48 @@ editDrafts maybeOpenDraft drafts =
 editDraft : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
 editDraft draft =
     Element.column []
-        [ toBox draft
+        [ closeDraft <| Tuple.first draft
+        , toBox draft
         , subjectBox draft
         , userInputBox draft
         , editCode draft
+        , editBlobs draft
+        , sendDraft <| Tuple.first draft
         ]
+
+
+editBlobs : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+editBlobs ( draft, openModule ) =
+    Element.column [] <|
+        List.map (editBlob draft openModule) <|
+            Dict.toList draft.blobs
+
+
+editBlob : Utils.Draft -> Maybe ( String, String ) -> ( String, Bytes.Bytes ) -> Element.Element Msg
+editBlob draft openModule ( blobName, blob ) =
+    Element.row []
+        [ Element.text blobName
+        , Element.Input.button []
+            { onPress = Just <| DownloadFile blobName blob
+            , label = Element.text "Download"
+            }
+        , let
+            newDraft =
+                { draft | blobs = Dict.remove blobName draft.blobs }
+          in
+          Element.Input.button []
+            { onPress = Just <| UpdatedDraft ( newDraft, openModule )
+            , label = Element.text "Delete"
+            }
+        ]
+
+
+sendDraft : Utils.Draft -> Element.Element Msg
+sendDraft draft =
+    Element.Input.button []
+        { onPress = Just <| SendDraft draft
+        , label = Element.text "Send message"
+        }
 
 
 toBox : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
@@ -443,17 +686,33 @@ userInputBox ( draft, openModule ) =
         }
 
 
+addBlobButton : Utils.Draft -> Element.Element Msg
+addBlobButton draft =
+    Element.Input.button []
+        { onPress = Just <| ClickAddBlobButton draft
+        , label = Element.text "Add file"
+        }
+
+
 editCode : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
 editCode ( draft, openModule ) =
     case openModule of
         Nothing ->
             Element.column [] <|
-                makeNewModuleButton draft
-                    :: (List.map (draftOpenModuleButton draft) <| Dict.toList draft.code)
+                [ makeNewModuleButton draft
+                , addBlobButton draft
+                , Element.column [] <|
+                    List.map (draftOpenModuleButton draft) <|
+                        Dict.toList draft.code
+                ]
 
         Just ( moduleName, code ) ->
             Element.column []
-                [ Element.Input.text []
+                [ Element.Input.button []
+                    { onPress = Just <| UpdatedDraft ( draft, Nothing )
+                    , label = Element.text "Back to modules"
+                    }
+                , Element.Input.text []
                     { onChange = \n -> UpdatedDraft ( draft, Just ( n, code ) )
                     , text = moduleName
                     , placeholder =
@@ -497,13 +756,20 @@ draftOpenModuleButton draft ( name, code ) =
 
 draftChooser : List Utils.Draft -> Element.Element Msg
 draftChooser drafts =
-    Element.column [] <| List.map showDraftButton drafts
+    Element.column [] <| List.indexedMap (showDraftButton drafts) drafts
 
 
-showDraftButton : Utils.Draft -> Element.Element Msg
-showDraftButton draft =
+showDraftButton : List Utils.Draft -> Int -> Utils.Draft -> Element.Element Msg
+showDraftButton drafts index draft =
+    let
+        before =
+            List.take index drafts
+
+        after =
+            List.drop (index + 1) drafts
+    in
     Element.Input.button []
-        { onPress = Just <| OpenDraft draft
+        { onPress = Just <| OpenDraft draft <| before ++ after
         , label = Element.text draft.subject
         }
 

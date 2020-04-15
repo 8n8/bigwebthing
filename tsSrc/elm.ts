@@ -12,11 +12,6 @@
     await localforage.setItem(key, value);
   }
 
-  async function localRemove(key: string): Promise<void> {
-    // @ts-ignore
-    await localforage.removeItem(key);
-  }
-
   function fromBytes(bytes: Uint8Array): string {
     // @ts-ignore
     return base64js.fromByteArray(bytes);
@@ -93,13 +88,12 @@
   // @ts-ignore
   const app = Elm.Main.init({ node: document.getElementById("main") });
 
-  const nullCache: string = "There is no cache!";
-
   interface EditorInfo {
     myName: number;
     inbox: string[];
     drafts: string[];
     myContacts: number[];
+    outbox: string[];
   }
 
   const nullEditorInfo: EditorInfo = {
@@ -107,6 +101,7 @@
     inbox: [],
     myContacts: [],
     drafts: [],
+    outbox: [],
   };
 
   async function readMessages(key: string): Promise<string[]> {
@@ -125,6 +120,7 @@
   async function getEditorInfo(): Promise<[EditorInfo, string]> {
     const inbox: string[] = await readMessages("inbox");
     const drafts: string[] = await readMessages("drafts");
+    const outbox: string[] = await readMessages("outbox");
 
     const keys: Keys = await getCryptoKeys();
 
@@ -152,6 +148,7 @@
       inbox: inbox,
       myContacts: myContacts,
       drafts: drafts,
+      outbox: outbox,
     };
     return [toSend, ""];
   }
@@ -171,41 +168,6 @@
     sendEditorInfo();
   });
 
-  app.ports.cacheEditorInfo.subscribe(function (editorCache: string) {
-    localSet("editorCache", toBytes(editorCache));
-  });
-
-  app.ports.cacheEditorInfoImporter.subscribe(function (editorCache: string) {
-    localSet("editorCache", toBytes(editorCache));
-  });
-
-  const whitelistSomeone: number = 1;
-  const sendThis: number = 2;
-
-  interface MsgOut {
-    msg: SendThis | WhitelistSomeone;
-    type: "whitelistSomeone" | "sendThis";
-  }
-
-  interface WhitelistSomeone {
-    id: number;
-  }
-
-  interface SendThis {
-    to: number;
-    document: Uint8Array;
-  }
-
-  function decodeHumanMsg(raw: Uint8Array): [MsgOut, string] {
-    const rawLength: number = raw.length;
-    if (rawLength < 13) {
-      return [nullMsgOut, "human message is less than 13 bytes long"];
-    }
-    const to: number = decodeInt32(raw.slice(1, 5));
-    const document: Uint8Array = raw.slice(5);
-    return [{ type: "sendThis", msg: { to: to, document: document } }, ""];
-  }
-
   function decodeInt(eightBytes: Uint8Array): number {
     let result: number = 0;
     for (let i = 0; i < 8; i++) {
@@ -220,54 +182,6 @@
       result += fourBytes[i] * Math.pow(256, i);
     }
     return result;
-  }
-
-  function parseMessage(raw: Uint8Array): [MsgOut, string] {
-    let pos: number = 0;
-    const messageType: number = raw[0];
-    pos += 1;
-
-    switch (messageType) {
-      case whitelistSomeone: {
-        const whitelistee: number = decodeInt32(raw.slice(pos, pos + 4));
-        pos += 4;
-        const message: MsgOut = {
-          type: "whitelistSomeone",
-          msg: { id: whitelistee },
-        };
-        return [message, ""];
-      }
-
-      case sendThis:
-        return decodeHumanMsg(raw);
-    }
-
-    return [nullMsgOut, "bad message type: " + messageType];
-  }
-
-  const nullMsgOut: MsgOut = { msg: { id: 0 }, type: "whitelistSomeone" };
-
-  function decodeMessages(raw: Uint8Array[]): [MsgOut[], string] {
-    if (raw === null) {
-      return [[], ""];
-    }
-
-    let messages = [];
-    const rawLength = raw.length;
-    for (let i = 0; i < rawLength; i++) {
-      const rawMessage = raw[i];
-      const [message, parseErr] = parseMessage(rawMessage);
-      if (parseErr !== "") {
-        return [[], parseErr];
-      }
-      messages.push(message);
-    }
-    return [messages, ""];
-  }
-
-  async function readMessagesFromCache(): Promise<[MsgOut[], string]> {
-    const raw = await localGet("outbox");
-    return decodeMessages(raw);
   }
 
   function createCryptoKeys(): Keys {
@@ -429,25 +343,6 @@
     return [decodeInt(response), ""];
   }
 
-  async function sendMessage(
-    message: MsgOut,
-    keys: Keys,
-    myName: number
-  ): Promise<string> {
-    switch (message.type) {
-      case "whitelistSomeone": {
-        const err = await sendWhitelistRequest(
-          (message.msg as WhitelistSomeone).id,
-          keys,
-          myName
-        );
-        return err;
-      }
-      case "sendThis":
-        return await sendClientToClient(message.msg as SendThis, keys, myName);
-    }
-  }
-
   // The chunk is the nonce plus the encrypted message.
   // The result is:
   // + 112 bytes: idToken
@@ -560,23 +455,24 @@
   }
 
   async function sendClientToClient(
-    message: SendThis,
+    message: Uint8Array,
     keys: Keys,
     myName: number
   ): Promise<string> {
-    const chunks: Uint8Array[] = chopMessageIntoChunks(message.document);
+    const to: number = decodeInt32(message.slice(0, 4));
+    const chunks: Uint8Array[] = chopMessageIntoChunks(message);
     const chunksLength: number = chunks.length;
     const [signingKey, signKeyErr]: [
       Uint8Array,
       string
-    ] = await getRecipientSigningKey(message.to);
+    ] = await getRecipientSigningKey(to);
     if (signKeyErr !== "") {
       return signKeyErr;
     }
     const [encryptionKey, encKeyErr]: [
       Uint8Array,
       string
-    ] = await getEncryptionKey(message.to, signingKey);
+    ] = await getEncryptionKey(to, signingKey);
 
     if (encKeyErr !== "") {
       return encKeyErr;
@@ -600,7 +496,7 @@
 
       const subMsg: Uint8Array = constructCtoCMessage(
         withNonce,
-        message.to,
+        to,
         keys,
         authCode,
         myName
@@ -695,21 +591,6 @@
     }
     const updateContactsErr: string = await updateContacts(whitelistee);
     return updateContactsErr;
-  }
-
-  async function sendMessages(
-    messages: MsgOut[],
-    keys: Keys,
-    myName: number
-  ): Promise<string> {
-    const messagesLength: number = messages.length;
-    for (let i = 0; i < messagesLength; i++) {
-      const responseErr: string = await sendMessage(messages[i], keys, myName);
-      if (responseErr !== "") {
-        return responseErr;
-      }
-    }
-    return "";
   }
 
   function getLeftOvers(
@@ -969,8 +850,7 @@
       return [nullUint8Array(), receiptErr];
     }
 
-    const encodedAuthor: Uint8Array = encodeInt32(author);
-    return [combine(encodedAuthor, assembled), ""];
+    return [assembled, ""];
   }
 
   function nullUint8Array(): Uint8Array {
@@ -1017,8 +897,7 @@
           "single-chunk message with bad hash",
         ];
       }
-      const combined = combine(encodeInt32(start.author), start.chunk);
-      return [combined, new Set([i]), true, ""];
+      return [start.chunk, new Set([i]), true, ""];
     }
 
     const [relevantChunks, newUsed]: [Chunk[], Set<number>] = getRelevantChunks(
@@ -1160,27 +1039,12 @@
   //    cache
   //
   async function communicateMain() {
-    const [messages, readMsgErr]: [
-      MsgOut[],
-      string
-    ] = await readMessagesFromCache();
-    if (readMsgErr !== "") {
-      return readMsgErr;
-    }
-
     const keys: Keys = await getCryptoKeys();
 
     const [myName, myNameErr]: [number, string] = await getMyName(keys);
     if (myNameErr !== "") {
       return myNameErr;
     }
-
-    const responseErr: string = await sendMessages(messages, keys, myName);
-    if (responseErr !== "") {
-      return responseErr;
-    }
-
-    await localRemove("outbox");
 
     const [rawDownloads, downloadErr]: [
       Uint8Array[],
@@ -1219,6 +1083,7 @@
     if (cacheErr !== "") {
       return cacheErr;
     }
+    sendEditorInfo();
     return "";
   }
 
@@ -1321,30 +1186,6 @@
     });
   });
 
-  app.ports.getImporterInfo.subscribe(function () {
-    localGet("editorCache").then(function (rawEditorCache) {
-      let editorCache: string = nullCache;
-      if (rawEditorCache !== null) {
-        editorCache = fromBytes(rawEditorCache);
-      }
-      localGet("inbox").then(function (rawInbox) {
-        let inboxBytes: Uint8Array[] = [];
-        if (rawInbox !== null) {
-          inboxBytes = rawInbox;
-        }
-        const inboxLength = inboxBytes.length;
-        let inbox: string[] = [];
-        for (let i = 0; i < inboxLength; i++) {
-          inbox.push(fromBytes(inboxBytes[i]));
-        }
-        app.ports.gotImporterInfo.send({
-          editorCache: editorCache,
-          inbox: inbox,
-        });
-      });
-    });
-  });
-
   app.ports.whitelistPort.subscribe(function (id: number): void {
     handleWhitelistRequest(id).then(function (err: string) {
       if (err !== "") {
@@ -1384,17 +1225,38 @@
     await localSet("drafts", asBytes);
   }
 
+  async function cacheOutboxHelp(rawB64: string[]): Promise<void> {
+    let asBytes: Uint8Array[] = [];
+    const numMessages = rawB64.length;
+    for (let i = 0; i < numMessages; i++) {
+      asBytes.push(toBytes(rawB64[i]));
+    }
+    await localSet("outbox", asBytes);
+  }
+
   app.ports.cacheDraftsPort.subscribe(function (rawB64: string[]) {
     cacheDraftsHelp(rawB64);
   });
 
+  app.ports.cacheOutboxPort.subscribe(function (rawB64: string[]) {
+    cacheOutboxHelp(rawB64);
+  });
+
+  async function sendMessageHelp(rawB64: string): Promise<void> {
+    const keys: Keys = await getCryptoKeys();
+    const [myName, myNameError]: [number, string] = await getMyName(keys);
+    if (myNameError !== "") {
+      app.ports.sendMessageError.send(myNameError);
+      return;
+    }
+    const asBytes: Uint8Array = toBytes(rawB64);
+    const sendError: string = await sendClientToClient(asBytes, keys, myName);
+    if (sendError !== "") {
+      app.ports.sendMessageError.send(sendError);
+    }
+  }
+
   app.ports.sendMessagePort.subscribe(function (rawB64: string): void {
-    localGet("outbox").then(function (outbox: Uint8Array[]) {
-      if (outbox === null) {
-        outbox = [];
-      }
-      outbox.push(toBytes(rawB64));
-      localSet("outbox", outbox);
-    });
+    sendMessageHelp(rawB64);
   });
 })();

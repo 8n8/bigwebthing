@@ -110,6 +110,10 @@ decodeMaybeHelp decoder indicator =
 
 encodeMessage : Message -> E.Encoder
 encodeMessage { to, from, time, subject, userInput, code, blobs } =
+    let
+        _ =
+            Debug.log "code" code
+    in
     E.sequence
         [ E.unsignedInt32 Bytes.LE to
         , E.unsignedInt32 Bytes.LE from
@@ -472,11 +476,42 @@ decodeInbox rawMessages =
             decodeInboxHelp bytesList
 
 
+decodeDrafts : List String -> Result String (List Draft)
+decodeDrafts rawDrafts =
+    let
+        asBytes =
+            List.map (Base64.Decode.decode Base64.Decode.bytes) rawDrafts
+    in
+    case combineResult asBytes of
+        Err err ->
+            Err <| "could not decode inbox base64: " ++ showB64Error err
+
+        Ok bytesList ->
+            decodeDraftsHelp bytesList
+
+
+decodeDraftsHelp : List Bytes.Bytes -> Result String (List Draft)
+decodeDraftsHelp rawDrafts =
+    let
+        maybes =
+            List.map (D.decode decodeDraft) rawDrafts
+    in
+    case onlyIfAllJust maybes of
+        Nothing ->
+            Err "could not decode drafts bytes"
+
+        Just drafts ->
+            Ok drafts
+
+
 decodeInboxHelp : List Bytes.Bytes -> Result String (List Message)
 decodeInboxHelp rawMessages =
     let
         maybes =
             List.map (D.decode decodeMessage) rawMessages
+
+        _ =
+            Debug.log "maybes" maybes
     in
     case onlyIfAllJust maybes of
         Nothing ->

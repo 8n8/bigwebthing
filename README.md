@@ -115,46 +115,29 @@ The response is the 96-byte signed public encryption key.
 
 This is what happens to a message as it is sent and received:
 
-1. It starts as a Utils.MsgOut in Elm. MsgOut is defined as follows:
+1. It starts as a Utils.Message in Elm. Utils.Message is defined as follows:
 
-   type MsgOut
-       = MakeMyName
-       | WhitelistSomeone Int
-       | SendThis HumanMsg
+   type alias Message =
+    { from : Int
+    , to : Int
+    , time : Int
+    , subject : String
+    , userInput : String
+    , code : Dict.Dict String String
+    , blobs : Dict.Dict String Bytes.Bytes
+    }
 
-   (The first two are not mentioned further in this list. This is
-    about SendThis.)
-   
-   type alias HumanMsgHelp = 
-       { to : Int
-       , from : Int
-       , code : String
-       , version : Version
-       }
-   
-   type alias Version =
-       { description : String
-       , userInput : String
-       , author : Int
-       }
-
-2. MsgOut 'SendThis' is encoded to bytes as follows:
-    + 0x02 indicator byte
-    + 4 bytes: recipient ID as little-endian integer
-    + the program code string
-    + the program description string
-    + the program user input string
-    + 4 bytes: version author ID as little-endian integer
+2. The message is encoded to bytes as shown in the 'encodeMessage' function in Utils.elm.
 
 3. On the JS side, the message from (2) is parsed as follows:
-    + the recipient is extracted from bytes 1 to 5
-    + the document is extracted from bytes 5 to end
+    + the recipient is extracted from bytes 0 to 4
+    + the document is extracted from bytes 4 to end
 
 4. The document is chopped up into chunks. A chunk is like this:
     + 0x01 (or 0x00 for a receipt)
     + 4 bytes: chunk counter integer
     + 4 bytes: total chunks in message
-    + 32 bytes: sha512[:32] of the whole document: to be clear, the version author ID, the program code and the program description
+    + 32 bytes: sha512[:32] of the encoded message except for the 'from' - first four bytes
     + <=15kB: the rest of the chunk
 
 5. Each chunk is encrypted and prefixed with a 24-byte nonce.
@@ -173,9 +156,7 @@ This is what happens to a message as it is sent and received:
 
 10. The decrypted chunk is parsed.
 
-11. Assembled chunks are put in the inbox as follows:
-    + 4 bytes: sender ID
-    + a 'SendThis' message, except for the indicator byte and recipient ID
+11. Assembled chunks are put in the inbox.
 
 # Programs
 
