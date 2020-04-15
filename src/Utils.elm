@@ -110,10 +110,6 @@ decodeMaybeHelp decoder indicator =
 
 encodeMessage : Message -> E.Encoder
 encodeMessage { to, from, time, subject, userInput, code, blobs } =
-    let
-        _ =
-            Debug.log "code" code
-    in
     E.sequence
         [ E.unsignedInt32 Bytes.LE to
         , E.unsignedInt32 Bytes.LE from
@@ -509,9 +505,6 @@ decodeInboxHelp rawMessages =
     let
         maybes =
             List.map (D.decode decodeMessage) rawMessages
-
-        _ =
-            Debug.log "maybes" maybes
     in
     case onlyIfAllJust maybes of
         Nothing ->

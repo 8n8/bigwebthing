@@ -10,46 +10,46 @@ import Utils
 
 
 runProgram :
-    String
-    -> Dict.Dict String Utils.Program
+    Dict.Dict String String
+    -> String
     -> Int
     -> Maybe Utils.Document
-runProgram programName allPrograms myName =
-    case Dict.get programName allPrograms of
+runProgram code userInput myName =
+    case Dict.get "main" code of
         Nothing ->
-            Just <| Utils.SmallString <| "internal error: no such program \"" ++ programName ++ "\""
+            Just <| Utils.SmallString <| "internal error: no main module"
 
-        Just program ->
-            case P.run (topProgramP (hash program.code) allPrograms) program.code of
+        Just mainModule ->
+            case P.run (topProgramP "main" code) mainModule of
                 Err deadEnds ->
                     Just <| Utils.SmallString <| deadEndsToString deadEnds
 
                 Ok atoms ->
-                    case runTypeChecks atoms { initEltState | position = { start = initEltState.position.start, end = initEltState.position.end, file = hash program.code } } of
+                    case runTypeChecks atoms { initEltState | position = { start = initEltState.position.start, end = initEltState.position.end, file = "main" } } of
                         Just errMsg ->
                             Just <| Utils.SmallString ("type error: " ++ errMsg)
 
                         Nothing ->
-                            runElfs allPrograms program atoms [] myName
+                            runElfs "main" code atoms [] myName
 
 
 runElfs :
-    Dict.Dict String Utils.Program
-    -> Utils.Program
+    String
+    -> Dict.Dict String String
     -> List (Located Atom)
     -> List ProgVal
     -> Int
     -> Maybe Utils.Document
-runElfs allPrograms program elfs progStack myName =
+runElfs moduleName modules elfs progStack myName =
     let
         oldP =
-            { program = program
-            , defs = standardLibrary
+            { defs = standardLibrary
             , stack = progStack
             , rightDoc = Nothing
             , internalError = Nothing
-            , allPrograms = allPrograms
             , myName = myName
+            , moduleName = moduleName
+            , modules = modules
             }
 
         newP =
@@ -111,10 +111,10 @@ deadEndToString deadEnd =
         ]
 
 
-topProgramP : String -> Dict.Dict String Utils.Program -> P.Parser (List (Located Atom))
-topProgramP filename programs =
+topProgramP : String -> Dict.Dict String String -> P.Parser (List (Located Atom))
+topProgramP moduleName modules =
     P.succeed identity
-        |= programP filename programs
+        |= programP moduleName modules
         |. P.end
 
 
@@ -142,7 +142,6 @@ type ProgVal
     | Ppop
     | Pbool Bool
     | Pequal
-    | PlistPrograms
     | PcatString
 
 
@@ -197,7 +196,6 @@ standardLibrary =
         , ( "==", Pequal )
         , ( "true", Pbool True )
         , ( "false", Pbool False )
-        , ( "listprograms", PlistPrograms )
         , ( "catstrings", PcatString )
         ]
 
@@ -246,7 +244,6 @@ standardTypes =
         , ( "==", [ Pequal ] )
         , ( "counter", [ PallInts ] )
         , ( "runloop", [ Pbool True, Pbool False ] )
-        , ( "listprograms", [ PlistPrograms ] )
         , ( "catstrings", [ PcatString ] )
         ]
 
@@ -472,13 +469,6 @@ processAtom state atom =
                         [] ->
                             Err { message = "empty stack", state = state }
 
-                [ PlistPrograms ] :: tack ->
-                    if state.isHome then
-                        Ok { state | stack = [ Plist [ PallStrings ] ] :: tack }
-
-                    else
-                        Err { message = "not home app", state = state }
-
                 [ Pcons ] :: tack ->
                     case tack of
                         toAdd :: toAddTo :: remainsOfStack ->
@@ -655,34 +645,34 @@ problemToString problem =
             "bad repeat"
 
 
-programP : String -> Dict.Dict String Utils.Program -> P.Parser (List (Located Atom))
-programP filename programs =
-    P.loop [] (programHelpP filename programs)
+programP : String -> Dict.Dict String String -> P.Parser (List (Located Atom))
+programP moduleName modules =
+    P.loop [] (programHelpP moduleName modules)
 
 
 programHelpP :
     String
-    -> Dict.Dict String Utils.Program
+    -> Dict.Dict String String
     -> List (Located Atom)
     -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
-programHelpP filename programs p =
+programHelpP moduleName modules p =
     P.oneOf
-        [ P.map (\elements -> P.Loop (List.reverse elements ++ p)) (importHelpP programs)
+        [ P.map (\elements -> P.Loop (List.reverse elements ++ p)) (importHelpP modules)
         , P.map (\element -> P.Loop (element :: p))
-            (located filename (elementP programs))
+            (located moduleName (elementP modules))
         , P.succeed ()
             |> P.map (\_ -> P.Done (List.reverse p))
         ]
 
 
 type alias ProgramState =
-    { program : Utils.Program
-    , allPrograms : Dict.Dict String Utils.Program
-    , defs : Dict.Dict String ProgVal
+    { defs : Dict.Dict String ProgVal
     , stack : List ProgVal
     , rightDoc : Maybe Utils.Document
     , internalError : Maybe String
     , myName : Int
+    , moduleName : String
+    , modules : Dict.Dict String String
     }
 
 
@@ -746,9 +736,6 @@ programProcessAtom { start, value, end } s =
 
                 Pequal :: e1 :: e2 :: remainsOfStack ->
                     { s | stack = Pbool (e1 == e2) :: remainsOfStack }
-
-                PlistPrograms :: remainsOfStack ->
-                    { s | stack = Plist (List.map Pstring <| Dict.keys s.allPrograms) :: remainsOfStack }
 
                 PcatString :: (Plist stringCandidates) :: tack ->
                     case extractStrings stringCandidates of
@@ -1010,8 +997,8 @@ getBlock v =
             Nothing
 
 
-elementP : Dict.Dict String Utils.Program -> String -> P.Parser Atom
-elementP programs filename =
+elementP : Dict.Dict String String -> String -> P.Parser Atom
+elementP modules moduleName =
     P.oneOf
         [ runBlockP
         , stringPWrap
@@ -1019,8 +1006,8 @@ elementP programs filename =
         , retrieveP
         , intPWrap
         , defP
-        , programBlockP filename programs
-        , topTypeLangP filename
+        , programBlockP moduleName modules
+        , topTypeLangP moduleName
         ]
 
 
@@ -1034,9 +1021,9 @@ located filename parser =
         |. whiteSpaceP
 
 
-importHelpP : Dict.Dict String Utils.Program -> P.Parser (List (Located Atom))
-importHelpP programs =
-    P.andThen (importHelpHelpP programs) importP
+importHelpP : Dict.Dict String String -> P.Parser (List (Located Atom))
+importHelpP modules =
+    P.andThen (importHelpHelpP modules) importP
 
 
 extractStrings : List ProgVal -> Maybe (List String)
@@ -1252,9 +1239,6 @@ showProgVal p =
         Pequal ->
             "=="
 
-        PlistPrograms ->
-            "listprograms"
-
         PcatString ->
             "catstring"
 
@@ -1310,11 +1294,11 @@ typeLangP filename =
     P.loop [] (typeLangHelpP filename)
 
 
-programBlockP : String -> Dict.Dict String Utils.Program -> P.Parser Atom
-programBlockP filename programs =
+programBlockP : String -> Dict.Dict String String -> P.Parser Atom
+programBlockP moduleName modules =
     P.succeed Block
         |. P.token "{"
-        |= programP filename programs
+        |= programP moduleName modules
         |. P.token "}"
 
 
@@ -1416,14 +1400,14 @@ hashBody =
     P.getChompedString <| P.succeed () |. hashCharsP
 
 
-importHelpHelpP : Dict.Dict String Utils.Program -> String -> P.Parser (List (Located Atom))
-importHelpHelpP programs toImport =
-    case Dict.get toImport programs of
+importHelpHelpP : Dict.Dict String String -> String -> P.Parser (List (Located Atom))
+importHelpHelpP modules toImport =
+    case Dict.get toImport modules of
         Nothing ->
             P.problem <| "can't find program with name \"" ++ toImport ++ "\""
 
-        Just program ->
-            case P.run (programP toImport programs) program.code of
+        Just module_ ->
+            case P.run (programP toImport modules) module_ of
                 Err err ->
                     P.problem <| deadEndsToString err
 

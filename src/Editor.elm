@@ -469,20 +469,25 @@ view model =
                 [ myUsernameIs model.myName
                 , myContactsAre <| Set.toList model.myContacts
                 , addNewContact model.addContactBox model.addContactError
-                , viewMessages model.messages model.openMessage
+                , case model.myName of
+                    Nothing ->
+                        Element.text "Need username to display messages"
+
+                    Just myName ->
+                        viewMessages myName model.messages model.openMessage
                 , makeNewDraft
                 , editDrafts model.openDraft model.drafts
                 ]
 
 
-viewMessages : List Utils.Message -> Maybe ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
-viewMessages messages maybeMessage =
+viewMessages : Int -> List Utils.Message -> Maybe ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
+viewMessages myName messages maybeMessage =
     case maybeMessage of
         Nothing ->
             messageChooser messages
 
         Just openMessage ->
-            viewMessage openMessage
+            viewMessage myName openMessage
 
 
 messageChooser : List Utils.Message -> Element.Element Msg
@@ -512,17 +517,28 @@ messageChooserLabel message =
         ]
 
 
-viewMessage : ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
-viewMessage ( message, maybeOpenModule ) =
+viewMessage : Int -> ( Utils.Message, Maybe ( String, String ) ) -> Element.Element Msg
+viewMessage myName ( message, maybeOpenModule ) =
     Element.column []
         [ closeMessage message
         , Element.text <| "From: " ++ String.fromInt message.from
         , Element.text <| "Subject: " ++ message.subject
         , Element.text "User input:"
         , Element.paragraph [] [ Element.text message.userInput ]
+        , codeOutput message.code message.userInput myName
         , viewCode ( message, maybeOpenModule )
         , viewBlobs message.blobs
         ]
+
+
+codeOutput : Dict.Dict String String -> String -> Int -> Element.Element Msg
+codeOutput code userInput myName =
+    case Truelang.runProgram code userInput myName of
+        Nothing ->
+            Element.text "no output"
+
+        Just document ->
+            displayDocument document
 
 
 viewBlobs : Dict.Dict String Bytes.Bytes -> Element.Element Msg
@@ -779,31 +795,32 @@ monospace =
     Font.family [ Font.typeface "Ubuntu Mono" ]
 
 
-programOutput :
-    Maybe String
-    -> Dict.Dict String Utils.Program
-    -> List Int
-    -> Maybe Int
-    -> Element.Element Msg
-programOutput maybeOpenProgram programs contacts maybeMyName =
-    case ( maybeOpenProgram, maybeMyName ) of
-        ( Nothing, _ ) ->
-            Element.none
 
-        ( _, Nothing ) ->
-            Element.el [ monospace ] <| Element.text "no username, so can't run program"
-
-        ( Just programName, Just myName ) ->
-            let
-                maybeOutput =
-                    Truelang.runProgram programName programs myName
-            in
-            case maybeOutput of
-                Nothing ->
-                    Element.text "this program produces no output"
-
-                Just output ->
-                    displayDocument output
+-- programOutput :
+--     Maybe String
+--     -> Dict.Dict String Utils.Program
+--     -> List Int
+--     -> Maybe Int
+--     -> Element.Element Msg
+-- programOutput maybeOpenProgram programs contacts maybeMyName =
+--     case ( maybeOpenProgram, maybeMyName ) of
+--         ( Nothing, _ ) ->
+--             Element.none
+--
+--         ( _, Nothing ) ->
+--             Element.el [ monospace ] <| Element.text "no username, so can't run program"
+--
+--         ( Just programName, Just myName ) ->
+--             let
+--                 maybeOutput =
+--                     Truelang.runProgram programName programs myName
+--             in
+--             case maybeOutput of
+--                 Nothing ->
+--                     Element.text "this program produces no output"
+--
+--                 Just output ->
+--                     displayDocument output
 
 
 displayDocument : Utils.Document -> Element.Element Msg
