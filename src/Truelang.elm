@@ -17,7 +17,7 @@ runProgram :
 runProgram code userInput myName =
     case Dict.get "main" code of
         Nothing ->
-            Just <| Utils.SmallString <| "internal error: no main module"
+            Just <| Utils.SmallString <| "no main module"
 
         Just mainModule ->
             case P.run (topProgramP "main" code) mainModule of

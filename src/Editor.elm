@@ -476,7 +476,12 @@ view model =
                     Just myName ->
                         viewMessages myName model.messages model.openMessage
                 , makeNewDraft
-                , editDrafts model.openDraft model.drafts
+                , case model.myName of
+                    Nothing ->
+                        Element.text "Need username to display drafts"
+
+                    Just myName ->
+                        editDrafts myName model.openDraft model.drafts
                 ]
 
 
@@ -603,23 +608,24 @@ messageOpenModuleButton message module_ =
         }
 
 
-editDrafts : Maybe ( Utils.Draft, Maybe ( String, String ) ) -> List Utils.Draft -> Element.Element Msg
-editDrafts maybeOpenDraft drafts =
+editDrafts : Int -> Maybe ( Utils.Draft, Maybe ( String, String ) ) -> List Utils.Draft -> Element.Element Msg
+editDrafts myName maybeOpenDraft drafts =
     case maybeOpenDraft of
         Nothing ->
             draftChooser drafts
 
         Just openDraft ->
-            editDraft openDraft
+            editDraft myName openDraft
 
 
-editDraft : ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
-editDraft draft =
+editDraft : Int -> ( Utils.Draft, Maybe ( String, String ) ) -> Element.Element Msg
+editDraft myName draft =
     Element.column []
         [ closeDraft <| Tuple.first draft
         , toBox draft
         , subjectBox draft
         , userInputBox draft
+        , codeOutput ((.code << Tuple.first) draft) ((.userInput << Tuple.first) draft) myName
         , editCode draft
         , editBlobs draft
         , sendDraft <| Tuple.first draft
@@ -786,7 +792,13 @@ showDraftButton drafts index draft =
     in
     Element.Input.button []
         { onPress = Just <| OpenDraft draft <| before ++ after
-        , label = Element.text draft.subject
+        , label =
+            case draft.subject of
+                "" ->
+                    Element.text "no subject"
+
+                _ ->
+                    Element.text draft.subject
         }
 
 
