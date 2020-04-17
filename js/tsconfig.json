@@ -1,13 +1,14 @@
 {
 	"compilerOptions": {
-		"outDir": "./static",
+		"outDir": "../static",
 		"target": "es2017",
 		"strict": true,
 		"noUnusedParameters": true,
 		"noUnusedLocals": true,
 		"noFallthroughCasesInSwitch": true,
-		"strictFunctionTypes": true
-	},
-	"include": [ "./tsSrc/**/*" ],
-	"moduleResolution": "node"
+		"strictFunctionTypes": true,
+                "sourceMap": true,
+		"allowJs": true,
+		"allowSyntheticDefaultImports": true
+	}
 }
