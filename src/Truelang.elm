@@ -665,6 +665,13 @@ programHelpP moduleName modules p =
         ]
 
 
+emptyModuleP : P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
+emptyModuleP =
+    P.succeed (P.Done [])
+        |. whiteSpaceP
+        |. P.end
+
+
 type alias ProgramState =
     { defs : Dict.Dict String ProgVal
     , stack : List ProgVal
@@ -902,14 +909,33 @@ checkBlocks maybeBlocks oldState =
                                 oldStack =
                                     [ Pbool True, Pbool False ] :: oldState.stack
                             in
-                            if ts /= oldStack then
-                                Err { message = "Bad loop block changed the stack. Old stack: " ++ showTypeStack oldStack ++ "\nNew stack: " ++ showTypeStack ts, state = oldState }
+                            if equalStacks ts oldStack then
+                                Ok combinedUsed
 
                             else
-                                Ok combinedUsed
+                                Err { message = "Bad loop block changed the stack. Old stack: " ++ showTypeStack oldStack ++ "\nNew stack: " ++ showTypeStack ts, state = oldState }
 
                         _ ->
                             Err { state = oldState, message = "internal error in type checker: could not convert stacks to tuples" }
+
+
+equalStacks : List Type -> List Type -> Bool
+equalStacks s1 s2 =
+    if List.length s1 /= List.length s2 then
+        False
+
+    else
+        List.all equalTypes <| zip s1 s2
+
+
+equalTypes : ( Type, Type ) -> Bool
+equalTypes ( t1, t2 ) =
+    isSubType t1 t2 && isSubType t2 t1
+
+
+zip : List a -> List b -> List ( a, b )
+zip l1 l2 =
+    List.map2 (\a b -> ( a, b )) l1 l2
 
 
 typeListUnion : List Type -> Type
@@ -925,6 +951,24 @@ typeListUnionHelp notLookedAtYet accumulator =
 
         topType :: remainder ->
             typeListUnionHelp remainder (typeUnion topType accumulator)
+
+
+deduplicate : Type -> Type
+deduplicate t =
+    let
+        result =
+            List.foldr dedupHelp [] t
+    in
+    result
+
+
+dedupHelp : ProgVal -> Type -> Type
+dedupHelp v accum =
+    if List.member v accum then
+        accum
+
+    else
+        v :: accum
 
 
 extractAndCheckPaths : Type -> Type -> Result String (List Type)
@@ -1253,7 +1297,7 @@ typeUnion t1 t2 =
             [ Ptype (p1 ++ p2) ]
 
         _ ->
-            t1 ++ t2
+            deduplicate <| t1 ++ t2
 
 
 checkPathsComplete : List ( Type, Type ) -> Type -> ( Type, Type )
@@ -1511,7 +1555,7 @@ stepHelp oldOffset step newOffset =
 
 
 {-| Don't use P.NotNestable for multicomment, as it doesn't consume
-the closing \*
+the closing \*/
 -}
 oneWhitespaceP : P.Parser ()
 oneWhitespaceP =

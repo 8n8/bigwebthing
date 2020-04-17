@@ -1,0 +1,13 @@
+true typeof. {i false "done" print.} 2 maketuple. = donePath
+false typeof. {i 1 +. "hello" print. true} 2 maketuple. = carryOnPath
+emptylist donePath cons. carryOnPath cons. = paths
+
+counter
+runloop
+{
+= i
+i 5 ==.
+paths switch..
+} loop. pop.
+
+// It should print "hello" 5 times, followed by "done".
