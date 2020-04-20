@@ -1,11 +1,20 @@
 module Truelang exposing (compile)
 
 import Dict
-import Maybe.Extra
 import Parser as P exposing ((|.), (|=))
-import Result.Extra
 import Set
 import Utils
+
+{-
+Overview:
+
+The code is parsed into into atoms.
+
+What's the difference between a ProgVal and an Atom? An atom is a
+piece of the code, whereas ProgVals are the values that the type
+checker uses to represent run-time values when it is checking the
+code.
+-}
 
 
 compile : Utils.Code -> Result String String
@@ -28,25 +37,34 @@ compile code =
                             Ok wasm
 
 
+
 type Atom
     = Retrieve String
     | Block (List (Located Atom))
     | Define String
     | Runblock
     | Export String
-    | AWasm Wasm
+    | AWasm WasmIn
+    | Loop
 
 
 type alias WasmState =
     { defs : Dict.Dict String Atom
-    , wasmStack : List Wasm
+    , wasmStack : List WasmOut
     , error : Maybe String
     , metaStack : List Atom
     }
 
 
-type Wasm
-    = I32mul
+type WasmOut
+    = Oi32mul
+    | Obreak
+    | Oloop (List WasmOut)
+
+
+type WasmIn
+    = Ii32mul
+    | Ibreak
 
 
 initWasmState : WasmState
@@ -72,16 +90,25 @@ makeWasm atoms =
             Err error
 
 
-wasmsToString : List Wasm -> String
+wasmsToString : List WasmOut -> String
 wasmsToString wasms =
     String.join " " <| List.map wasmToString wasms
 
 
-wasmToString : Wasm -> String
+wasmToString : WasmOut -> String
 wasmToString wasm =
     case wasm of
-        I32mul ->
+        Oi32mul ->
             "i32.mul"
+
+        Oloop wasms ->
+            String.concat
+                [ "(loop\n"
+                , String.join " " <| List.map wasmToString wasms
+                ]
+
+        Obreak ->
+            "(br 0)"
 
 
 makeWasmHelp : WasmState -> List (Located Atom) -> WasmState
@@ -92,16 +119,23 @@ makeWasmHelp wasmState atoms =
 makeOneWasm : Located Atom -> WasmState -> WasmState
 makeOneWasm { value } accum =
     case value of
-        AWasm I32mul ->
-            { accum | wasmStack = I32mul :: accum.wasmStack }
+        AWasm Ii32mul ->
+            { accum | wasmStack = Oi32mul :: accum.wasmStack }
+
+        AWasm Ibreak ->
+            { accum | wasmStack = Obreak :: accum.wasmStack }
 
         Retrieve name ->
             case Dict.get name accum.defs of
                 Nothing ->
-                    { accum | error = Just <| "could not find \"" ++ name ++ "\"" }
+                    { accum | error = Just <|
+                        "could not find \"" ++ name ++ "\""
+                    }
 
                 Just retrieved ->
-                    { accum | metaStack = retrieved :: accum.metaStack }
+                    { accum | metaStack =
+                        retrieved :: accum.metaStack
+                    }
 
         Block block ->
             { accum | metaStack = Block block :: accum.metaStack }
@@ -109,7 +143,11 @@ makeOneWasm { value } accum =
         Define name ->
             case accum.metaStack of
                 [] ->
-                    { accum | error = Just <| "nothing on stack to define as name \"" ++ name ++ "\"" }
+                    { accum | error = Just <| String.concat
+                        [ "nothing on stack to define as name \""
+                        , name
+                        , "\""
+                        ] }
 
                 s :: tack ->
                     { accum
@@ -120,7 +158,7 @@ makeOneWasm { value } accum =
         Runblock ->
             case accum.metaStack of
                 [] ->
-                    { accum | error = Just <| "nothing on stack to run" }
+                    { accum | error = Just "nothing on stack to run" }
 
                 (Block block) :: tack ->
                     makeWasmHelp { accum | metaStack = tack } block
@@ -130,6 +168,17 @@ makeOneWasm { value } accum =
 
         Export _ ->
             accum
+
+        Loop ->
+            case accum.metaStack of
+                [] ->
+                    { accum | error = Just "nothing on stack to run" }
+
+                (Block block) :: tack ->
+                    makeWasmHelp accum block
+
+                other :: _ ->
+                    { accum | error = Just <| "top of stack is not a block, it is: " ++ showAtom other }
 
 
 typeCheck : List (Located Atom) -> Maybe String
@@ -173,11 +222,12 @@ parseHelpP moduleName modules p =
 initEltState : EltState
 initEltState =
     { position = { start = ( 0, 0 ), end = ( 0, 0 ), file = "" }
-    , stack = []
-    , defs = standardTypes
+    , defs = Dict.empty
     , defPos = Dict.empty
     , defUse = Set.empty
     , isHome = True
+    , metaStack = []
+    , wasmStack = []
     }
 
 
@@ -211,31 +261,15 @@ deadEndToString deadEnd =
 
 
 type ProgVal
-    = Pstring String
-    | Ptuple (List ProgVal)
-    | Pint Int
-    | Pblock (List (Located Atom))
-    | Plist (List ProgVal)
-    | PallLists
-    | Ptype Type
-    | PallInts
-    | PallStrings
-    | PallBlocks
-    | PallTuples
-    | PsomeTuples (List Type)
+    = Pint32 Int
+    | Pint64 Int
+    | Pfloat32 Float
+    | Pfloat64 Float
     | Pall
-    | Pprint
-    | Pcons
-    | PmakeTuple
-    | PtypeOf
-    | Pswitch
-    | Ploop
-    | Pplus
-    | Ppop
-    | Pbool Bool
-    | Pequal
-    | PcatString
-    | PallI32
+    | PallInt32
+    | PallInt64
+    | PallFloat32
+    | PallFloat64
 
 
 type alias Type =
@@ -250,35 +284,11 @@ type alias Located a =
     }
 
 
-standardTypes : Dict.Dict String Type
-standardTypes =
-    Dict.fromList
-        [ ( "[]", [ Plist [] ] )
-        , ( "int", [ PallInts ] )
-        , ( "string", [ PallStrings ] )
-        , ( "testForSwitch", [ Pint 1, Pint 2 ] )
-        , ( "print", [ Pprint ] )
-        , ( "emptylist", [ Plist [] ] )
-        , ( "cons", [ Pcons ] )
-        , ( "maketuple", [ PmakeTuple ] )
-        , ( "typeof", [ PtypeOf ] )
-        , ( "switch", [ Pswitch ] )
-        , ( "loop", [ Ploop ] )
-        , ( "+", [ Pplus ] )
-        , ( "pop", [ Ppop ] )
-        , ( "true", [ Pbool True ] )
-        , ( "false", [ Pbool False ] )
-        , ( "==", [ Pequal ] )
-        , ( "counter", [ PallInts ] )
-        , ( "runloop", [ Pbool True, Pbool False ] )
-        , ( "catstrings", [ PcatString ] )
-        ]
-
-
 type alias EltState =
     { position : Position
     , defs : Dict.Dict String Type
-    , stack : List Type
+    , metaStack : List Atom
+    , wasmStack : List Type
     , defPos : Dict.Dict String Position
     , defUse : Set.Set String
     , isHome : Bool
@@ -340,8 +350,7 @@ noUnusedNames s =
         keys =
             Set.fromList <| Dict.keys s.defs
 
-        standardKeys =
-            Set.fromList <| Dict.keys standardTypes
+        standardKeys = Set.empty
 
         newKeys =
             Set.diff keys standardKeys
@@ -378,17 +387,19 @@ processAtom state atom =
         Retrieve v ->
             case Dict.get v state.defs of
                 Nothing ->
-                    Err { state = state, message = "no definition \"" ++ v ++ "\"" }
+                    Err { state = state
+                        , message = "no definition \"" ++ v ++ "\""
+                        }
 
                 Just retrieved ->
                     Ok
                         { state
-                            | stack = retrieved :: state.stack
+                            | wasmStack = retrieved :: state.wasmStack
                             , defUse = Set.insert v state.defUse
                         }
 
         Block bs ->
-            Ok { state | stack = [ Pblock bs ] :: state.stack }
+            Ok { state | metaStack = Block bs :: state.metaStack }
 
         Define newName ->
             case Dict.get newName state.defPos of
@@ -396,20 +407,20 @@ processAtom state atom =
                     Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyLocation position }
 
                 Nothing ->
-                    case state.stack of
+                    case state.wasmStack of
                         [] ->
                             Err { state = state, message = "empty stack" }
 
                         s :: tack ->
                             Ok
                                 { state
-                                    | stack = tack
+                                    | wasmStack = tack
                                     , defs = Dict.insert newName s state.defs
                                     , defPos = Dict.insert newName state.position state.defPos
                                 }
 
-        AWasm I32mul ->
-            case state.stack of
+        AWasm Ii32mul ->
+            case state.wasmStack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
@@ -417,201 +428,37 @@ processAtom state atom =
                     Err { state = state, message = "only one thing in stack" }
 
                 i1 :: i2 :: tack ->
-                    case ( isSubType i1 [ PallI32 ], isSubType i2 [ PallI32 ] ) of
+                    case ( isSubType i1 [ PallInt32 ], isSubType i2 [ PallInt32 ] ) of
                         ( False, _ ) ->
-                            Err { state = state, message = "Top item instack should be a " ++ showTypeVal [ PallI32 ] ++ ", but is a " ++ showTypeVal i1 }
+                            Err { state = state, message = "Top item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i1 }
 
                         ( _, False ) ->
-                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallI32 ] ++ ", but is a " ++ showTypeVal i2 }
+                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i2 }
 
                         ( True, True ) ->
-                            Ok { state | stack = tack }
+                            Ok { state | wasmStack = tack }
 
-        Runblock ->
-            case state.stack of
+        AWasm Ibreak ->
+            Ok state
+
+        Loop ->
+            case state.metaStack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                ((Pblock b1) :: bs) :: tack ->
-                    case getBlocks (Pblock b1 :: bs) of
-                        Nothing ->
-                            Err { message = "expecting a block, but got " ++ showTypeVal (Pblock b1 :: bs), state = state }
+                (Block block) :: tack ->
+                    runTypeChecksHelp block {state | metaStack = tack }
 
-                        Just blocks ->
-                            case Result.Extra.combine <| List.map (\b -> runTypeChecksHelp b { state | stack = tack }) blocks of
-                                Err err ->
-                                    Err { err | message = "error inside block called at " ++ prettyLocation state.position ++ ": " ++ err.message }
+                _ ->
+                    Err { message = "there's nothing to run", state = state }
 
-                                Ok results ->
-                                    let
-                                        allNames =
-                                            List.foldr Set.union Set.empty (List.map (Set.fromList << Dict.keys << .defPos) results)
+        Runblock ->
+            case state.metaStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
 
-                                        oldNames =
-                                            Set.fromList <| Dict.keys state.defPos
-
-                                        newNames =
-                                            Set.diff allNames oldNames
-
-                                        newUnused =
-                                            Set.diff newNames combinedUsed
-
-                                        stacksAsTuples =
-                                            List.map (\s -> [ PsomeTuples s.stack ]) results
-
-                                        combinedType =
-                                            typeListUnion stacksAsTuples
-
-                                        combinedPositions =
-                                            List.foldr Dict.union Dict.empty (List.map .defPos results)
-
-                                        combinedUsed =
-                                            List.foldr Set.union Set.empty (List.map .defUse results)
-                                    in
-                                    if Set.isEmpty newUnused then
-                                        case combinedType of
-                                            [ PsomeTuples ts ] ->
-                                                Ok { state | stack = ts, defUse = combinedUsed }
-
-                                            _ ->
-                                                Err { state = state, message = "internal error in type checker: could not convert stacks to tuples" }
-
-                                    else
-                                        Err { state = state, message = prettyUnusedInBlock newUnused combinedPositions }
-
-                [ PcatString ] :: tack ->
-                    case tack of
-                        stringsCandidate :: ack ->
-                            if isSubType stringsCandidate [ Plist [ PallStrings ] ] then
-                                Ok { state | stack = [ PallStrings ] :: ack }
-
-                            else
-                                Err { message = "expecting a list of strings, but got " ++ showTypeVal stringsCandidate, state = state }
-
-                        [] ->
-                            Err { message = "empty stack", state = state }
-
-                [ Pprint ] :: tack ->
-                    case tack of
-                        stringCandidate :: ack ->
-                            if isSubType stringCandidate [ PallStrings ] then
-                                Ok { state | stack = ack }
-
-                            else
-                                Err { message = "expecting a string but got " ++ showTypeVal stringCandidate, state = state }
-
-                        [] ->
-                            Err { message = "empty stack", state = state }
-
-                [ Pcons ] :: tack ->
-                    case tack of
-                        toAdd :: toAddTo :: remainsOfStack ->
-                            case listTypeCons toAdd toAddTo of
-                                Nothing ->
-                                    Err { message = "the second thing on the stack must be a list", state = state }
-
-                                Just newListType ->
-                                    Ok { state | stack = newListType :: remainsOfStack }
-
-                        _ ->
-                            Err { message = "the top of the stack should be the thing to add, and the second thing should be the list to add to", state = state }
-
-                [ PmakeTuple ] :: tack ->
-                    case tack of
-                        [ Pint i ] :: remainsOfStack ->
-                            if List.length remainsOfStack < i then
-                                Err { state = state, message = "stack too short" }
-
-                            else
-                                Ok { state | stack = [ PsomeTuples (List.take i remainsOfStack) ] :: List.drop i remainsOfStack }
-
-                        _ ->
-                            Err { state = state, message = "no integer on top of stack" }
-
-                [ PtypeOf ] :: tack ->
-                    case tack of
-                        t :: ack ->
-                            Ok { state | stack = [ Ptype t ] :: ack }
-
-                        _ ->
-                            Err { state = state, message = "empty stack" }
-
-                [ Pswitch ] :: tack ->
-                    case tack of
-                        [] ->
-                            Err { message = "empty stack", state = state }
-
-                        _ :: [] ->
-                            Err { message = "only one thing in stack", state = state }
-
-                        pathsCandidate :: toSwitchOn :: remainsOfStack ->
-                            case extractAndCheckPaths pathsCandidate toSwitchOn of
-                                Err err ->
-                                    Err { message = err, state = state }
-
-                                Ok routes ->
-                                    Ok { state | stack = typeListUnion routes :: remainsOfStack }
-
-                [ Ploop ] :: tack ->
-                    case tack of
-                        [] ->
-                            Err { message = "empty stack", state = state }
-
-                        _ :: [] ->
-                            Err { message = "only one thing in stack", state = state }
-
-                        maybeBlocks :: maybeKeepRunning :: restOfStack ->
-                            if isSubType maybeKeepRunning [ Pbool True, Pbool False ] then
-                                case checkBlocks maybeBlocks { state | stack = restOfStack } of
-                                    Ok newUsed ->
-                                        Ok { state | stack = restOfStack, defUse = newUsed }
-
-                                    Err err ->
-                                        Err err
-
-                            else
-                                Err { message = "second item in the stack must be a 1 or 0", state = state }
-
-                [ Ppop ] :: tack ->
-                    case tack of
-                        _ :: ack ->
-                            Ok { state | stack = ack }
-
-                        _ ->
-                            Err { message = "empty stack", state = state }
-
-                [ Pplus ] :: tack ->
-                    case tack of
-                        [] ->
-                            Err { message = "empty stack", state = state }
-
-                        _ :: [] ->
-                            Err { message = "only one thing on stack", state = state }
-
-                        [ Pint n1 ] :: [ Pint n2 ] :: remainder ->
-                            Ok { state | stack = [ Pint (n1 + n2) ] :: remainder }
-
-                        maybeN1 :: maybeN2 :: remainder ->
-                            if isSubType maybeN1 [ PallInts ] then
-                                if isSubType maybeN2 [ PallInts ] then
-                                    Ok { state | stack = [ PallInts ] :: remainder }
-
-                                else
-                                    Err { message = "the second thing on the stack is not an integer, it is a " ++ showTypeVal maybeN2, state = state }
-
-                            else
-                                Err { message = "the top thing on the stack is not an integer, it is a " ++ showTypeVal maybeN2, state = state }
-
-                [ Pequal ] :: tack ->
-                    case tack of
-                        [] ->
-                            Err { message = "empty stack", state = state }
-
-                        _ :: [] ->
-                            Err { message = "only one thing on stack", state = state }
-
-                        _ :: _ :: ck ->
-                            Ok { state | stack = [ Pbool True, Pbool False ] :: ck }
+                (Block block) :: tack ->
+                    runTypeChecksHelp block {state | metaStack = tack }
 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
@@ -622,6 +469,9 @@ processAtom state atom =
 
             else
                 Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
+
+
+
 
 
 problemToString : P.Problem -> String
@@ -678,7 +528,7 @@ type alias TypeError =
 
 endEmpty : EltState -> Maybe String
 endEmpty s =
-    case s.stack of
+    case s.wasmStack of
         [] ->
             Nothing
 
@@ -749,185 +599,6 @@ isContained sub master =
         == master
         || master
         == Pall
-        || (case ( sub, master ) of
-                ( Pstring _, PallStrings ) ->
-                    True
-
-                ( Pint _, PallInts ) ->
-                    True
-
-                ( Pblock _, PallBlocks ) ->
-                    True
-
-                ( Plist _, PallLists ) ->
-                    True
-
-                ( Plist subList, Plist masterList ) ->
-                    isSubType subList masterList
-
-                _ ->
-                    False
-           )
-
-
-checkBlocks : Type -> EltState -> Result TypeError (Set.Set String)
-checkBlocks maybeBlocks oldState =
-    case getBlocks maybeBlocks of
-        Nothing ->
-            Err { message = "not only a block", state = oldState }
-
-        Just blocks ->
-            case Result.Extra.combine <| List.map (\b -> runTypeChecksHelp b oldState) blocks of
-                Err err ->
-                    Err err
-
-                Ok results ->
-                    let
-                        stacksAsTuples =
-                            List.map (\s -> [ PsomeTuples s.stack ]) results
-
-                        combinedType =
-                            typeListUnion stacksAsTuples
-
-                        combinedUsed =
-                            List.foldr Set.union Set.empty (List.map .defUse results)
-                    in
-                    case combinedType of
-                        [ PsomeTuples ts ] ->
-                            let
-                                oldStack =
-                                    [ Pbool True, Pbool False ] :: oldState.stack
-                            in
-                            if equalStacks ts oldStack then
-                                Ok combinedUsed
-
-                            else
-                                Err { message = "Bad loop block changed the stack. Old stack: " ++ showTypeStack oldStack ++ "\nNew stack: " ++ showTypeStack ts, state = oldState }
-
-                        _ ->
-                            Err { state = oldState, message = "internal error in type checker: could not convert stacks to tuples" }
-
-
-equalStacks : List Type -> List Type -> Bool
-equalStacks s1 s2 =
-    if List.length s1 /= List.length s2 then
-        False
-
-    else
-        List.all equalTypes <| zip s1 s2
-
-
-equalTypes : ( Type, Type ) -> Bool
-equalTypes ( t1, t2 ) =
-    isSubType t1 t2 && isSubType t2 t1
-
-
-zip : List a -> List b -> List ( a, b )
-zip l1 l2 =
-    List.map2 (\a b -> ( a, b )) l1 l2
-
-
-typeListUnion : List Type -> Type
-typeListUnion types =
-    typeListUnionHelp types []
-
-
-typeListUnionHelp : List Type -> Type -> Type
-typeListUnionHelp notLookedAtYet accumulator =
-    case notLookedAtYet of
-        [] ->
-            accumulator
-
-        topType :: remainder ->
-            typeListUnionHelp remainder (typeUnion topType accumulator)
-
-
-deduplicate : Type -> Type
-deduplicate t =
-    let
-        result =
-            List.foldr dedupHelp [] t
-    in
-    result
-
-
-dedupHelp : ProgVal -> Type -> Type
-dedupHelp v accum =
-    if List.member v accum then
-        accum
-
-    else
-        v :: accum
-
-
-extractAndCheckPaths : Type -> Type -> Result String (List Type)
-extractAndCheckPaths pathsCandidate toSwitchOn =
-    case pathsCandidate of
-        [ Plist pl ] ->
-            case Result.Extra.combine <| List.map toPath pl of
-                Err err ->
-                    Err err
-
-                Ok paths ->
-                    let
-                        ( missingPaths, surplusPaths ) =
-                            checkPathsComplete paths toSwitchOn
-                    in
-                    if List.isEmpty missingPaths then
-                        if List.isEmpty surplusPaths then
-                            Ok <| List.map Tuple.second paths
-
-                        else
-                            Err <| "too many paths: " ++ showTypeVal surplusPaths
-
-                    else
-                        Err <| "not enough paths: " ++ showTypeVal missingPaths
-
-        _ ->
-            Err "paths are not a list"
-
-
-listTypeCons : Type -> Type -> Maybe Type
-listTypeCons toAdd toAddTo =
-    case toAddTo of
-        [ PallLists ] ->
-            Just [ PallLists ]
-
-        [ Plist values ] ->
-            Just [ Plist <| typeUnion toAdd values ]
-
-        _ ->
-            Nothing
-
-
-prettyUnusedInBlock : Set.Set String -> Dict.Dict String Position -> String
-prettyUnusedInBlock names positions =
-    let
-        help : String -> String
-        help name =
-            case Dict.get name positions of
-                Nothing ->
-                    "internal error: cannot find position of name \"" ++ name ++ "\""
-
-                Just position ->
-                    onePrettyUnused ( name, position )
-    in
-    String.join ", " <| List.map help <| Set.toList names
-
-
-getBlocks : Type -> Maybe (List (List (Located Atom)))
-getBlocks type_ =
-    Maybe.Extra.combine <| List.map getBlock type_
-
-
-getBlock : ProgVal -> Maybe (List (Located Atom))
-getBlock v =
-    case v of
-        Pblock bs ->
-            Just bs
-
-        _ ->
-            Nothing
 
 
 elementP : List String -> String -> P.Parser Atom
@@ -969,125 +640,32 @@ showTypeStack typestack =
 showProgVal : ProgVal -> String
 showProgVal p =
     case p of
-        Pstring s ->
-            "string: " ++ s
-
-        Pint i ->
-            "int: " ++ String.fromInt i
-
-        Pblock bs ->
-            "block: {" ++ String.join ", " (List.map (showAtom << .value) bs) ++ "}"
-
-        Plist l ->
-            String.concat
-                [ "list ["
-                , String.join ", " <| List.map showProgVal l
-                , "]"
-                ]
-
-        Ptype type_ ->
-            "type: " ++ showTypeVal type_
-
-        Ptuple ts ->
-            "tuple: " ++ String.join ", " (List.map showProgVal ts)
-
-        PallInts ->
-            "int"
-
-        PallStrings ->
-            "string"
-
-        PallBlocks ->
-            "block"
+        Pint32 i ->
+            "int32: " ++ String.fromInt i
 
         Pall ->
             "all"
 
-        PallTuples ->
-            "tuple"
-
-        PsomeTuples ts ->
-            "tuple: (" ++ String.join ", " (List.map showTypeVal ts) ++ ")"
-
-        Pprint ->
-            "print"
-
-        PallLists ->
-            "list"
-
-        Pcons ->
-            "cons"
-
-        PmakeTuple ->
-            "maketuple"
-
-        PtypeOf ->
-            "typeof"
-
-        Pswitch ->
-            "switch"
-
-        Ploop ->
-            "loop"
-
-        Pplus ->
-            "plus"
-
-        Ppop ->
-            "pop"
-
-        Pbool True ->
-            "bool: true"
-
-        Pbool False ->
-            "bool: false"
-
-        Pequal ->
-            "=="
-
-        PcatString ->
-            "catstring"
-
-        PallI32 ->
+        PallInt32 ->
             "int32"
 
+        Pint64 i ->
+            "int64: " ++ String.fromInt i
 
-typeUnion : Type -> Type -> Type
-typeUnion t1 t2 =
-    case ( t1, t2 ) of
-        ( [ PsomeTuples t1s ], [ PsomeTuples t2s ] ) ->
-            [ PsomeTuples <| List.map2 typeUnion t1s t2s ]
+        Pfloat32 f ->
+            "float32: " ++ String.fromFloat f
 
-        ( [ Ptype p1 ], [ Ptype p2 ] ) ->
-            [ Ptype (p1 ++ p2) ]
+        Pfloat64 f ->
+            "float64: " ++ String.fromFloat f
 
-        _ ->
-            deduplicate <| t1 ++ t2
+        PallInt64 ->
+            "int64"
 
+        PallFloat32 ->
+            "float32"
 
-checkPathsComplete : List ( Type, Type ) -> Type -> ( Type, Type )
-checkPathsComplete paths value =
-    let
-        combinedPaths =
-            typeListUnion <| List.map Tuple.first paths
-
-        missingPaths =
-            typeDiff value combinedPaths
-
-        surplusPaths =
-            typeDiff combinedPaths value
-    in
-    ( missingPaths, surplusPaths )
-
-
-toPath : ProgVal -> Result String ( Type, Type )
-toPath candidate =
-    case candidate of
-        PsomeTuples [ value, [ Ptype toMatch ] ] ->
-            Ok ( toMatch, value )
-
-        _ ->
-            Err <| "not a path: " ++ showProgVal candidate
+        PallFloat64 ->
+            "float64"
 
 
 programBlockP : String -> List String -> P.Parser Atom
@@ -1111,19 +689,19 @@ wasmP =
     P.map AWasm wasmHelpP
 
 
-wasmHelpP : P.Parser Wasm
+wasmHelpP : P.Parser WasmIn
 wasmHelpP =
     P.oneOf <| List.map wasmHelpHelpP wasmWords
 
 
-wasmHelpHelpP : ( String, Wasm ) -> P.Parser Wasm
+wasmHelpHelpP : ( String, WasmIn ) -> P.Parser WasmIn
 wasmHelpHelpP ( literal, wasm ) =
     P.succeed wasm |. P.keyword literal
 
 
-wasmWords : List ( String, Wasm )
+wasmWords : List ( String, WasmIn )
 wasmWords =
-    [ ( "i32.mul", I32mul )
+    [ ( "i32.mul", Ii32mul )
     ]
 
 
@@ -1230,17 +808,18 @@ showAtom atom =
         AWasm wasm ->
             "WASM: " ++ showWasm wasm
 
+        Loop ->
+            "loop"
 
-showWasm : Wasm -> String
+
+showWasm : WasmIn -> String
 showWasm wasm =
     case wasm of
-        I32mul ->
+        Ii32mul ->
             "i32.mul"
 
-
-typeDiff : Type -> Type -> Type
-typeDiff fromThis subtractThis =
-    List.filter (\x -> not <| isSubType [ x ] subtractThis) fromThis
+        Ibreak ->
+            "break"
 
 
 variable : P.Parser String
