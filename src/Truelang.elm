@@ -5,15 +5,17 @@ import Parser as P exposing ((|.), (|=))
 import Set
 import Utils
 
+
+
 {-
-Overview:
+   Overview:
 
-The code is parsed into into atoms.
+   The code is parsed into into atoms.
 
-What's the difference between a ProgVal and an Atom? An atom is a
-piece of the code, whereas ProgVals are the values that the type
-checker uses to represent run-time values when it is checking the
-code.
+   What's the difference between a ProgVal and an Atom? An atom is a
+   piece of the code, whereas ProgVals are the values that the type
+   checker uses to represent run-time values when it is checking the
+   code.
 -}
 
 
@@ -35,7 +37,6 @@ compile code =
 
                         Ok wasm ->
                             Ok wasm
-
 
 
 type Atom
@@ -128,13 +129,18 @@ makeOneWasm { value } accum =
         Retrieve name ->
             case Dict.get name accum.defs of
                 Nothing ->
-                    { accum | error = Just <|
-                        "could not find \"" ++ name ++ "\""
+                    { accum
+                        | error =
+                            Just <|
+                                "could not find \""
+                                    ++ name
+                                    ++ "\""
                     }
 
                 Just retrieved ->
-                    { accum | metaStack =
-                        retrieved :: accum.metaStack
+                    { accum
+                        | metaStack =
+                            retrieved :: accum.metaStack
                     }
 
         Block block ->
@@ -143,11 +149,15 @@ makeOneWasm { value } accum =
         Define name ->
             case accum.metaStack of
                 [] ->
-                    { accum | error = Just <| String.concat
-                        [ "nothing on stack to define as name \""
-                        , name
-                        , "\""
-                        ] }
+                    { accum
+                        | error =
+                            Just <|
+                                String.concat
+                                    [ "nothing on stack to define as name \""
+                                    , name
+                                    , "\""
+                                    ]
+                    }
 
                 s :: tack ->
                     { accum
@@ -350,7 +360,8 @@ noUnusedNames s =
         keys =
             Set.fromList <| Dict.keys s.defs
 
-        standardKeys = Set.empty
+        standardKeys =
+            Set.empty
 
         newKeys =
             Set.diff keys standardKeys
@@ -387,7 +398,8 @@ processAtom state atom =
         Retrieve v ->
             case Dict.get v state.defs of
                 Nothing ->
-                    Err { state = state
+                    Err
+                        { state = state
                         , message = "no definition \"" ++ v ++ "\""
                         }
 
@@ -447,7 +459,7 @@ processAtom state atom =
                     Err { state = state, message = "empty stack" }
 
                 (Block block) :: tack ->
-                    runTypeChecksHelp block {state | metaStack = tack }
+                    runTypeChecksHelp block { state | metaStack = tack }
 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
@@ -458,7 +470,7 @@ processAtom state atom =
                     Err { state = state, message = "empty stack" }
 
                 (Block block) :: tack ->
-                    runTypeChecksHelp block {state | metaStack = tack }
+                    runTypeChecksHelp block { state | metaStack = tack }
 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
@@ -469,9 +481,6 @@ processAtom state atom =
 
             else
                 Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
-
-
-
 
 
 problemToString : P.Problem -> String
