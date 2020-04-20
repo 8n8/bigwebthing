@@ -1,85 +1,184 @@
-module Truelang exposing (runProgram)
+module Truelang exposing (compile)
 
 import Dict
 import Maybe.Extra
 import Parser as P exposing ((|.), (|=))
 import Result.Extra
-import SHA256
 import Set
 import Utils
 
 
-runProgram :
-    Dict.Dict String String
-    -> String
-    -> Int
-    -> Maybe Utils.Document
-runProgram code userInput myName =
-    case Dict.get "main" code of
-        Nothing ->
-            Just <| Utils.SmallString <| "no main module"
+compile : Utils.Code -> Result String String
+compile code =
+    case parse code of
+        Err parsingError ->
+            Err <| "Parsing error: " ++ parsingError
 
-        Just mainModule ->
-            case P.run (topProgramP "main" code) mainModule of
-                Err deadEnds ->
-                    Just <| Utils.SmallString <| deadEndsToString deadEnds
+        Ok atoms ->
+            case typeCheck atoms of
+                Just typeError ->
+                    Err <| "Type error: " ++ typeError
 
-                Ok atoms ->
-                    case runTypeChecks atoms { initEltState | position = { start = initEltState.position.start, end = initEltState.position.end, file = "main" } } of
-                        Just errMsg ->
-                            Just <| Utils.SmallString ("type error: " ++ errMsg)
+                Nothing ->
+                    case makeWasm atoms of
+                        Err error ->
+                            Err <| "WASM generator error: " ++ error
 
-                        Nothing ->
-                            runElfs "main" code atoms [] myName
+                        Ok wasm ->
+                            Ok wasm
 
 
-runElfs :
-    String
-    -> Dict.Dict String String
-    -> List (Located Atom)
-    -> List ProgVal
-    -> Int
-    -> Maybe Utils.Document
-runElfs moduleName modules elfs progStack myName =
+type Atom
+    = Retrieve String
+    | Block (List (Located Atom))
+    | Define String
+    | Runblock
+    | Export String
+    | AWasm Wasm
+
+
+type alias WasmState =
+    { defs : Dict.Dict String Atom
+    , wasmStack : List Wasm
+    , error : Maybe String
+    , metaStack : List Atom
+    }
+
+
+type Wasm
+    = I32mul
+
+
+initWasmState : WasmState
+initWasmState =
+    { defs = Dict.empty
+    , wasmStack = []
+    , error = Nothing
+    , metaStack = []
+    }
+
+
+makeWasm : List (Located Atom) -> Result String String
+makeWasm atoms =
     let
-        oldP =
-            { defs = standardLibrary
-            , stack = progStack
-            , rightDoc = Nothing
-            , internalError = Nothing
-            , myName = myName
-            , moduleName = moduleName
-            , modules = modules
-            }
-
-        newP =
-            runElfsHelp elfs oldP
+        result =
+            makeWasmHelp initWasmState atoms
     in
-    case newP.internalError of
+    case result.error of
         Nothing ->
-            newP.rightDoc
+            Ok <| wasmsToString result.wasmStack
 
-        Just err ->
-            Just <| Utils.SmallString ("internal error: " ++ err)
+        Just error ->
+            Err error
 
 
+wasmsToString : List Wasm -> String
+wasmsToString wasms =
+    String.join " " <| List.map wasmToString wasms
+
+
+wasmToString : Wasm -> String
+wasmToString wasm =
+    case wasm of
+        I32mul ->
+            "i32.mul"
+
+
+makeWasmHelp : WasmState -> List (Located Atom) -> WasmState
+makeWasmHelp wasmState atoms =
+    List.foldr makeOneWasm wasmState atoms
+
+
+makeOneWasm : Located Atom -> WasmState -> WasmState
+makeOneWasm { value } accum =
+    case value of
+        AWasm I32mul ->
+            { accum | wasmStack = I32mul :: accum.wasmStack }
+
+        Retrieve name ->
+            case Dict.get name accum.defs of
+                Nothing ->
+                    { accum | error = Just <| "could not find \"" ++ name ++ "\"" }
+
+                Just retrieved ->
+                    { accum | metaStack = retrieved :: accum.metaStack }
+
+        Block block ->
+            { accum | metaStack = Block block :: accum.metaStack }
+
+        Define name ->
+            case accum.metaStack of
+                [] ->
+                    { accum | error = Just <| "nothing on stack to define as name \"" ++ name ++ "\"" }
+
+                s :: tack ->
+                    { accum
+                        | defs = Dict.insert name s accum.defs
+                        , metaStack = tack
+                    }
+
+        Runblock ->
+            case accum.metaStack of
+                [] ->
+                    { accum | error = Just <| "nothing on stack to run" }
+
+                (Block block) :: tack ->
+                    makeWasmHelp { accum | metaStack = tack } block
+
+                other :: _ ->
+                    { accum | error = Just <| "top of stack is not a block, it is: " ++ showAtom other }
+
+        Export _ ->
+            accum
+
+
+typeCheck : List (Located Atom) -> Maybe String
+typeCheck atoms =
+    runTypeChecks atoms initEltState
+
+
+parse : Utils.Code -> Result String (List (Located Atom))
+parse code =
+    case P.run (parseP "main" code.modules) code.main of
+        Err err ->
+            Err <| deadEndsToString err
+
+        Ok atoms ->
+            Ok atoms
+
+
+parseP : String -> List String -> P.Parser (List (Located Atom))
+parseP moduleName modules =
+    P.loop [] <| parseHelpP moduleName modules
+
+
+parseHelpP :
+    String
+    -> List String
+    -> List (Located Atom)
+    -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
+parseHelpP moduleName modules p =
+    P.oneOf
+        [ P.map
+            (\elements -> P.Loop (List.reverse elements ++ p))
+            (importHelpP modules)
+        , P.map
+            (\element -> P.Loop (element :: p))
+            (located moduleName (elementP modules))
+        , P.succeed ()
+            |> P.map (\_ -> P.Done (List.reverse p))
+        ]
+
+
+initEltState : EltState
 initEltState =
     { position = { start = ( 0, 0 ), end = ( 0, 0 ), file = "" }
     , stack = []
     , defs = standardTypes
     , defPos = Dict.empty
     , defUse = Set.empty
-    , typeDefPos = Dict.empty
-    , typeDefUse = Set.empty
-    , typeDefs = standardTypeProgramDefs
-    , typeStack = []
     , isHome = True
     }
-
-
-hash : String -> String
-hash s =
-    SHA256.toBase64 <| SHA256.fromString s
 
 
 runTypeChecks : List (Located Atom) -> EltState -> Maybe String
@@ -111,13 +210,6 @@ deadEndToString deadEnd =
         ]
 
 
-topProgramP : String -> Dict.Dict String String -> P.Parser (List (Located Atom))
-topProgramP moduleName modules =
-    P.succeed identity
-        |= programP moduleName modules
-        |. P.end
-
-
 type ProgVal
     = Pstring String
     | Ptuple (List ProgVal)
@@ -143,6 +235,7 @@ type ProgVal
     | Pbool Bool
     | Pequal
     | PcatString
+    | PallI32
 
 
 type alias Type =
@@ -155,72 +248,6 @@ type alias Located a =
     , file : String
     , end : ( Int, Int )
     }
-
-
-type Atom
-    = Retrieve String
-    | Block (List (Located Atom))
-    | Define String
-    | Runblock
-    | TypeLanguage (List (Located TlAtom))
-    | StringLiteral String
-    | IntegerLiteral Int
-    | Export String
-
-
-type TlAtom
-    = TlRetrieve String
-    | TlBlock (List (Located TlAtom))
-    | TlDefine String
-    | TlRunblock
-    | TlStringLiteral String
-    | TlIntegerLiteral Int
-
-
-standardLibrary : Dict.Dict String ProgVal
-standardLibrary =
-    Dict.fromList
-        [ ( "[]", Plist [] )
-        , ( "testForSwitch", Pint 2 )
-        , ( "print", Pprint )
-        , ( "emptylist", Plist [] )
-        , ( "cons", Pcons )
-        , ( "maketuple", PmakeTuple )
-        , ( "typeof", PtypeOf )
-        , ( "switch", Pswitch )
-        , ( "loop", Ploop )
-        , ( "counter", Pint 0 )
-        , ( "runloop", Pbool True )
-        , ( "+", Pplus )
-        , ( "pop", Ppop )
-        , ( "==", Pequal )
-        , ( "true", Pbool True )
-        , ( "false", Pbool False )
-        , ( "catstrings", PcatString )
-        ]
-
-
-runElfsHelp :
-    List (Located Atom)
-    -> ProgramState
-    -> ProgramState
-runElfsHelp atoms s =
-    case atoms of
-        [] ->
-            s
-
-        a :: toms ->
-            runElfsHelp toms (programProcessAtom a s)
-
-
-standardTypeProgramDefs : Dict.Dict String TypeProgramValue
-standardTypeProgramDefs =
-    Dict.fromList
-        [ ( "string", Ttype [ PallStrings ] )
-        , ( "[]", Tlist [] )
-        , ( "int", Ttype [ PallInts ] )
-        , ( "alltypes", Ttype [ Pall ] )
-        ]
 
 
 standardTypes : Dict.Dict String Type
@@ -250,24 +277,12 @@ standardTypes =
 
 type alias EltState =
     { position : Position
-    , typeDefs : Dict.Dict String TypeProgramValue
-    , typeStack : List TypeProgramValue
-    , typeDefPos : Dict.Dict String Position
-    , typeDefUse : Set.Set String
     , defs : Dict.Dict String Type
     , stack : List Type
     , defPos : Dict.Dict String Position
     , defUse : Set.Set String
     , isHome : Bool
     }
-
-
-type TypeProgramValue
-    = Ttype Type
-    | Tstring String
-    | Tblock (List (Located TlAtom))
-    | Tlist (List TypeProgramValue)
-    | Tinteger Int
 
 
 type alias Position =
@@ -392,6 +407,25 @@ processAtom state atom =
                                     , defs = Dict.insert newName s state.defs
                                     , defPos = Dict.insert newName state.position state.defPos
                                 }
+
+        AWasm I32mul ->
+            case state.stack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                _ :: [] ->
+                    Err { state = state, message = "only one thing in stack" }
+
+                i1 :: i2 :: tack ->
+                    case ( isSubType i1 [ PallI32 ], isSubType i2 [ PallI32 ] ) of
+                        ( False, _ ) ->
+                            Err { state = state, message = "Top item instack should be a " ++ showTypeVal [ PallI32 ] ++ ", but is a " ++ showTypeVal i1 }
+
+                        ( _, False ) ->
+                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallI32 ] ++ ", but is a " ++ showTypeVal i2 }
+
+                        ( True, True ) ->
+                            Ok { state | stack = tack }
 
         Runblock ->
             case state.stack of
@@ -540,7 +574,7 @@ processAtom state atom =
 
                 [ Ppop ] :: tack ->
                     case tack of
-                        t :: ack ->
+                        _ :: ack ->
                             Ok { state | stack = ack }
 
                         _ ->
@@ -576,20 +610,11 @@ processAtom state atom =
                         _ :: [] ->
                             Err { message = "only one thing on stack", state = state }
 
-                        t :: a :: ck ->
+                        _ :: _ :: ck ->
                             Ok { state | stack = [ Pbool True, Pbool False ] :: ck }
 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
-
-        TypeLanguage typeAtomsLocated ->
-            runTypeProgram typeAtomsLocated state
-
-        StringLiteral s ->
-            Ok { state | stack = [ Pstring s ] :: state.stack }
-
-        IntegerLiteral i ->
-            Ok { state | stack = [ Pint i ] :: state.stack }
 
         Export exported ->
             if Dict.member exported state.defPos then
@@ -645,131 +670,10 @@ problemToString problem =
             "bad repeat"
 
 
-programP : String -> Dict.Dict String String -> P.Parser (List (Located Atom))
-programP moduleName modules =
-    P.loop [] (programHelpP moduleName modules)
-
-
-programHelpP :
-    String
-    -> Dict.Dict String String
-    -> List (Located Atom)
-    -> P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
-programHelpP moduleName modules p =
-    P.oneOf
-        [ P.map (\elements -> P.Loop (List.reverse elements ++ p)) (importHelpP modules)
-        , P.map (\element -> P.Loop (element :: p))
-            (located moduleName (elementP modules))
-        , P.succeed ()
-            |> P.map (\_ -> P.Done (List.reverse p))
-        ]
-
-
-emptyModuleP : P.Parser (P.Step (List (Located Atom)) (List (Located Atom)))
-emptyModuleP =
-    P.succeed (P.Done [])
-        |. whiteSpaceP
-        |. P.end
-
-
-type alias ProgramState =
-    { defs : Dict.Dict String ProgVal
-    , stack : List ProgVal
-    , rightDoc : Maybe Utils.Document
-    , internalError : Maybe String
-    , myName : Int
-    , moduleName : String
-    , modules : Dict.Dict String String
-    }
-
-
-programProcessAtom : Located Atom -> ProgramState -> ProgramState
-programProcessAtom { start, value, end } s =
-    case value of
-        Retrieve name ->
-            case Dict.get name s.defs of
-                Nothing ->
-                    { s | internalError = Just <| "could not find name \"" ++ name ++ "\"" }
-
-                Just retrieved ->
-                    { s | stack = retrieved :: s.stack }
-
-        Block block ->
-            { s | stack = Pblock block :: s.stack }
-
-        Define newName ->
-            case s.stack of
-                [] ->
-                    { s | internalError = Just "empty stack" }
-
-                top :: remainsOfStack ->
-                    { s
-                        | defs = Dict.insert newName top s.defs
-                        , stack = remainsOfStack
-                    }
-
-        Runblock ->
-            case s.stack of
-                (Pblock block) :: remainsOfStack ->
-                    let
-                        newS =
-                            runElfsHelp block { s | stack = remainsOfStack }
-                    in
-                    { newS | defs = s.defs }
-
-                Pprint :: (Pstring string) :: remainsOfStack ->
-                    { s | rightDoc = Just <| print s.rightDoc string, stack = remainsOfStack }
-
-                Pcons :: toAdd :: (Plist ls) :: remainsOfStack ->
-                    { s | stack = Plist (toAdd :: ls) :: remainsOfStack }
-
-                PmakeTuple :: (Pint tupleLength) :: remainsOfStack ->
-                    { s | stack = Ptuple (List.take tupleLength remainsOfStack) :: List.drop tupleLength remainsOfStack }
-
-                PtypeOf :: next :: remainsOfStack ->
-                    { s | stack = Ptype [ next ] :: remainsOfStack }
-
-                Pswitch :: paths :: toSwitchOn :: remainsOfStack ->
-                    switch paths toSwitchOn { s | stack = remainsOfStack }
-
-                Ploop :: (Pblock blockToRun) :: remainsOfStack ->
-                    runLoop blockToRun { s | stack = remainsOfStack }
-
-                Ppop :: toPop :: remainsOfStack ->
-                    { s | stack = remainsOfStack }
-
-                Pplus :: (Pint n1) :: (Pint n2) :: rest ->
-                    { s | stack = Pint (n1 + n2) :: rest }
-
-                Pequal :: e1 :: e2 :: remainsOfStack ->
-                    { s | stack = Pbool (e1 == e2) :: remainsOfStack }
-
-                PcatString :: (Plist stringCandidates) :: tack ->
-                    case extractStrings stringCandidates of
-                        Nothing ->
-                            { s | internalError = Just "not all strings on top of stack" }
-
-                        Just strings ->
-                            { s | stack = Pstring (String.concat strings) :: tack }
-
-                _ ->
-                    { s | internalError = Just "not a block on top of stack, or couldn't run it" }
-
-        TypeLanguage _ ->
-            s
-
-        StringLiteral string ->
-            { s | stack = Pstring string :: s.stack }
-
-        IntegerLiteral i ->
-            { s | stack = Pint i :: s.stack }
-
-        Export _ ->
-            s
-
-
 type alias TypeError =
-    { state : EltState, message : String }
+    { state : EltState
+    , message : String
+    }
 
 
 endEmpty : EltState -> Maybe String
@@ -818,21 +722,6 @@ makePosition positions name =
 
 type alias EltOut =
     Result TypeError EltState
-
-
-runTypeProgram : List (Located TlAtom) -> EltState -> EltOut
-runTypeProgram atoms state =
-    case atoms of
-        [] ->
-            Ok state
-
-        a :: toms ->
-            case processTypeAtom { state | position = { start = a.start, end = a.end, file = a.file } } a.value of
-                Err err ->
-                    Err err
-
-                Ok newState ->
-                    runTypeProgram toms newState
 
 
 showTypeVal : Type -> String
@@ -1041,17 +930,15 @@ getBlock v =
             Nothing
 
 
-elementP : Dict.Dict String String -> String -> P.Parser Atom
+elementP : List String -> String -> P.Parser Atom
 elementP modules moduleName =
     P.oneOf
         [ runBlockP
-        , stringPWrap
         , exportP
         , retrieveP
-        , intPWrap
         , defP
+        , wasmP
         , programBlockP moduleName modules
-        , topTypeLangP moduleName
         ]
 
 
@@ -1065,75 +952,9 @@ located filename parser =
         |. whiteSpaceP
 
 
-importHelpP : Dict.Dict String String -> P.Parser (List (Located Atom))
+importHelpP : List String -> P.Parser (List (Located Atom))
 importHelpP modules =
     P.andThen (importHelpHelpP modules) importP
-
-
-extractStrings : List ProgVal -> Maybe (List String)
-extractStrings candidates =
-    Maybe.Extra.combine <| List.map extractString candidates
-
-
-extractString : ProgVal -> Maybe String
-extractString candidate =
-    case candidate of
-        Pstring s ->
-            Just s
-
-        _ ->
-            Nothing
-
-
-runLoop : List (Located Atom) -> ProgramState -> ProgramState
-runLoop blockBody oldState =
-    case oldState.stack of
-        (Pbool False) :: remainsOfStack ->
-            { oldState | stack = remainsOfStack }
-
-        (Pbool True) :: remainsOfStack ->
-            runLoop blockBody (runElfsHelp blockBody { oldState | stack = remainsOfStack })
-
-        _ ->
-            { oldState | internalError = Just "need a bool on top of stack" }
-
-
-switch : ProgVal -> ProgVal -> ProgramState -> ProgramState
-switch pathsCandidate toSwitchOn state =
-    case matchPath pathsCandidate toSwitchOn of
-        Err err ->
-            { state | internalError = Just err }
-
-        Ok chosen ->
-            { state | stack = chosen :: state.stack }
-
-
-matchPath : ProgVal -> ProgVal -> Result String ProgVal
-matchPath pathsCandidate toSwitchOn =
-    case extractPaths pathsCandidate of
-        Err err ->
-            Err <| "bad paths: got " ++ showProgVal err
-
-        Ok paths ->
-            case List.head <| List.filter (\p -> isSubType [ toSwitchOn ] (Tuple.first p)) paths of
-                Nothing ->
-                    Err "no matching paths"
-
-                Just chosen ->
-                    Ok <| Tuple.second chosen
-
-
-print : Maybe Utils.Document -> String -> Utils.Document
-print doc s =
-    case doc of
-        Just (Utils.Ordering ds) ->
-            Utils.Ordering <| ds ++ [ Utils.SmallString s ]
-
-        Just (Utils.SmallString oldS) ->
-            Utils.Ordering [ Utils.SmallString oldS, Utils.SmallString s ]
-
-        Nothing ->
-            Utils.SmallString s
 
 
 showTypeStack : List Type -> String
@@ -1143,65 +964,6 @@ showTypeStack typestack =
         , String.join ", " <| List.map showTypeVal typestack
         , ">"
         ]
-
-
-processTypeAtom : EltState -> TlAtom -> EltOut
-processTypeAtom state atom =
-    case atom of
-        TlRetrieve toRetrieve ->
-            case Dict.get toRetrieve state.typeDefs of
-                Nothing ->
-                    Err { state = state, message = "no definition \"" ++ toRetrieve ++ "\"" }
-
-                Just retrieved ->
-                    Ok
-                        { state
-                            | typeStack = retrieved :: state.typeStack
-                            , typeDefUse = Set.insert toRetrieve state.typeDefUse
-                        }
-
-        TlBlock block ->
-            Ok { state | typeStack = Tblock block :: state.typeStack }
-
-        TlDefine newName ->
-            case Dict.get newName state.typeDefPos of
-                Just position ->
-                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyLocation position }
-
-                Nothing ->
-                    case state.typeStack of
-                        [] ->
-                            Err { state = state, message = "empty stack" }
-
-                        s :: tack ->
-                            Ok
-                                { state
-                                    | typeStack = tack
-                                    , typeDefs = Dict.insert newName s state.typeDefs
-                                    , typeDefPos = Dict.insert newName state.position state.typeDefPos
-                                }
-
-        TlRunblock ->
-            case state.typeStack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                (Tblock bs) :: tack ->
-                    case runTypeProgram bs state of
-                        Err err ->
-                            Err { err | message = "error inside block called at " ++ prettyLocation state.position }
-
-                        Ok newState ->
-                            Ok { newState | typeDefs = state.typeDefs }
-
-                _ ->
-                    Err { state = state, message = "it's not a block" }
-
-        TlStringLiteral s ->
-            Ok { state | typeStack = Tstring s :: state.typeStack }
-
-        TlIntegerLiteral i ->
-            Ok { state | typeStack = Tinteger i :: state.typeStack }
 
 
 showProgVal : ProgVal -> String
@@ -1286,6 +1048,9 @@ showProgVal p =
         PcatString ->
             "catstring"
 
+        PallI32 ->
+            "int32"
+
 
 typeUnion : Type -> Type -> Type
 typeUnion t1 t2 =
@@ -1325,24 +1090,11 @@ toPath candidate =
             Err <| "not a path: " ++ showProgVal candidate
 
 
-topTypeLangP : String -> P.Parser Atom
-topTypeLangP filename =
-    P.succeed TypeLanguage
-        |. P.token "<"
-        |= typeLangP filename
-        |. P.token ">"
-
-
-typeLangP : String -> P.Parser (List (Located TlAtom))
-typeLangP filename =
-    P.loop [] (typeLangHelpP filename)
-
-
-programBlockP : String -> Dict.Dict String String -> P.Parser Atom
+programBlockP : String -> List String -> P.Parser Atom
 programBlockP moduleName modules =
     P.succeed Block
         |. P.token "{"
-        |= programP moduleName modules
+        |= parseP moduleName modules
         |. P.token "}"
 
 
@@ -1354,20 +1106,25 @@ defP =
         |= variable
 
 
-intPWrap : P.Parser Atom
-intPWrap =
-    P.succeed IntegerLiteral
-        |= intP
+wasmP : P.Parser Atom
+wasmP =
+    P.map AWasm wasmHelpP
 
 
-intP : P.Parser Int
-intP =
-    P.oneOf
-        [ P.succeed negate
-            |. P.symbol "-"
-            |= P.int
-        , P.int
-        ]
+wasmHelpP : P.Parser Wasm
+wasmHelpP =
+    P.oneOf <| List.map wasmHelpHelpP wasmWords
+
+
+wasmHelpHelpP : ( String, Wasm ) -> P.Parser Wasm
+wasmHelpHelpP ( literal, wasm ) =
+    P.succeed wasm |. P.keyword literal
+
+
+wasmWords : List ( String, Wasm )
+wasmWords =
+    [ ( "i32.mul", I32mul )
+    ]
 
 
 retrieveP : P.Parser Atom
@@ -1381,22 +1138,6 @@ exportP =
         |. P.keyword "export"
         |. whiteSpaceP
         |= variable
-
-
-stringPWrap : P.Parser Atom
-stringPWrap =
-    P.succeed StringLiteral
-        |= stringP
-
-
-{-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
--}
-stringP : P.Parser String
-stringP =
-    P.succeed identity
-        |. P.token "\""
-        |= P.loop ( [], 0 ) stringHelp2
-        |. P.token "\""
 
 
 runBlockP : P.Parser Atom
@@ -1444,14 +1185,14 @@ hashBody =
     P.getChompedString <| P.succeed () |. hashCharsP
 
 
-importHelpHelpP : Dict.Dict String String -> String -> P.Parser (List (Located Atom))
+importHelpHelpP : List String -> String -> P.Parser (List (Located Atom))
 importHelpHelpP modules toImport =
-    case Dict.get toImport modules of
+    case findModule modules toImport of
         Nothing ->
             P.problem <| "can't find program with name \"" ++ toImport ++ "\""
 
         Just module_ ->
-            case P.run (programP toImport modules) module_ of
+            case P.run (parseP toImport modules) module_ of
                 Err err ->
                     P.problem <| deadEndsToString err
 
@@ -1459,24 +1200,13 @@ importHelpHelpP modules toImport =
                     P.succeed atoms
 
 
-extractPaths : ProgVal -> Result ProgVal (List ( Type, ProgVal ))
-extractPaths candidates =
-    case candidates of
-        Plist ls ->
-            Result.Extra.combine <| List.map getMatchPath ls
-
-        _ ->
-            Err candidates
-
-
-getMatchPath : ProgVal -> Result ProgVal ( Type, ProgVal )
-getMatchPath p =
-    case p of
-        Ptuple [ path, Ptype t ] ->
-            Ok ( t, path )
-
-        bad ->
-            Err bad
+findModule : List String -> String -> Maybe String
+findModule modules hash =
+    let
+        hashes =
+            Dict.fromList <| List.map (\s -> ( Utils.hash s, s )) modules
+    in
+    Dict.get hash hashes
 
 
 showAtom : Atom -> String
@@ -1494,34 +1224,23 @@ showAtom atom =
         Runblock ->
             "Runblock"
 
-        TypeLanguage tlAtoms ->
-            "Typelanguage <" ++ String.join " " (List.map (showTlAtom << .value) tlAtoms) ++ ">"
-
-        StringLiteral string ->
-            "String " ++ showString string
-
-        IntegerLiteral integer ->
-            "Integer " ++ String.fromInt integer
-
         Export s ->
             "Export " ++ s
+
+        AWasm wasm ->
+            "WASM: " ++ showWasm wasm
+
+
+showWasm : Wasm -> String
+showWasm wasm =
+    case wasm of
+        I32mul ->
+            "i32.mul"
 
 
 typeDiff : Type -> Type -> Type
 typeDiff fromThis subtractThis =
     List.filter (\x -> not <| isSubType [ x ] subtractThis) fromThis
-
-
-typeLangHelpP :
-    String
-    -> List (Located TlAtom)
-    -> P.Parser (P.Step (List (Located TlAtom)) (List (Located TlAtom)))
-typeLangHelpP filename p =
-    P.oneOf
-        [ P.map (\element -> P.Loop (element :: p))
-            (located filename typeElementP)
-        , P.succeed () |> P.map (\_ -> P.Done (List.reverse p))
-        ]
 
 
 variable : P.Parser String
@@ -1531,27 +1250,6 @@ variable =
         , inner = \c -> Char.isAlphaNum c || Set.member c okVariableInner
         , reserved = reserved
         }
-
-
-stringHelp2 : ( List String, Int ) -> P.Parser (P.Step ( List String, Int ) String)
-stringHelp2 ( revChunks, offset ) =
-    P.succeed (stepHelp offset)
-        |= stringHelp revChunks
-        |= P.getOffset
-
-
-stepHelp : Int -> P.Step (List String) String -> Int -> P.Step ( List String, Int ) String
-stepHelp oldOffset step newOffset =
-    case step of
-        P.Done str ->
-            P.Done str
-
-        P.Loop revChunks ->
-            if newOffset > oldOffset then
-                P.Loop ( revChunks, newOffset )
-
-            else
-                P.Done <| String.join "" <| List.reverse revChunks
 
 
 {-| Don't use P.NotNestable for multicomment, as it doesn't consume
@@ -1616,61 +1314,6 @@ showStringHelp char accumulator =
             String.cons c accumulator
 
 
-showTlAtom : TlAtom -> String
-showTlAtom atom =
-    case atom of
-        TlRetrieve string ->
-            "Retrieve " ++ string
-
-        TlBlock atoms ->
-            "Block {" ++ String.join " " (List.map (showTlAtom << .value) atoms) ++ "}"
-
-        TlDefine string ->
-            "Define " ++ string
-
-        TlRunblock ->
-            "Runblock"
-
-        TlStringLiteral string ->
-            "String " ++ string
-
-        TlIntegerLiteral integer ->
-            "Integer " ++ String.fromInt integer
-
-
-typeElementP : String -> P.Parser TlAtom
-typeElementP filename =
-    P.oneOf
-        [ typeRunBlockP
-        , typeStringP
-        , typeDefP
-        , typeBlockP filename
-        , typeRetrieveP
-        ]
-
-
-typeRetrieveP : P.Parser TlAtom
-typeRetrieveP =
-    P.succeed TlRetrieve
-        |= variable
-
-
-typeBlockP : String -> P.Parser TlAtom
-typeBlockP filename =
-    P.succeed TlBlock
-        |. P.token "{"
-        |= typeLangP filename
-        |. P.token "}"
-
-
-typeDefP : P.Parser TlAtom
-typeDefP =
-    P.succeed TlDefine
-        |. P.token "="
-        |. whiteSpaceP
-        |= variable
-
-
 okVariableStart : Set.Set Char
 okVariableStart =
     Set.fromList
@@ -1693,37 +1336,3 @@ okVariableInner : Set.Set Char
 okVariableInner =
     Set.fromList
         [ '=' ]
-
-
-stringHelp : List String -> P.Parser (P.Step (List String) String)
-stringHelp revChunks =
-    P.oneOf
-        [ P.succeed (\chunk -> P.Loop (chunk :: revChunks))
-            |. P.token "\\"
-            |= P.oneOf
-                [ P.map (\_ -> "\n") (P.token "n")
-                , P.map (\_ -> "\t") (P.token "t")
-                , P.map (\_ -> "\u{000D}") (P.token "r")
-                , P.map (\_ -> "\"") (P.token "\"")
-                ]
-        , P.chompWhile isUninteresting
-            |> P.getChompedString
-            |> P.map (\chunk -> P.Loop (chunk :: revChunks))
-        ]
-
-
-typeStringP : P.Parser TlAtom
-typeStringP =
-    P.succeed TlStringLiteral
-        |= stringP
-
-
-typeRunBlockP : P.Parser TlAtom
-typeRunBlockP =
-    P.succeed TlRunblock
-        |. P.token "."
-
-
-isUninteresting : Char -> Bool
-isUninteresting char =
-    char /= '\\' && char /= '"'

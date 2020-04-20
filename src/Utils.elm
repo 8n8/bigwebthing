@@ -43,8 +43,14 @@ type alias Message =
     , time : Int
     , subject : String
     , userInput : String
-    , code : Dict.Dict String String
+    , code : Code
     , blobs : Dict.Dict String Bytes.Bytes
+    }
+
+
+type alias Code =
+    { main : String
+    , modules : List String
     }
 
 
@@ -53,7 +59,7 @@ type alias Draft =
     , time : Int
     , subject : String
     , userInput : String
-    , code : Dict.Dict String String
+    , code : Code
     , blobs : Dict.Dict String Bytes.Bytes
     }
 
@@ -65,7 +71,7 @@ encodeDraft { to, time, subject, userInput, code, blobs } =
         , E.unsignedInt32 Bytes.LE time
         , encodeSizedString subject
         , encodeSizedString userInput
-        , encodeList (Dict.toList code) encodeCode
+        , encodeCode code
         , encodeList (Dict.toList blobs) encodeBlob
         ]
 
@@ -77,7 +83,7 @@ decodeDraft =
         (D.unsignedInt32 Bytes.LE)
         sizedString
         sizedString
-        (D.map Dict.fromList <| list decodeCode)
+        decodeCode
         (D.map Dict.fromList <| list decodeBlob)
 
 
@@ -116,16 +122,16 @@ encodeMessage { to, from, time, subject, userInput, code, blobs } =
         , E.unsignedInt32 Bytes.LE time
         , encodeSizedString subject
         , encodeSizedString userInput
-        , encodeList (Dict.toList code) encodeCode
+        , encodeCode code
         , encodeList (Dict.toList blobs) encodeBlob
         ]
 
 
-encodeCode : ( String, String ) -> E.Encoder
-encodeCode ( name, code ) =
+encodeCode : Code -> E.Encoder
+encodeCode { main, modules } =
     E.sequence
-        [ encodeSizedString name
-        , encodeSizedString code
+        [ encodeSizedString main
+        , encodeList modules encodeSizedString
         ]
 
 
@@ -145,15 +151,15 @@ decodeMessage =
         (D.unsignedInt32 Bytes.LE)
         sizedString
         sizedString
-        (D.map Dict.fromList <| list decodeCode)
+        decodeCode
         (D.map Dict.fromList <| list decodeBlob)
 
 
-decodeCode : D.Decoder ( String, String )
+decodeCode : D.Decoder Code
 decodeCode =
-    D.map2 (\a b -> ( a, b ))
+    D.map2 Code
         sizedString
-        sizedString
+        (list sizedString)
 
 
 decodeBlob : D.Decoder ( String, Bytes.Bytes )

@@ -1,6 +1,12 @@
 (function () {
   "use strict";
 
+  function parseWat(code: string): Uint8Array {
+    // @ts-ignore
+    const wasm = wabt.parseWat("", code).toBinary.buffer;
+    return wasm;
+  }
+
   async function localGet(key: string): Promise<any> {
     // @ts-ignore
     const value = await localforage.getItem(key);
@@ -1259,4 +1265,42 @@
   app.ports.sendMessagePort.subscribe(function (rawB64: string): void {
     sendMessageHelp(rawB64);
   });
+
+
+  interface ToRun {
+    readonly wat: string;
+    readonly userInput: string;
+  }
+
+  function makeMemory(userInput: string) {
+    const stringEncoder = new TextEncoder();
+    const encodedUserInput: Uint8Array = stringEncoder.encode(userInput);
+    const inputLength = encodedUserInput.length
+    const pages = Math.ceil(inputLength / 64000)
+    const memory = new WebAssembly.Memory({initial:pages, maximum: 1000})
+    const memoryBuffer = new Uint8Array(memory.buffer);
+    
+    for (let i = 0; i < inputLength; i++) {
+      memoryBuffer[i] = encodedUserInput[i]
+    }
+    return memory
+  }
+
+  async function runWat(toRun: ToRun): Promise<Uint8Array> {
+    const wasm = parseWat(toRun.wat);
+    const memory = makeMemory(toRun.userInput)
+    const imports = {env: { memory: memory }};
+    const wasmModule = new WebAssembly.Module(wasm);
+    const wasmInstance = new WebAssembly.Instance(wasmModule, imports)
+    // @ts-ignore
+    wasmInstance.exports.main();
+    return new Uint8Array(memory.buffer);
+  }
+
+  app.ports.runWasmPort.subscribe(function (toRun: ToRun) {
+    runWat(toRun).then(function(encodedDocument: Uint8Array) {
+       app.ports.wasmDocumentPort.send(fromBytes(encodedDocument))
+    })
+  });
+
 })();
