@@ -47,6 +47,7 @@ type Atom
     | Export String
     | AWasm WasmIn
     | Loop
+    | IfElse
 
 
 type alias WasmState =
@@ -59,13 +60,12 @@ type alias WasmState =
 
 type WasmOut
     = Oi32mul
-    | Obreak
-    | Oloop (List WasmOut)
+    | Oloop (List WasmOut) (List WasmOut)
+    | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
 
 
 type WasmIn
     = Ii32mul
-    | Ibreak
 
 
 initWasmState : WasmState
@@ -102,14 +102,27 @@ wasmToString wasm =
         Oi32mul ->
             "i32.mul"
 
-        Oloop wasms ->
+        Oloop break body ->
             String.concat
-                [ "(loop\n"
-                , String.join " " <| List.map wasmToString wasms
+                [ "(block\n"
+                , "  (loop\n"
+                , "    " ++ wasmsToString body ++ "\n"
+                , "\n"
+                , "    " ++ wasmsToString break ++ "\n"
+                , "    (br_if 1)\n"
+                , "    (br 0)\n"
+                , "  )\n"
+                , ")\n"
                 ]
 
-        Obreak ->
-            "(br 0)"
+        OifElse if_ then_ else_ ->
+            String.concat
+                [ wasmsToString if_ ++ "\n"
+                , "(if\n"
+                , "  (then " ++ wasmsToString then_ ++ ")\n"
+                , "  (else " ++ wasmsToString else_ ++ ")\n"
+                , ")\n"
+                ]
 
 
 makeWasmHelp : WasmState -> List (Located Atom) -> WasmState
@@ -122,9 +135,6 @@ makeOneWasm { value } accum =
     case value of
         AWasm Ii32mul ->
             { accum | wasmStack = Oi32mul :: accum.wasmStack }
-
-        AWasm Ibreak ->
-            { accum | wasmStack = Obreak :: accum.wasmStack }
 
         Retrieve name ->
             case Dict.get name accum.defs of
@@ -181,14 +191,78 @@ makeOneWasm { value } accum =
 
         Loop ->
             case accum.metaStack of
-                [] ->
-                    { accum | error = Just "nothing on stack to run" }
+                (Block body) :: (Block break) :: tack ->
+                    let
+                        clearStack =
+                            { accum
+                                | wasmStack = []
+                                , metaStack = []
+                            }
 
-                (Block block) :: tack ->
-                    makeWasmHelp accum block
+                        bodyWasm =
+                            makeWasmHelp clearStack body
 
-                other :: _ ->
-                    { accum | error = Just <| "top of stack is not a block, it is: " ++ showAtom other }
+                        breakWasm =
+                            makeWasmHelp clearStack break
+
+                        loopWasm =
+                            Oloop
+                                breakWasm.wasmStack
+                                bodyWasm.wasmStack
+                    in
+                    { accum | wasmStack = loopWasm :: accum.wasmStack }
+
+                other ->
+                    { accum
+                        | error =
+                            Just <|
+                                String.concat
+                                    [ "bad stack: expecting EXIT and BODY blocks "
+                                    , "for the loop, but got: "
+                                    , showAtoms other
+                                    ]
+                    }
+
+        IfElse ->
+            case accum.metaStack of
+                (Block else_) :: (Block then_) :: (Block if_) :: tack ->
+                    let
+                        clearStack =
+                            { accum
+                                | wasmStack = []
+                                , metaStack = []
+                            }
+
+                        ifWasm =
+                            makeWasmHelp clearStack if_
+
+                        thenWasm =
+                            makeWasmHelp clearStack then_
+
+                        elseWasm =
+                            makeWasmHelp clearStack else_
+
+                        ifElseWasm =
+                            OifElse
+                                ifWasm.wasmStack
+                                thenWasm.wasmStack
+                                elseWasm.wasmStack
+                    in
+                    { accum
+                        | wasmStack =
+                            ifElseWasm :: accum.wasmStack
+                    }
+
+                other ->
+                    { accum
+                        | error =
+                            Just <|
+                                String.concat
+                                    [ "bad stack: expecting IF, THEN and ELSE "
+                                    , "blocks, but got: "
+                                    , showAtoms other
+                                    ]
+                    }
 
 
 typeCheck : List (Located Atom) -> Maybe String
@@ -243,7 +317,7 @@ initEltState =
 
 runTypeChecks : List (Located Atom) -> EltState -> Maybe String
 runTypeChecks atoms init =
-    case runTypeChecksHelp atoms init of
+    case runTypeChecksHelp (Just []) atoms init of
         Ok endState ->
             typeEndChecks endState
 
@@ -377,11 +451,51 @@ noUnusedNames s =
             Just <| prettyUnused oneOrMore
 
 
-runTypeChecksHelp : List (Located Atom) -> EltState -> EltOut
-runTypeChecksHelp atoms state =
+badStackEnd : List Type -> List Type -> String
+badStackEnd expected got =
+    String.concat
+        [ "bad stack: got "
+        , showTypeStack got
+        , ", expected "
+        , showTypeStack expected
+        ]
+
+
+
+-- combineResults : List (Result a b) -> Result a (List b)
+-- combineResults results =
+--     List.foldr combineResultsHelp (Ok []) results
+--
+--
+-- combineResultsHelp : Result a b -> Result a (List b) -> Result a (List b)
+-- combineResultsHelp result accum =
+--     case (result, accum) of
+--         (Ok okResult, Ok okAccum) ->
+--             Ok <| okResult :: okAccum
+--
+--         (Err errResult, Ok okAccum) ->
+--             Err errResult
+--
+--
+
+
+runTypeChecksHelp : Maybe (List Type) -> List (Located Atom) -> EltState -> EltOut
+runTypeChecksHelp stackEnd atoms state =
     case atoms of
         [] ->
-            Ok state
+            case stackEnd of
+                Nothing ->
+                    Ok state
+
+                Just se ->
+                    if se == state.wasmStack then
+                        Err
+                            { state = state
+                            , message = badStackEnd se state.wasmStack
+                            }
+
+                    else
+                        Ok state
 
         a :: toms ->
             case processAtom { state | position = { start = a.start, end = a.end, file = a.file } } a.value of
@@ -389,7 +503,7 @@ runTypeChecksHelp atoms state =
                     Err err
 
                 Ok ok ->
-                    runTypeChecksHelp toms ok
+                    runTypeChecksHelp stackEnd toms ok
 
 
 processAtom : EltState -> Atom -> EltOut
@@ -450,19 +564,8 @@ processAtom state atom =
                         ( True, True ) ->
                             Ok { state | wasmStack = tack }
 
-        AWasm Ibreak ->
-            Ok state
-
         Loop ->
-            case state.metaStack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                (Block block) :: tack ->
-                    runTypeChecksHelp block { state | metaStack = tack }
-
-                _ ->
-                    Err { message = "there's nothing to run", state = state }
+            loopHelp state
 
         Runblock ->
             case state.metaStack of
@@ -470,7 +573,7 @@ processAtom state atom =
                     Err { state = state, message = "empty stack" }
 
                 (Block block) :: tack ->
-                    runTypeChecksHelp block { state | metaStack = tack }
+                    runTypeChecksHelp Nothing block { state | metaStack = tack }
 
                 _ ->
                     Err { message = "there's nothing to run", state = state }
@@ -481,6 +584,122 @@ processAtom state atom =
 
             else
                 Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
+
+        IfElse ->
+            ifElseTypeHelp state
+
+
+loopHelp : EltState -> EltOut
+loopHelp state =
+    case state.metaStack of
+        [] ->
+            Err { state = state, message = "empty stack" }
+
+        (Block body) :: (Block break) :: tack ->
+            let
+                cleanStack =
+                    { state | wasmStack = [] }
+
+                bodyEnd =
+                    runTypeChecksHelp (Just []) body cleanStack
+
+                breakEnd =
+                    runTypeChecksHelp (Just [ [ PallInt32 ] ]) break cleanStack
+            in
+            case ( bodyEnd, breakEnd ) of
+                ( Err err, _ ) ->
+                    Err
+                        { message =
+                            String.concat
+                                [ "bad LOOP body: "
+                                , prettyErrorMessage err
+                                ]
+                        , state = state
+                        }
+
+                ( _, Err err ) ->
+                    Err
+                        { message =
+                            String.concat
+                                [ "bad LOOP break block: "
+                                , prettyErrorMessage err
+                                ]
+                        , state = state
+                        }
+
+                ( Ok _, Ok _ ) ->
+                    Ok state
+
+        _ ->
+            Err { message = "there's nothing to run", state = state }
+
+
+ifElseTypeHelp : EltState -> EltOut
+ifElseTypeHelp state =
+    case state.metaStack of
+        (Block else_) :: (Block if_) :: (Block switch) :: metatack ->
+            let
+                cleanStack =
+                    { state | wasmStack = [] }
+
+                elseEnd =
+                    runTypeChecksHelp (Just []) else_ cleanStack
+
+                ifEnd =
+                    runTypeChecksHelp (Just []) if_ cleanStack
+
+                switchEnd =
+                    runTypeChecksHelp (Just [ [ PallInt32 ] ]) switch cleanStack
+            in
+            case ( elseEnd, ifEnd, switchEnd ) of
+                ( Err err, _, _ ) ->
+                    Err
+                        { message =
+                            String.concat
+                                [ "bad ELSE block: "
+                                , prettyErrorMessage err
+                                ]
+                        , state = state
+                        }
+
+                ( _, Err err, _ ) ->
+                    Err
+                        { message =
+                            String.concat
+                                [ "bad IF block: "
+                                , prettyErrorMessage err
+                                ]
+                        , state = state
+                        }
+
+                ( _, _, Err err ) ->
+                    Err
+                        { message =
+                            String.concat
+                                [ "bad switch block in IFELSE: "
+                                , prettyErrorMessage err
+                                ]
+                        , state = state
+                        }
+
+                ( Ok _, Ok _, Ok _ ) ->
+                    Ok state
+
+        bad ->
+            Err
+                { message =
+                    String.concat
+                        [ "bad stack: "
+                        , showAtoms bad
+                        , ", expecting IF, ELSE, and SWITCH blocks"
+                        ]
+                , state = state
+                }
+
+
+showAtoms : List Atom -> String
+showAtoms atoms =
+    String.join " " <| List.map showAtom atoms
 
 
 problemToString : P.Problem -> String
@@ -619,7 +838,27 @@ elementP modules moduleName =
         , defP
         , wasmP
         , programBlockP moduleName modules
+        , plainP
         ]
+
+
+plainP : P.Parser Atom
+plainP =
+    P.oneOf <|
+        List.map plainHelpP
+            [ ( "loop", Loop )
+            , ( "ifelse", IfElse )
+            ]
+
+
+plainHelpP : ( String, Atom ) -> P.Parser Atom
+plainHelpP ( string, atom ) =
+    P.succeed atom |. P.keyword string
+
+
+loopP : P.Parser Atom
+loopP =
+    P.succeed Loop |. P.keyword "loop"
 
 
 located : String -> (String -> P.Parser a) -> P.Parser (Located a)
@@ -820,15 +1059,15 @@ showAtom atom =
         Loop ->
             "loop"
 
+        IfElse ->
+            "ifelse"
+
 
 showWasm : WasmIn -> String
 showWasm wasm =
     case wasm of
         Ii32mul ->
             "i32.mul"
-
-        Ibreak ->
-            "break"
 
 
 variable : P.Parser String
