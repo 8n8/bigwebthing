@@ -448,17 +448,18 @@ update msg model =
 
                 newOpened =
                     { draft = newDraft
-                    , module_ = case oldName of
-                        "main" ->
-                            Just ("main", newModuleCode)
+                    , module_ =
+                        case oldName of
+                            "main" ->
+                                Just ( "main", newModuleCode )
 
-                        _ ->
-                            Just ( Utils.hash newModuleCode
-                                 , newModuleCode )
+                            _ ->
+                                Just
+                                    ( Utils.hash newModuleCode
+                                    , newModuleCode
+                                    )
                     , document = Nothing
                     }
-                _ = Debug.log "oldName" oldName
-                _ = Debug.log "addedNewModule" addedNewModule
             in
             case Truelang.compile addedNewModule of
                 Err err ->
@@ -674,7 +675,7 @@ viewMessage { message, module_, document } =
         , Element.paragraph [] [ Element.text message.userInput ]
         , case document of
             Nothing ->
-                Element.text "Compiling..."
+                Element.none
 
             Just d ->
                 displayDocument d
