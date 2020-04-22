@@ -85,7 +85,16 @@ makeWasm atoms =
     in
     case result.error of
         Nothing ->
-            Ok <| wasmsToString result.wasmStack
+            Ok <|
+                String.concat
+                    [ "(module\n"
+                    , "  (import \"env\" \"memory\" (memory 1))\n"
+                    , "  (func $main\n"
+                    , wasmsToString result.wasmStack ++ "\n"
+                    , "  )\n"
+                    , "  (export \"main\" (func $main))\n"
+                    , ")\n"
+                    ]
 
         Just error ->
             Err error

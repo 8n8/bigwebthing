@@ -1267,7 +1267,8 @@ func (startHttpServer) io(inputChan chan inputT) {
 	http.HandleFunc(
 		"/",
 		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Add("Content-Security-Policy", csp)
+			// Turned off in devlopment, because webpack uses eval.
+			// w.Header().Add("Content-Security-Policy", csp)
 			handle, err := os.Open("index.html")
 			if err != nil {
 				http.Error(w, err.Error(), 500)

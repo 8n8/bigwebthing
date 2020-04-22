@@ -6,9 +6,10 @@ const nacl = require("tweetnacl");
 (function () {
   "use strict";
 
-  function parseWat(code: string): Uint8Array {
-    const wasm = wabt.parseWat("", code).toBinary.buffer;
-    return wasm;
+  function parseWat(code: string) {
+    const wasmModule = wabt.parseWat("main", code);
+    const { buffer } = wasmModule.toBinary({});
+    return buffer;
   }
 
   async function localGet(key: string): Promise<any> {
@@ -1259,7 +1260,6 @@ const nacl = require("tweetnacl");
     sendMessageHelp(rawB64);
   });
 
-
   interface ToRun {
     readonly wat: string;
     readonly userInput: string;
@@ -1268,23 +1268,28 @@ const nacl = require("tweetnacl");
   function makeMemory(userInput: string) {
     const stringEncoder = new TextEncoder();
     const encodedUserInput: Uint8Array = stringEncoder.encode(userInput);
-    const inputLength = encodedUserInput.length
-    const pages = Math.ceil(inputLength / 64000)
-    const memory = new WebAssembly.Memory({initial:pages, maximum: 1000})
-    const memoryBuffer = new Uint8Array(memory.buffer);
-    
-    for (let i = 0; i < inputLength; i++) {
-      memoryBuffer[i] = encodedUserInput[i]
+    const inputLength = encodedUserInput.length;
+    let pages = Math.ceil(inputLength / 64000);
+    if (pages === 0) {
+      pages = 1;
     }
-    return memory
+    const memory = new WebAssembly.Memory({ initial: pages, maximum: 1000 });
+    const memoryBuffer = new Uint8Array(memory.buffer);
+
+    for (let i = 0; i < inputLength; i++) {
+      memoryBuffer[i] = encodedUserInput[i];
+    }
+    return memory;
   }
 
   async function runWat(toRun: ToRun): Promise<Uint8Array> {
-    const wasm = parseWat(toRun.wat);
-    const memory = makeMemory(toRun.userInput)
-    const imports = {env: { memory: memory }};
-    const wasmModule = new WebAssembly.Module(wasm);
-    const wasmInstance = new WebAssembly.Instance(wasmModule, imports)
+    debugger;
+    console.log(toRun.wat);
+    const moduleBuffer = parseWat(toRun.wat);
+    const module_ = await WebAssembly.compile(moduleBuffer);
+    const memory = makeMemory(toRun.userInput);
+    const imports = { env: { memory: memory } };
+    const wasmInstance = await WebAssembly.instantiate(module_, imports);
     // @ts-ignore
     wasmInstance.exports.main();
     return new Uint8Array(memory.buffer);
@@ -1292,9 +1297,8 @@ const nacl = require("tweetnacl");
 
   app.ports.runWasmPort.subscribe(function (toRun: ToRun) {
     console.log("app.ports.runWasmPort");
-    runWat(toRun).then(function(encodedDocument: Uint8Array) {
-       app.ports.wasmDocumentPort.send(fromBytes(encodedDocument))
-    })
+    runWat(toRun).then(function (encodedDocument: Uint8Array) {
+      app.ports.wasmDocumentPort.send(fromBytes(encodedDocument));
+    });
   });
-
 })();
