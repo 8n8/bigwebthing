@@ -1,30 +1,30 @@
+const wabt = require("wabt")();
+const localforage = require("localforage");
+const base64js = require("base64-js");
+const nacl = require("tweetnacl");
+
 (function () {
   "use strict";
 
   function parseWat(code: string): Uint8Array {
-    // @ts-ignore
     const wasm = wabt.parseWat("", code).toBinary.buffer;
     return wasm;
   }
 
   async function localGet(key: string): Promise<any> {
-    // @ts-ignore
     const value = await localforage.getItem(key);
     return value;
   }
 
   async function localSet(key: string, value: any): Promise<void> {
-    // @ts-ignore
     await localforage.setItem(key, value);
   }
 
   function fromBytes(bytes: Uint8Array): string {
-    // @ts-ignore
     return base64js.fromByteArray(bytes);
   }
 
   function toBytes(b64: string): Uint8Array {
-    // @ts-ignore
     return base64js.toByteArray(b64);
   }
 
@@ -32,12 +32,10 @@
     signedMessage: Uint8Array,
     publicKey: Uint8Array
   ): Uint8Array | null {
-    // @ts-ignore
     return nacl.sign.open(signedMessage, publicKey);
   }
 
   function sign(message: Uint8Array, secretKey: Uint8Array): Uint8Array {
-    // @ts-ignore
     return nacl.sign(message, secretKey);
   }
 
@@ -47,7 +45,6 @@
   }
 
   function signKeyPair(): SignKeyPair {
-    // @ts-ignore
     return nacl.sign.keyPair();
   }
 
@@ -62,7 +59,6 @@
   }
 
   function boxKeyPair(): BoxKeyPair {
-    // @ts-ignore
     return nacl.box.keyPair();
   }
 
@@ -72,12 +68,10 @@
     theirPublicKey: Uint8Array,
     mySecretKey: Uint8Array
   ): Uint8Array {
-    // @ts-ignore
     return nacl.box(message, nonce, theirPublicKey, mySecretKey);
   }
 
   function sha512(message: Uint8Array): Uint8Array {
-    // @ts-ignore
     return nacl.hash(message);
   }
 
@@ -87,7 +81,6 @@
     theirPublicKey: Uint8Array,
     mySecretKey: Uint8Array
   ): Uint8Array | null {
-    // @ts-ignore
     return nacl.box.open(box, nonce, theirPublicKey, mySecretKey);
   }
 
