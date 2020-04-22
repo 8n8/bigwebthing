@@ -771,7 +771,7 @@ editDraft myName draft =
         , userInputBox draft
         , case draft.document of
             Nothing ->
-                Element.text "Compiling..."
+                Element.none
 
             Just d ->
                 displayDocument d

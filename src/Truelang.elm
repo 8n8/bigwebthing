@@ -470,7 +470,7 @@ runTypeChecksHelp stackEnd atoms state =
                     Ok state
 
                 Just se ->
-                    if se == state.wasmStack then
+                    if se /= state.wasmStack then
                         Err
                             { state = state
                             , message = badStackEnd se state.wasmStack
