@@ -1298,6 +1298,7 @@
   }
 
   app.ports.runWasmPort.subscribe(function (toRun: ToRun) {
+    console.log("app.ports.runWasmPort");
     runWat(toRun).then(function(encodedDocument: Uint8Array) {
        app.ports.wasmDocumentPort.send(fromBytes(encodedDocument))
     })

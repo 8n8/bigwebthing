@@ -447,7 +447,18 @@ update msg model =
                             Utils.hash oldName
 
                 newOpened =
-                    { draft = newDraft, module_ = Just ( Utils.hash newModuleCode, newModuleCode ), document = Nothing }
+                    { draft = newDraft
+                    , module_ = case oldName of
+                        "main" ->
+                            Just ("main", newModuleCode)
+
+                        _ ->
+                            Just ( Utils.hash newModuleCode
+                                 , newModuleCode )
+                    , document = Nothing
+                    }
+                _ = Debug.log "oldName" oldName
+                _ = Debug.log "addedNewModule" addedNewModule
             in
             case Truelang.compile addedNewModule of
                 Err err ->

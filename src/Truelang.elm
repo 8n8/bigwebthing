@@ -461,24 +461,6 @@ badStackEnd expected got =
         ]
 
 
-
--- combineResults : List (Result a b) -> Result a (List b)
--- combineResults results =
---     List.foldr combineResultsHelp (Ok []) results
---
---
--- combineResultsHelp : Result a b -> Result a (List b) -> Result a (List b)
--- combineResultsHelp result accum =
---     case (result, accum) of
---         (Ok okResult, Ok okAccum) ->
---             Ok <| okResult :: okAccum
---
---         (Err errResult, Ok okAccum) ->
---             Err errResult
---
---
-
-
 runTypeChecksHelp : Maybe (List Type) -> List (Located Atom) -> EltState -> EltOut
 runTypeChecksHelp stackEnd atoms state =
     case atoms of
@@ -834,11 +816,10 @@ elementP modules moduleName =
     P.oneOf
         [ runBlockP
         , exportP
+        , plainP
         , retrieveP
         , defP
-        , wasmP
         , programBlockP moduleName modules
-        , plainP
         ]
 
 
@@ -848,6 +829,7 @@ plainP =
         List.map plainHelpP
             [ ( "loop", Loop )
             , ( "ifelse", IfElse )
+            , ( "i32mul", AWasm Ii32mul )
             ]
 
 
