@@ -1283,20 +1283,18 @@ const nacl = require("tweetnacl");
   }
 
   async function runWat(toRun: ToRun): Promise<Uint8Array> {
-    debugger;
-    console.log(toRun.wat);
     const moduleBuffer = parseWat(toRun.wat);
     const module_ = await WebAssembly.compile(moduleBuffer);
     const memory = makeMemory(toRun.userInput);
     const imports = { env: { memory: memory } };
     const wasmInstance = await WebAssembly.instantiate(module_, imports);
     // @ts-ignore
-    wasmInstance.exports.main();
-    return new Uint8Array(memory.buffer);
+    const docLength = wasmInstance.exports.main();
+    const docBytes = new Uint8Array(memory.buffer);
+    return docBytes.slice(0, docLength);
   }
 
   app.ports.runWasmPort.subscribe(function (toRun: ToRun) {
-    console.log("app.ports.runWasmPort");
     runWat(toRun).then(function (encodedDocument: Uint8Array) {
       app.ports.wasmDocumentPort.send(fromBytes(encodedDocument));
     });

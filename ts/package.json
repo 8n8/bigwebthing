@@ -16,12 +16,17 @@
     "webpack-cli": "^3.3.11"
   },
   "dependencies": {
+    "@types/eslint": "^6.8.0",
     "@types/localforage": "0.0.34",
     "@types/node": "^13.13.2",
+    "@typescript-eslint/eslint-plugin": "^2.29.0",
+    "@typescript-eslint/parser": "^2.29.0",
     "base64-js": "^1.3.1",
+    "eslint": "^6.8.0",
     "fs": "0.0.1-security",
     "localforage": "^1.7.3",
     "tweetnacl": "^1.0.3",
+    "typescript-eslint": "0.0.1-alpha.0",
     "wabt": "^1.0.13"
   }
 }

@@ -300,14 +300,14 @@ encodeDocumentHelp doc =
     case doc of
         Ordering docs ->
             E.sequence <|
-                [ E.unsignedInt8 2
+                [ E.unsignedInt8 0
                 , E.unsignedInt32 Bytes.LE <| List.length docs
                 ]
                     ++ List.map encodeDocument docs
 
         SmallString s ->
             E.sequence <|
-                [ E.unsignedInt8 3
+                [ E.unsignedInt8 1
                 , encodeSizedString s
                 ]
 

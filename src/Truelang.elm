@@ -60,12 +60,16 @@ type alias WasmState =
 
 type WasmOut
     = Oi32mul
+    | Oi32const Int
+    | Oi32store8
     | Oloop (List WasmOut) (List WasmOut)
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
 
 
 type WasmIn
     = Ii32mul
+    | Ii32const Int
+    | Ii32store8
 
 
 initWasmState : WasmState
@@ -89,7 +93,7 @@ makeWasm atoms =
                 String.concat
                     [ "(module\n"
                     , "  (import \"env\" \"memory\" (memory 1))\n"
-                    , "  (func $main\n"
+                    , "  (func $main (result i32)\n"
                     , wasmsToString result.wasmStack ++ "\n"
                     , "  )\n"
                     , "  (export \"main\" (func $main))\n"
@@ -133,6 +137,12 @@ wasmToString wasm =
                 , ")\n"
                 ]
 
+        Oi32const i ->
+            "i32.const " ++ String.fromInt i
+
+        Oi32store8 ->
+            "i32.store8"
+
 
 makeWasmHelp : WasmState -> List (Located Atom) -> WasmState
 makeWasmHelp wasmState atoms =
@@ -144,6 +154,12 @@ makeOneWasm { value } accum =
     case value of
         AWasm Ii32mul ->
             { accum | wasmStack = Oi32mul :: accum.wasmStack }
+
+        AWasm (Ii32const i) ->
+            { accum | wasmStack = Oi32const i :: accum.wasmStack }
+
+        AWasm Ii32store8 ->
+            { accum | wasmStack = Oi32store8 :: accum.wasmStack }
 
         Retrieve name ->
             case Dict.get name accum.defs of
@@ -326,9 +342,9 @@ initEltState =
 
 runTypeChecks : List (Located Atom) -> EltState -> Maybe String
 runTypeChecks atoms init =
-    case runTypeChecksHelp (Just []) atoms init of
+    case runTypeChecksHelp (Just [ [ PallInt32 ] ]) atoms init of
         Ok endState ->
-            typeEndChecks endState
+            Nothing
 
         Err err ->
             Just <| prettyErrorMessage err
@@ -470,6 +486,20 @@ badStackEnd expected got =
         ]
 
 
+checkStackEnd : List Type -> List Type -> Bool
+checkStackEnd sub master =
+    if List.length sub /= List.length master then
+        False
+
+    else
+        List.all (\( a, b ) -> isSubType a b) <| zip sub master
+
+
+zip : List a -> List b -> List ( a, b )
+zip las lbs =
+    List.map2 (\a b -> ( a, b )) las lbs
+
+
 runTypeChecksHelp : Maybe (List Type) -> List (Located Atom) -> EltState -> EltOut
 runTypeChecksHelp stackEnd atoms state =
     case atoms of
@@ -479,7 +509,7 @@ runTypeChecksHelp stackEnd atoms state =
                     Ok state
 
                 Just se ->
-                    if se /= state.wasmStack then
+                    if not <| checkStackEnd state.wasmStack se then
                         Err
                             { state = state
                             , message = badStackEnd se state.wasmStack
@@ -547,7 +577,32 @@ processAtom state atom =
                 i1 :: i2 :: tack ->
                     case ( isSubType i1 [ PallInt32 ], isSubType i2 [ PallInt32 ] ) of
                         ( False, _ ) ->
-                            Err { state = state, message = "Top item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i1 }
+                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i1 }
+
+                        ( _, False ) ->
+                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i2 }
+
+                        ( True, True ) ->
+                            Ok
+                                { state
+                                    | wasmStack = [ PallInt32 ] :: tack
+                                }
+
+        AWasm (Ii32const i) ->
+            Ok { state | wasmStack = [ Pint32 i ] :: state.wasmStack }
+
+        AWasm Ii32store8 ->
+            case state.wasmStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                _ :: [] ->
+                    Err { state = state, message = "only one thing on stack" }
+
+                i1 :: i2 :: tack ->
+                    case ( isSubType i1 [ PallInt32 ], isSubType i2 [ PallInt32 ] ) of
+                        ( False, _ ) ->
+                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i1 }
 
                         ( _, False ) ->
                             Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i2 }
@@ -814,10 +869,77 @@ matchesType master sub =
 
 isContained : ProgVal -> ProgVal -> Bool
 isContained sub master =
-    sub
-        == master
-        || master
-        == Pall
+    case ( sub, master ) of
+        -- Pall
+        ( _, Pall ) ->
+            True
+
+        ( Pall, _ ) ->
+            False
+
+        -- Pint32
+        ( Pint32 _, PallInt32 ) ->
+            True
+
+        ( Pint32 i1, Pint32 i2 ) ->
+            i1 == i2
+
+        ( Pint32 _, _ ) ->
+            False
+
+        ( PallInt32, PallInt32 ) ->
+            True
+
+        ( PallInt32, _ ) ->
+            False
+
+        -- Pint64
+        ( Pint64 _, PallInt64 ) ->
+            True
+
+        ( Pint64 i1, Pint64 i2 ) ->
+            i1 == i2
+
+        ( Pint64 _, _ ) ->
+            False
+
+        ( PallInt64, PallInt64 ) ->
+            True
+
+        ( PallInt64, _ ) ->
+            False
+
+        -- Pfloat32
+        ( Pfloat32 _, PallFloat32 ) ->
+            True
+
+        ( Pfloat32 f1, Pfloat32 f2 ) ->
+            f1 == f2
+
+        ( Pfloat32 _, _ ) ->
+            False
+
+        ( PallFloat32, PallFloat32 ) ->
+            True
+
+        ( PallFloat32, _ ) ->
+            False
+
+        -- Pfloat64
+        ( Pfloat64 _, PallFloat64 ) ->
+            True
+
+        ( Pfloat64 f1, Pfloat64 f2 ) ->
+            f1 == f2
+
+        ( Pfloat64 _, _ ) ->
+            False
+
+        ( PallFloat64, PallFloat64 ) ->
+            True
+
+        ( PallFloat64, _ ) ->
+            False
 
 
 elementP : List String -> String -> P.Parser Atom
@@ -829,6 +951,30 @@ elementP modules moduleName =
         , retrieveP
         , defP
         , programBlockP moduleName modules
+        , int32P
+        ]
+
+
+int32P : P.Parser Atom
+int32P =
+    P.succeed (AWasm << Ii32const)
+        |= intHelpP
+        |. P.keyword "i32"
+
+
+intP : (Int -> Atom) -> P.Parser Atom
+intP toAtom =
+    P.succeed toAtom
+        |= intHelpP
+
+
+intHelpP : P.Parser Int
+intHelpP =
+    P.oneOf
+        [ P.succeed negate
+            |. P.symbol "-"
+            |= P.int
+        , P.int
         ]
 
 
@@ -839,6 +985,7 @@ plainP =
             [ ( "loop", Loop )
             , ( "ifelse", IfElse )
             , ( "i32mul", AWasm Ii32mul )
+            , ( "i32store8", AWasm Ii32store8 )
             ]
 
 
@@ -1059,6 +1206,12 @@ showWasm wasm =
     case wasm of
         Ii32mul ->
             "i32.mul"
+
+        Ii32const i ->
+            "i32.const " ++ String.fromInt i
+
+        Ii32store8 ->
+            "i32.store8"
 
 
 variable : P.Parser String
