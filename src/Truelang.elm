@@ -48,6 +48,8 @@ type Atom
     | AWasm WasmIn
     | Loop
     | IfElse
+    | TypeWrap String
+    | TypeUnwrap String
 
 
 type alias WasmState =
@@ -289,6 +291,12 @@ makeOneWasm { value } accum =
                                     ]
                     }
 
+        TypeWrap _ ->
+            accum
+
+        TypeUnwrap _ ->
+            accum
+
 
 typeCheck : List (Located Atom) -> Maybe String
 typeCheck atoms =
@@ -337,12 +345,13 @@ initEltState =
     , isHome = True
     , metaStack = []
     , wasmStack = []
+    , wrapperTypes = Dict.empty
     }
 
 
 runTypeChecks : List (Located Atom) -> EltState -> Maybe String
 runTypeChecks atoms init =
-    case runTypeChecksHelp (Just [ [ PallInt32 ] ]) atoms init of
+    case runTypeChecksHelp (Just [ TallInt32 ]) atoms init of
         Ok endState ->
             Nothing
 
@@ -369,20 +378,17 @@ deadEndToString deadEnd =
         ]
 
 
-type ProgVal
-    = Pint32 Int
-    | Pint64 Int
-    | Pfloat32 Float
-    | Pfloat64 Float
-    | Pall
-    | PallInt32
-    | PallInt64
-    | PallFloat32
-    | PallFloat64
-
-
-type alias Type =
-    List ProgVal
+type Type
+    = Tint32 Int
+    | Tint64 Int
+    | Tfloat32 Float
+    | Tfloat64 Float
+    | Tall
+    | TallInt32
+    | TallInt64
+    | TallFloat32
+    | TallFloat64
+    | Twrapper String Type
 
 
 type alias Located a =
@@ -401,6 +407,7 @@ type alias EltState =
     , defPos : Dict.Dict String Position
     , defUse : Set.Set String
     , isHome : Bool
+    , wrapperTypes : Dict.Dict String Type
     }
 
 
@@ -575,21 +582,21 @@ processAtom state atom =
                     Err { state = state, message = "only one thing in stack" }
 
                 i1 :: i2 :: tack ->
-                    case ( isSubType i1 [ PallInt32 ], isSubType i2 [ PallInt32 ] ) of
+                    case ( isSubType i1 TallInt32, isSubType i2 TallInt32 ) of
                         ( False, _ ) ->
-                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i1 }
+                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal TallInt32 ++ ", but is a " ++ showTypeVal i1 }
 
                         ( _, False ) ->
-                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i2 }
+                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal TallInt32 ++ ", but is a " ++ showTypeVal i2 }
 
                         ( True, True ) ->
                             Ok
                                 { state
-                                    | wasmStack = [ PallInt32 ] :: tack
+                                    | wasmStack = TallInt32 :: tack
                                 }
 
         AWasm (Ii32const i) ->
-            Ok { state | wasmStack = [ Pint32 i ] :: state.wasmStack }
+            Ok { state | wasmStack = Tint32 i :: state.wasmStack }
 
         AWasm Ii32store8 ->
             case state.wasmStack of
@@ -600,12 +607,12 @@ processAtom state atom =
                     Err { state = state, message = "only one thing on stack" }
 
                 i1 :: i2 :: tack ->
-                    case ( isSubType i1 [ PallInt32 ], isSubType i2 [ PallInt32 ] ) of
+                    case ( isSubType i1 TallInt32, isSubType i2 TallInt32 ) of
                         ( False, _ ) ->
-                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i1 }
+                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal TallInt32 ++ ", but is a " ++ showTypeVal i1 }
 
                         ( _, False ) ->
-                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal [ PallInt32 ] ++ ", but is a " ++ showTypeVal i2 }
+                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal TallInt32 ++ ", but is a " ++ showTypeVal i2 }
 
                         ( True, True ) ->
                             Ok { state | wasmStack = tack }
@@ -634,6 +641,58 @@ processAtom state atom =
         IfElse ->
             ifElseTypeHelp state
 
+        TypeWrap type_ ->
+            case ( state.wasmStack, Dict.get type_ state.wrapperTypes ) of
+                ( [], _ ) ->
+                    Err { state = state, message = "empty stack" }
+
+                ( contained :: tack, Nothing ) ->
+                    Ok
+                        { state
+                            | wrapperTypes = Dict.insert type_ contained state.wrapperTypes
+                            , wasmStack = Twrapper type_ contained :: tack
+                        }
+
+                ( contained :: tack, Just previouslyWrapped ) ->
+                    if isSubType contained previouslyWrapped then
+                        Ok { state | wasmStack = Twrapper type_ contained :: tack }
+
+                    else
+                        Err { state = state, message = "type \"" ++ showTypeVal contained ++ "\" is not compatible with \"" ++ type_ ++ "\"" }
+
+        TypeUnwrap type_ ->
+            case state.wasmStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                (Twrapper wrapper wrapped) :: tack ->
+                    if type_ == wrapper then
+                        Ok { state | wasmStack = wrapped :: tack }
+
+                    else
+                        Err
+                            { state = state
+                            , message =
+                                String.concat
+                                    [ "expected \""
+                                    , type_
+                                    , "\", but got \""
+                                    , wrapper
+                                    ]
+                            }
+
+                other :: _ ->
+                    Err
+                        { state = state
+                        , message =
+                            String.concat
+                                [ "expected \""
+                                , type_
+                                , "\", but got "
+                                , showTypeVal other
+                                ]
+                        }
+
 
 loopHelp : EltState -> EltOut
 loopHelp state =
@@ -650,7 +709,7 @@ loopHelp state =
                     runTypeChecksHelp (Just []) body cleanStack
 
                 breakEnd =
-                    runTypeChecksHelp (Just [ [ PallInt32 ] ]) break cleanStack
+                    runTypeChecksHelp (Just [ TallInt32 ]) break cleanStack
             in
             case ( bodyEnd, breakEnd ) of
                 ( Err err, _ ) ->
@@ -695,7 +754,7 @@ ifElseTypeHelp state =
                     runTypeChecksHelp (Just []) if_ cleanStack
 
                 switchEnd =
-                    runTypeChecksHelp (Just [ [ PallInt32 ] ]) switch cleanStack
+                    runTypeChecksHelp (Just [ TallInt32 ]) switch cleanStack
             in
             case ( elseEnd, ifEnd, switchEnd ) of
                 ( Err err, _, _ ) ->
@@ -850,95 +909,116 @@ type alias EltOut =
 
 showTypeVal : Type -> String
 showTypeVal type_ =
-    String.concat
-        [ "["
-        , String.join ", " <| List.map showProgVal type_
-        , "]"
-        ]
+    case type_ of
+        Tint32 i ->
+            "int32: " ++ String.fromInt i
+
+        Tall ->
+            "all"
+
+        TallInt32 ->
+            "int32"
+
+        Tint64 i ->
+            "int64: " ++ String.fromInt i
+
+        Tfloat32 f ->
+            "float32: " ++ String.fromFloat f
+
+        Tfloat64 f ->
+            "float64: " ++ String.fromFloat f
+
+        TallInt64 ->
+            "int64"
+
+        TallFloat32 ->
+            "float32"
+
+        TallFloat64 ->
+            "float64"
+
+        Twrapper wrapper wrapped ->
+            wrapper ++ "<" ++ showTypeVal wrapped ++ ">"
 
 
 isSubType : Type -> Type -> Bool
 isSubType sub master =
-    List.all (matchesType master) sub
-
-
-matchesType : Type -> ProgVal -> Bool
-matchesType master sub =
-    List.any (isContained sub) master
-
-
-isContained : ProgVal -> ProgVal -> Bool
-isContained sub master =
     case ( sub, master ) of
-        -- Pall
-        ( _, Pall ) ->
+        -- Tall
+        ( _, Tall ) ->
             True
 
-        ( Pall, _ ) ->
+        ( Tall, _ ) ->
             False
 
-        -- Pint32
-        ( Pint32 _, PallInt32 ) ->
+        -- Tint32
+        ( Tint32 _, TallInt32 ) ->
             True
 
-        ( Pint32 i1, Pint32 i2 ) ->
+        ( Tint32 i1, Tint32 i2 ) ->
             i1 == i2
 
-        ( Pint32 _, _ ) ->
+        ( Tint32 _, _ ) ->
             False
 
-        ( PallInt32, PallInt32 ) ->
+        ( TallInt32, TallInt32 ) ->
             True
 
-        ( PallInt32, _ ) ->
+        ( TallInt32, _ ) ->
             False
 
-        -- Pint64
-        ( Pint64 _, PallInt64 ) ->
+        -- Tint64
+        ( Tint64 _, TallInt64 ) ->
             True
 
-        ( Pint64 i1, Pint64 i2 ) ->
+        ( Tint64 i1, Tint64 i2 ) ->
             i1 == i2
 
-        ( Pint64 _, _ ) ->
+        ( Tint64 _, _ ) ->
             False
 
-        ( PallInt64, PallInt64 ) ->
+        ( TallInt64, TallInt64 ) ->
             True
 
-        ( PallInt64, _ ) ->
+        ( TallInt64, _ ) ->
             False
 
-        -- Pfloat32
-        ( Pfloat32 _, PallFloat32 ) ->
+        -- Tfloat32
+        ( Tfloat32 _, TallFloat32 ) ->
             True
 
-        ( Pfloat32 f1, Pfloat32 f2 ) ->
+        ( Tfloat32 f1, Tfloat32 f2 ) ->
             f1 == f2
 
-        ( Pfloat32 _, _ ) ->
+        ( Tfloat32 _, _ ) ->
             False
 
-        ( PallFloat32, PallFloat32 ) ->
+        ( TallFloat32, TallFloat32 ) ->
             True
 
-        ( PallFloat32, _ ) ->
+        ( TallFloat32, _ ) ->
             False
 
-        -- Pfloat64
-        ( Pfloat64 _, PallFloat64 ) ->
+        -- Tfloat64
+        ( Tfloat64 _, TallFloat64 ) ->
             True
 
-        ( Pfloat64 f1, Pfloat64 f2 ) ->
+        ( Tfloat64 f1, Tfloat64 f2 ) ->
             f1 == f2
 
-        ( Pfloat64 _, _ ) ->
+        ( Tfloat64 _, _ ) ->
             False
 
-        ( PallFloat64, PallFloat64 ) ->
+        ( TallFloat64, TallFloat64 ) ->
             True
 
-        ( PallFloat64, _ ) ->
+        ( TallFloat64, _ ) ->
+            False
+
+        ( Twrapper t1 _, Twrapper t2 _ ) ->
+            t1 == t2
+
+        ( Twrapper _ _, _ ) ->
             False
 
 
@@ -952,7 +1032,25 @@ elementP modules moduleName =
         , defP
         , programBlockP moduleName modules
         , int32P
+        , typeWrapP
+        , typeUnwrapP
         ]
+
+
+typeUnwrapP : P.Parser Atom
+typeUnwrapP =
+    P.succeed TypeUnwrap
+        |. P.token ">"
+        |= variable
+        |. P.token "<"
+
+
+typeWrapP : P.Parser Atom
+typeWrapP =
+    P.succeed TypeWrap
+        |. P.token "<"
+        |= variable
+        |. P.token ">"
 
 
 int32P : P.Parser Atom
@@ -985,7 +1083,7 @@ plainP =
             [ ( "loop", Loop )
             , ( "ifelse", IfElse )
             , ( "i32mul", AWasm Ii32mul )
-            , ( "i32store8", AWasm Ii32store8 )
+            , ( "UNSAFE_i32store8", AWasm Ii32store8 )
             ]
 
 
@@ -1023,35 +1121,36 @@ showTypeStack typestack =
         ]
 
 
-showProgVal : ProgVal -> String
-showProgVal p =
-    case p of
-        Pint32 i ->
-            "int32: " ++ String.fromInt i
 
-        Pall ->
-            "all"
-
-        PallInt32 ->
-            "int32"
-
-        Pint64 i ->
-            "int64: " ++ String.fromInt i
-
-        Pfloat32 f ->
-            "float32: " ++ String.fromFloat f
-
-        Pfloat64 f ->
-            "float64: " ++ String.fromFloat f
-
-        PallInt64 ->
-            "int64"
-
-        PallFloat32 ->
-            "float32"
-
-        PallFloat64 ->
-            "float64"
+-- showProgVal : ProgVal -> String
+-- showProgVal p =
+--     case p of
+--         Pint32 i ->
+--             "int32: " ++ String.fromInt i
+--
+--         Pall ->
+--             "all"
+--
+--         PallInt32 ->
+--             "int32"
+--
+--         Pint64 i ->
+--             "int64: " ++ String.fromInt i
+--
+--         Pfloat32 f ->
+--             "float32: " ++ String.fromFloat f
+--
+--         Pfloat64 f ->
+--             "float64: " ++ String.fromFloat f
+--
+--         PallInt64 ->
+--             "int64"
+--
+--         PallFloat32 ->
+--             "float32"
+--
+--         PallFloat64 ->
+--             "float64"
 
 
 programBlockP : String -> List String -> P.Parser Atom
@@ -1199,6 +1298,12 @@ showAtom atom =
 
         IfElse ->
             "ifelse"
+
+        TypeWrap t ->
+            "<" ++ t ++ ">"
+
+        TypeUnwrap t ->
+            ">" ++ t ++ "<"
 
 
 showWasm : WasmIn -> String
