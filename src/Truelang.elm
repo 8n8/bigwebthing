@@ -42,7 +42,7 @@ compile code =
 type Atom
     = Retrieve String
     | Block (List (Located Atom))
-    | Define String
+    | MetaDefine String
     | Runblock
     | Export String
     | AWasm WasmIn
@@ -66,12 +66,58 @@ type WasmOut
     | Oi32store8
     | Oloop (List WasmOut) (List WasmOut)
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
+    | OsetLocal BasicType String
+    | OupdateLocal String
+    | OgetLocal String
+
+
+type BasicType
+    = Bi32
+    | Bi64
+    | Bf32
+    | Bf64
+
+
+showBasic : BasicType -> String
+showBasic basicType =
+    case basicType of
+        Bi32 ->
+            "i32"
+
+        Bi64 ->
+            "i64"
+
+        Bf32 ->
+            "f32"
+
+        Bf64 ->
+            "f64"
+
+
+fromBasic : BasicType -> Type
+fromBasic basicType =
+    case basicType of
+        Bi32 ->
+            TallInt32
+
+        Bi64 ->
+            TallInt64
+
+        Bf32 ->
+            TallFloat32
+
+        Bf64 ->
+            TallFloat64
 
 
 type WasmIn
     = Ii32mul
     | Ii32const Int
     | Ii32store8
+    | IsetConstLocal BasicType String
+    | IsetMutLocal BasicType String
+    | IupdateMutLocal String
+    | IgetLocal String
 
 
 initWasmState : WasmState
@@ -145,6 +191,32 @@ wasmToString wasm =
         Oi32store8 ->
             "i32.store8"
 
+        OsetLocal basicType name ->
+            String.concat
+                [ "(local $"
+                , name
+                , " "
+                , showBasic basicType
+                , ")\n"
+                , "(set_local $"
+                , name
+                , ")\n"
+                ]
+
+        OupdateLocal name ->
+            String.concat
+                [ "(set_local $"
+                , name
+                , ")\n"
+                ]
+
+        OgetLocal name ->
+            String.concat
+                [ "(get_local $"
+                , name
+                , ")\n"
+                ]
+
 
 makeWasmHelp : WasmState -> List (Located Atom) -> WasmState
 makeWasmHelp wasmState atoms =
@@ -162,6 +234,18 @@ makeOneWasm { value } accum =
 
         AWasm Ii32store8 ->
             { accum | wasmStack = Oi32store8 :: accum.wasmStack }
+
+        AWasm (IsetConstLocal basicType name) ->
+            { accum | wasmStack = OsetLocal basicType name :: accum.wasmStack }
+
+        AWasm (IsetMutLocal basicType name) ->
+            { accum | wasmStack = OsetLocal basicType name :: accum.wasmStack }
+
+        AWasm (IupdateMutLocal name) ->
+            { accum | wasmStack = OupdateLocal name :: accum.wasmStack }
+
+        AWasm (IgetLocal name) ->
+            { accum | wasmStack = OgetLocal name :: accum.wasmStack }
 
         Retrieve name ->
             case Dict.get name accum.defs of
@@ -183,7 +267,7 @@ makeOneWasm { value } accum =
         Block block ->
             { accum | metaStack = Block block :: accum.metaStack }
 
-        Define name ->
+        MetaDefine name ->
             case accum.metaStack of
                 [] ->
                     { accum
@@ -340,11 +424,10 @@ initEltState : EltState
 initEltState =
     { position = { start = ( 0, 0 ), end = ( 0, 0 ), file = "" }
     , defs = Dict.empty
-    , defPos = Dict.empty
-    , defUse = Set.empty
-    , isHome = True
     , metaStack = []
     , wasmStack = []
+    , defUse = Set.empty
+    , isHome = True
     , wrapperTypes = Dict.empty
     }
 
@@ -399,12 +482,22 @@ type alias Located a =
     }
 
 
+type Mutability
+    = Mutable
+    | Immutable
+
+
+type Def
+    = WasmMut Type
+    | WasmConst Type
+    | Meta Atom
+
+
 type alias EltState =
     { position : Position
-    , defs : Dict.Dict String Type
+    , defs : Dict.Dict String ( Position, Def )
     , metaStack : List Atom
     , wasmStack : List Type
-    , defPos : Dict.Dict String Position
     , defUse : Set.Set String
     , isHome : Bool
     , wrapperTypes : Dict.Dict String Type
@@ -475,7 +568,7 @@ noUnusedNames s =
         unused =
             Set.diff newKeys s.defUse
     in
-    case namesAndPositions unused s.defPos of
+    case namesAndPositions unused s.defs of
         [] ->
             Nothing
 
@@ -545,20 +638,78 @@ processAtom state atom =
                         , message = "no definition \"" ++ v ++ "\""
                         }
 
-                Just retrieved ->
+                Just ( _, WasmMut retrieved ) ->
                     Ok
                         { state
                             | wasmStack = retrieved :: state.wasmStack
                             , defUse = Set.insert v state.defUse
                         }
 
+                Just ( _, WasmConst retrieved ) ->
+                    Ok
+                        { state
+                            | wasmStack = retrieved :: state.wasmStack
+                            , defUse = Set.insert v state.defUse
+                        }
+
+                Just ( _, Meta retrieved ) ->
+                    Ok
+                        { state
+                            | metaStack = retrieved :: state.metaStack
+                            , defUse = Set.insert v state.defUse
+                        }
+
         Block bs ->
             Ok { state | metaStack = Block bs :: state.metaStack }
 
-        Define newName ->
-            case Dict.get newName state.defPos of
-                Just position ->
-                    Err { state = state, message = "\"" ++ newName ++ "\" is already defined at " ++ prettyLocation position }
+        MetaDefine newName ->
+            case Dict.get newName state.defs of
+                Just ( position, _ ) ->
+                    Err { state = state, message = "\"" ++ newName ++ "\" is immutable and is already defined at " ++ prettyLocation position }
+
+                Nothing ->
+                    case state.metaStack of
+                        [] ->
+                            Err { state = state, message = "empty stack" }
+
+                        s :: tack ->
+                            Ok
+                                { state
+                                    | metaStack = tack
+                                    , defs = Dict.insert newName ( state.position, Meta s ) state.defs
+                                }
+
+        AWasm (IupdateMutLocal name) ->
+            case Dict.get name state.defs of
+                Just ( position, WasmConst _ ) ->
+                    Err { state = state, message = "\"" ++ name ++ "\" is immutable and is already defined at " ++ prettyLocation position }
+
+                Just ( position, Meta _ ) ->
+                    Err { state = state, message = "\"" ++ name ++ "\" is immutable and is already defined at " ++ prettyLocation position }
+
+                Just ( position, WasmMut value ) ->
+                    case state.wasmStack of
+                        [] ->
+                            Err { state = state, message = "empty stack" }
+
+                        s :: tack ->
+                            if isSubType s value then
+                                Ok
+                                    { state
+                                        | wasmStack = tack
+                                        , defs = Dict.insert name ( position, WasmMut s ) state.defs
+                                    }
+
+                            else
+                                Err { state = state, message = "bad type: got \"" ++ showTypeVal s ++ "\", but expected \"" ++ showTypeVal value ++ "\"" }
+
+                Nothing ->
+                    Err { state = state, message = "\"" ++ name ++ "\" is not defined" }
+
+        AWasm (IsetMutLocal basicType name) ->
+            case Dict.get name state.defs of
+                Just ( position, _ ) ->
+                    Err { state = state, message = "\"" ++ name ++ "\" is immutable and is already defined at " ++ prettyLocation position }
 
                 Nothing ->
                     case state.wasmStack of
@@ -566,12 +717,11 @@ processAtom state atom =
                             Err { state = state, message = "empty stack" }
 
                         s :: tack ->
-                            Ok
-                                { state
-                                    | wasmStack = tack
-                                    , defs = Dict.insert newName s state.defs
-                                    , defPos = Dict.insert newName state.position state.defPos
-                                }
+                            if isSubType (fromBasic basicType) s then
+                                Ok { state | wasmStack = tack, defs = Dict.insert name ( state.position, WasmMut s ) state.defs }
+
+                            else
+                                Err { state = state, message = "bad type declaration: " ++ " got \"" ++ showBasic basicType ++ "\", expected: \"" ++ showTypeVal s ++ "\"" }
 
         AWasm Ii32mul ->
             case state.wasmStack of
@@ -597,6 +747,36 @@ processAtom state atom =
 
         AWasm (Ii32const i) ->
             Ok { state | wasmStack = Tint32 i :: state.wasmStack }
+
+        AWasm (IsetConstLocal basicType name) ->
+            case state.wasmStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                value :: tack ->
+                    if isSubType (fromBasic basicType) value then
+                        Ok
+                            { state
+                                | defs = Dict.insert name ( state.position, WasmConst value ) state.defs
+                                , wasmStack = tack
+                            }
+
+                    else
+                        Err { state = state, message = "bad type declaration: " ++ " got \"" ++ showBasic basicType ++ "\", expected: \"" ++ showTypeVal value ++ "\"" }
+
+        AWasm (IgetLocal name) ->
+            case Dict.get name state.defs of
+                Nothing ->
+                    Err { state = state, message = "\"" ++ name ++ "\" is not defined" }
+
+                Just ( _, WasmMut value ) ->
+                    Ok { state | wasmStack = value :: state.wasmStack }
+
+                Just ( _, WasmConst value ) ->
+                    Ok { state | wasmStack = value :: state.wasmStack }
+
+                Just ( position, Meta _ ) ->
+                    Err { state = state, message = "\"" ++ name ++ "\" is defined at " ++ prettyLocation position ++ ", but it is a meta definition, not a run-time definition" }
 
         AWasm Ii32store8 ->
             case state.wasmStack of
@@ -632,7 +812,7 @@ processAtom state atom =
                     Err { message = "there's nothing to run", state = state }
 
         Export exported ->
-            if Dict.member exported state.defPos then
+            if Dict.member exported state.defs then
                 Ok { state | defUse = Set.insert exported state.defUse }
 
             else
@@ -888,18 +1068,18 @@ onePrettyUnused ( name, position ) =
         ]
 
 
-namesAndPositions : Set.Set String -> Dict.Dict String Position -> List ( String, Position )
+namesAndPositions : Set.Set String -> Dict.Dict String ( Position, Def ) -> List ( String, Position )
 namesAndPositions unused positions =
     Utils.justs <| List.map (makePosition positions) <| Set.toList unused
 
 
-makePosition : Dict.Dict String Position -> String -> Maybe ( String, Position )
+makePosition : Dict.Dict String ( Position, Def ) -> String -> Maybe ( String, Position )
 makePosition positions name =
     case Dict.get name positions of
         Nothing ->
             Nothing
 
-        Just position ->
+        Just ( position, _ ) ->
             Just ( name, position )
 
 
@@ -1029,7 +1209,7 @@ elementP modules moduleName =
         , exportP
         , plainP
         , retrieveP
-        , defP
+        , metaDefP
         , programBlockP moduleName modules
         , int32P
         , typeWrapP
@@ -1161,9 +1341,9 @@ programBlockP moduleName modules =
         |. P.token "}"
 
 
-defP : P.Parser Atom
-defP =
-    P.succeed Define
+metaDefP : P.Parser Atom
+metaDefP =
+    P.succeed MetaDefine
         |. P.token "="
         |. whiteSpaceP
         |= variable
@@ -1281,8 +1461,8 @@ showAtom atom =
         Block atoms ->
             "Block {" ++ String.join " " (List.map (showAtom << .value) atoms) ++ "}"
 
-        Define string ->
-            "Define " ++ string
+        MetaDefine string ->
+            "MetaDefine " ++ string
 
         Runblock ->
             "Runblock"
@@ -1317,6 +1497,24 @@ showWasm wasm =
 
         Ii32store8 ->
             "i32.store8"
+
+        IsetConstLocal basicType name ->
+            String.concat
+                [ "local $" ++ name ++ " " ++ showBasic basicType ++ "\n"
+                , "set_local $" ++ name ++ "\n"
+                ]
+
+        IsetMutLocal basicType name ->
+            String.concat
+                [ "local $" ++ name ++ " " ++ showBasic basicType ++ "\n"
+                , "set_local $" ++ name ++ "\n"
+                ]
+
+        IupdateMutLocal name ->
+            "set_local $" ++ name
+
+        IgetLocal name ->
+            "get_local $" ++ name
 
 
 variable : P.Parser String
