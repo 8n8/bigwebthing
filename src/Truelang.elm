@@ -43,6 +43,7 @@ type Atom
     = Retrieve String
     | Block (List (Located Atom))
     | MetaDefine String
+    | MetaSwitch (List ( Type, Atom ))
     | Runblock
     | Export String
     | AWasm WasmIn
@@ -1214,7 +1215,110 @@ elementP modules moduleName =
         , int32P
         , typeWrapP
         , typeUnwrapP
+        , metaSwitchP modules moduleName
         ]
+
+
+metaSwitchP : List String -> String -> P.Parser Atom
+metaSwitchP moduleName modules =
+    P.map MetaSwitch <|
+        P.sequence
+            { start = "("
+            , separator = ","
+            , end = ")"
+            , spaces = whiteSpaceP
+            , item = metaSwitchBranchP moduleName modules
+            , trailing = P.Forbidden
+            }
+
+
+metaSwitchBranchP : List String -> String -> P.Parser ( Type, Atom )
+metaSwitchBranchP modules moduleName =
+    P.succeed (\type_ atom -> ( type_, atom ))
+        |= typeP
+        |. whiteSpaceP
+        |. P.symbol "->"
+        |. whiteSpaceP
+        |= elementP modules moduleName
+
+
+typeP : P.Parser Type
+typeP =
+    P.oneOf
+        [ int32typeP
+        , int64typeP
+        , float32typeP
+        , float64typeP
+        , allInt32typeP
+        , allInt64typeP
+        , allFloat32typeP
+        , allFloat64typeP
+        , wrapperTypeP
+        ]
+
+
+int32typeP : P.Parser Type
+int32typeP =
+    P.succeed Tint32
+        |. P.keyword "i32"
+        |= intHelpP
+
+
+int64typeP : P.Parser Type
+int64typeP =
+    P.succeed Tint64
+        |. P.keyword "i64"
+        |= intHelpP
+
+
+float32typeP : P.Parser Type
+float32typeP =
+    P.succeed Tfloat32
+        |. P.keyword "f32"
+        |= P.float
+
+
+float64typeP : P.Parser Type
+float64typeP =
+    P.succeed Tfloat64
+        |. P.keyword "f64"
+        |= P.float
+
+
+allInt32typeP : P.Parser Type
+allInt32typeP =
+    P.succeed TallInt32
+        |. P.keyword "i32"
+
+
+allInt64typeP : P.Parser Type
+allInt64typeP =
+    P.succeed TallInt64
+        |. P.keyword "i64"
+
+
+allFloat32typeP : P.Parser Type
+allFloat32typeP =
+    P.succeed TallFloat32
+        |. P.keyword "f32"
+
+
+allFloat64typeP : P.Parser Type
+allFloat64typeP =
+    P.succeed TallFloat64
+        |. P.keyword "f64"
+
+
+wrapperTypeP : P.Parser Type
+wrapperTypeP =
+    P.succeed Twrapper
+        |= variable
+        |. P.symbol "<"
+        -- The lambda wrapper was necessary to get round a
+        -- "Bad recursion" compiler error. I'm pretty sure it's OK
+        -- in this case though.
+        |= (\() -> typeP) ()
+        |. P.symbol ">"
 
 
 typeUnwrapP : P.Parser Atom
