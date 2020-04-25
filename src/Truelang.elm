@@ -281,7 +281,7 @@ metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
 metaLoopHelp block counter stateResult =
     case stateResult of
         Err err ->
-            Err err
+            Err { err | message = "error in metaloop iteration " ++ String.fromInt counter ++ ": " ++ err.message }
 
         Ok state ->
             runTypeChecksHelp Nothing block state
@@ -495,7 +495,7 @@ processAtom state atom =
                     Err { state = state, message = "only one thing on stack" }
 
                 (Tint64 i) :: (Tblock block) :: tack ->
-                    List.foldr (metaLoopHelp block) (Ok state) (List.range 1 i)
+                    List.foldr (metaLoopHelp block) (Ok {state| stack = tack}) (List.range 1 i)
 
                 other ->
                     Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
