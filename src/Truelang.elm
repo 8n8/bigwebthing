@@ -43,14 +43,6 @@ type Atom
     | TypeUnwrap String
 
 
-type alias WasmState =
-    { defs : Dict.Dict String Atom
-    , wasmStack : List WasmOut
-    , error : Maybe String
-    , metaStack : List Atom
-    }
-
-
 type WasmOut
     = Oi32mul
     | Oi32const Int
@@ -109,15 +101,6 @@ type WasmIn
     | IsetMutLocal BasicType String
     | IupdateMutLocal String
     | IgetLocal String
-
-
-initWasmState : WasmState
-initWasmState =
-    { defs = Dict.empty
-    , wasmStack = []
-    , error = Nothing
-    , metaStack = []
-    }
 
 
 makeWasmModule : List WasmOut -> String
@@ -301,11 +284,6 @@ type alias Located a =
     }
 
 
-type Mutability
-    = Mutable
-    | Immutable
-
-
 type Def
     = WasmMut Type
     | WasmConst Type
@@ -375,39 +353,6 @@ prettyPosition ( row, column ) =
         , " column "
         , String.fromInt column
         ]
-
-
-typeEndChecks : EltState -> Maybe String
-typeEndChecks s =
-    case endEmpty s of
-        Nothing ->
-            noUnusedNames s
-
-        Just badEmpty ->
-            Just badEmpty
-
-
-noUnusedNames : EltState -> Maybe String
-noUnusedNames s =
-    let
-        keys =
-            Set.fromList <| Dict.keys s.defs
-
-        standardKeys =
-            Set.empty
-
-        newKeys =
-            Set.diff keys standardKeys
-
-        unused =
-            Set.diff newKeys s.defUse
-    in
-    case namesAndPositions unused s.defs of
-        [] ->
-            Nothing
-
-        oneOrMore ->
-            Just <| prettyUnused oneOrMore
 
 
 badStackEnd : List Type -> List Type -> String
@@ -503,7 +448,7 @@ processAtom state atom =
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                s :: tack ->
+                s :: _ ->
                     case findPath s metaSwitch of
                         Err error ->
                             Err { state = state, message = error }
@@ -766,7 +711,7 @@ loopHelp state =
                         loopWasm =
                             Oloop bodyEnd.wasmOut breakEnd.wasmOut
                     in
-                    Ok { state | wasmOut = loopWasm :: state.wasmOut }
+                    Ok { state | wasmOut = loopWasm :: state.wasmOut, metaStack = tack }
 
         _ ->
             Err { message = "there's nothing to run", state = state }
@@ -828,7 +773,7 @@ ifElseTypeHelp state =
                                 thenE.wasmOut
                                 elseE.wasmOut
                     in
-                    Ok { state | wasmOut = ifElseWasm :: state.wasmOut }
+                    Ok { state | wasmOut = ifElseWasm :: state.wasmOut, metaStack = metatack }
 
         bad ->
             Err
@@ -897,50 +842,6 @@ type alias TypeError =
     { state : EltState
     , message : String
     }
-
-
-endEmpty : EltState -> Maybe String
-endEmpty s =
-    case s.wasmStack of
-        [] ->
-            Nothing
-
-        ts ->
-            Just <|
-                String.concat
-                    [ "typestack should be empty at end of program, but got "
-                    , showTypeStack ts
-                    ]
-
-
-prettyUnused : List ( String, Position ) -> String
-prettyUnused unused =
-    String.join ", " <| List.map onePrettyUnused unused
-
-
-onePrettyUnused : ( String, Position ) -> String
-onePrettyUnused ( name, position ) =
-    String.concat
-        [ "\""
-        , name
-        , "\" defined but not used: \n"
-        , prettyLocation position
-        ]
-
-
-namesAndPositions : Set.Set String -> Dict.Dict String ( Position, Def ) -> List ( String, Position )
-namesAndPositions unused positions =
-    Utils.justs <| List.map (makePosition positions) <| Set.toList unused
-
-
-makePosition : Dict.Dict String ( Position, Def ) -> String -> Maybe ( String, Position )
-makePosition positions name =
-    case Dict.get name positions of
-        Nothing ->
-            Nothing
-
-        Just ( position, _ ) ->
-            Just ( name, position )
 
 
 type alias EltOut =
@@ -1068,6 +969,10 @@ elementP modules moduleName =
         [ runBlockP
         , exportP
         , plainP
+        , getLocalP
+        , updateMutLocalP
+        , setConstLocalP
+        , setMutLocalP
         , retrieveP
         , metaDefP
         , programBlockP moduleName modules
@@ -1076,6 +981,60 @@ elementP modules moduleName =
         , typeUnwrapP
         , metaSwitchP modules moduleName
         ]
+
+
+setMutLocalP : P.Parser Atom
+setMutLocalP =
+    P.map (\( a, b ) -> AWasm <| IsetMutLocal a b) setLocalHelpP
+
+
+updateMutLocalP : P.Parser Atom
+updateMutLocalP =
+    P.succeed (AWasm << IupdateMutLocal)
+        |. P.keyword "updateMutableLocal"
+        |. whiteSpaceP
+        |= variable
+
+
+setConstLocalP : P.Parser Atom
+setConstLocalP =
+    P.map (\( a, b ) -> AWasm <| IsetConstLocal a b) setLocalHelpP
+
+
+setLocalHelpP : P.Parser ( BasicType, String )
+setLocalHelpP =
+    P.succeed (\a b -> ( a, b ))
+        |. P.keyword "setConstLocal"
+        |. whiteSpaceP
+        |= basicTypeP
+        |. whiteSpaceP
+        |= variable
+
+
+basicTypeP : P.Parser BasicType
+basicTypeP =
+    P.oneOf <| List.map basicTypeHelpP basicTypes
+
+
+basicTypeHelpP : ( String, BasicType ) -> P.Parser BasicType
+basicTypeHelpP ( from, to ) =
+    P.succeed to |. P.keyword from
+
+
+basicTypes : List ( String, BasicType )
+basicTypes =
+    [ ( "i32", Bi32 )
+    , ( "i64", Bi64 )
+    , ( "f32", Bf32 )
+    , ( "f64", Bf64 )
+    ]
+
+
+getLocalP : P.Parser Atom
+getLocalP =
+    P.succeed (AWasm << IgetLocal)
+        |. P.keyword "getLocal"
+        |= variable
 
 
 metaSwitchP : List String -> String -> P.Parser Atom
@@ -1113,7 +1072,14 @@ typeP =
         , allFloat32typeP
         , allFloat64typeP
         , wrapperTypeP
+        , allTypesP
         ]
+
+
+allTypesP : P.Parser Type
+allTypesP =
+    P.succeed Tall
+        |. P.keyword "allTypes"
 
 
 int32typeP : P.Parser Type
@@ -1203,12 +1169,6 @@ int32P =
         |. P.keyword "i32"
 
 
-intP : (Int -> Atom) -> P.Parser Atom
-intP toAtom =
-    P.succeed toAtom
-        |= intHelpP
-
-
 intHelpP : P.Parser Int
 intHelpP =
     P.oneOf
@@ -1224,7 +1184,7 @@ plainP =
     P.oneOf <|
         List.map plainHelpP
             [ ( "loop", Loop )
-            , ( "ifelse", IfElse )
+            , ( "ifElse", IfElse )
             , ( "i32mul", AWasm Ii32mul )
             , ( "UNSAFE_i32store8", AWasm Ii32store8 )
             ]
@@ -1233,11 +1193,6 @@ plainP =
 plainHelpP : ( String, Atom ) -> P.Parser Atom
 plainHelpP ( string, atom ) =
     P.succeed atom |. P.keyword string
-
-
-loopP : P.Parser Atom
-loopP =
-    P.succeed Loop |. P.keyword "loop"
 
 
 located : String -> (String -> P.Parser a) -> P.Parser (Located a)
@@ -1283,27 +1238,6 @@ metaDefP =
         |. P.token "="
         |. whiteSpaceP
         |= variable
-
-
-wasmP : P.Parser Atom
-wasmP =
-    P.map AWasm wasmHelpP
-
-
-wasmHelpP : P.Parser WasmIn
-wasmHelpP =
-    P.oneOf <| List.map wasmHelpHelpP wasmWords
-
-
-wasmHelpHelpP : ( String, WasmIn ) -> P.Parser WasmIn
-wasmHelpHelpP ( literal, wasm ) =
-    P.succeed wasm |. P.keyword literal
-
-
-wasmWords : List ( String, WasmIn )
-wasmWords =
-    [ ( "i32.mul", Ii32mul )
-    ]
 
 
 retrieveP : P.Parser Atom
