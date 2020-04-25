@@ -34,6 +34,7 @@ type Atom
     | Block (List (Located Atom))
     | MetaDefine String
     | MetaSwitch (List ( Type, List (Located Atom) ))
+    | MetaLoop
     | Runblock
     | Export String
     | AWasm WasmIn
@@ -224,8 +225,7 @@ initEltState : EltState
 initEltState =
     { position = { start = ( 0, 0 ), end = ( 0, 0 ), file = "" }
     , defs = Dict.empty
-    , metaStack = []
-    , wasmStack = []
+    , stack = []
     , wasmOut = []
     , defUse = Set.empty
     , isHome = True
@@ -274,6 +274,17 @@ type Type
     | TallFloat32
     | TallFloat64
     | Twrapper String Type
+    | Tblock (List (Located Atom))
+
+
+metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
+metaLoopHelp block counter stateResult =
+    case stateResult of
+        Err err ->
+            Err err
+
+        Ok state ->
+            runTypeChecksHelp Nothing block state
 
 
 type alias Located a =
@@ -285,16 +296,14 @@ type alias Located a =
 
 
 type Def
-    = WasmMut Type
-    | WasmConst Type
-    | Meta (List (Located Atom))
+    = Mutable Type
+    | Constant Type
 
 
 type alias EltState =
     { position : Position
     , defs : Dict.Dict String ( Position, Def )
-    , metaStack : List (List (Located Atom))
-    , wasmStack : List Type
+    , stack : List Type
     , wasmOut : List WasmOut
     , defUse : Set.Set String
     , isHome : Bool
@@ -388,10 +397,10 @@ runTypeChecksHelp stackEnd atoms state =
                     Ok state
 
                 Just se ->
-                    if not <| checkStackEnd state.wasmStack se then
+                    if not <| checkStackEnd state.stack se then
                         Err
                             { state = state
-                            , message = badStackEnd se state.wasmStack
+                            , message = badStackEnd se state.stack
                             }
 
                     else
@@ -417,34 +426,27 @@ processAtom state atom =
                         , message = "no definition \"" ++ v ++ "\""
                         }
 
-                Just ( _, WasmMut retrieved ) ->
+                Just ( _, Mutable retrieved ) ->
                     Ok
                         { state
-                            | wasmStack = retrieved :: state.wasmStack
+                            | stack = retrieved :: state.stack
                             , wasmOut = OgetLocal v :: state.wasmOut
                             , defUse = Set.insert v state.defUse
                         }
 
-                Just ( _, WasmConst retrieved ) ->
+                Just ( _, Constant retrieved ) ->
                     Ok
                         { state
-                            | wasmStack = retrieved :: state.wasmStack
+                            | stack = retrieved :: state.stack
                             , wasmOut = OgetLocal v :: state.wasmOut
-                            , defUse = Set.insert v state.defUse
-                        }
-
-                Just ( _, Meta retrieved ) ->
-                    Ok
-                        { state
-                            | metaStack = retrieved :: state.metaStack
                             , defUse = Set.insert v state.defUse
                         }
 
         Block bs ->
-            Ok { state | metaStack = bs :: state.metaStack }
+            Ok { state | stack = Tblock bs :: state.stack }
 
         MetaSwitch metaSwitch ->
-            case state.wasmStack of
+            case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
@@ -454,7 +456,7 @@ processAtom state atom =
                             Err { state = state, message = error }
 
                         Ok path ->
-                            Ok { state | metaStack = path :: state.metaStack }
+                            Ok { state | stack = Tblock path :: state.stack }
 
         MetaDefine newName ->
             case Dict.get newName state.defs of
@@ -462,24 +464,41 @@ processAtom state atom =
                     Err { state = state, message = "\"" ++ newName ++ "\" is immutable and is already defined at " ++ prettyLocation position }
 
                 Nothing ->
-                    case state.metaStack of
+                    case state.stack of
                         [] ->
                             Err { state = state, message = "empty stack" }
 
                         s :: tack ->
                             Ok
                                 { state
-                                    | metaStack = tack
-                                    , defs = Dict.insert newName ( state.position, Meta s ) state.defs
+                                    | stack = tack
+                                    , defs = Dict.insert newName ( state.position, Constant s ) state.defs
                                 }
 
         Runblock ->
-            case state.metaStack of
+            case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                block :: tack ->
-                    runTypeChecksHelp Nothing block { state | metaStack = tack }
+                (Tblock block) :: tack ->
+                    runTypeChecksHelp Nothing block { state | stack = tack }
+
+                other :: _ ->
+                    Err { state = state, message = "expecting a block on the stack, but got: " ++ showTypeVal other }
+
+        MetaLoop ->
+            case state.stack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                [ _ ] ->
+                    Err { state = state, message = "only one thing on stack" }
+
+                (Tint64 i) :: (Tblock block) :: tack ->
+                    List.foldr (metaLoopHelp block) (Ok state) (List.range 1 i)
+
+                other ->
+                    Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
 
         Export exported ->
             if Dict.member exported state.defs then
@@ -496,14 +515,11 @@ processAtom state atom =
 
         AWasm (IupdateMutLocal name) ->
             case Dict.get name state.defs of
-                Just ( position, WasmConst _ ) ->
+                Just ( position, Constant _ ) ->
                     Err { state = state, message = "\"" ++ name ++ "\" is immutable and is already defined at " ++ prettyLocation position }
 
-                Just ( position, Meta _ ) ->
-                    Err { state = state, message = "\"" ++ name ++ "\" is immutable and is already defined at " ++ prettyLocation position }
-
-                Just ( position, WasmMut value ) ->
-                    case state.wasmStack of
+                Just ( position, Mutable value ) ->
+                    case state.stack of
                         [] ->
                             Err { state = state, message = "empty stack" }
 
@@ -511,9 +527,9 @@ processAtom state atom =
                             if isSubType s value then
                                 Ok
                                     { state
-                                        | wasmStack = tack
+                                        | stack = tack
                                         , wasmOut = OupdateLocal name :: state.wasmOut
-                                        , defs = Dict.insert name ( position, WasmMut s ) state.defs
+                                        , defs = Dict.insert name ( position, Mutable s ) state.defs
                                     }
 
                             else
@@ -528,19 +544,19 @@ processAtom state atom =
                     Err { state = state, message = "\"" ++ name ++ "\" is immutable and is already defined at " ++ prettyLocation position }
 
                 Nothing ->
-                    case state.wasmStack of
+                    case state.stack of
                         [] ->
                             Err { state = state, message = "empty stack" }
 
                         s :: tack ->
                             if isSubType (fromBasic basicType) s then
-                                Ok { state | wasmStack = tack, wasmOut = OsetLocal basicType name :: state.wasmOut, defs = Dict.insert name ( state.position, WasmMut s ) state.defs }
+                                Ok { state | stack = tack, wasmOut = OsetLocal basicType name :: state.wasmOut, defs = Dict.insert name ( state.position, Mutable s ) state.defs }
 
                             else
                                 Err { state = state, message = "bad type declaration: " ++ " got \"" ++ showBasic basicType ++ "\", expected: \"" ++ showTypeVal s ++ "\"" }
 
         AWasm Ii32mul ->
-            case state.wasmStack of
+            case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
@@ -558,15 +574,15 @@ processAtom state atom =
                         ( True, True ) ->
                             Ok
                                 { state
-                                    | wasmStack = TallInt32 :: tack
+                                    | stack = TallInt32 :: tack
                                     , wasmOut = Oi32mul :: state.wasmOut
                                 }
 
         AWasm (Ii32const i) ->
-            Ok { state | wasmStack = Tint32 i :: state.wasmStack, wasmOut = Oi32const i :: state.wasmOut }
+            Ok { state | stack = Tint32 i :: state.stack, wasmOut = Oi32const i :: state.wasmOut }
 
         AWasm (IsetConstLocal basicType name) ->
-            case state.wasmStack of
+            case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
@@ -574,8 +590,8 @@ processAtom state atom =
                     if isSubType (fromBasic basicType) value then
                         Ok
                             { state
-                                | defs = Dict.insert name ( state.position, WasmConst value ) state.defs
-                                , wasmStack = tack
+                                | defs = Dict.insert name ( state.position, Constant value ) state.defs
+                                , stack = tack
                                 , wasmOut = OsetLocal basicType name :: state.wasmOut
                             }
 
@@ -587,17 +603,14 @@ processAtom state atom =
                 Nothing ->
                     Err { state = state, message = "\"" ++ name ++ "\" is not defined" }
 
-                Just ( _, WasmMut value ) ->
-                    Ok { state | wasmStack = value :: state.wasmStack, wasmOut = OgetLocal name :: state.wasmOut }
+                Just ( _, Mutable value ) ->
+                    Ok { state | stack = value :: state.stack, wasmOut = OgetLocal name :: state.wasmOut }
 
-                Just ( _, WasmConst value ) ->
-                    Ok { state | wasmStack = value :: state.wasmStack, wasmOut = OgetLocal name :: state.wasmOut }
-
-                Just ( position, Meta _ ) ->
-                    Err { state = state, message = "\"" ++ name ++ "\" is defined at " ++ prettyLocation position ++ ", but it is a meta definition, not a run-time definition" }
+                Just ( _, Constant value ) ->
+                    Ok { state | stack = value :: state.stack, wasmOut = OgetLocal name :: state.wasmOut }
 
         AWasm Ii32store8 ->
-            case state.wasmStack of
+            case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
@@ -613,10 +626,10 @@ processAtom state atom =
                             Err { state = state, message = "Second item instack should be a " ++ showTypeVal TallInt32 ++ ", but is a " ++ showTypeVal i2 }
 
                         ( True, True ) ->
-                            Ok { state | wasmStack = tack, wasmOut = Oi32store8 :: state.wasmOut }
+                            Ok { state | stack = tack, wasmOut = Oi32store8 :: state.wasmOut }
 
         TypeWrap type_ ->
-            case ( state.wasmStack, Dict.get type_ state.wrapperTypes ) of
+            case ( state.stack, Dict.get type_ state.wrapperTypes ) of
                 ( [], _ ) ->
                     Err { state = state, message = "empty stack" }
 
@@ -624,24 +637,24 @@ processAtom state atom =
                     Ok
                         { state
                             | wrapperTypes = Dict.insert type_ contained state.wrapperTypes
-                            , wasmStack = Twrapper type_ contained :: tack
+                            , stack = Twrapper type_ contained :: tack
                         }
 
                 ( contained :: tack, Just previouslyWrapped ) ->
                     if isSubType contained previouslyWrapped then
-                        Ok { state | wasmStack = Twrapper type_ contained :: tack }
+                        Ok { state | stack = Twrapper type_ contained :: tack }
 
                     else
                         Err { state = state, message = "type \"" ++ showTypeVal contained ++ "\" is not compatible with \"" ++ type_ ++ "\"" }
 
         TypeUnwrap type_ ->
-            case state.wasmStack of
+            case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
                 (Twrapper wrapper wrapped) :: tack ->
                     if type_ == wrapper then
-                        Ok { state | wasmStack = wrapped :: tack }
+                        Ok { state | stack = wrapped :: tack }
 
                     else
                         Err
@@ -670,14 +683,14 @@ processAtom state atom =
 
 loopHelp : EltState -> EltOut
 loopHelp state =
-    case state.metaStack of
+    case state.stack of
         [] ->
             Err { state = state, message = "empty stack" }
 
-        body :: break :: tack ->
+        (Tblock body) :: (Tblock break) :: tack ->
             let
                 cleanStack =
-                    { state | wasmStack = [], metaStack = [] }
+                    { state | stack = [] }
 
                 bodyEndResult =
                     runTypeChecksHelp (Just []) body cleanStack
@@ -711,7 +724,7 @@ loopHelp state =
                         loopWasm =
                             Oloop bodyEnd.wasmOut breakEnd.wasmOut
                     in
-                    Ok { state | wasmOut = loopWasm :: state.wasmOut, metaStack = tack }
+                    Ok { state | wasmOut = loopWasm :: state.wasmOut, stack = tack }
 
         _ ->
             Err { message = "there's nothing to run", state = state }
@@ -719,11 +732,11 @@ loopHelp state =
 
 ifElseTypeHelp : EltState -> EltOut
 ifElseTypeHelp state =
-    case state.metaStack of
-        else_ :: then_ :: switch :: metatack ->
+    case state.stack of
+        (Tblock else_) :: (Tblock then_) :: (Tblock switch) :: tack ->
             let
                 cleanStack =
-                    { state | wasmStack = [] }
+                    { state | stack = [] }
 
                 elseEnd =
                     runTypeChecksHelp (Just []) else_ cleanStack
@@ -773,14 +786,14 @@ ifElseTypeHelp state =
                                 thenE.wasmOut
                                 elseE.wasmOut
                     in
-                    Ok { state | wasmOut = ifElseWasm :: state.wasmOut, metaStack = metatack }
+                    Ok { state | wasmOut = ifElseWasm :: state.wasmOut, stack = tack }
 
         bad ->
             Err
                 { message =
                     String.concat
                         [ "bad stack: "
-                        , showAtoms <| List.map Block bad
+                        , showTypeStack bad
                         , ", expecting IF, ELSE, and SWITCH blocks"
                         ]
                 , state = state
@@ -851,6 +864,9 @@ type alias EltOut =
 showTypeVal : Type -> String
 showTypeVal type_ =
     case type_ of
+        Tblock block ->
+            "block: " ++ showAtoms (List.map .value block)
+
         Tint32 i ->
             "int32: " ++ String.fromInt i
 
@@ -960,6 +976,13 @@ isSubType sub master =
             t1 == t2
 
         ( Twrapper _ _, _ ) ->
+            False
+
+        -- Tblock
+        ( Tblock b1, Tblock b2 ) ->
+            b1 == b2
+
+        ( Tblock _, _ ) ->
             False
 
 
@@ -1187,6 +1210,7 @@ plainP =
             , ( "ifElse", IfElse )
             , ( "i32mul", AWasm Ii32mul )
             , ( "UNSAFE_i32store8", AWasm Ii32store8 )
+            , ( "metaLoop", MetaLoop )
             ]
 
 
@@ -1325,6 +1349,9 @@ findModule modules hash =
 showAtom : Atom -> String
 showAtom atom =
     case atom of
+        MetaLoop ->
+            "MetaLoop"
+
         Retrieve string ->
             "Retrieve " ++ showString string
 
