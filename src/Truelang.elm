@@ -26,24 +26,14 @@ compile code =
             Err <| "Parsing error: " ++ parsingError
 
         Ok atoms ->
-            case typeCheck atoms of
-                Just typeError ->
-                    Err <| "Type error: " ++ typeError
-
-                Nothing ->
-                    case makeWasm atoms of
-                        Err error ->
-                            Err <| "WASM generator error: " ++ error
-
-                        Ok wasm ->
-                            Ok wasm
+            secondStage atoms
 
 
 type Atom
     = Retrieve String
     | Block (List (Located Atom))
     | MetaDefine String
-    | MetaSwitch (List ( Type, Atom ))
+    | MetaSwitch (List ( Type, List (Located Atom) ))
     | Runblock
     | Export String
     | AWasm WasmIn
@@ -130,27 +120,17 @@ initWasmState =
     }
 
 
-makeWasm : List (Located Atom) -> Result String String
-makeWasm atoms =
-    let
-        result =
-            makeWasmHelp initWasmState atoms
-    in
-    case result.error of
-        Nothing ->
-            Ok <|
-                String.concat
-                    [ "(module\n"
-                    , "  (import \"env\" \"memory\" (memory 1))\n"
-                    , "  (func $main (result i32)\n"
-                    , wasmsToString result.wasmStack ++ "\n"
-                    , "  )\n"
-                    , "  (export \"main\" (func $main))\n"
-                    , ")\n"
-                    ]
-
-        Just error ->
-            Err error
+makeWasmModule : List WasmOut -> String
+makeWasmModule wasms =
+    String.concat
+        [ "(module\n"
+        , "  (import \"env\" \"memory\" (memory 1))\n"
+        , "  (func $main (result i32)\n"
+        , wasmsToString wasms ++ "\n"
+        , "  )\n"
+        , "  (export \"main\" (func $main))\n"
+        , ")\n"
+        ]
 
 
 wasmsToString : List WasmOut -> String
@@ -219,172 +199,8 @@ wasmToString wasm =
                 ]
 
 
-makeWasmHelp : WasmState -> List (Located Atom) -> WasmState
-makeWasmHelp wasmState atoms =
-    List.foldr makeOneWasm wasmState atoms
-
-
-makeOneWasm : Located Atom -> WasmState -> WasmState
-makeOneWasm { value } accum =
-    case value of
-        AWasm Ii32mul ->
-            { accum | wasmStack = Oi32mul :: accum.wasmStack }
-
-        AWasm (Ii32const i) ->
-            { accum | wasmStack = Oi32const i :: accum.wasmStack }
-
-        AWasm Ii32store8 ->
-            { accum | wasmStack = Oi32store8 :: accum.wasmStack }
-
-        AWasm (IsetConstLocal basicType name) ->
-            { accum | wasmStack = OsetLocal basicType name :: accum.wasmStack }
-
-        AWasm (IsetMutLocal basicType name) ->
-            { accum | wasmStack = OsetLocal basicType name :: accum.wasmStack }
-
-        AWasm (IupdateMutLocal name) ->
-            { accum | wasmStack = OupdateLocal name :: accum.wasmStack }
-
-        AWasm (IgetLocal name) ->
-            { accum | wasmStack = OgetLocal name :: accum.wasmStack }
-
-        Retrieve name ->
-            case Dict.get name accum.defs of
-                Nothing ->
-                    { accum
-                        | error =
-                            Just <|
-                                "could not find \""
-                                    ++ name
-                                    ++ "\""
-                    }
-
-                Just retrieved ->
-                    { accum
-                        | metaStack =
-                            retrieved :: accum.metaStack
-                    }
-
-        Block block ->
-            { accum | metaStack = Block block :: accum.metaStack }
-
-        MetaDefine name ->
-            case accum.metaStack of
-                [] ->
-                    { accum
-                        | error =
-                            Just <|
-                                String.concat
-                                    [ "nothing on stack to define as name \""
-                                    , name
-                                    , "\""
-                                    ]
-                    }
-
-                s :: tack ->
-                    { accum
-                        | defs = Dict.insert name s accum.defs
-                        , metaStack = tack
-                    }
-
-        Runblock ->
-            case accum.metaStack of
-                [] ->
-                    { accum | error = Just "nothing on stack to run" }
-
-                (Block block) :: tack ->
-                    makeWasmHelp { accum | metaStack = tack } block
-
-                other :: _ ->
-                    { accum | error = Just <| "top of stack is not a block, it is: " ++ showAtom other }
-
-        Export _ ->
-            accum
-
-        Loop ->
-            case accum.metaStack of
-                (Block body) :: (Block break) :: tack ->
-                    let
-                        clearStack =
-                            { accum
-                                | wasmStack = []
-                                , metaStack = []
-                            }
-
-                        bodyWasm =
-                            makeWasmHelp clearStack body
-
-                        breakWasm =
-                            makeWasmHelp clearStack break
-
-                        loopWasm =
-                            Oloop
-                                breakWasm.wasmStack
-                                bodyWasm.wasmStack
-                    in
-                    { accum | wasmStack = loopWasm :: accum.wasmStack }
-
-                other ->
-                    { accum
-                        | error =
-                            Just <|
-                                String.concat
-                                    [ "bad stack: expecting EXIT and BODY blocks "
-                                    , "for the loop, but got: "
-                                    , showAtoms other
-                                    ]
-                    }
-
-        IfElse ->
-            case accum.metaStack of
-                (Block else_) :: (Block then_) :: (Block if_) :: tack ->
-                    let
-                        clearStack =
-                            { accum
-                                | wasmStack = []
-                                , metaStack = []
-                            }
-
-                        ifWasm =
-                            makeWasmHelp clearStack if_
-
-                        thenWasm =
-                            makeWasmHelp clearStack then_
-
-                        elseWasm =
-                            makeWasmHelp clearStack else_
-
-                        ifElseWasm =
-                            OifElse
-                                ifWasm.wasmStack
-                                thenWasm.wasmStack
-                                elseWasm.wasmStack
-                    in
-                    { accum
-                        | wasmStack =
-                            ifElseWasm :: accum.wasmStack
-                    }
-
-                other ->
-                    { accum
-                        | error =
-                            Just <|
-                                String.concat
-                                    [ "bad stack: expecting IF, THEN and ELSE "
-                                    , "blocks, but got: "
-                                    , showAtoms other
-                                    ]
-                    }
-
-        TypeWrap _ ->
-            accum
-
-        TypeUnwrap _ ->
-            accum
-
-
-typeCheck : List (Located Atom) -> Maybe String
-typeCheck atoms =
+secondStage : List (Located Atom) -> Result String String
+secondStage atoms =
     runTypeChecks atoms initEltState
 
 
@@ -427,20 +243,22 @@ initEltState =
     , defs = Dict.empty
     , metaStack = []
     , wasmStack = []
+    , wasmOut = []
     , defUse = Set.empty
     , isHome = True
     , wrapperTypes = Dict.empty
+    , error = Nothing
     }
 
 
-runTypeChecks : List (Located Atom) -> EltState -> Maybe String
+runTypeChecks : List (Located Atom) -> EltState -> Result String String
 runTypeChecks atoms init =
     case runTypeChecksHelp (Just [ TallInt32 ]) atoms init of
         Ok endState ->
-            Nothing
+            Ok <| makeWasmModule endState.wasmOut
 
         Err err ->
-            Just <| prettyErrorMessage err
+            Err <| prettyErrorMessage err
 
 
 deadEndsToString : List P.DeadEnd -> String
@@ -491,18 +309,33 @@ type Mutability
 type Def
     = WasmMut Type
     | WasmConst Type
-    | Meta Atom
+    | Meta (List (Located Atom))
 
 
 type alias EltState =
     { position : Position
     , defs : Dict.Dict String ( Position, Def )
-    , metaStack : List Atom
+    , metaStack : List (List (Located Atom))
     , wasmStack : List Type
+    , wasmOut : List WasmOut
     , defUse : Set.Set String
     , isHome : Bool
     , wrapperTypes : Dict.Dict String Type
+    , error : Maybe String
     }
+
+
+findPath : Type -> List ( Type, List (Located Atom) ) -> Result String (List (Located Atom))
+findPath key paths =
+    case List.filter (isSubType key << Tuple.first) paths of
+        [] ->
+            Err <| "no path matching " ++ showTypeVal key
+
+        [ ( _, matchingPath ) ] ->
+            Ok matchingPath
+
+        matchingPaths ->
+            Err <| "multiple paths matching " ++ showTypeVal key ++ ": " ++ String.join " " (List.map (showTypeVal << Tuple.first) matchingPaths)
 
 
 type alias Position =
@@ -643,6 +476,7 @@ processAtom state atom =
                     Ok
                         { state
                             | wasmStack = retrieved :: state.wasmStack
+                            , wasmOut = OgetLocal v :: state.wasmOut
                             , defUse = Set.insert v state.defUse
                         }
 
@@ -650,6 +484,7 @@ processAtom state atom =
                     Ok
                         { state
                             | wasmStack = retrieved :: state.wasmStack
+                            , wasmOut = OgetLocal v :: state.wasmOut
                             , defUse = Set.insert v state.defUse
                         }
 
@@ -661,7 +496,20 @@ processAtom state atom =
                         }
 
         Block bs ->
-            Ok { state | metaStack = Block bs :: state.metaStack }
+            Ok { state | metaStack = bs :: state.metaStack }
+
+        MetaSwitch metaSwitch ->
+            case state.wasmStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                s :: tack ->
+                    case findPath s metaSwitch of
+                        Err error ->
+                            Err { state = state, message = error }
+
+                        Ok path ->
+                            Ok { state | metaStack = path :: state.metaStack }
 
         MetaDefine newName ->
             case Dict.get newName state.defs of
@@ -679,6 +527,27 @@ processAtom state atom =
                                     | metaStack = tack
                                     , defs = Dict.insert newName ( state.position, Meta s ) state.defs
                                 }
+
+        Runblock ->
+            case state.metaStack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                block :: tack ->
+                    runTypeChecksHelp Nothing block { state | metaStack = tack }
+
+        Export exported ->
+            if Dict.member exported state.defs then
+                Ok { state | defUse = Set.insert exported state.defUse }
+
+            else
+                Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
+
+        Loop ->
+            loopHelp state
+
+        IfElse ->
+            ifElseTypeHelp state
 
         AWasm (IupdateMutLocal name) ->
             case Dict.get name state.defs of
@@ -698,6 +567,7 @@ processAtom state atom =
                                 Ok
                                     { state
                                         | wasmStack = tack
+                                        , wasmOut = OupdateLocal name :: state.wasmOut
                                         , defs = Dict.insert name ( position, WasmMut s ) state.defs
                                     }
 
@@ -719,7 +589,7 @@ processAtom state atom =
 
                         s :: tack ->
                             if isSubType (fromBasic basicType) s then
-                                Ok { state | wasmStack = tack, defs = Dict.insert name ( state.position, WasmMut s ) state.defs }
+                                Ok { state | wasmStack = tack, wasmOut = OsetLocal basicType name :: state.wasmOut, defs = Dict.insert name ( state.position, WasmMut s ) state.defs }
 
                             else
                                 Err { state = state, message = "bad type declaration: " ++ " got \"" ++ showBasic basicType ++ "\", expected: \"" ++ showTypeVal s ++ "\"" }
@@ -744,10 +614,11 @@ processAtom state atom =
                             Ok
                                 { state
                                     | wasmStack = TallInt32 :: tack
+                                    , wasmOut = Oi32mul :: state.wasmOut
                                 }
 
         AWasm (Ii32const i) ->
-            Ok { state | wasmStack = Tint32 i :: state.wasmStack }
+            Ok { state | wasmStack = Tint32 i :: state.wasmStack, wasmOut = Oi32const i :: state.wasmOut }
 
         AWasm (IsetConstLocal basicType name) ->
             case state.wasmStack of
@@ -760,6 +631,7 @@ processAtom state atom =
                             { state
                                 | defs = Dict.insert name ( state.position, WasmConst value ) state.defs
                                 , wasmStack = tack
+                                , wasmOut = OsetLocal basicType name :: state.wasmOut
                             }
 
                     else
@@ -771,10 +643,10 @@ processAtom state atom =
                     Err { state = state, message = "\"" ++ name ++ "\" is not defined" }
 
                 Just ( _, WasmMut value ) ->
-                    Ok { state | wasmStack = value :: state.wasmStack }
+                    Ok { state | wasmStack = value :: state.wasmStack, wasmOut = OgetLocal name :: state.wasmOut }
 
                 Just ( _, WasmConst value ) ->
-                    Ok { state | wasmStack = value :: state.wasmStack }
+                    Ok { state | wasmStack = value :: state.wasmStack, wasmOut = OgetLocal name :: state.wasmOut }
 
                 Just ( position, Meta _ ) ->
                     Err { state = state, message = "\"" ++ name ++ "\" is defined at " ++ prettyLocation position ++ ", but it is a meta definition, not a run-time definition" }
@@ -796,31 +668,7 @@ processAtom state atom =
                             Err { state = state, message = "Second item instack should be a " ++ showTypeVal TallInt32 ++ ", but is a " ++ showTypeVal i2 }
 
                         ( True, True ) ->
-                            Ok { state | wasmStack = tack }
-
-        Loop ->
-            loopHelp state
-
-        Runblock ->
-            case state.metaStack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                (Block block) :: tack ->
-                    runTypeChecksHelp Nothing block { state | metaStack = tack }
-
-                _ ->
-                    Err { message = "there's nothing to run", state = state }
-
-        Export exported ->
-            if Dict.member exported state.defs then
-                Ok { state | defUse = Set.insert exported state.defUse }
-
-            else
-                Err { message = "\"" ++ exported ++ "\" is not defined", state = state }
-
-        IfElse ->
-            ifElseTypeHelp state
+                            Ok { state | wasmStack = tack, wasmOut = Oi32store8 :: state.wasmOut }
 
         TypeWrap type_ ->
             case ( state.wasmStack, Dict.get type_ state.wrapperTypes ) of
@@ -881,18 +729,18 @@ loopHelp state =
         [] ->
             Err { state = state, message = "empty stack" }
 
-        (Block body) :: (Block break) :: tack ->
+        body :: break :: tack ->
             let
                 cleanStack =
-                    { state | wasmStack = [] }
+                    { state | wasmStack = [], metaStack = [] }
 
-                bodyEnd =
+                bodyEndResult =
                     runTypeChecksHelp (Just []) body cleanStack
 
-                breakEnd =
+                breakEndResult =
                     runTypeChecksHelp (Just [ TallInt32 ]) break cleanStack
             in
-            case ( bodyEnd, breakEnd ) of
+            case ( bodyEndResult, breakEndResult ) of
                 ( Err err, _ ) ->
                     Err
                         { message =
@@ -913,8 +761,12 @@ loopHelp state =
                         , state = state
                         }
 
-                ( Ok _, Ok _ ) ->
-                    Ok state
+                ( Ok bodyEnd, Ok breakEnd ) ->
+                    let
+                        loopWasm =
+                            Oloop bodyEnd.wasmOut breakEnd.wasmOut
+                    in
+                    Ok { state | wasmOut = loopWasm :: state.wasmOut }
 
         _ ->
             Err { message = "there's nothing to run", state = state }
@@ -923,7 +775,7 @@ loopHelp state =
 ifElseTypeHelp : EltState -> EltOut
 ifElseTypeHelp state =
     case state.metaStack of
-        (Block else_) :: (Block if_) :: (Block switch) :: metatack ->
+        else_ :: then_ :: switch :: metatack ->
             let
                 cleanStack =
                     { state | wasmStack = [] }
@@ -931,13 +783,13 @@ ifElseTypeHelp state =
                 elseEnd =
                     runTypeChecksHelp (Just []) else_ cleanStack
 
-                ifEnd =
-                    runTypeChecksHelp (Just []) if_ cleanStack
+                thenEnd =
+                    runTypeChecksHelp (Just []) then_ cleanStack
 
                 switchEnd =
                     runTypeChecksHelp (Just [ TallInt32 ]) switch cleanStack
             in
-            case ( elseEnd, ifEnd, switchEnd ) of
+            case ( elseEnd, thenEnd, switchEnd ) of
                 ( Err err, _, _ ) ->
                     Err
                         { message =
@@ -968,15 +820,22 @@ ifElseTypeHelp state =
                         , state = state
                         }
 
-                ( Ok _, Ok _, Ok _ ) ->
-                    Ok state
+                ( Ok elseE, Ok thenE, Ok switchE ) ->
+                    let
+                        ifElseWasm =
+                            OifElse
+                                switchE.wasmOut
+                                thenE.wasmOut
+                                elseE.wasmOut
+                    in
+                    Ok { state | wasmOut = ifElseWasm :: state.wasmOut }
 
         bad ->
             Err
                 { message =
                     String.concat
                         [ "bad stack: "
-                        , showAtoms bad
+                        , showAtoms <| List.map Block bad
                         , ", expecting IF, ELSE, and SWITCH blocks"
                         ]
                 , state = state
@@ -1232,14 +1091,14 @@ metaSwitchP moduleName modules =
             }
 
 
-metaSwitchBranchP : List String -> String -> P.Parser ( Type, Atom )
+metaSwitchBranchP : List String -> String -> P.Parser ( Type, List (Located Atom) )
 metaSwitchBranchP modules moduleName =
     P.succeed (\type_ atom -> ( type_, atom ))
         |= typeP
         |. whiteSpaceP
         |. P.symbol "->"
         |. whiteSpaceP
-        |= elementP modules moduleName
+        |= bareBlockP moduleName modules
 
 
 typeP : P.Parser Type
@@ -1405,41 +1264,14 @@ showTypeStack typestack =
         ]
 
 
-
--- showProgVal : ProgVal -> String
--- showProgVal p =
---     case p of
---         Pint32 i ->
---             "int32: " ++ String.fromInt i
---
---         Pall ->
---             "all"
---
---         PallInt32 ->
---             "int32"
---
---         Pint64 i ->
---             "int64: " ++ String.fromInt i
---
---         Pfloat32 f ->
---             "float32: " ++ String.fromFloat f
---
---         Pfloat64 f ->
---             "float64: " ++ String.fromFloat f
---
---         PallInt64 ->
---             "int64"
---
---         PallFloat32 ->
---             "float32"
---
---         PallFloat64 ->
---             "float64"
-
-
 programBlockP : String -> List String -> P.Parser Atom
 programBlockP moduleName modules =
-    P.succeed Block
+    P.map Block <| bareBlockP moduleName modules
+
+
+bareBlockP : String -> List String -> P.Parser (List (Located Atom))
+bareBlockP moduleName modules =
+    P.succeed identity
         |. P.token "{"
         |= parseP moduleName modules
         |. P.token "}"
@@ -1563,10 +1395,13 @@ showAtom atom =
             "Retrieve " ++ showString string
 
         Block atoms ->
-            "Block {" ++ String.join " " (List.map (showAtom << .value) atoms) ++ "}"
+            "Block {" ++ bareShowBlock atoms ++ "}"
 
         MetaDefine string ->
             "MetaDefine " ++ string
+
+        MetaSwitch paths ->
+            "MetaSwitch: " ++ showPaths paths
 
         Runblock ->
             "Runblock"
@@ -1588,6 +1423,21 @@ showAtom atom =
 
         TypeUnwrap t ->
             ">" ++ t ++ "<"
+
+
+bareShowBlock : List (Located Atom) -> String
+bareShowBlock block =
+    String.join " " <| List.map (showAtom << .value) block
+
+
+showPaths : List ( Type, List (Located Atom) ) -> String
+showPaths paths =
+    "(" ++ String.join ", " (List.map showPath paths) ++ ")"
+
+
+showPath : ( Type, List (Located Atom) ) -> String
+showPath ( type_, block ) =
+    showTypeVal type_ ++ " -> " ++ bareShowBlock block
 
 
 showWasm : WasmIn -> String
