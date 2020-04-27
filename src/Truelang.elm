@@ -42,6 +42,7 @@ type Atom
     | IfElse
     | TypeWrap String
     | TypeUnwrap String
+    | StringLiteral String
 
 
 type WasmOut
@@ -712,6 +713,24 @@ processAtom state atom =
                                 ]
                         }
 
+        StringLiteral string ->
+            let
+                toChar c =
+                    Twrapper "char" (Ti32 <| Char.toCode c)
+
+                charList =
+                    String.toList string
+
+                unicode =
+                    List.map toChar charList
+
+                len =
+                    Twrapper "stringlength" <|
+                        Ti32 <|
+                            List.length unicode
+            in
+            Ok { state | stack = len :: unicode ++ state.stack }
+
 
 loopHelp : EltState -> EltOut
 loopHelp state =
@@ -1031,13 +1050,14 @@ elementP modules moduleName =
         , retrieveP
         , metaDefP
         , programBlockP moduleName modules
-        , i32P
+        , P.backtrackable i32P
         , i64P
         , f64P
         , f32P
         , typeWrapP
         , typeUnwrapP
         , metaSwitchP modules moduleName
+        , stringPWrap
         ]
 
 
@@ -1067,6 +1087,65 @@ setLocalHelpP =
         |= basicTypeP
         |. whiteSpaceP
         |= variable
+
+
+stringHelp2 : ( List String, Int ) -> P.Parser (P.Step ( List String, Int ) String)
+stringHelp2 ( revChunks, offset ) =
+    P.succeed (stepHelp offset)
+        |= stringHelp revChunks
+        |= P.getOffset
+
+
+stringPWrap : P.Parser Atom
+stringPWrap =
+    P.succeed StringLiteral
+        |= stringP
+
+
+stringHelp : List String -> P.Parser (P.Step (List String) String)
+stringHelp revChunks =
+    P.oneOf
+        [ P.succeed (\chunk -> P.Loop (chunk :: revChunks))
+            |. P.token "\\"
+            |= P.oneOf
+                [ P.map (\_ -> "\n") (P.token "n")
+                , P.map (\_ -> "\t") (P.token "t")
+                , P.map (\_ -> "\u{000D}") (P.token "r")
+                , P.map (\_ -> "\"") (P.token "\"")
+                ]
+        , P.chompWhile isUninteresting
+            |> P.getChompedString
+            |> P.map (\chunk -> P.Loop (chunk :: revChunks))
+        ]
+
+
+stepHelp : Int -> P.Step (List String) String -> Int -> P.Step ( List String, Int ) String
+stepHelp oldOffset step newOffset =
+    case step of
+        P.Done str ->
+            P.Done str
+
+        P.Loop revChunks ->
+            if newOffset > oldOffset then
+                P.Loop ( revChunks, newOffset )
+
+            else
+                P.Done <| String.join "" <| List.reverse revChunks
+
+
+isUninteresting : Char -> Bool
+isUninteresting char =
+    char /= '\\' && char /= '"'
+
+
+{-| Mostly copied from <https://github.com/elm/parser/blob/master/examples/DoubleQuoteString.elm>
+-}
+stringP : P.Parser String
+stringP =
+    P.succeed identity
+        |. P.token "\""
+        |= P.loop ( [], 0 ) stringHelp2
+        |. P.token "\""
 
 
 basicTypeP : P.Parser BasicType
@@ -1197,10 +1276,9 @@ wrapperTypeP =
     P.succeed Twrapper
         |= variable
         |. P.symbol "<"
-        -- The lambda wrapper was necessary to get round a
-        -- "Bad recursion" compiler error. I'm pretty sure it's OK
-        -- in this case though.
-        |= (\() -> typeP) ()
+        -- The lazy wrapper is necessary to get round a
+        -- "Bad recursion" compiler error.
+        |= P.lazy (\_ -> typeP)
         |. P.symbol ">"
 
 
@@ -1299,11 +1377,7 @@ importHelpP modules =
 
 showTypeStack : List Type -> String
 showTypeStack typestack =
-    String.concat
-        [ "<"
-        , String.join ", " <| List.map showTypeVal typestack
-        , ">"
-        ]
+    "[" ++ (String.join ", " <| List.map showTypeVal typestack) ++ "]"
 
 
 programBlockP : String -> List String -> P.Parser Atom
@@ -1447,6 +1521,9 @@ showAtom atom =
 
         TypeUnwrap t ->
             ">" ++ t ++ "<"
+
+        StringLiteral s ->
+            "\"" ++ showString s ++ "\""
 
 
 bareShowBlock : List (Located Atom) -> String
