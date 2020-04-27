@@ -47,6 +47,9 @@ type Atom
 type WasmOut
     = Oi32mul
     | Oi32const Int
+    | Oi64const Int
+    | Of32const Float
+    | Of64const Float
     | Oi32store8
     | Oloop (List WasmOut) (List WasmOut)
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
@@ -96,12 +99,23 @@ fromBasic basicType =
 
 type WasmIn
     = Ii32mul
+      -- Const
     | Ii32const Int
+    | Ii64const Int
+    | If32const Float
+    | If64const Float
     | Ii32store8
     | IsetConstLocal BasicType String
     | IsetMutLocal BasicType String
     | IupdateMutLocal String
     | IgetLocal String
+
+
+type BasicValue
+    = Vi32 Int
+    | Vi64 Int
+    | Vf32 Float
+    | Vf64 Float
 
 
 makeWasmModule : List WasmOut -> String
@@ -152,6 +166,15 @@ wasmToString wasm =
 
         Oi32const i ->
             "i32.const " ++ String.fromInt i
+
+        Oi64const i ->
+            "i64.const " ++ String.fromInt i
+
+        Of32const f ->
+            "f32.const " ++ String.fromFloat f
+
+        Of64const f ->
+            "f64const " ++ String.fromFloat f
 
         Oi32store8 ->
             "i32.store8"
@@ -264,10 +287,10 @@ deadEndToString deadEnd =
 
 
 type Type
-    = Tint32 Int
-    | Tint64 Int
-    | Tfloat32 Float
-    | Tfloat64 Float
+    = Ti32 Int
+    | Ti64 Int
+    | Tf32 Float
+    | Tf64 Float
     | Tall
     | TallInt32
     | TallInt64
@@ -494,8 +517,8 @@ processAtom state atom =
                 [ _ ] ->
                     Err { state = state, message = "only one thing on stack" }
 
-                (Tint64 i) :: (Tblock block) :: tack ->
-                    List.foldr (metaLoopHelp block) (Ok {state| stack = tack}) (List.range 1 i)
+                (Ti64 i) :: (Tblock block) :: tack ->
+                    List.foldr (metaLoopHelp block) (Ok { state | stack = tack }) (List.range 1 i)
 
                 other ->
                     Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
@@ -579,7 +602,16 @@ processAtom state atom =
                                 }
 
         AWasm (Ii32const i) ->
-            Ok { state | stack = Tint32 i :: state.stack, wasmOut = Oi32const i :: state.wasmOut }
+            Ok { state | stack = Ti32 i :: state.stack, wasmOut = Oi32const i :: state.wasmOut }
+
+        AWasm (Ii64const i) ->
+            Ok { state | stack = Ti64 i :: state.stack, wasmOut = Oi64const i :: state.wasmOut }
+
+        AWasm (If32const f) ->
+            Ok { state | stack = Tf32 f :: state.stack, wasmOut = Of32const f :: state.wasmOut }
+
+        AWasm (If64const f) ->
+            Ok { state | stack = Tf64 f :: state.stack, wasmOut = Of64const f :: state.wasmOut }
 
         AWasm (IsetConstLocal basicType name) ->
             case state.stack of
@@ -867,22 +899,22 @@ showTypeVal type_ =
         Tblock block ->
             "block: " ++ showAtoms (List.map .value block)
 
-        Tint32 i ->
-            "int32: " ++ String.fromInt i
-
         Tall ->
             "all"
 
         TallInt32 ->
             "int32"
 
-        Tint64 i ->
+        Ti32 i ->
+            "int32: " ++ String.fromInt i
+
+        Ti64 i ->
             "int64: " ++ String.fromInt i
 
-        Tfloat32 f ->
+        Tf32 f ->
             "float32: " ++ String.fromFloat f
 
-        Tfloat64 f ->
+        Tf64 f ->
             "float64: " ++ String.fromFloat f
 
         TallInt64 ->
@@ -909,13 +941,13 @@ isSubType sub master =
             False
 
         -- Tint32
-        ( Tint32 _, TallInt32 ) ->
+        ( Ti32 _, TallInt32 ) ->
             True
 
-        ( Tint32 i1, Tint32 i2 ) ->
+        ( Ti32 i1, Ti32 i2 ) ->
             i1 == i2
 
-        ( Tint32 _, _ ) ->
+        ( Ti32 _, _ ) ->
             False
 
         ( TallInt32, TallInt32 ) ->
@@ -925,13 +957,13 @@ isSubType sub master =
             False
 
         -- Tint64
-        ( Tint64 _, TallInt64 ) ->
+        ( Ti64 _, TallInt64 ) ->
             True
 
-        ( Tint64 i1, Tint64 i2 ) ->
+        ( Ti64 i1, Ti64 i2 ) ->
             i1 == i2
 
-        ( Tint64 _, _ ) ->
+        ( Ti64 _, _ ) ->
             False
 
         ( TallInt64, TallInt64 ) ->
@@ -941,13 +973,13 @@ isSubType sub master =
             False
 
         -- Tfloat32
-        ( Tfloat32 _, TallFloat32 ) ->
+        ( Tf32 _, TallFloat32 ) ->
             True
 
-        ( Tfloat32 f1, Tfloat32 f2 ) ->
+        ( Tf32 f1, Tf32 f2 ) ->
             f1 == f2
 
-        ( Tfloat32 _, _ ) ->
+        ( Tf32 _, _ ) ->
             False
 
         ( TallFloat32, TallFloat32 ) ->
@@ -957,13 +989,13 @@ isSubType sub master =
             False
 
         -- Tfloat64
-        ( Tfloat64 _, TallFloat64 ) ->
+        ( Tf64 _, TallFloat64 ) ->
             True
 
-        ( Tfloat64 f1, Tfloat64 f2 ) ->
+        ( Tf64 f1, Tf64 f2 ) ->
             f1 == f2
 
-        ( Tfloat64 _, _ ) ->
+        ( Tf64 _, _ ) ->
             False
 
         ( TallFloat64, TallFloat64 ) ->
@@ -999,7 +1031,10 @@ elementP modules moduleName =
         , retrieveP
         , metaDefP
         , programBlockP moduleName modules
-        , int32P
+        , i32P
+        , i64P
+        , f64P
+        , f32P
         , typeWrapP
         , typeUnwrapP
         , metaSwitchP modules moduleName
@@ -1107,28 +1142,28 @@ allTypesP =
 
 int32typeP : P.Parser Type
 int32typeP =
-    P.succeed Tint32
+    P.succeed Ti32
         |. P.keyword "i32"
         |= intHelpP
 
 
 int64typeP : P.Parser Type
 int64typeP =
-    P.succeed Tint64
+    P.succeed Ti64
         |. P.keyword "i64"
         |= intHelpP
 
 
 float32typeP : P.Parser Type
 float32typeP =
-    P.succeed Tfloat32
+    P.succeed Tf32
         |. P.keyword "f32"
         |= P.float
 
 
 float64typeP : P.Parser Type
 float64typeP =
-    P.succeed Tfloat64
+    P.succeed Tf64
         |. P.keyword "f64"
         |= P.float
 
@@ -1185,8 +1220,14 @@ typeWrapP =
         |. P.token ">"
 
 
-int32P : P.Parser Atom
-int32P =
+i64P : P.Parser Atom
+i64P =
+    P.succeed (AWasm << Ii64const)
+        |= intHelpP
+
+
+i32P : P.Parser Atom
+i32P =
     P.succeed (AWasm << Ii32const)
         |= intHelpP
         |. P.keyword "i32"
@@ -1199,6 +1240,28 @@ intHelpP =
             |. P.symbol "-"
             |= P.int
         , P.int
+        ]
+
+
+f64P : P.Parser Atom
+f64P =
+    P.map (AWasm << If64const) floatP
+
+
+f32P : P.Parser Atom
+f32P =
+    P.succeed (AWasm << If32const)
+        |= floatP
+        |. P.keyword "f32"
+
+
+floatP : P.Parser Float
+floatP =
+    P.oneOf
+        [ P.succeed negate
+            |. P.symbol "-"
+            |= P.float
+        , P.float
         ]
 
 
@@ -1409,6 +1472,15 @@ showWasm wasm =
 
         Ii32const i ->
             "i32.const " ++ String.fromInt i
+
+        Ii64const i ->
+            "i64.const " ++ String.fromInt i
+
+        If32const f ->
+            "f32.const " ++ String.fromFloat f
+
+        If64const f ->
+            "f64.const " ++ String.fromFloat f
 
         Ii32store8 ->
             "i32.store8"
