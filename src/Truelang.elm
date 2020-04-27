@@ -98,14 +98,18 @@ fromBasic basicType =
             TallFloat64
 
 
-type WasmIn
-    = Ii32mul
+type
+    WasmIn
+    -- Simple
+    = Ii32store8
+    | Ii32mul
+    | Ii64extend_i32_u
+    | Ii64extend_i32_s
       -- Const
     | Ii32const Int
     | Ii64const Int
     | If32const Float
     | If64const Float
-    | Ii32store8
     | IsetConstLocal BasicType String
     | IsetMutLocal BasicType String
     | IupdateMutLocal String
@@ -661,6 +665,34 @@ processAtom state atom =
                         ( True, True ) ->
                             Ok { state | stack = tack, wasmOut = Oi32store8 :: state.wasmOut }
 
+        AWasm Ii64extend_i32_u ->
+            case state.stack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                (Ti32 i) :: tack ->
+                    Ok { state | stack = Ti64 i :: tack }
+
+                TallInt32 :: tack ->
+                    Ok { state | stack = TallInt64 :: tack }
+
+                other :: _ ->
+                    Err { state = state, message = "expecting an int32, but got " ++ showTypeVal other }
+
+        AWasm Ii64extend_i32_s ->
+            case state.stack of
+                [] ->
+                    Err { state = state, message = "empty stack" }
+
+                (Ti32 i) :: tack ->
+                    Ok { state | stack = Ti64 i :: tack }
+
+                TallInt32 :: tack ->
+                    Ok { state | stack = TallInt64 :: tack }
+
+                other :: _ ->
+                    Err { state = state, message = "expecting an int32, but got " ++ showTypeVal other }
+
         TypeWrap type_ ->
             case ( state.stack, Dict.get type_ state.wrapperTypes ) of
                 ( [], _ ) ->
@@ -1063,7 +1095,12 @@ elementP modules moduleName =
 
 setMutLocalP : P.Parser Atom
 setMutLocalP =
-    P.map (\( a, b ) -> AWasm <| IsetMutLocal a b) setLocalHelpP
+    P.succeed (\a b -> AWasm <| IsetMutLocal a b)
+        |. P.keyword "setMutLocal"
+        |. whiteSpaceP
+        |= basicTypeP
+        |. whiteSpaceP
+        |= variable
 
 
 updateMutLocalP : P.Parser Atom
@@ -1076,12 +1113,7 @@ updateMutLocalP =
 
 setConstLocalP : P.Parser Atom
 setConstLocalP =
-    P.map (\( a, b ) -> AWasm <| IsetConstLocal a b) setLocalHelpP
-
-
-setLocalHelpP : P.Parser ( BasicType, String )
-setLocalHelpP =
-    P.succeed (\a b -> ( a, b ))
+    P.succeed (\a b -> AWasm <| IsetConstLocal a b)
         |. P.keyword "setConstLocal"
         |. whiteSpaceP
         |= basicTypeP
@@ -1346,12 +1378,16 @@ floatP =
 plainP : P.Parser Atom
 plainP =
     P.oneOf <|
-        List.map plainHelpP
+        List.map plainHelpP <|
             [ ( "loop", Loop )
             , ( "ifElse", IfElse )
-            , ( "i32mul", AWasm Ii32mul )
-            , ( "UNSAFE_i32store8", AWasm Ii32store8 )
             , ( "metaLoop", MetaLoop )
+
+            -- Basic WASM instructions
+            , ( "i32.mul", AWasm Ii32mul )
+            , ( "i64.extend_i32_s", AWasm Ii64extend_i32_s )
+            , ( "i64.extend_i32_u", AWasm Ii64extend_i32_u )
+            , ( "UNSAFE_i32.store8", AWasm Ii32store8 )
             ]
 
 
@@ -1579,6 +1615,12 @@ showWasm wasm =
 
         IgetLocal name ->
             "get_local $" ++ name
+
+        Ii64extend_i32_u ->
+            "i64.extend_i32_u"
+
+        Ii64extend_i32_s ->
+            "i64.extend_i32_s"
 
 
 variable : P.Parser String
