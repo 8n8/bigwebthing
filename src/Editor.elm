@@ -41,6 +41,7 @@ type alias Model =
     , opened : Opened
     , drafts : List Utils.Draft
     , internalError : Maybe String
+    , compilerError : Maybe String
     , outbox : List Utils.Message
     , sendMessageError : Maybe String
     }
@@ -145,6 +146,7 @@ initModel =
     , sendMessageError = Nothing
     , drafts = []
     , outbox = []
+    , compilerError = Nothing
     , messages = []
     , opened = Neither
     }
@@ -465,7 +467,7 @@ update msg model =
             in
             case Truelang.compile addedNewModule of
                 Err err ->
-                    ( { model | opened = ODraft { newOpened | document = Just <| Utils.SmallString <| "compiler error: " ++ err } }, cacheDrafts newDrafts )
+                    ( { model | opened = ODraft newOpened, compilerError = Just err }, cacheDrafts newDrafts )
 
                 Ok wasm ->
                     ( { model | opened = ODraft newOpened }
@@ -485,7 +487,7 @@ update msg model =
             in
             case Truelang.compile draft.code of
                 Err err ->
-                    ( { model | opened = ODraft { draft = draft, module_ = Nothing, document = Just <| Utils.SmallString <| "compiler error: " ++ err } }, Cmd.none )
+                    ( { model | opened = ODraft newDraft, compilerError = Just err }, Cmd.none )
 
                 Ok wasm ->
                     ( { model | opened = ODraft newDraft }, runWasm wasm draft.userInput )
@@ -626,7 +628,7 @@ view model =
                         Element.text "Need username to display drafts"
 
                     Just myName ->
-                        editDrafts myName model.opened model.drafts
+                        editDrafts myName model.compilerError model.opened model.drafts
                 ]
 
 
@@ -754,18 +756,18 @@ messageOpenModuleButton message module_ =
         }
 
 
-editDrafts : Int -> Opened -> List Utils.Draft -> Element.Element Msg
-editDrafts myName maybeOpenDraft drafts =
+editDrafts : Int -> Maybe String -> Opened -> List Utils.Draft -> Element.Element Msg
+editDrafts myName compilerError maybeOpenDraft drafts =
     case maybeOpenDraft of
         ODraft openDraft ->
-            editDraft myName openDraft
+            editDraft myName compilerError openDraft
 
         _ ->
             draftChooser drafts
 
 
-editDraft : Int -> OpenedDraft -> Element.Element Msg
-editDraft myName draft =
+editDraft : Int -> Maybe String -> OpenedDraft -> Element.Element Msg
+editDraft myName compilerError draft =
     Element.column []
         [ closeDraft draft.draft
         , toBox draft
@@ -778,6 +780,12 @@ editDraft myName draft =
             Just d ->
                 displayDocument d
         , editCode draft
+        , case compilerError of
+            Nothing ->
+                Element.none
+
+            Just err ->
+                Element.text err
         , editBlobs draft
         , sendDraft draft.draft
         ]
@@ -898,7 +906,7 @@ editCode draft =
                         Element.Input.labelAbove [] <|
                             Element.text "Module name"
                     }
-                , Element.Input.multiline []
+                , Element.Input.multiline [monospace]
                     { onChange = \c -> UpdatedCode draft ( moduleName, c )
                     , text = code
                     , placeholder =

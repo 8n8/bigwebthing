@@ -577,7 +577,7 @@ processAtom state atom =
                             Err { state = state, message = "empty stack" }
 
                         s :: tack ->
-                            if isSubType (fromBasic basicType) s then
+                            if isSubType s (fromBasic basicType) then
                                 Ok { state | stack = tack, wasmOut = OsetLocal basicType name :: state.wasmOut, defs = Dict.insert name ( state.position, Mutable s ) state.defs }
 
                             else
@@ -1348,7 +1348,13 @@ intHelpP =
     P.oneOf
         [ P.succeed negate
             |. P.symbol "-"
-            |= P.int
+            |= P.number
+                { int = Just identity
+                , hex = Just identity
+                , octal = Nothing
+                , binary = Nothing
+                , float = Nothing
+                }
         , P.int
         ]
 
