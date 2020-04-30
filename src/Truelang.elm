@@ -1,6 +1,9 @@
 module Truelang exposing (compile)
 
+import Bytes
+import Bytes.Encode as E
 import Dict
+import Hex.Convert
 import Parser as P exposing ((|.), (|=))
 import Set
 import Utils
@@ -46,6 +49,7 @@ type Atom
     | StringLiteral String
     | IntLiteral Int
     | FloatLiteral Float
+    | Serialize
 
 
 type WasmOut
@@ -269,6 +273,7 @@ type Type
     | Tint Int
     | Tfloat Float
     | Tstring String
+    | Tbytes Bytes.Bytes
 
 
 metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
@@ -411,7 +416,22 @@ runTypeChecksHelp stackEnd atoms state =
 
 processAtom : EltState -> Atom -> EltOut
 processAtom state atom =
+    let
+        bad s =
+            Err { state = state, message = s }
+    in
     case atom of
+        Serialize ->
+            case state.stack of
+                [] ->
+                    bad "empty stack"
+
+                (Tstring s) :: tack ->
+                    Ok { state | stack = Tbytes (E.encode <| Utils.encodeSizedString s) :: tack }
+
+                other :: _ ->
+                    bad <| "can't serialize " ++ showTypeVal other
+
         Retrieve v ->
             case Dict.get v state.defs of
                 Nothing ->
@@ -862,6 +882,9 @@ showTypeVal type_ =
         Tstring s ->
             "\"" ++ showString s ++ "\""
 
+        Tbytes bs ->
+            "bytes: " ++ Hex.Convert.toString bs
+
 
 isSubType : Type -> Type -> Bool
 isSubType sub master =
@@ -939,6 +962,12 @@ isSubType sub master =
             s1 == s2
 
         ( Tstring _, _ ) ->
+            False
+
+        ( Tbytes a, Tbytes b ) ->
+            a == b
+
+        ( Tbytes _, _ ) ->
             False
 
 
@@ -1179,6 +1208,7 @@ plainP =
             [ ( "loop", Loop )
             , ( "ifElse", IfElse )
             , ( "metaLoop", MetaLoop )
+            , ( "serialize", Serialize )
 
             -- Basic WASM instructions
             , ( "i32.mul", AWasm Ii32mul )
@@ -1363,6 +1393,9 @@ showAtom atom =
 
         FloatLiteral f ->
             "float: " ++ String.fromFloat f
+
+        Serialize ->
+            "serialize"
 
 
 bareShowBlock : List (Located Atom) -> String
