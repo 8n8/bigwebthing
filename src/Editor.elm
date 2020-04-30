@@ -906,7 +906,7 @@ editCode draft =
                         Element.Input.labelAbove [] <|
                             Element.text "Module name"
                     }
-                , Element.Input.multiline [monospace]
+                , Element.Input.multiline [ monospace ]
                     { onChange = \c -> UpdatedCode draft ( moduleName, c )
                     , text = code
                     , placeholder =

@@ -44,15 +44,12 @@ type Atom
     | TypeWrap String
     | TypeUnwrap String
     | StringLiteral String
+    | IntLiteral Int
+    | FloatLiteral Float
 
 
 type WasmOut
     = Oi32mul
-    | Oi32const Int
-    | Oi64const Int
-    | Of32const Float
-    | Of64const Float
-    | Oi32store8
     | Oloop (List WasmOut) (List WasmOut)
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
     | OsetLocal String
@@ -60,58 +57,35 @@ type WasmOut
 
 
 type BasicType
-    = BallI32
-    | BallI64
-    | BallF32
-    | BallF64
-    | Bi32 Int
-    | Bi64 Int
-    | Bf32 Float
-    | Bf64 Float
+    = Bi32
+    | Bi64
+    | Bf32
+    | Bf64
 
 
 showBasic : BasicType -> String
 showBasic basicType =
     case basicType of
-        BallI32 ->
+        Bi32 ->
             "i32"
 
-        BallI64 ->
+        Bi64 ->
             "i64"
 
-        BallF32 ->
+        Bf32 ->
             "f32"
 
-        BallF64 ->
+        Bf64 ->
             "f64"
 
-        Bi32 i ->
-            "i32: " ++ String.fromInt i
 
-        Bi64 i ->
-            "i64: " ++ String.fromInt i
-
-        Bf32 f ->
-            "f32: " ++ String.fromFloat f
-
-        Bf64 f ->
-            "f64: " ++ String.fromFloat f
-
-
-type WasmIn
+type
+    WasmIn
     -- Simple
-    = Ii32store8
-    | Ii32mul
-    | Ii64extend_i32_u
-    | Ii64extend_i32_s
-      -- Const
-    | Ii32const Int
-    | Ii64const Int
-    | If32const Float
-    | If64const Float
+    = Ii32mul
 
 
-makeWasmModule : List WasmOut -> Dict.Dict String (Position, Def) -> String
+makeWasmModule : List WasmOut -> Dict.Dict String ( Position, Def ) -> String
 makeWasmModule wasms defs =
     String.concat
         [ "(module\n"
@@ -127,34 +101,36 @@ makeWasmModule wasms defs =
         ]
 
 
-declareLocals : Dict.Dict String (Position, Def) -> String
+declareLocals : Dict.Dict String ( Position, Def ) -> String
 declareLocals defs =
     String.join " " <| Utils.justs <| List.map declareLocal <| Dict.toList defs
 
 
-declareLocal : (String, (Position, Def)) -> Maybe String
-declareLocal (name, (_, def)) =
+declareLocal : ( String, ( Position, Def ) ) -> Maybe String
+declareLocal ( name, ( _, def ) ) =
     case def of
-        Mutable basic -> Just <|
-            String.concat
-                [ "(local $"
-                , name
-                , " "
-                , showBasic basic
-                , ")"
-                ]
+        Mutable basic ->
+            Just <|
+                String.concat
+                    [ "(local $"
+                    , name
+                    , " "
+                    , showBasic basic
+                    , ")"
+                    ]
 
-        Constant (Tbasic basic) -> Just <|
-            String.concat
-                [ "(local $"
-                , name
-                , " "
-                , showBasic basic
-                , ")"
-                ]
+        Constant (Tbasic basic) ->
+            Just <|
+                String.concat
+                    [ "(local $"
+                    , name
+                    , " "
+                    , showBasic basic
+                    , ")"
+                    ]
 
-        Constant _ -> Nothing
-    
+        Constant _ ->
+            Nothing
 
 
 wasmsToString : List WasmOut -> String
@@ -189,21 +165,6 @@ wasmToString wasm =
                 , "  (else " ++ wasmsToString else_ ++ ")\n"
                 , ")\n"
                 ]
-
-        Oi32const i ->
-            "i32.const " ++ String.fromInt i
-
-        Oi64const i ->
-            "i64.const " ++ String.fromInt i
-
-        Of32const f ->
-            "f32.const " ++ String.fromFloat f
-
-        Of64const f ->
-            "f64const " ++ String.fromFloat f
-
-        Oi32store8 ->
-            "i32.store8"
 
         OsetLocal name ->
             String.concat
@@ -273,7 +234,7 @@ initEltState =
 
 runTypeChecks : List (Located Atom) -> EltState -> Result String String
 runTypeChecks atoms init =
-    case runTypeChecksHelp (Just [ Tbasic BallI32 ]) atoms init of
+    case runTypeChecksHelp (Just [ Tbasic Bi32 ]) atoms init of
         Ok endState ->
             Ok <| makeWasmModule endState.wasmOut endState.defs
 
@@ -305,6 +266,9 @@ type Type
     | Tall
     | Twrapper String Type
     | Tblock (List (Located Atom))
+    | Tint Int
+    | Tfloat Float
+    | Tstring String
 
 
 metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
@@ -472,7 +436,7 @@ processAtom state atom =
                             , defUse = Set.insert v state.defUse
                         }
 
-                Just (_, Constant nonBasic) ->
+                Just ( _, Constant nonBasic ) ->
                     Ok
                         { state
                             | stack = nonBasic :: state.stack
@@ -510,9 +474,13 @@ processAtom state atom =
                                 { state
                                     | stack = tack
                                     , defs = Dict.insert newName ( state.position, Constant s ) state.defs
-                                    , wasmOut = case s of
-                                        Tbasic _ -> OsetLocal newName :: state.wasmOut
-                                        _ -> state.wasmOut
+                                    , wasmOut =
+                                        case s of
+                                            Tbasic _ ->
+                                                OsetLocal newName :: state.wasmOut
+
+                                            _ ->
+                                                state.wasmOut
                                 }
 
         Runblock ->
@@ -534,7 +502,7 @@ processAtom state atom =
                 [ _ ] ->
                     Err { state = state, message = "only one thing on stack" }
 
-                Tbasic (Bi64 i) :: (Tblock block) :: tack ->
+                (Tint i) :: (Tblock block) :: tack ->
                     List.foldr (metaLoopHelp block) (Ok { state | stack = tack }) (List.range 1 i)
 
                 other ->
@@ -554,43 +522,46 @@ processAtom state atom =
             ifElseTypeHelp state
 
         DefMut name ->
-            case (Dict.get name state.defs, state.stack) of
-                (_, []) ->
+            case ( Dict.get name state.defs, state.stack ) of
+                ( _, [] ) ->
                     Err { state = state, message = "empty stack" }
 
-                (Nothing, s :: tack) ->
+                ( Nothing, s :: tack ) ->
                     case s of
-
                         Tbasic basic ->
-                            Ok { state | stack = tack
-                               , wasmOut = OsetLocal name :: state.wasmOut
-                               , defs = Dict.insert name (state.position, Mutable basic) state.defs
-                               }
+                            Ok
+                                { state
+                                    | stack = tack
+                                    , wasmOut = OsetLocal name :: state.wasmOut
+                                    , defs = Dict.insert name ( state.position, Mutable basic ) state.defs
+                                }
 
                         _ ->
-                            Err { state = state
+                            Err
+                                { state = state
                                 , message = "expected basic numeric type, but got " ++ showTypeVal s
                                 }
 
-                (Just (position, Mutable oldValue), s :: tack) ->
+                ( Just ( position, Mutable oldValue ), s :: tack ) ->
                     case s of
                         Tbasic basic ->
                             if oldValue == basic then
-                                Ok { state
-                                       | stack = tack
-                                       , wasmOut = OsetLocal name :: state.wasmOut
-                                   }
+                                Ok
+                                    { state
+                                        | stack = tack
+                                        , wasmOut = OsetLocal name :: state.wasmOut
+                                    }
 
                             else
                                 Err { state = state, message = "variable \"" ++ name ++ "\" was previously defined at position " ++ prettyLocation position ++ " with type " ++ showBasic oldValue ++ " but type of new value is " ++ showBasic basic }
 
                         _ ->
-                            Err { state = state
+                            Err
+                                { state = state
                                 , message = "expected basic numeric type, but got " ++ showTypeVal s
                                 }
 
-
-                (Just (_, Constant _), _) ->
+                ( Just ( _, Constant _ ), _ ) ->
                     Err { state = state, message = "Can't change value of constant." }
 
         AWasm Ii32mul ->
@@ -602,78 +573,19 @@ processAtom state atom =
                     Err { state = state, message = "only one thing in stack" }
 
                 i1 :: i2 :: tack ->
-                    case ( isSubType i1 (Tbasic BallI32), isSubType i2 (Tbasic BallI32) ) of
+                    case ( isSubType i1 (Tbasic Bi32), isSubType i2 (Tbasic Bi32) ) of
                         ( False, _ ) ->
-                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal (Tbasic BallI32) ++ ", but is a " ++ showTypeVal i1 }
+                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal (Tbasic Bi32) ++ ", but is a " ++ showTypeVal i1 }
 
                         ( _, False ) ->
-                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal (Tbasic BallI32) ++ ", but is a " ++ showTypeVal i2 }
+                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal (Tbasic Bi32) ++ ", but is a " ++ showTypeVal i2 }
 
                         ( True, True ) ->
                             Ok
                                 { state
-                                    | stack = Tbasic BallI32 :: tack
+                                    | stack = Tbasic Bi32 :: tack
                                     , wasmOut = Oi32mul :: state.wasmOut
                                 }
-
-        AWasm (Ii32const i) ->
-            Ok { state | stack = Tbasic (Bi32 i) :: state.stack, wasmOut = Oi32const i :: state.wasmOut }
-
-        AWasm (Ii64const i) ->
-            Ok { state | stack = Tbasic (Bi64 i) :: state.stack, wasmOut = Oi64const i :: state.wasmOut }
-
-        AWasm (If32const f) ->
-            Ok { state | stack = Tbasic (Bf32 f) :: state.stack, wasmOut = Of32const f :: state.wasmOut }
-
-        AWasm (If64const f) ->
-            Ok { state | stack = Tbasic (Bf64 f) :: state.stack, wasmOut = Of64const f :: state.wasmOut }
-
-        AWasm Ii32store8 ->
-            case state.stack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                _ :: [] ->
-                    Err { state = state, message = "only one thing on stack" }
-
-                i1 :: i2 :: tack ->
-                    case ( isSubType i1 (Tbasic BallI32), isSubType i2 (Tbasic BallI32) ) of
-                        ( False, _ ) ->
-                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal (Tbasic BallI32) ++ ", but is a " ++ showTypeVal i1 }
-
-                        ( _, False ) ->
-                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal (Tbasic BallI32) ++ ", but is a " ++ showTypeVal i2 }
-
-                        ( True, True ) ->
-                            Ok { state | stack = tack, wasmOut = Oi32store8 :: state.wasmOut }
-
-        AWasm Ii64extend_i32_u ->
-            case state.stack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                (Tbasic (Bi32 i)) :: tack ->
-                    Ok { state | stack = Tbasic (Bi64 i) :: tack }
-
-                (Tbasic BallI32) :: tack ->
-                    Ok { state | stack = Tbasic BallI64 :: tack }
-
-                other :: _ ->
-                    Err { state = state, message = "expecting an int32, but got " ++ showTypeVal other }
-
-        AWasm Ii64extend_i32_s ->
-            case state.stack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                (Tbasic (Bi32 i)) :: tack ->
-                    Ok { state | stack = Tbasic (Bi64 i) :: tack }
-
-                (Tbasic BallI32) :: tack ->
-                    Ok { state | stack = Tbasic BallI64 :: tack }
-
-                other :: _ ->
-                    Err { state = state, message = "expecting an int32, but got " ++ showTypeVal other }
 
         TypeWrap type_ ->
             case ( state.stack, Dict.get type_ state.wrapperTypes ) of
@@ -728,22 +640,13 @@ processAtom state atom =
                         }
 
         StringLiteral string ->
-            let
-                toChar c =
-                    Twrapper "char" (Tbasic <| Bi32 <| Char.toCode c)
+            Ok { state | stack = Tstring string :: state.stack }
 
-                charList =
-                    String.toList string
+        IntLiteral i ->
+            Ok { state | stack = Tint i :: state.stack }
 
-                unicode =
-                    List.map toChar charList
-
-                len =
-                    Twrapper "stringlength" <|
-                        Tbasic <| Bi32 <|
-                            List.length unicode
-            in
-            Ok { state | stack = len :: unicode ++ state.stack }
+        FloatLiteral f ->
+            Ok { state | stack = Tfloat f :: state.stack }
 
 
 loopHelp : EltState -> EltOut
@@ -761,7 +664,7 @@ loopHelp state =
                     runTypeChecksHelp (Just []) body cleanStack
 
                 breakEndResult =
-                    runTypeChecksHelp (Just [ Tbasic BallI32 ]) break cleanStack
+                    runTypeChecksHelp (Just [ Tbasic Bi32 ]) break cleanStack
             in
             case ( bodyEndResult, breakEndResult ) of
                 ( Err err, _ ) ->
@@ -810,7 +713,7 @@ ifElseTypeHelp state =
                     runTypeChecksHelp (Just []) then_ cleanStack
 
                 switchEnd =
-                    runTypeChecksHelp (Just [ Tbasic BallI32 ]) switch cleanStack
+                    runTypeChecksHelp (Just [ Tbasic Bi32 ]) switch cleanStack
             in
             case ( elseEnd, thenEnd, switchEnd ) of
                 ( Err err, _, _ ) ->
@@ -935,32 +838,29 @@ showTypeVal type_ =
         Tall ->
             "all"
 
-        Tbasic BallI32 ->
+        Tbasic Bi32 ->
             "int32"
 
-        Tbasic (Bi32 i) ->
-            "int32: " ++ String.fromInt i
-
-        Tbasic (Bi64 i) ->
-            "int64: " ++ String.fromInt i
-
-        Tbasic (Bf32 f) ->
-            "float32: " ++ String.fromFloat f
-
-        Tbasic (Bf64 f) ->
-            "float64: " ++ String.fromFloat f
-
-        Tbasic BallI64 ->
+        Tbasic Bi64 ->
             "int64"
 
-        Tbasic BallF32 ->
+        Tbasic Bf32 ->
             "float32"
 
-        Tbasic BallF64 ->
+        Tbasic Bf64 ->
             "float64"
 
         Twrapper wrapper wrapped ->
             wrapper ++ "<" ++ showTypeVal wrapped ++ ">"
+
+        Tint i ->
+            "int: " ++ String.fromInt i
+
+        Tfloat f ->
+            "float: " ++ String.fromFloat f
+
+        Tstring s ->
+            "\"" ++ showString s ++ "\""
 
 
 isSubType : Type -> Type -> Bool
@@ -973,68 +873,53 @@ isSubType sub master =
         ( Tall, _ ) ->
             False
 
-        -- Tint32
-        ( Tbasic (Bi32 _), Tbasic BallI32 ) ->
+        -- Tint
+        ( Tint _, Tbasic Bi32 ) ->
             True
 
-        ( Tbasic (Bi32 i1), Tbasic (Bi32 i2) ) ->
+        ( Tint i1, Tint i2 ) ->
             i1 == i2
 
-        ( Tbasic (Bi32 _), _ ) ->
-            False
-
-        ( Tbasic BallI32, Tbasic BallI32 ) ->
+        ( Tint _, Tbasic Bi64 ) ->
             True
 
-        ( Tbasic BallI32, _ ) ->
+        ( Tint _, _ ) ->
             False
 
-        -- Tint64
-        ( Tbasic (Bi64 _), Tbasic BallI64 ) ->
+        ( Tbasic Bi32, Tbasic Bi32 ) ->
             True
 
-        ( Tbasic (Bi64 i1), Tbasic (Bi64 i2) ) ->
-            i1 == i2
-
-        ( Tbasic (Bi64 _), _ ) ->
+        ( Tbasic Bi32, _ ) ->
             False
 
-        ( Tbasic BallI64, Tbasic BallI64 ) ->
+        ( Tbasic Bi64, Tbasic Bi64 ) ->
             True
 
-        ( Tbasic BallI64, _ ) ->
+        ( Tbasic Bi64, _ ) ->
             False
 
-        -- Tfloat32
-        ( Tbasic (Bf32 _), Tbasic BallF32 ) ->
+        ( Tfloat _, Tbasic Bf32 ) ->
             True
 
-        ( Tbasic (Bf32 f1), Tbasic (Bf32 f2) ) ->
+        ( Tfloat _, Tbasic Bf64 ) ->
+            True
+
+        ( Tfloat f1, Tfloat f2 ) ->
             f1 == f2
 
-        ( Tbasic (Bf32 _), _ ) ->
+        ( Tfloat _, _ ) ->
             False
 
-        ( Tbasic BallF32, Tbasic BallF32 ) ->
+        ( Tbasic Bf32, Tbasic Bf32 ) ->
             True
 
-        ( Tbasic BallF32, _ ) ->
+        ( Tbasic Bf32, _ ) ->
             False
 
-        -- Tfloat64
-        ( Tbasic (Bf64 _), Tbasic BallF64 ) ->
+        ( Tbasic Bf64, Tbasic Bf64 ) ->
             True
 
-        ( Tbasic (Bf64 f1), Tbasic (Bf64 f2) ) ->
-            f1 == f2
-
-        ( Tbasic (Bf64 _), _ ) ->
-            False
-
-        ( Tbasic BallF64, Tbasic BallF64 ) ->
-            True
-
-        ( Tbasic BallF64, _ ) ->
+        ( Tbasic Bf64, _ ) ->
             False
 
         ( Twrapper t1 _, Twrapper t2 _ ) ->
@@ -1050,6 +935,12 @@ isSubType sub master =
         ( Tblock _, _ ) ->
             False
 
+        ( Tstring s1, Tstring s2 ) ->
+            s1 == s2
+
+        ( Tstring _, _ ) ->
+            False
+
 
 elementP : List String -> String -> P.Parser Atom
 elementP modules moduleName =
@@ -1061,14 +952,12 @@ elementP modules moduleName =
         , retrieveP
         , defConstP
         , programBlockP moduleName modules
-        , P.backtrackable i32P
-        , i64P
-        , f64P
-        , f32P
+        , intLiteralP
+        , floatLiteralP
         , typeWrapP
         , typeUnwrapP
         , metaSwitchP modules moduleName
-        , stringPWrap
+        , stringLiteralP
         ]
 
 
@@ -1087,10 +976,9 @@ stringHelp2 ( revChunks, offset ) =
         |= P.getOffset
 
 
-stringPWrap : P.Parser Atom
-stringPWrap =
-    P.succeed StringLiteral
-        |= stringP
+stringLiteralP : P.Parser Atom
+stringLiteralP =
+    P.map StringLiteral stringP
 
 
 stringHelp : List String -> P.Parser (P.Step (List String) String)
@@ -1165,10 +1053,9 @@ metaSwitchBranchP modules moduleName =
 typeP : P.Parser Type
 typeP =
     P.oneOf
-        [ int32typeP
-        , int64typeP
-        , float32typeP
-        , float64typeP
+        [ intTypeP
+        , floatTypeP
+        , intTypeP
         , allInt32typeP
         , allInt64typeP
         , allFloat32typeP
@@ -1184,55 +1071,41 @@ allTypesP =
         |. P.keyword "allTypes"
 
 
-int32typeP : P.Parser Type
-int32typeP =
-    P.succeed (Tbasic << Bi32)
-        |. P.keyword "i32"
+intTypeP : P.Parser Type
+intTypeP =
+    P.succeed Tint
+        |. P.keyword "int"
         |= intHelpP
 
 
-int64typeP : P.Parser Type
-int64typeP =
-    P.succeed (Tbasic << Bi64)
-        |. P.keyword "i64"
-        |= intHelpP
-
-
-float32typeP : P.Parser Type
-float32typeP =
-    P.succeed (Tbasic << Bf32)
-        |. P.keyword "f32"
-        |= P.float
-
-
-float64typeP : P.Parser Type
-float64typeP =
-    P.succeed (Tbasic << Bf64)
-        |. P.keyword "f64"
+floatTypeP : P.Parser Type
+floatTypeP =
+    P.succeed Tfloat
+        |. P.keyword "float"
         |= P.float
 
 
 allInt32typeP : P.Parser Type
 allInt32typeP =
-    P.succeed (Tbasic BallI32)
+    P.succeed (Tbasic Bi32)
         |. P.keyword "i32"
 
 
 allInt64typeP : P.Parser Type
 allInt64typeP =
-    P.succeed (Tbasic BallI64)
+    P.succeed (Tbasic Bi64)
         |. P.keyword "i64"
 
 
 allFloat32typeP : P.Parser Type
 allFloat32typeP =
-    P.succeed (Tbasic BallF32)
+    P.succeed (Tbasic Bf32)
         |. P.keyword "f32"
 
 
 allFloat64typeP : P.Parser Type
 allFloat64typeP =
-    P.succeed (Tbasic BallF64)
+    P.succeed (Tbasic Bf64)
         |. P.keyword "f64"
 
 
@@ -1263,17 +1136,9 @@ typeWrapP =
         |. P.token ">"
 
 
-i64P : P.Parser Atom
-i64P =
-    P.succeed (AWasm << Ii64const)
-        |= intHelpP
-
-
-i32P : P.Parser Atom
-i32P =
-    P.succeed (AWasm << Ii32const)
-        |= intHelpP
-        |. P.keyword "i32"
+intLiteralP : P.Parser Atom
+intLiteralP =
+    P.map IntLiteral intHelpP
 
 
 intHelpP : P.Parser Int
@@ -1292,16 +1157,9 @@ intHelpP =
         ]
 
 
-f64P : P.Parser Atom
-f64P =
-    P.map (AWasm << If64const) floatP
-
-
-f32P : P.Parser Atom
-f32P =
-    P.succeed (AWasm << If32const)
-        |= floatP
-        |. P.keyword "f32"
+floatLiteralP : P.Parser Atom
+floatLiteralP =
+    P.map FloatLiteral floatP
 
 
 floatP : P.Parser Float
@@ -1324,9 +1182,6 @@ plainP =
 
             -- Basic WASM instructions
             , ( "i32.mul", AWasm Ii32mul )
-            , ( "i64.extend_i32_s", AWasm Ii64extend_i32_s )
-            , ( "i64.extend_i32_u", AWasm Ii64extend_i32_u )
-            , ( "UNSAFE_i32.store8", AWasm Ii32store8 )
             ]
 
 
@@ -1503,6 +1358,12 @@ showAtom atom =
         DefMut name ->
             "DefMut " ++ name
 
+        IntLiteral i ->
+            "int: " ++ String.fromInt i
+
+        FloatLiteral f ->
+            "float: " ++ String.fromFloat f
+
 
 bareShowBlock : List (Located Atom) -> String
 bareShowBlock block =
@@ -1524,27 +1385,6 @@ showWasm wasm =
     case wasm of
         Ii32mul ->
             "i32.mul"
-
-        Ii32const i ->
-            "i32.const " ++ String.fromInt i
-
-        Ii64const i ->
-            "i64.const " ++ String.fromInt i
-
-        If32const f ->
-            "f32.const " ++ String.fromFloat f
-
-        If64const f ->
-            "f64.const " ++ String.fromFloat f
-
-        Ii32store8 ->
-            "i32.store8"
-
-        Ii64extend_i32_u ->
-            "i64.extend_i32_u"
-
-        Ii64extend_i32_s ->
-            "i64.extend_i32_s"
 
 
 variable : P.Parser String
