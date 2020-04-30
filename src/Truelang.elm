@@ -43,6 +43,14 @@ type Atom
     | TypeWrap String
     | TypeUnwrap String
     | StringLiteral String
+    | AnameSpace Namespace (List (Located Atom))
+
+
+type alias Namespace =
+    { name : String
+    , imports : Dict.Dict String String
+    , exports : Set.Set String
+    }
 
 
 type WasmOut
@@ -259,6 +267,7 @@ initEltState =
     , isHome = True
     , wrapperTypes = Dict.empty
     , error = Nothing
+    , nameSpace = []
     }
 
 
@@ -337,6 +346,7 @@ type alias EltState =
     , isHome : Bool
     , wrapperTypes : Dict.Dict String Type
     , error : Maybe String
+    , nameSpace : List Namespace
     }
 
 
@@ -447,7 +457,7 @@ processAtom : EltState -> Atom -> EltOut
 processAtom state atom =
     case atom of
         Retrieve v ->
-            case Dict.get v state.defs of
+            case lookupName v state.nameSpace state.defs of
                 Nothing ->
                     Err
                         { state = state
@@ -487,7 +497,7 @@ processAtom state atom =
                             Ok { state | stack = Tblock path :: state.stack }
 
         MetaDefine newName ->
-            case Dict.get newName state.defs of
+            case lookupName newName state.nameSpace state.defs of
                 Just ( position, _ ) ->
                     Err { state = state, message = "\"" ++ newName ++ "\" is immutable and is already defined at " ++ prettyLocation position }
 
@@ -500,7 +510,7 @@ processAtom state atom =
                             Ok
                                 { state
                                     | stack = tack
-                                    , defs = Dict.insert newName ( state.position, Constant s ) state.defs
+                                    , defs = Dict.insert (makeName newName state.nameSpace) ( state.position, Constant s ) state.defs
                                 }
 
         Runblock ->
@@ -762,6 +772,10 @@ processAtom state atom =
                             List.length unicode
             in
             Ok { state | stack = len :: unicode ++ state.stack }
+
+        AnameSpace names atoms ->
+            runTypeChecksHelp Nothing atoms { state | nameSpace = names :: state.nameSpace }
+            
 
 
 loopHelp : EltState -> EltOut
@@ -1090,7 +1104,66 @@ elementP modules moduleName =
         , typeUnwrapP
         , metaSwitchP modules moduleName
         , stringPWrap
+        , nameSpaceP modules moduleName
         ]
+
+
+nameSpaceP : List String -> String -> P.Parser Atom
+nameSpaceP modules moduleName =
+    P.succeed AnameSpace
+        |= namespaceHeaderP
+        |. whiteSpaceP
+        |= bareBlockP moduleName modules
+
+
+namespaceHeaderP : P.Parser Namespace
+namespaceHeaderP =
+    P.succeed Namespace
+        |. P.keyword "name"
+        |. whiteSpaceP
+        |= variable
+        |. whiteSpaceP
+        |= nameImportsP
+        |. whiteSpaceP
+        |. P.keyword "->"
+        |. whiteSpaceP
+        |= nameExportsP
+
+
+nameImportsP : P.Parser (Dict.Dict String String)
+nameImportsP =
+    P.map Dict.fromList <|
+    P.sequence
+        { start = "("
+        , separator = ","
+        , end = ")"
+        , spaces = whiteSpaceP
+        , item = nameImportP
+        , trailing = P.Forbidden
+        }
+
+
+nameExportsP : P.Parser (Set.Set String)
+nameExportsP =
+    P.map Set.fromList <|
+    P.sequence
+        { start = "("
+        , separator = ","
+        , end = ")"
+        , spaces = whiteSpaceP
+        , item = variable
+        , trailing = P.Forbidden
+        }
+
+
+nameImportP : P.Parser (String, String)
+nameImportP =
+    P.succeed (\a b -> (b, a))
+        |= variable
+        |. whiteSpaceP
+        |. P.keyword "as"
+        |. whiteSpaceP
+        |= variable
 
 
 setMutLocalP : P.Parser Atom
@@ -1566,6 +1639,9 @@ showAtom atom =
 
         StringLiteral s ->
             "\"" ++ showString s ++ "\""
+
+        AnameSpace names atoms ->
+            "NameSpace {" ++ bareShowBlock atoms ++ "}"
 
 
 bareShowBlock : List (Located Atom) -> String
