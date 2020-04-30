@@ -1,6 +1,7 @@
 module Truelang exposing (compile)
 
 import Bytes
+import Bytes.Decode as D
 import Bytes.Encode as E
 import Dict
 import Hex.Convert
@@ -50,6 +51,7 @@ type Atom
     | IntLiteral Int
     | FloatLiteral Float
     | Serialize
+    | Store
 
 
 type WasmOut
@@ -58,6 +60,8 @@ type WasmOut
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
     | OsetLocal String
     | OgetLocal String
+    | Oi32const Int
+    | Oi32Store8
 
 
 type BasicType
@@ -98,7 +102,7 @@ makeWasmModule wasms defs =
         , "    "
         , declareLocals defs
         , "\n"
-        , wasmsToString wasms ++ "\n"
+        , wasmsToString (List.reverse wasms) ++ "\n"
         , "  )\n"
         , "  (export \"main\" (func $main))\n"
         , ")\n"
@@ -183,6 +187,12 @@ wasmToString wasm =
                 , name
                 , ")\n"
                 ]
+
+        Oi32const i ->
+            "(i32.const " ++ String.fromInt i ++ ")\n"
+
+        Oi32Store8 ->
+            "i32.store8\n"
 
 
 secondStage : List (Located Atom) -> Result String String
@@ -667,6 +677,62 @@ processAtom state atom =
 
         FloatLiteral f ->
             Ok { state | stack = Tfloat f :: state.stack }
+
+        Store ->
+            case state.stack of
+                [] ->
+                    bad "empty stack"
+
+                [ _ ] ->
+                    bad "only one thing on stack"
+
+                (Tbytes bs) :: (Tint offset) :: ack ->
+                    case decodeBytes bs of
+                        Nothing ->
+                            bad "could not decode bytes"
+
+                        Just asInts ->
+                            let
+                                ( asWasms, newOffset ) =
+                                    makeStoreWasms offset asInts
+                            in
+                            Ok { state | stack = Tint newOffset :: ack, wasmOut = List.reverse asWasms ++ state.wasmOut }
+
+                other ->
+                    bad <| "expecting some bytes and an offset, but got: " ++ showTypeStack other
+
+
+makeStoreWasms : Int -> List Int -> ( List WasmOut, Int )
+makeStoreWasms offset bytes =
+    List.foldr makeStoreWasmHelp ( [], offset ) bytes
+
+
+makeStoreWasmHelp : Int -> ( List WasmOut, Int ) -> ( List WasmOut, Int )
+makeStoreWasmHelp byte ( wasms, offset ) =
+    ( [ Oi32const offset
+      , Oi32const byte
+      , Oi32Store8
+      ]
+    , offset + 1
+    )
+
+
+decodeBytes : Bytes.Bytes -> Maybe (List Int)
+decodeBytes bs =
+    let
+        width =
+            Bytes.width bs
+    in
+    D.decode (D.loop ( [], 0 ) (decodeBytesHelp width)) bs
+
+
+decodeBytesHelp : Int -> ( List Int, Int ) -> D.Decoder (D.Step ( List Int, Int ) (List Int))
+decodeBytesHelp width ( accum, position ) =
+    if width == position then
+        D.succeed <| D.Done <| List.reverse accum
+
+    else
+        D.map (\b -> D.Loop ( b :: accum, position + 1 )) D.unsignedInt8
 
 
 loopHelp : EltState -> EltOut
@@ -1209,6 +1275,7 @@ plainP =
             , ( "ifElse", IfElse )
             , ( "metaLoop", MetaLoop )
             , ( "serialize", Serialize )
+            , ( "store", Store )
 
             -- Basic WASM instructions
             , ( "i32.mul", AWasm Ii32mul )
@@ -1396,6 +1463,9 @@ showAtom atom =
 
         Serialize ->
             "serialize"
+
+        Store ->
+            "store"
 
 
 bareShowBlock : List (Located Atom) -> String
