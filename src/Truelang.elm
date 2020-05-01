@@ -62,6 +62,7 @@ type WasmOut
     | OgetLocal String
     | Oi32const Int
     | Oi32Store8
+    | Oi32add
 
 
 type BasicType
@@ -99,10 +100,11 @@ makeWasmModule wasms defs =
         [ "(module\n"
         , "  (import \"env\" \"memory\" (memory 1))\n"
         , "  (func $main (result i32)\n"
+        , "    (local $local_offset i32)\n"
         , "    "
         , declareLocals defs
         , "\n"
-        , wasmsToString (List.reverse wasms) ++ "\n"
+        , wasmsToString wasms ++ "\n"
         , "  )\n"
         , "  (export \"main\" (func $main))\n"
         , ")\n"
@@ -193,6 +195,9 @@ wasmToString wasm =
 
         Oi32Store8 ->
             "i32.store8\n"
+
+        Oi32add ->
+            "i32.add\n"
 
 
 secondStage : List (Located Atom) -> Result String String
@@ -437,6 +442,10 @@ processAtom state atom =
                     bad "empty stack"
 
                 (Tstring s) :: tack ->
+                  let
+                    bs = E.encode <| Utils.encodeSizedString s
+                    _ = Debug.log "bs" <| Hex.Convert.toString bs
+                  in
                     Ok { state | stack = Tbytes (E.encode <| Utils.encodeSizedString s) :: tack }
 
                 other :: _ ->
@@ -454,7 +463,7 @@ processAtom state atom =
                     Ok
                         { state
                             | stack = Tbasic retrieved :: state.stack
-                            , wasmOut = OgetLocal v :: state.wasmOut
+                            , wasmOut = state.wasmOut ++ [OgetLocal v]
                             , defUse = Set.insert v state.defUse
                         }
 
@@ -462,7 +471,7 @@ processAtom state atom =
                     Ok
                         { state
                             | stack = Tbasic retrieved :: state.stack
-                            , wasmOut = OgetLocal v :: state.wasmOut
+                            , wasmOut = state.wasmOut ++ [OgetLocal v]
                             , defUse = Set.insert v state.defUse
                         }
 
@@ -507,7 +516,7 @@ processAtom state atom =
                                     , wasmOut =
                                         case s of
                                             Tbasic _ ->
-                                                OsetLocal newName :: state.wasmOut
+                                                state.wasmOut ++ [OsetLocal newName]
 
                                             _ ->
                                                 state.wasmOut
@@ -562,7 +571,7 @@ processAtom state atom =
                             Ok
                                 { state
                                     | stack = tack
-                                    , wasmOut = OsetLocal name :: state.wasmOut
+                                    , wasmOut = state.wasmOut ++ [OsetLocal name]
                                     , defs = Dict.insert name ( state.position, Mutable basic ) state.defs
                                 }
 
@@ -579,7 +588,7 @@ processAtom state atom =
                                 Ok
                                     { state
                                         | stack = tack
-                                        , wasmOut = OsetLocal name :: state.wasmOut
+                                        , wasmOut = state.wasmOut ++ [OsetLocal name]
                                     }
 
                             else
@@ -614,7 +623,7 @@ processAtom state atom =
                             Ok
                                 { state
                                     | stack = Tbasic Bi32 :: tack
-                                    , wasmOut = Oi32mul :: state.wasmOut
+                                    , wasmOut = state.wasmOut ++ [Oi32mul]
                                 }
 
         TypeWrap type_ ->
@@ -686,35 +695,36 @@ processAtom state atom =
                 [ _ ] ->
                     bad "only one thing on stack"
 
-                (Tbytes bs) :: (Tint offset) :: ack ->
+                Tbytes bs :: Tbasic Bi32 :: ack ->
                     case decodeBytes bs of
                         Nothing ->
                             bad "could not decode bytes"
 
                         Just asInts ->
                             let
-                                ( asWasms, newOffset ) =
-                                    makeStoreWasms offset asInts
+                                asWasms = makeStoreWasms asInts
                             in
-                            Ok { state | stack = Tint newOffset :: ack, wasmOut = List.reverse asWasms ++ state.wasmOut }
+                            Ok { state | stack = Tbasic Bi32 :: ack, wasmOut = state.wasmOut ++ asWasms }
 
                 other ->
                     bad <| "expecting some bytes and an offset, but got: " ++ showTypeStack other
 
 
-makeStoreWasms : Int -> List Int -> ( List WasmOut, Int )
-makeStoreWasms offset bytes =
-    List.foldr makeStoreWasmHelp ( [], offset ) bytes
+makeStoreWasms : List Int -> List WasmOut
+makeStoreWasms bytes =
+    List.foldr makeStoreWasmHelp [] bytes
 
 
-makeStoreWasmHelp : Int -> ( List WasmOut, Int ) -> ( List WasmOut, Int )
-makeStoreWasmHelp byte ( wasms, offset ) =
-    ( [ Oi32const offset
-      , Oi32const byte
-      , Oi32Store8
-      ]
-    , offset + 1
-    )
+makeStoreWasmHelp : Int -> List WasmOut -> List WasmOut
+makeStoreWasmHelp byte wasms =
+    [ OsetLocal "local_offset"
+    , OgetLocal "local_offset"
+    , Oi32const byte
+    , Oi32Store8
+    , OgetLocal "local_offset"
+    , Oi32const 1
+    , Oi32add
+    ] ++ wasms
 
 
 decodeBytes : Bytes.Bytes -> Maybe (List Int)
@@ -778,7 +788,7 @@ loopHelp state =
                         loopWasm =
                             Oloop bodyEnd.wasmOut breakEnd.wasmOut
                     in
-                    Ok { state | wasmOut = loopWasm :: state.wasmOut, stack = tack }
+                    Ok { state | wasmOut = state.wasmOut ++ [loopWasm], stack = tack }
 
         _ ->
             Err { message = "there's nothing to run", state = state }

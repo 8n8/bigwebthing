@@ -7,6 +7,7 @@ const nacl = require("tweetnacl");
   "use strict";
 
   function parseWat(code: string) {
+    console.log(code);
     const wasmModule = wabt.parseWat("main", code);
     const { buffer } = wasmModule.toBinary({});
     return buffer;
