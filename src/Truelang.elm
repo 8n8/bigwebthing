@@ -38,7 +38,6 @@ type Atom
     | Block (List (Located Atom))
     | MetaSwitch (List ( Type, List (Located Atom) ))
     | Runblock
-    | IfElse
     | TypeWrap String
     | TypeUnwrap String
     | StringLiteral String
@@ -338,6 +337,7 @@ type BuiltIn
     | BemptyMap
     | BmetaLoop
     | BwasmLoop
+    | BwasmIfElse
 
 
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
@@ -357,6 +357,9 @@ runBuiltIn builtIn tack state =
 
         BwasmLoop ->
             loopHelp tack state
+
+        BwasmIfElse ->
+            ifElseTypeHelp tack state
 
 
 metaLoop : List Type -> EltState -> EltOut
@@ -489,6 +492,10 @@ wasmDefs =
     [ ( Tmeta <| Tstring "loop"
       , Internal
       , ConstantMeta <| TbuiltIn BwasmLoop
+      )
+    , ( Tmeta <| Tstring "ifElse"
+      , Internal
+      , ConstantMeta <| TbuiltIn BwasmIfElse
       )
     ]
 
@@ -756,9 +763,6 @@ processAtom state atom =
                 _ ->
                     bad "not runnable"
 
-        IfElse ->
-            ifElseTypeHelp state
-
         TypeWrap type_ ->
             case ( state.stack, Dict.get type_ state.wrapperTypes ) of
                 ( [], _ ) ->
@@ -891,9 +895,9 @@ loopHelp stack state =
             Err { message = "there's nothing to run", state = state }
 
 
-ifElseTypeHelp : EltState -> EltOut
-ifElseTypeHelp state =
-    case state.stack of
+ifElseTypeHelp : List Type -> EltState -> EltOut
+ifElseTypeHelp stack state =
+    case stack of
         (Tmeta (Tblock else_)) :: (Tmeta (Tblock then_)) :: (Tmeta (Tblock switch)) :: tack ->
             let
                 cleanStack =
@@ -1049,6 +1053,9 @@ showBuiltIn builtIn =
 
         BwasmLoop ->
             "wasmLoop"
+
+        BwasmIfElse ->
+            "wasmIfElse"
 
 
 showMap : Map -> String
@@ -1389,8 +1396,7 @@ plainP : P.Parser Atom
 plainP =
     P.oneOf <|
         List.map plainHelpP <|
-            [ ( "ifElse", IfElse )
-            , ( ".", DumpTopNames )
+            [ ( ".", DumpTopNames )
             ]
 
 
@@ -1520,9 +1526,6 @@ showAtom atom =
 
         Runblock ->
             "Runblock"
-
-        IfElse ->
-            "ifelse"
 
         TypeWrap t ->
             "<" ++ t ++ ">"
