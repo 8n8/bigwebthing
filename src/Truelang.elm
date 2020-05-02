@@ -37,7 +37,6 @@ type Atom
     = Retrieve
     | Block (List (Located Atom))
     | MetaSwitch (List ( Type, List (Located Atom) ))
-    | MetaLoop
     | Runblock
     | Loop
     | IfElse
@@ -338,19 +337,39 @@ type BuiltIn
     = BdefMut
     | BdefConst
     | BemptyMap
+    | BmetaLoop
 
 
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
 runBuiltIn builtIn tack state =
-    case ( builtIn, tack ) of
-        ( BdefMut, _ ) ->
+    case builtIn of
+        BdefMut ->
             defMut tack state
 
-        ( BdefConst, _ ) ->
+        BdefConst ->
             defConst tack state
 
-        ( BemptyMap, _) ->
+        BemptyMap ->
             Ok { state | stack = Tmeta (Tmap []) :: tack }
+
+        BmetaLoop ->
+            metaLoop tack state
+
+
+metaLoop : List Type -> EltState -> EltOut
+metaLoop stack state =
+    case state.stack of
+        [] ->
+            Err { state = state, message = "empty stack" }
+
+        [ _ ] ->
+            Err { state = state, message = "only one thing on stack" }
+
+        (Tmeta (Tint i)) :: (Tmeta (Tblock block)) :: tack ->
+            List.foldr (metaLoopHelp block) (Ok { state | stack = tack }) (List.range 1 i)
+
+        other ->
+            Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
 
 
 defConst : List Type -> EltState -> EltOut
@@ -443,15 +462,32 @@ defMut stack state =
 
 builtInNames : Map
 builtInNames =
-    [ ( Tmeta (Tstring "meta"), Internal, ConstantMeta <| Tmap metaDefs )
-    , ( Tmeta (Tstring "="), Internal, ConstantMeta <| TbuiltIn BdefConst )
-    , ( Tmeta (Tstring "~="), Internal, ConstantMeta <| TbuiltIn BdefMut )
+    [ ( Tmeta (Tstring "meta")
+      , Internal
+      , ConstantMeta <| Tmap metaDefs
+      )
+    , ( Tmeta (Tstring "=")
+      , Internal
+      , ConstantMeta <| TbuiltIn BdefConst
+      )
+    , ( Tmeta (Tstring "~=")
+      , Internal
+      , ConstantMeta <| TbuiltIn BdefMut
+      )
     ]
 
 
 metaDefs : Map
 metaDefs =
-    []
+    [ ( Tmeta (Tstring "loop")
+      , Internal
+      , ConstantMeta <| TbuiltIn BmetaLoop
+      )
+    , ( Tmeta (Tstring "emptyMap")
+      , Internal
+      , ConstantMeta <| TbuiltIn BemptyMap
+      )
+    ]
 
 
 metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
@@ -703,20 +739,6 @@ processAtom state atom =
 
                 _ ->
                     bad "not runnable"
-
-        MetaLoop ->
-            case state.stack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                [ _ ] ->
-                    Err { state = state, message = "only one thing on stack" }
-
-                (Tmeta (Tint i)) :: (Tmeta (Tblock block)) :: tack ->
-                    List.foldr (metaLoopHelp block) (Ok { state | stack = tack }) (List.range 1 i)
-
-                other ->
-                    Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
 
         Loop ->
             loopHelp state
@@ -1008,6 +1030,9 @@ showBuiltIn builtIn =
 
         BemptyMap ->
             "empty map"
+
+        BmetaLoop ->
+            "metaLoop"
 
 
 showMap : Map -> String
@@ -1350,7 +1375,6 @@ plainP =
         List.map plainHelpP <|
             [ ( "loop", Loop )
             , ( "ifElse", IfElse )
-            , ( "metaLoop", MetaLoop )
             , ( ".", DumpTopNames )
             ]
 
@@ -1470,9 +1494,6 @@ findModule modules hash =
 showAtom : Atom -> String
 showAtom atom =
     case atom of
-        MetaLoop ->
-            "MetaLoop"
-
         Retrieve ->
             ":"
 
