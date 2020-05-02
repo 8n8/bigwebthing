@@ -1,0 +1,99 @@
+/* So the string is sitting on the stack like this:
+
+[ number of characters (int64)
+, int64: unicode code point
+, ...
+]
+
+So my serialization code would be something like this:
+*/
+
+0 FRONT_OF_MEMORY ~=
+
+{
+    0 remainingCharacters ==
+} <breakLoop>
+{
+    remainingCharacters ~=
+    FRONT_OF_MEMORY lenPosition =
+    4 FRONT_OF_MEMORY + FRONT_OF_MEMORY ~=
+    0 byteCount ~=
+    
+    topchar ~=
+    
+    { 
+        0x7F topchar <=
+    } <if>
+    {
+        FRONT_OF_MEMORY topchar store8
+        byteCount +=1
+        FRONT_OF_MEMORY +=1
+    } <then>
+    {
+        {
+            0x07FF topchar <=
+        } <if>
+        {
+            // top byte
+            0b11111_000000 topchar AND 6 shiftRight biggestByte =
+            FRONT_OF_MEMORY biggestByte 0b11011111 AND store8
+            FRONT_OF_MEMORY +=1
+            byteCount +=1
+    
+            // second byte
+            0b00000_111111 topchar AND secondByte =
+            FRONT_OF_MEMORY secondByte 0b10111111 AND store8
+            FRONT_OF_MEMORY +=1
+            byteCount +=1
+        } <then>
+        {
+            {
+                0xFFFF topchar <=
+            } <if>
+            {
+                // top byte
+                0b1111_000000_000000 topchar AND 12 shiftRight biggestByte =
+                FRONT_OF_MEMORY biggestByte 0b11101111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+    
+                // second byte
+                0b0000_111111_000000 topchar AND 6 shiftRight secondByte =
+                FRONT_OF_MEMORY secondByte 0b10111111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+    
+                // third byte
+                0b0000_000000_111111 topchar AND thirdByte =
+                FRONT_OF_MEMORY thirdByte 0b10111111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+            } <then>
+            {
+                // top byte
+                0b111_000000_000000_000000 topchar AND 18 shiftRight biggestByte =
+                FRONT_OF_MEMORY biggestByte 0b1110111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+    
+                // second byte
+                0b000_111111_000000_000000 topchar AND 12 shiftRight secondByte =
+                FRONT_OF_MEMORY secondByte 0b10111111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+    
+                // third byte
+                0b000_000000_111111_000000 topchar AND 6 shiftRight thirdByte =
+                FRONT_OF_MEMORY thirdByte 0b10111111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+    
+                // fourth byte
+                0b000_000000_000000_111111 topchar AND 6 shiftRight fourthByte =
+                FRONT_OF_MEMORY fourthByte 0b10111111 AND store8
+                FRONT_OF_MEMORY +=1
+                byteCount +=1
+            } <else> ifelse
+        } <else> ifelse
+    } <else> ifelse
+} <loopbody> loop
