@@ -39,7 +39,6 @@ type Atom
     | MetaSwitch (List ( Type, List (Located Atom) ))
     | MetaLoop
     | Runblock
-    | AWasm WasmIn
     | Loop
     | IfElse
     | TypeWrap String
@@ -725,29 +724,6 @@ processAtom state atom =
         IfElse ->
             ifElseTypeHelp state
 
-        AWasm Ii32mul ->
-            case state.stack of
-                [] ->
-                    Err { state = state, message = "empty stack" }
-
-                _ :: [] ->
-                    Err { state = state, message = "only one thing in stack" }
-
-                i1 :: i2 :: tack ->
-                    case ( isSubType i1 (Tbasic Bi32), isSubType i2 (Tbasic Bi32) ) of
-                        ( False, _ ) ->
-                            Err { state = state, message = "Top item in stack should be a " ++ showTypeVal (Tbasic Bi32) ++ ", but is a " ++ showTypeVal i1 }
-
-                        ( _, False ) ->
-                            Err { state = state, message = "Second item instack should be a " ++ showTypeVal (Tbasic Bi32) ++ ", but is a " ++ showTypeVal i2 }
-
-                        ( True, True ) ->
-                            Ok
-                                { state
-                                    | stack = Tbasic Bi32 :: tack
-                                    , wasmOut = state.wasmOut ++ [ Oi32mul ]
-                                }
-
         TypeWrap type_ ->
             case ( state.stack, Dict.get type_ state.wrapperTypes ) of
                 ( [], _ ) ->
@@ -1376,9 +1352,6 @@ plainP =
             , ( "ifElse", IfElse )
             , ( "metaLoop", MetaLoop )
             , ( ".", DumpTopNames )
-
-            -- Basic WASM instructions
-            , ( "i32.mul", AWasm Ii32mul )
             ]
 
 
@@ -1511,9 +1484,6 @@ showAtom atom =
 
         Runblock ->
             "Runblock"
-
-        AWasm wasm ->
-            "WASM: " ++ showWasm wasm
 
         Loop ->
             "loop"
