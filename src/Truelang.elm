@@ -38,7 +38,6 @@ type Atom
     | Block (List (Located Atom))
     | MetaSwitch (List ( Type, List (Located Atom) ))
     | Runblock
-    | Loop
     | IfElse
     | TypeWrap String
     | TypeUnwrap String
@@ -338,6 +337,7 @@ type BuiltIn
     | BdefConst
     | BemptyMap
     | BmetaLoop
+    | BwasmLoop
 
 
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
@@ -354,6 +354,9 @@ runBuiltIn builtIn tack state =
 
         BmetaLoop ->
             metaLoop tack state
+
+        BwasmLoop ->
+            loopHelp tack state
 
 
 metaLoop : List Type -> EltState -> EltOut
@@ -466,6 +469,10 @@ builtInNames =
       , Internal
       , ConstantMeta <| Tmap metaDefs
       )
+    , ( Tmeta (Tstring "wasm")
+      , Internal
+      , ConstantMeta <| Tmap wasmDefs
+      )
     , ( Tmeta (Tstring "=")
       , Internal
       , ConstantMeta <| TbuiltIn BdefConst
@@ -473,6 +480,15 @@ builtInNames =
     , ( Tmeta (Tstring "~=")
       , Internal
       , ConstantMeta <| TbuiltIn BdefMut
+      )
+    ]
+
+
+wasmDefs : Map
+wasmDefs =
+    [ ( Tmeta <| Tstring "loop"
+      , Internal
+      , ConstantMeta <| TbuiltIn BwasmLoop
       )
     ]
 
@@ -740,9 +756,6 @@ processAtom state atom =
                 _ ->
                     bad "not runnable"
 
-        Loop ->
-            loopHelp state
-
         IfElse ->
             ifElseTypeHelp state
 
@@ -829,9 +842,9 @@ decodeBytesHelp width ( accum, position ) =
         D.map (\b -> D.Loop ( b :: accum, position + 1 )) D.unsignedInt8
 
 
-loopHelp : EltState -> EltOut
-loopHelp state =
-    case state.stack of
+loopHelp : List Type -> EltState -> EltOut
+loopHelp stack state =
+    case stack of
         [] ->
             Err { state = state, message = "empty stack" }
 
@@ -1033,6 +1046,9 @@ showBuiltIn builtIn =
 
         BmetaLoop ->
             "metaLoop"
+
+        BwasmLoop ->
+            "wasmLoop"
 
 
 showMap : Map -> String
@@ -1373,8 +1389,7 @@ plainP : P.Parser Atom
 plainP =
     P.oneOf <|
         List.map plainHelpP <|
-            [ ( "loop", Loop )
-            , ( "ifElse", IfElse )
+            [ ( "ifElse", IfElse )
             , ( ".", DumpTopNames )
             ]
 
@@ -1505,9 +1520,6 @@ showAtom atom =
 
         Runblock ->
             "Runblock"
-
-        Loop ->
-            "loop"
 
         IfElse ->
             "ifelse"
