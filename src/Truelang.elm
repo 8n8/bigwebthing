@@ -286,6 +286,28 @@ type Type
     | Tint Int
     | Tfloat Float
     | Tstring String
+    | TbuiltIn BuiltIn
+    | Tmap Map
+
+
+type alias Map =
+    List ( Type, Def )
+
+
+type BuiltIn
+    = Bserialize
+
+
+builtInNames : Map
+builtInNames =
+    [ ( Tstring "meta", Constant <| Tmap meta )
+    ]
+
+
+meta : Map
+meta =
+    [ ( Tstring "serialize", Constant <| TbuiltIn Bserialize )
+    ]
 
 
 metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
@@ -919,6 +941,37 @@ showTypeVal type_ =
         Tstring s ->
             "\"" ++ showString s ++ "\""
 
+        TbuiltIn b ->
+            showBuiltIn b
+
+        Tmap m ->
+            showMap m
+
+
+showBuiltIn : BuiltIn -> String
+showBuiltIn builtIn =
+    case builtIn of
+        Bserialize ->
+            "serialize"
+
+
+showMap : Map -> String
+showMap map =
+    String.join ", " <| List.map showPair map
+
+
+showPair : ( Type, Def ) -> String
+showPair ( t1, t2 ) =
+    "(" ++ showTypeVal t1 ++ ", " ++ showDef t2 ++ ")"
+
+
+showDef : Def -> String
+showDef def =
+    case def of
+        Mutable basic -> "Mutable: " ++ showBasic basic
+        Constant t -> "Constant: " ++ showTypeVal t
+  
+
 
 isSubType : Type -> Type -> Bool
 isSubType sub master =
@@ -996,6 +1049,19 @@ isSubType sub master =
             s1 == s2
 
         ( Tstring _, _ ) ->
+            False
+
+        -- TbuiltIn
+        ( TbuiltIn a, TbuiltIn b ) ->
+            a == b
+
+        ( TbuiltIn _, _ ) ->
+            False
+
+        ( Tmap a, Tmap b ) ->
+            a == b
+
+        ( Tmap a, _ ) ->
             False
 
 
