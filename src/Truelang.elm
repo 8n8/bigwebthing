@@ -50,8 +50,6 @@ type Atom
     | StringLiteral String
     | IntLiteral Int
     | FloatLiteral Float
-    | Serialize
-    | Store
 
 
 type WasmOut
@@ -288,7 +286,6 @@ type Type
     | Tint Int
     | Tfloat Float
     | Tstring String
-    | Tbytes Bytes.Bytes
 
 
 metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
@@ -436,21 +433,6 @@ processAtom state atom =
             Err { state = state, message = s }
     in
     case atom of
-        Serialize ->
-            case state.stack of
-                [] ->
-                    bad "empty stack"
-
-                (Tstring s) :: tack ->
-                  let
-                    bs = E.encode <| Utils.encodeSizedString s
-                    _ = Debug.log "bs" <| Hex.Convert.toString bs
-                  in
-                    Ok { state | stack = Tbytes (E.encode <| Utils.encodeSizedString s) :: tack }
-
-                other :: _ ->
-                    bad <| "can't serialize " ++ showTypeVal other
-
         Retrieve v ->
             case Dict.get v state.defs of
                 Nothing ->
@@ -463,7 +445,7 @@ processAtom state atom =
                     Ok
                         { state
                             | stack = Tbasic retrieved :: state.stack
-                            , wasmOut = state.wasmOut ++ [OgetLocal v]
+                            , wasmOut = state.wasmOut ++ [ OgetLocal v ]
                             , defUse = Set.insert v state.defUse
                         }
 
@@ -471,7 +453,7 @@ processAtom state atom =
                     Ok
                         { state
                             | stack = Tbasic retrieved :: state.stack
-                            , wasmOut = state.wasmOut ++ [OgetLocal v]
+                            , wasmOut = state.wasmOut ++ [ OgetLocal v ]
                             , defUse = Set.insert v state.defUse
                         }
 
@@ -516,7 +498,7 @@ processAtom state atom =
                                     , wasmOut =
                                         case s of
                                             Tbasic _ ->
-                                                state.wasmOut ++ [OsetLocal newName]
+                                                state.wasmOut ++ [ OsetLocal newName ]
 
                                             _ ->
                                                 state.wasmOut
@@ -571,7 +553,7 @@ processAtom state atom =
                             Ok
                                 { state
                                     | stack = tack
-                                    , wasmOut = state.wasmOut ++ [OsetLocal name]
+                                    , wasmOut = state.wasmOut ++ [ OsetLocal name ]
                                     , defs = Dict.insert name ( state.position, Mutable basic ) state.defs
                                 }
 
@@ -588,7 +570,7 @@ processAtom state atom =
                                 Ok
                                     { state
                                         | stack = tack
-                                        , wasmOut = state.wasmOut ++ [OsetLocal name]
+                                        , wasmOut = state.wasmOut ++ [ OsetLocal name ]
                                     }
 
                             else
@@ -623,7 +605,7 @@ processAtom state atom =
                             Ok
                                 { state
                                     | stack = Tbasic Bi32 :: tack
-                                    , wasmOut = state.wasmOut ++ [Oi32mul]
+                                    , wasmOut = state.wasmOut ++ [ Oi32mul ]
                                 }
 
         TypeWrap type_ ->
@@ -687,28 +669,6 @@ processAtom state atom =
         FloatLiteral f ->
             Ok { state | stack = Tfloat f :: state.stack }
 
-        Store ->
-            case state.stack of
-                [] ->
-                    bad "empty stack"
-
-                [ _ ] ->
-                    bad "only one thing on stack"
-
-                Tbytes bs :: Tbasic Bi32 :: ack ->
-                    case decodeBytes bs of
-                        Nothing ->
-                            bad "could not decode bytes"
-
-                        Just asInts ->
-                            let
-                                asWasms = makeStoreWasms asInts
-                            in
-                            Ok { state | stack = Tbasic Bi32 :: ack, wasmOut = state.wasmOut ++ asWasms }
-
-                other ->
-                    bad <| "expecting some bytes and an offset, but got: " ++ showTypeStack other
-
 
 makeStoreWasms : List Int -> List WasmOut
 makeStoreWasms bytes =
@@ -724,7 +684,8 @@ makeStoreWasmHelp byte wasms =
     , OgetLocal "local_offset"
     , Oi32const 1
     , Oi32add
-    ] ++ wasms
+    ]
+        ++ wasms
 
 
 decodeBytes : Bytes.Bytes -> Maybe (List Int)
@@ -788,7 +749,7 @@ loopHelp state =
                         loopWasm =
                             Oloop bodyEnd.wasmOut breakEnd.wasmOut
                     in
-                    Ok { state | wasmOut = state.wasmOut ++ [loopWasm], stack = tack }
+                    Ok { state | wasmOut = state.wasmOut ++ [ loopWasm ], stack = tack }
 
         _ ->
             Err { message = "there's nothing to run", state = state }
@@ -958,9 +919,6 @@ showTypeVal type_ =
         Tstring s ->
             "\"" ++ showString s ++ "\""
 
-        Tbytes bs ->
-            "bytes: " ++ Hex.Convert.toString bs
-
 
 isSubType : Type -> Type -> Bool
 isSubType sub master =
@@ -1038,12 +996,6 @@ isSubType sub master =
             s1 == s2
 
         ( Tstring _, _ ) ->
-            False
-
-        ( Tbytes a, Tbytes b ) ->
-            a == b
-
-        ( Tbytes _, _ ) ->
             False
 
 
@@ -1284,8 +1236,6 @@ plainP =
             [ ( "loop", Loop )
             , ( "ifElse", IfElse )
             , ( "metaLoop", MetaLoop )
-            , ( "serialize", Serialize )
-            , ( "store", Store )
 
             -- Basic WASM instructions
             , ( "i32.mul", AWasm Ii32mul )
@@ -1470,12 +1420,6 @@ showAtom atom =
 
         FloatLiteral f ->
             "float: " ++ String.fromFloat f
-
-        Serialize ->
-            "serialize"
-
-        Store ->
-            "store"
 
 
 bareShowBlock : List (Located Atom) -> String
