@@ -1,10 +1,6 @@
 module Truelang exposing (compile)
 
-import Bytes
-import Bytes.Decode as D
-import Bytes.Encode as E
 import Dict
-import Hex.Convert
 import Parser as P exposing ((|.), (|=))
 import Set
 import Utils
@@ -33,6 +29,146 @@ compile code =
             secondStage atoms
 
 
+defMutWasm : List Type -> EltState -> EltOut
+defMutWasm stack state =
+    let
+        bad s =
+            Err { state = state, message = s }
+    in
+    case stack of
+        [] ->
+            bad "empty stack"
+
+        [ _ ] ->
+            bad "only one thing on stack"
+
+        [ _, _ ] ->
+            bad "only two things on stack"
+
+        key :: (Tbasic basic) :: (Tmap map) :: ack ->
+            case lookup key map of
+                Nothing ->
+                    Ok
+                        { state
+                            | stack = Tmap (insert key ( UserMade state.position, Basic Mutable state.iota basic ) map) :: ack
+                            , wasmOut = state.wasmOut ++ [ OsetLocal state.iota ]
+                            , iota = state.iota + 1
+                            , wasmLocals = Dict.insert state.iota basic state.wasmLocals
+                        }
+
+                Just ( _, Basic Mutable name oldValue ) ->
+                    if basic == oldValue then
+                        Ok
+                            { state
+                                | stack = Tmap map :: ack
+                                , wasmOut = state.wasmOut ++ [ OsetLocal name ]
+                                , wasmLocals = Dict.insert state.iota basic state.wasmLocals
+                            }
+
+                    else
+                        bad <| "expecting " ++ showBasic oldValue ++ ", but got " ++ showBasic basic
+
+                Just ( _, Meta _ _ ) ->
+                    bad "expecting basic type, but the definition is meta"
+
+                Just ( _, Basic Constant _ _ ) ->
+                    bad "can't change a constant"
+
+        other ->
+            bad <| "expecting a key, a basic value and a map, but got " ++ showTypeStack other
+
+
+defMutMeta : List Type -> EltState -> EltOut
+defMutMeta stack state =
+    let
+        bad s =
+            Err { state = state, message = s }
+    in
+    case stack of
+        [] ->
+            bad "empty stack"
+
+        [ _ ] ->
+            bad "only one thing on stack"
+
+        [ _, _ ] ->
+            bad "only two things on stack"
+
+        key :: value :: (Tmap map) :: ack ->
+            Ok
+                { state
+                    | stack = Tmap (insert key ( UserMade state.position, Meta Mutable value ) map) :: ack
+                }
+
+        other ->
+            bad <| "expecting a key, a value and a map, but got " ++ showTypeStack other
+
+
+defConstMeta : List Type -> EltState -> EltOut
+defConstMeta stack state =
+    let
+        bad s =
+            Err { state = state, message = s }
+    in
+    case stack of
+        [] ->
+            bad "empty stack"
+
+        [ _ ] ->
+            bad "only one thing on stack"
+
+        [ _, _ ] ->
+            bad "only two things on stack"
+
+        key :: value :: (Tmap map) :: ack ->
+            case lookup key map of
+                Nothing ->
+                    Ok
+                        { state
+                            | stack = Tmap (insert key ( UserMade state.position, Meta Mutable value ) map) :: ack
+                        }
+
+                Just ( position, _ ) ->
+                    bad <| showTypeVal key ++ " is already defined at " ++ prettyLocation position
+
+        other ->
+            bad <| "expecting a key, a value and a map, but got " ++ showTypeStack other
+
+
+defConstWasm : List Type -> EltState -> EltOut
+defConstWasm stack state =
+    let
+        bad s =
+            Err { state = state, message = s }
+    in
+    case stack of
+        [] ->
+            bad "empty stack"
+
+        [ _ ] ->
+            bad "only one thing on stack"
+
+        [ _, _ ] ->
+            bad "only two things on stack"
+
+        key :: Tbasic basic :: (Tmap map) :: ack ->
+            case lookup key map of
+                Nothing ->
+                    Ok
+                        { state
+                            | stack = Tmap (insert key ( UserMade state.position, Basic Mutable state.iota basic ) map) :: ack
+                            , wasmOut = state.wasmOut ++ [ OsetLocal state.iota ]
+                            , iota = state.iota + 1
+                            , wasmLocals = Dict.insert state.iota basic state.wasmLocals
+                        }
+
+                Just ( position, _ ) ->
+                    bad <| showTypeVal key ++ " is already defined at " ++ prettyLocation position
+
+        other ->
+            bad <| "expecting a key, a basic value and a map, but got " ++ showTypeStack other
+
+
 type Atom
     = Retrieve
     | Block (List (Located Atom))
@@ -47,14 +183,10 @@ type Atom
 
 
 type WasmOut
-    = Oi32mul
-    | Oloop (List WasmOut) (List WasmOut)
+    = Oloop (List WasmOut) (List WasmOut)
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
     | OsetLocal Int
     | OgetLocal Int
-    | Oi32const Int
-    | Oi32Store8
-    | Oi32add
 
 
 type BasicType
@@ -80,21 +212,15 @@ showBasic basicType =
             "f64"
 
 
-type
-    WasmIn
-    -- Simple
-    = Ii32mul
-
-
-makeWasmModule : List WasmOut -> Dict.Dict String ( Position, Def ) -> String
-makeWasmModule wasms defs =
+makeWasmModule : List WasmOut -> Dict.Dict Int BasicType -> String
+makeWasmModule wasms wasmLocals =
     String.concat
         [ "(module\n"
         , "  (import \"env\" \"memory\" (memory 1))\n"
         , "  (func $main (result i32)\n"
         , "    (local $local_offset i32)\n"
         , "    "
-        , declareLocals defs
+        , declareLocals wasmLocals
         , "\n"
         , wasmsToString wasms ++ "\n"
         , "  )\n"
@@ -103,36 +229,20 @@ makeWasmModule wasms defs =
         ]
 
 
-declareLocals : Dict.Dict String ( Position, Def ) -> String
+declareLocals : Dict.Dict Int BasicType -> String
 declareLocals defs =
-    String.join " " <| Utils.justs <| List.map declareLocal <| Dict.toList defs
+    String.join " " <| List.map declareLocal <| Dict.toList defs
 
 
-declareLocal : ( String, ( Position, Def ) ) -> Maybe String
-declareLocal ( name, ( _, def ) ) =
-    case def of
-        Mutable iota basic ->
-            Just <|
-                String.concat
-                    [ "(local $"
-                    , String.fromInt iota
-                    , " "
-                    , showBasic basic
-                    , ")"
-                    ]
-
-        ConstantBasic iota basic ->
-            Just <|
-                String.concat
-                    [ "(local $"
-                    , String.fromInt iota
-                    , " "
-                    , showBasic basic
-                    , ")"
-                    ]
-
-        ConstantMeta _ ->
-            Nothing
+declareLocal : (Int, BasicType) -> String
+declareLocal (iota, basic) =
+    String.concat
+        [ "(local $"
+        , String.fromInt iota
+        , " "
+        , showBasic basic
+        , ")"
+        ]
 
 
 wasmsToString : List WasmOut -> String
@@ -143,9 +253,6 @@ wasmsToString wasms =
 wasmToString : WasmOut -> String
 wasmToString wasm =
     case wasm of
-        Oi32mul ->
-            "i32.mul"
-
         Oloop break body ->
             String.concat
                 [ "(block\n"
@@ -181,15 +288,6 @@ wasmToString wasm =
                 , String.fromInt name
                 , ")\n"
                 ]
-
-        Oi32const i ->
-            "(i32.const " ++ String.fromInt i ++ ")\n"
-
-        Oi32Store8 ->
-            "i32.store8\n"
-
-        Oi32add ->
-            "i32.add\n"
 
 
 secondStage : List (Located Atom) -> Result String String
@@ -233,7 +331,7 @@ parseHelpP moduleName modules p =
 initEltState : EltState
 initEltState =
     { position = { start = ( 0, 0 ), end = ( 0, 0 ), file = "" }
-    , defs = Dict.empty
+    , wasmLocals = Dict.empty
     , stack = []
     , wasmOut = []
     , defUse = []
@@ -248,7 +346,7 @@ runTypeChecks : List (Located Atom) -> EltState -> Result String String
 runTypeChecks atoms init =
     case runTypeChecksHelp (Just [ Tbasic Bi32 ]) atoms init of
         Ok endState ->
-            Ok <| makeWasmModule endState.wasmOut endState.defs
+            Ok <| makeWasmModule endState.wasmOut endState.wasmLocals
 
         Err err ->
             Err <| prettyErrorMessage err
@@ -275,11 +373,7 @@ deadEndToString deadEnd =
 
 type Type
     = Tbasic BasicType
-    | Tmeta MetaType
-
-
-type MetaType
-    = Tall
+    | Tall
     | Twrapper String Type
     | Tblock (List (Located Atom))
     | Tint Int
@@ -287,34 +381,6 @@ type MetaType
     | Tstring String
     | TbuiltIn BuiltIn
     | Tmap Map
-
-
-showMeta : MetaType -> String
-showMeta meta =
-    case meta of
-        Tblock block ->
-            "block: " ++ showAtoms (List.map .value block)
-
-        Tall ->
-            "all"
-
-        Twrapper wrapper wrapped ->
-            wrapper ++ "<" ++ showTypeVal wrapped ++ ">"
-
-        Tint i ->
-            "int: " ++ String.fromInt i
-
-        Tfloat f ->
-            "float: " ++ String.fromFloat f
-
-        Tstring s ->
-            "\"" ++ showString s ++ "\""
-
-        TbuiltIn b ->
-            showBuiltIn b
-
-        Tmap m ->
-            showMap m
 
 
 type alias Map =
@@ -332,8 +398,10 @@ lookup key map =
 
 
 type BuiltIn
-    = BdefMut
-    | BdefConst
+    = BdefMutWasm
+    | BdefConstWasm
+    | BdefMutMeta
+    | BdefConstMeta
     | BemptyMap
     | BmetaLoop
     | BwasmLoop
@@ -343,14 +411,20 @@ type BuiltIn
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
 runBuiltIn builtIn tack state =
     case builtIn of
-        BdefMut ->
-            defMut tack state
+        BdefMutWasm ->
+            defMutWasm tack state
 
-        BdefConst ->
-            defConst tack state
+        BdefConstWasm ->
+            defConstWasm tack state
+
+        BdefMutMeta ->
+            defMutMeta tack state
+
+        BdefConstMeta ->
+            defConstMeta tack state
 
         BemptyMap ->
-            Ok { state | stack = Tmeta (Tmap []) :: tack }
+            Ok { state | stack = Tmap [] :: tack }
 
         BmetaLoop ->
             metaLoop tack state
@@ -364,151 +438,71 @@ runBuiltIn builtIn tack state =
 
 metaLoop : List Type -> EltState -> EltOut
 metaLoop stack state =
-    case state.stack of
+    case stack of
         [] ->
             Err { state = state, message = "empty stack" }
 
         [ _ ] ->
             Err { state = state, message = "only one thing on stack" }
 
-        (Tmeta (Tint i)) :: (Tmeta (Tblock block)) :: tack ->
+        (Tint i) :: (Tblock block) :: tack ->
             List.foldr (metaLoopHelp block) (Ok { state | stack = tack }) (List.range 1 i)
 
         other ->
             Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
 
 
-defConst : List Type -> EltState -> EltOut
-defConst stack state =
-    let
-        bad s =
-            Err { state = state, message = s }
-    in
-    case state.stack of
-        [] ->
-            bad "empty stack"
-
-        [ _ ] ->
-            bad "only one thing on stack"
-
-        [ _, _ ] ->
-            bad "only two things on stack"
-
-        key :: (Tbasic basic) :: (Tmeta (Tmap map)) :: ack ->
-            case lookup key map of
-                Nothing ->
-                    Ok
-                        { state
-                            | stack = Tmeta (Tmap <| insert key ( UserMade state.position, ConstantBasic state.iota basic ) map) :: ack
-                            , wasmOut = state.wasmOut ++ [ OsetLocal state.iota ]
-                            , iota = state.iota + 1
-                        }
-
-                Just ( position, _ ) ->
-                    bad <| showTypeVal key ++ " already defined at " ++ prettyLocation position
-
-        key :: (Tmeta meta) :: (Tmeta (Tmap map)) :: ack ->
-            case lookup key map of
-                Nothing ->
-                    Ok
-                        { state
-                            | stack = Tmeta (Tmap <| insert key ( UserMade state.position, ConstantMeta meta ) map) :: ack
-                        }
-
-                Just ( position, _ ) ->
-                    bad <| showTypeVal key ++ " already defined at " ++ prettyLocation position
-
-        _ ->
-            bad "bad stack"
-
-
-defMut : List Type -> EltState -> EltOut
-defMut stack state =
-    let
-        bad s =
-            Err { state = state, message = s }
-    in
-    case state.stack of
-        [] ->
-            bad "empty stack"
-
-        [ _ ] ->
-            bad "only one thing on stack"
-
-        [ _, _ ] ->
-            bad "only two things on stack"
-
-        key :: (Tbasic basic) :: (Tmeta (Tmap map)) :: ack ->
-            case lookup key map of
-                Nothing ->
-                    Ok
-                        { state
-                            | stack = Tmeta (Tmap <| insert key ( UserMade state.position, Mutable state.iota basic ) map) :: ack
-                            , wasmOut = state.wasmOut ++ [ OsetLocal state.iota ]
-                            , iota = state.iota + 1
-                        }
-
-                Just ( _, Mutable name oldValue ) ->
-                    if basic == oldValue then
-                        Ok
-                            { state
-                                | stack = Tmeta (Tmap map) :: ack
-                                , wasmOut = state.wasmOut ++ [ OsetLocal name ]
-                            }
-
-                    else
-                        bad <| "expecting " ++ showBasic oldValue ++ ", but got " ++ showBasic basic
-
-                Just ( _, _ ) ->
-                    bad <| showTypeVal key ++ " is a constant"
-
-        _ ->
-            bad "bad stack"
-
-
 builtInNames : Map
 builtInNames =
-    [ ( Tmeta (Tstring "meta")
+    [ ( Tstring "meta"
       , Internal
-      , ConstantMeta <| Tmap metaDefs
+      , Meta Constant <| Tmap metaDefs
       )
-    , ( Tmeta (Tstring "wasm")
+    , ( Tstring "wasm"
       , Internal
-      , ConstantMeta <| Tmap wasmDefs
-      )
-    , ( Tmeta (Tstring "=")
-      , Internal
-      , ConstantMeta <| TbuiltIn BdefConst
-      )
-    , ( Tmeta (Tstring "~=")
-      , Internal
-      , ConstantMeta <| TbuiltIn BdefMut
+      , Meta Constant <| Tmap wasmDefs
       )
     ]
 
 
 wasmDefs : Map
 wasmDefs =
-    [ ( Tmeta <| Tstring "loop"
+    [ ( Tstring "loop"
       , Internal
-      , ConstantMeta <| TbuiltIn BwasmLoop
+      , Meta Constant <| TbuiltIn BwasmLoop
       )
-    , ( Tmeta <| Tstring "ifElse"
+    , ( Tstring "ifElse"
       , Internal
-      , ConstantMeta <| TbuiltIn BwasmIfElse
+      , Meta Constant <| TbuiltIn BwasmIfElse
+      )
+    , ( Tstring "="
+      , Internal
+      , Meta Constant <| TbuiltIn BdefConstWasm
+      )
+    , ( Tstring "=~"
+      , Internal
+      , Meta Constant <| TbuiltIn BdefMutWasm
       )
     ]
 
 
 metaDefs : Map
 metaDefs =
-    [ ( Tmeta (Tstring "loop")
+    [ ( Tstring "loop"
       , Internal
-      , ConstantMeta <| TbuiltIn BmetaLoop
+      , Meta Constant <| TbuiltIn BmetaLoop
       )
-    , ( Tmeta (Tstring "emptyMap")
+    , ( Tstring "emptyMap"
       , Internal
-      , ConstantMeta <| TbuiltIn BemptyMap
+      , Meta Constant <| TbuiltIn BemptyMap
+      )
+    , ( Tstring "="
+      , Internal
+      , Meta Constant <| TbuiltIn BdefConstMeta
+      )
+    , ( Tstring "=~"
+      , Internal
+      , Meta Constant <| TbuiltIn BdefMutMeta
       )
     ]
 
@@ -542,7 +536,7 @@ insert key ( position, def ) oldMap =
 
 
 updateKey : Type -> ( Position, Def ) -> ( Type, Position, Def ) -> Maybe ( Type, Position, Def )
-updateKey key ( position, def ) ( oldKey, oldPosition, oldDef ) =
+updateKey key ( position, def ) ( oldKey, _, _ ) =
     if key == oldKey then
         Just ( key, position, def )
 
@@ -551,15 +545,19 @@ updateKey key ( position, def ) ( oldKey, oldPosition, oldDef ) =
 
 
 type Def
-    = Mutable Int BasicType
-    | ConstantBasic Int BasicType
-    | ConstantMeta MetaType
+    = Basic Mutability Int BasicType
+    | Meta Mutability Type
+
+
+type Mutability
+    = Mutable
+    | Constant
 
 
 type alias EltState =
     { position : CodePosition
     , iota : Int
-    , defs : Dict.Dict String ( Position, Def )
+    , wasmLocals : Dict.Dict Int BasicType
     , stack : List Type
     , wasmOut : List WasmOut
     , defUse : List Type
@@ -702,31 +700,31 @@ processAtom state atom =
                 [ _ ] ->
                     bad "only one thing on stack"
 
-                key :: (Tmeta (Tmap map)) :: ack ->
+                key :: (Tmap map) :: ack ->
                     case lookup key map of
                         Nothing ->
                             bad <| showTypeVal key ++ " is not defined"
 
-                        Just ( _, Mutable runTimeName retrieved ) ->
+                        Just ( _, Basic Mutable runTimeName retrieved ) ->
                             Ok
                                 { state
-                                    | stack = Tbasic retrieved :: state.stack
+                                    | stack = Tbasic retrieved :: ack
                                     , wasmOut = state.wasmOut ++ [ OgetLocal runTimeName ]
                                     , defUse = key :: state.defUse
                                 }
 
-                        Just ( _, ConstantBasic runTimeName basic ) ->
+                        Just ( _, Basic Constant runTimeName basic ) ->
                             Ok
                                 { state
-                                    | stack = Tbasic basic :: state.stack
+                                    | stack = Tbasic basic :: ack
                                     , wasmOut = state.wasmOut ++ [ OgetLocal runTimeName ]
                                     , defUse = key :: state.defUse
                                 }
 
-                        Just ( _, ConstantMeta nonBasic ) ->
+                        Just ( _, Meta _ nonBasic ) ->
                             Ok
                                 { state
-                                    | stack = Tmeta nonBasic :: state.stack
+                                    | stack = nonBasic :: ack
                                     , defUse = key :: state.defUse
                                 }
 
@@ -734,7 +732,7 @@ processAtom state atom =
                     bad "bad stack"
 
         Block bs ->
-            Ok { state | stack = Tmeta (Tblock bs) :: state.stack }
+            Ok { state | stack = Tblock bs :: state.stack }
 
         MetaSwitch metaSwitch ->
             case state.stack of
@@ -747,17 +745,17 @@ processAtom state atom =
                             Err { state = state, message = error }
 
                         Ok path ->
-                            Ok { state | stack = Tmeta (Tblock path) :: state.stack }
+                            Ok { state | stack = Tblock path :: state.stack }
 
         Runblock ->
             case state.stack of
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                (Tmeta (Tblock block)) :: tack ->
+                (Tblock block) :: tack ->
                     runTypeChecksHelp Nothing block { state | stack = tack }
 
-                (Tmeta (TbuiltIn builtIn)) :: tack ->
+                (TbuiltIn builtIn) :: tack ->
                     runBuiltIn builtIn tack state
 
                 _ ->
@@ -772,12 +770,12 @@ processAtom state atom =
                     Ok
                         { state
                             | wrapperTypes = Dict.insert type_ contained state.wrapperTypes
-                            , stack = Tmeta (Twrapper type_ contained) :: tack
+                            , stack = Twrapper type_ contained :: tack
                         }
 
                 ( contained :: tack, Just previouslyWrapped ) ->
                     if isSubType contained previouslyWrapped then
-                        Ok { state | stack = Tmeta (Twrapper type_ contained) :: tack }
+                        Ok { state | stack = Twrapper type_ contained :: tack }
 
                     else
                         Err { state = state, message = "type \"" ++ showTypeVal contained ++ "\" is not compatible with \"" ++ type_ ++ "\"" }
@@ -787,7 +785,7 @@ processAtom state atom =
                 [] ->
                     Err { state = state, message = "empty stack" }
 
-                (Tmeta (Twrapper wrapper wrapped)) :: tack ->
+                (Twrapper wrapper wrapped) :: tack ->
                     if type_ == wrapper then
                         Ok { state | stack = wrapped :: tack }
 
@@ -816,34 +814,16 @@ processAtom state atom =
                         }
 
         StringLiteral string ->
-            Ok { state | stack = Tmeta (Tstring string) :: state.stack }
+            Ok { state | stack = Tstring string :: state.stack }
 
         IntLiteral i ->
-            Ok { state | stack = Tmeta (Tint i) :: state.stack }
+            Ok { state | stack = Tint i :: state.stack }
 
         FloatLiteral f ->
-            Ok { state | stack = Tmeta (Tfloat f) :: state.stack }
+            Ok { state | stack = Tfloat f :: state.stack }
 
         DumpTopNames ->
-            Ok { state | stack = Tmeta (Tmap builtInNames) :: state.stack }
-
-
-decodeBytes : Bytes.Bytes -> Maybe (List Int)
-decodeBytes bs =
-    let
-        width =
-            Bytes.width bs
-    in
-    D.decode (D.loop ( [], 0 ) (decodeBytesHelp width)) bs
-
-
-decodeBytesHelp : Int -> ( List Int, Int ) -> D.Decoder (D.Step ( List Int, Int ) (List Int))
-decodeBytesHelp width ( accum, position ) =
-    if width == position then
-        D.succeed <| D.Done <| List.reverse accum
-
-    else
-        D.map (\b -> D.Loop ( b :: accum, position + 1 )) D.unsignedInt8
+            Ok { state | stack = Tmap builtInNames :: state.stack }
 
 
 loopHelp : List Type -> EltState -> EltOut
@@ -852,7 +832,7 @@ loopHelp stack state =
         [] ->
             Err { state = state, message = "empty stack" }
 
-        (Tmeta (Tblock body)) :: (Tmeta (Tblock break)) :: tack ->
+        (Tblock body) :: (Tblock break) :: tack ->
             let
                 cleanStack =
                     { state | stack = [] }
@@ -898,7 +878,7 @@ loopHelp stack state =
 ifElseTypeHelp : List Type -> EltState -> EltOut
 ifElseTypeHelp stack state =
     case stack of
-        (Tmeta (Tblock else_)) :: (Tmeta (Tblock then_)) :: (Tmeta (Tblock switch)) :: tack ->
+        (Tblock else_) :: (Tblock then_) :: (Tblock switch) :: tack ->
             let
                 cleanStack =
                     { state | stack = [] }
@@ -1029,8 +1009,29 @@ type alias EltOut =
 showTypeVal : Type -> String
 showTypeVal type_ =
     case type_ of
-        Tmeta meta ->
-            showMeta meta
+        Tblock block ->
+            "block: " ++ showAtoms (List.map .value block)
+
+        Tall ->
+            "all"
+
+        Twrapper wrapper wrapped ->
+            wrapper ++ "<" ++ showTypeVal wrapped ++ ">"
+
+        Tint i ->
+            "int: " ++ String.fromInt i
+
+        Tfloat f ->
+            "float: " ++ String.fromFloat f
+
+        Tstring s ->
+            "\"" ++ showString s ++ "\""
+
+        TbuiltIn b ->
+            showBuiltIn b
+
+        Tmap m ->
+            showMap m
 
         Tbasic basic ->
             showBasic basic
@@ -1039,14 +1040,8 @@ showTypeVal type_ =
 showBuiltIn : BuiltIn -> String
 showBuiltIn builtIn =
     case builtIn of
-        BdefMut ->
-            "~="
-
-        BdefConst ->
-            "="
-
         BemptyMap ->
-            "empty map"
+            "emptyMap"
 
         BmetaLoop ->
             "metaLoop"
@@ -1056,6 +1051,18 @@ showBuiltIn builtIn =
 
         BwasmIfElse ->
             "wasmIfElse"
+
+        BdefMutWasm ->
+            "defMutWasm"
+
+        BdefConstWasm ->
+            "defConstWasm"
+
+        BdefMutMeta ->
+            "defMutMeta"
+
+        BdefConstMeta ->
+            "defConstMeta"
 
 
 showMap : Map -> String
@@ -1071,37 +1078,40 @@ showPair ( t1, _, t2 ) =
 showDef : Def -> String
 showDef def =
     case def of
-        Mutable _ basic ->
-            "Mutable: " ++ showBasic basic
+        Basic Mutable _ basic ->
+            "Basic Mutable: " ++ showBasic basic
 
-        ConstantBasic _ t ->
-            "ConstantBasic: " ++ showBasic t
+        Basic Constant _ t ->
+            "Basic Constant: " ++ showBasic t
 
-        ConstantMeta meta ->
-            "ConstantMeta: " ++ showMeta meta
+        Meta Constant meta ->
+            "Meta Constant: " ++ showTypeVal meta
+
+        Meta Mutable meta ->
+            "Meta Mutable: " ++ showTypeVal meta
 
 
 isSubType : Type -> Type -> Bool
 isSubType sub master =
     case ( sub, master ) of
         -- Tall
-        ( _, Tmeta Tall ) ->
+        ( _, Tall ) ->
             True
 
-        ( Tmeta Tall, _ ) ->
+        ( Tall, _ ) ->
             False
 
         -- Tint
-        ( Tmeta (Tint _), Tbasic Bi32 ) ->
+        ( Tint _, Tbasic Bi32 ) ->
             True
 
-        ( Tmeta (Tint i1), Tmeta (Tint i2) ) ->
+        ( Tint i1, Tint i2 ) ->
             i1 == i2
 
-        ( Tmeta (Tint _), Tbasic Bi64 ) ->
+        ( Tint _, Tbasic Bi64 ) ->
             True
 
-        ( Tmeta (Tint _), _ ) ->
+        ( Tint _, _ ) ->
             False
 
         ( Tbasic Bi32, Tbasic Bi32 ) ->
@@ -1116,16 +1126,16 @@ isSubType sub master =
         ( Tbasic Bi64, _ ) ->
             False
 
-        ( Tmeta (Tfloat _), Tbasic Bf32 ) ->
+        ( Tfloat _, Tbasic Bf32 ) ->
             True
 
-        ( Tmeta (Tfloat _), Tbasic Bf64 ) ->
+        ( Tfloat _, Tbasic Bf64 ) ->
             True
 
-        ( Tmeta (Tfloat f1), Tmeta (Tfloat f2) ) ->
+        ( Tfloat f1, Tfloat f2 ) ->
             f1 == f2
 
-        ( Tmeta (Tfloat _), _ ) ->
+        ( Tfloat _, _ ) ->
             False
 
         ( Tbasic Bf32, Tbasic Bf32 ) ->
@@ -1140,36 +1150,36 @@ isSubType sub master =
         ( Tbasic Bf64, _ ) ->
             False
 
-        ( Tmeta (Twrapper t1 _), Tmeta (Twrapper t2 _) ) ->
+        ( Twrapper t1 _, Twrapper t2 _ ) ->
             t1 == t2
 
-        ( Tmeta (Twrapper _ _), _ ) ->
+        ( Twrapper _ _, _ ) ->
             False
 
         -- Tblock
-        ( Tmeta (Tblock b1), Tmeta (Tblock b2) ) ->
+        ( Tblock b1, Tblock b2 ) ->
             b1 == b2
 
-        ( Tmeta (Tblock _), _ ) ->
+        ( Tblock _, _ ) ->
             False
 
-        ( Tmeta (Tstring s1), Tmeta (Tstring s2) ) ->
+        ( Tstring s1, Tstring s2 ) ->
             s1 == s2
 
-        ( Tmeta (Tstring _), _ ) ->
+        ( Tstring _, _ ) ->
             False
 
         -- TbuiltIn
-        ( Tmeta (TbuiltIn a), Tmeta (TbuiltIn b) ) ->
+        ( TbuiltIn a, TbuiltIn b ) ->
             a == b
 
-        ( Tmeta (TbuiltIn _), _ ) ->
+        ( TbuiltIn _, _ ) ->
             False
 
-        ( Tmeta (Tmap a), Tmeta (Tmap b) ) ->
+        ( Tmap a, Tmap b ) ->
             a == b
 
-        ( Tmeta (Tmap a), _ ) ->
+        ( Tmap _, _ ) ->
             False
 
 
@@ -1287,20 +1297,20 @@ typeP =
 
 allTypesP : P.Parser Type
 allTypesP =
-    P.succeed (Tmeta Tall)
+    P.succeed Tall
         |. P.keyword "allTypes"
 
 
 intTypeP : P.Parser Type
 intTypeP =
-    P.succeed (Tmeta << Tint)
+    P.succeed Tint
         |. P.keyword "int"
         |= intHelpP
 
 
 floatTypeP : P.Parser Type
 floatTypeP =
-    P.succeed (Tmeta << Tfloat)
+    P.succeed Tfloat
         |. P.keyword "float"
         |= P.float
 
@@ -1331,7 +1341,7 @@ allFloat64typeP =
 
 wrapperTypeP : P.Parser Type
 wrapperTypeP =
-    P.succeed (\a b -> Tmeta <| Twrapper a b)
+    P.succeed Twrapper
         |= variable
         |. P.symbol "<"
         -- The lazy wrapper is necessary to get round a
@@ -1559,13 +1569,6 @@ showPaths paths =
 showPath : ( Type, List (Located Atom) ) -> String
 showPath ( type_, block ) =
     showTypeVal type_ ++ " -> " ++ bareShowBlock block
-
-
-showWasm : WasmIn -> String
-showWasm wasm =
-    case wasm of
-        Ii32mul ->
-            "i32.mul"
 
 
 variable : P.Parser String
