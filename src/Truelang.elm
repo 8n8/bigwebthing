@@ -218,7 +218,6 @@ makeWasmModule wasms wasmLocals =
         [ "(module\n"
         , "  (import \"env\" \"memory\" (memory 1))\n"
         , "  (func $main (result i32)\n"
-        , "    (local $local_offset i32)\n"
         , "    "
         , declareLocals wasmLocals
         , "\n"
