@@ -26,7 +26,7 @@ compile code =
             Err <| "Parsing error: " ++ parsingError
 
         Ok atoms ->
-            secondStage atoms
+            runTypeChecks atoms initEltState
 
 
 defMutWasm : List Type -> EltState -> EltOut
@@ -287,11 +287,6 @@ wasmToString wasm =
                 , String.fromInt name
                 , ")\n"
                 ]
-
-
-secondStage : List (Located Atom) -> Result String String
-secondStage atoms =
-    runTypeChecks atoms initEltState
 
 
 parse : Utils.Code -> Result String (List (Located Atom))
@@ -1101,14 +1096,8 @@ isSubType sub master =
             False
 
         -- Tint
-        ( Tint _, Tbasic Bi32 ) ->
-            True
-
         ( Tint i1, Tint i2 ) ->
             i1 == i2
-
-        ( Tint _, Tbasic Bi64 ) ->
-            True
 
         ( Tint _, _ ) ->
             False
@@ -1195,6 +1184,7 @@ elementP modules moduleName =
         , typeUnwrapP
         , metaSwitchP modules moduleName
         , stringLiteralP
+        , shortStringP
         ]
 
 
@@ -1203,6 +1193,11 @@ stringHelp2 ( revChunks, offset ) =
     P.succeed (stepHelp offset)
         |= stringHelp revChunks
         |= P.getOffset
+
+
+shortStringP : P.Parser Atom
+shortStringP =
+    P.map StringLiteral variable
 
 
 stringLiteralP : P.Parser Atom
