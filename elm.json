@@ -16,7 +16,6 @@
             "elm/time": "1.0.0",
             "folkertdev/elm-sha2": "1.0.0",
             "ivadzy/bbase64": "1.1.1",
-            "jxxcarlson/hex": "4.0.0",
             "mdgriffith/elm-ui": "1.1.5"
         },
         "indirect": {

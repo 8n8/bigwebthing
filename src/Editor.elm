@@ -20,10 +20,8 @@ import Element.Input
 import File
 import File.Download as Download
 import File.Select as Select
-import Hex.Convert
 import Json.Decode as Jd
 import Json.Encode as Je
-import SHA256
 import Set
 import Task
 import Time
@@ -117,6 +115,7 @@ port getEditorInfo : () -> Cmd msg
 port retrievedEditorInfo : (Je.Value -> msg) -> Sub msg
 
 
+subscriptions : Sub Msg
 subscriptions =
     Sub.batch
         [ retrievedEditorInfo RetrievedEditorInfo
@@ -416,7 +415,7 @@ update msg model =
             in
             ( { model | opened = ODraft { draft = newDraft, module_ = module_, document = document } }, cacheDrafts newDrafts )
 
-        UpdatedDraftNotCode { draft, module_, document } ->
+        UpdatedDraftNotCode { draft, module_ } ->
             let
                 newDrafts =
                     draft :: model.drafts
@@ -431,7 +430,7 @@ update msg model =
             , cacheDrafts newDrafts
             )
 
-        UpdatedCode { draft, module_, document } ( oldName, newModuleCode ) ->
+        UpdatedCode { draft } ( oldName, newModuleCode ) ->
             let
                 addedNewModule =
                     replaceModule draft.code oldName newModuleCode
@@ -441,14 +440,6 @@ update msg model =
 
                 newDrafts =
                     newDraft :: model.drafts
-
-                newName =
-                    case oldName of
-                        "main" ->
-                            "main"
-
-                        _ ->
-                            Utils.hash oldName
 
                 newOpened =
                     { draft = newDraft
@@ -474,7 +465,7 @@ update msg model =
                     , Cmd.batch [ runWasm wasm draft.userInput, cacheDrafts newDrafts ]
                     )
 
-        MakeNewModule { draft, module_, document } ->
+        MakeNewModule { draft, document } ->
             ( { model | opened = ODraft { draft = draft, module_ = Just ( "", "" ), document = document } }, Cmd.none )
 
         OpenDraft draft remainingDrafts ->
@@ -490,7 +481,7 @@ update msg model =
                     ( { model | opened = ODraft newDraft, compilerError = Just err }, Cmd.none )
 
                 Ok wasm ->
-                    ( { model | opened = ODraft newDraft }, runWasm wasm draft.userInput )
+                    ( { model | opened = ODraft newDraft, drafts = remainingDrafts }, runWasm wasm draft.userInput )
 
         OpenMessage message remainingMessages ->
             let
@@ -505,7 +496,7 @@ update msg model =
                     ( { model | opened = OMessage { newMessage | document = Just <| Utils.SmallString <| "compiler error: " ++ err } }, Cmd.none )
 
                 Ok wasm ->
-                    ( { model | opened = OMessage newMessage }
+                    ( { model | opened = OMessage newMessage, messages = remainingMessages }
                     , runWasm wasm message.userInput
                     )
 
@@ -616,24 +607,14 @@ view model =
                 [ myUsernameIs model.myName
                 , myContactsAre <| Set.toList model.myContacts
                 , addNewContact model.addContactBox model.addContactError
-                , case model.myName of
-                    Nothing ->
-                        Element.text "Need username to display messages"
-
-                    Just myName ->
-                        viewMessages myName model.messages model.opened
+                , viewMessages model.messages model.opened
                 , makeNewDraft
-                , case model.myName of
-                    Nothing ->
-                        Element.text "Need username to display drafts"
-
-                    Just myName ->
-                        editDrafts myName model.compilerError model.opened model.drafts
+                , editDrafts model.compilerError model.opened model.drafts
                 ]
 
 
-viewMessages : Int -> List Utils.Message -> Opened -> Element.Element Msg
-viewMessages myName messages opened =
+viewMessages : List Utils.Message -> Opened -> Element.Element Msg
+viewMessages messages opened =
     case opened of
         OMessage m ->
             viewMessage m
@@ -662,6 +643,7 @@ messageChooserButton messages index message =
         }
 
 
+messageChooserLabel : Utils.Message -> Element.Element Msg
 messageChooserLabel message =
     Element.column []
         [ Element.text <| "Subject: " ++ message.subject
@@ -756,18 +738,18 @@ messageOpenModuleButton message module_ =
         }
 
 
-editDrafts : Int -> Maybe String -> Opened -> List Utils.Draft -> Element.Element Msg
-editDrafts myName compilerError maybeOpenDraft drafts =
+editDrafts : Maybe String -> Opened -> List Utils.Draft -> Element.Element Msg
+editDrafts compilerError maybeOpenDraft drafts =
     case maybeOpenDraft of
         ODraft openDraft ->
-            editDraft myName compilerError openDraft
+            editDraft compilerError openDraft
 
         _ ->
             draftChooser drafts
 
 
-editDraft : Int -> Maybe String -> OpenedDraft -> Element.Element Msg
-editDraft myName compilerError draft =
+editDraft : Maybe String -> OpenedDraft -> Element.Element Msg
+editDraft compilerError draft =
     Element.column []
         [ closeDraft draft.draft
         , toBox draft
