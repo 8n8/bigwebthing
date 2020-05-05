@@ -9,12 +9,32 @@ import Hex.Convert
 import Parser as P
 import Test exposing (..)
 import Truelang
+import Utils
 
 
 suite : Test
 suite =
-    describe "Truelang"
-        [ test "3" <| \_ ->
-            Expect.err <| Truelang.compile {main = "3", modules = []}
-        ]
+    describe "Truelang" <| List.map makeTest spec
 
+
+makeTest : (Utils.Code, Result String String) -> Test
+makeTest (input, output) =
+    test input.main <| \_ ->
+        Expect.equal (Truelang.compile input) output
+
+
+spec =
+    [ ( { main = "0", modules = []}
+      , Err <| String.dropLeft 1 """
+Bad stack at program end.
+
+Got:
+
+    int 0
+
+Expected:
+
+    i32
+"""
+      )
+    ]
