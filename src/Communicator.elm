@@ -10,8 +10,6 @@ port module Communicator exposing
 
 import Element
 import Element.Input
-import Json.Decode as Jd
-import Json.Encode as Je
 
 
 
@@ -62,6 +60,7 @@ type alias Model =
     Maybe String
 
 
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         Communicate ->
@@ -71,10 +70,12 @@ update msg model =
             ( Just error, Cmd.none )
 
 
+initModel : Model
 initModel =
     Nothing
 
 
+view : Model -> Element.Element Msg
 view model =
     case model of
         Just err ->
@@ -90,6 +91,7 @@ view model =
 port communicationError : (String -> msg) -> Sub msg
 
 
+subscriptions : Sub Msg
 subscriptions =
     communicationError Error
 
@@ -97,6 +99,7 @@ subscriptions =
 port communicate : () -> Cmd msg
 
 
+initCmd : Cmd msg
 initCmd =
     Cmd.none
 
