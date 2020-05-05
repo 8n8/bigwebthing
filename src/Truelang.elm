@@ -187,6 +187,7 @@ type WasmOut
     | OifElse (List WasmOut) (List WasmOut) (List WasmOut)
     | OsetLocal Int
     | OgetLocal Int
+    | Oi32Const Int
 
 
 type BasicType
@@ -216,14 +217,13 @@ makeWasmModule : List WasmOut -> Dict.Dict Int BasicType -> String
 makeWasmModule wasms wasmLocals =
     String.concat
         [ "(module\n"
-        , "  (import \"env\" \"memory\" (memory 1))\n"
-        , "  (func $main (result i32)\n"
-        , "    "
+        , "    (import \"env\" \"memory\" (memory 1))\n"
+        , "    (func $main (result i32)\n"
         , declareLocals wasmLocals
-        , "\n"
+        , "        "
         , wasmsToString wasms ++ "\n"
-        , "  )\n"
-        , "  (export \"main\" (func $main))\n"
+        , "    )\n"
+        , "    (export \"main\" (func $main))\n"
         , ")\n"
         ]
 
@@ -236,17 +236,17 @@ declareLocals defs =
 declareLocal : ( Int, BasicType ) -> String
 declareLocal ( iota, basic ) =
     String.concat
-        [ "(local $"
+        [ "        (local $"
         , String.fromInt iota
         , " "
         , showBasic basic
-        , ")"
+        , ")\n"
         ]
 
 
 wasmsToString : List WasmOut -> String
 wasmsToString wasms =
-    String.join " " <| List.map wasmToString wasms
+    String.join "\n        " <| List.map wasmToString wasms
 
 
 wasmToString : WasmOut -> String
@@ -262,7 +262,7 @@ wasmToString wasm =
                 , "    (br_if 1)\n"
                 , "    (br 0)\n"
                 , "  )\n"
-                , ")\n"
+                , ")"
                 ]
 
         OifElse if_ then_ else_ ->
@@ -271,22 +271,25 @@ wasmToString wasm =
                 , "(if\n"
                 , "  (then " ++ wasmsToString then_ ++ ")\n"
                 , "  (else " ++ wasmsToString else_ ++ ")\n"
-                , ")\n"
+                , ")"
                 ]
 
         OsetLocal name ->
             String.concat
                 [ "(set_local $"
                 , String.fromInt name
-                , ")\n"
+                , ")"
                 ]
 
         OgetLocal name ->
             String.concat
                 [ "(get_local $"
                 , String.fromInt name
-                , ")\n"
+                , ")"
                 ]
+
+        Oi32Const i ->
+            "(i32.const " ++ String.fromInt i ++ ")"
 
 
 parse : Utils.Code -> Result String (List (Located Atom))
@@ -400,6 +403,7 @@ type BuiltIn
     | BmetaLoop
     | BwasmLoop
     | BwasmIfElse
+    | BtoI32
 
 
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
@@ -428,6 +432,21 @@ runBuiltIn builtIn tack state =
 
         BwasmIfElse ->
             ifElseTypeHelp tack state
+
+        BtoI32 ->
+            case tack of
+                [] ->
+                    Err <| prettyErrorMessage { state = state, message = "empty stack" }
+
+                (Tint i) :: ack ->
+                    Ok
+                        { state
+                            | stack = Tbasic Bi32 :: ack
+                            , wasmOut = Oi32Const i :: state.wasmOut
+                        }
+
+                other :: ack ->
+                    Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
 
 
 metaLoop : List Type -> EltState -> EltOut
@@ -497,6 +516,10 @@ metaDefs =
     , ( Tstring "=~"
       , Internal
       , Meta Constant <| TbuiltIn BdefMutMeta
+      )
+    , ( Tstring "toI32"
+      , Internal
+      , Meta Constant <| TbuiltIn BtoI32
       )
     ]
 
@@ -1047,6 +1070,9 @@ showBuiltIn builtIn =
         BdefConstMeta ->
             "defConstMeta"
 
+        BtoI32 ->
+            "toI32"
+
 
 showMap : Map -> String
 showMap map =
@@ -1164,7 +1190,7 @@ elementP : List String -> String -> P.Parser Atom
 elementP modules moduleName =
     P.oneOf
         [ runBlockP
-        , plainP
+        , dotP
         , retrieveP
         , programBlockP moduleName modules
         , intLiteralP
@@ -1295,7 +1321,7 @@ floatTypeP : P.Parser Type
 floatTypeP =
     P.succeed Tfloat
         |. P.keyword "float"
-        |= P.float
+        |= floatHelp
 
 
 allInt32typeP : P.Parser Type
@@ -1380,7 +1406,17 @@ floatP =
     P.oneOf
         [ P.succeed negate
             |. P.symbol "-"
-            |= P.float
+            |= floatHelp
+        , floatHelp
+        ]
+
+
+floatHelp : P.Parser Float
+floatHelp =
+    P.oneOf
+        [ P.succeed 0
+            |. P.symbol "."
+            |. P.problem "floating point numbers must start with a digit, like 0.25"
         , P.float
         ]
 
@@ -1438,6 +1474,11 @@ bareBlockP moduleName modules =
 retrieveP : P.Parser Atom
 retrieveP =
     P.succeed Retrieve |. P.symbol ":"
+
+
+dotP : P.Parser Atom
+dotP =
+    P.succeed DumpTopNames |. P.token "."
 
 
 runBlockP : P.Parser Atom

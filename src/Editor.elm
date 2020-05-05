@@ -767,7 +767,7 @@ editDraft compilerError draft =
                 Element.none
 
             Just err ->
-                Element.text err
+                Element.el [ monospace ] <| Element.text err
         , editBlobs draft
         , sendDraft draft.draft
         ]

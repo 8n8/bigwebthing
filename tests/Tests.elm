@@ -16,14 +16,15 @@ suite =
     describe "Truelang" <| List.map makeTest spec
 
 
-makeTest : (Utils.Code, Result String String) -> Test
-makeTest (input, output) =
-    test input.main <| \_ ->
-        Expect.equal (Truelang.compile input) output
+makeTest : ( String, Result String String ) -> Test
+makeTest ( input, output ) =
+    test input <|
+        \_ ->
+            Expect.equal (Truelang.compile { main = input, modules = [] }) output
 
 
 spec =
-    [ ( { main = "0", modules = []}
+    [ ( "0"
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
@@ -34,6 +35,17 @@ Got:
 Expected:
 
     i32
+"""
+      )
+    , ( "0 .meta:toI32:;"
+      , Ok <| String.dropLeft 1 """
+(module
+    (import "env" "memory" (memory 1))
+    (func $main (result i32)
+        (i32.const 0)
+    )
+    (export "main" (func $main))
+)
 """
       )
     ]
