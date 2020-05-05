@@ -1088,10 +1088,10 @@ showTypeVal type_ =
             wrapper ++ "<" ++ showTypeVal wrapped ++ ">"
 
         Tint i ->
-            "int " ++ String.fromInt i
+            String.fromInt i
 
         Tfloat f ->
-            "float " ++ String.fromFloat f
+            String.fromFloat f
 
         Tstring s ->
             "\"" ++ showString s ++ "\""
@@ -1530,7 +1530,12 @@ showTypeStack typestack =
         f t =
             "    " ++ showTypeVal t ++ "\n"
     in
-    String.concat <| List.map f typestack
+    case typestack of
+        [] ->
+            "    <empty stack>\n"
+
+        _ ->
+            String.concat <| List.map f typestack
 
 
 programBlockP : String -> List String -> P.Parser Atom

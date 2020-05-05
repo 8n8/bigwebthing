@@ -16,28 +16,30 @@ suite =
     describe "Truelang" <| List.map makeTest spec
 
 
-makeTest : ( String, Result String String ) -> Test
-makeTest ( input, output ) =
-    test input <|
+makeTest : ( String, String, Result String String ) -> Test
+makeTest ( name, input, output ) =
+    test name <|
         \_ ->
             Expect.equal (Truelang.compile { main = input, modules = [] }) output
 
 
 spec =
-    [ ( "0"
+    [ ( "just one integer"
+      , "0"
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
 Got:
 
-    int 0
+    0
 
 Expected:
 
     i32
 """
       )
-    , ( "0 .meta:toI32:;"
+    , ( "very simple int32"
+      , "0 .meta:toI32:;"
       , Ok <| String.dropLeft 1 """
 (module
     (import "env" "memory" (memory 1))
@@ -48,7 +50,8 @@ Expected:
 )
 """
       )
-    , ( "0 .meta:toI64:;"
+    , ( "very simple int64"
+      , "0 .meta:toI64:;"
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
@@ -61,13 +64,28 @@ Expected:
     i32
 """
       )
-    , ( "0.0 .meta:toF32:;"
+    , ( "very simple float32"
+      , "0.0 .meta:toF32:;"
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
 Got:
 
     f32
+
+Expected:
+
+    i32
+"""
+      )
+    , ( "empty program"
+      , ""
+      , Err <| String.dropLeft 1 """
+Bad stack at program end.
+
+Got:
+
+    <empty stack>
 
 Expected:
 
