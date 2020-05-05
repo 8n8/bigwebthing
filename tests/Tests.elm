@@ -5,7 +5,6 @@ import Bytes.Encode as E
 import Dict
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
-import Hex.Convert
 import Parser as P
 import Test exposing (..)
 import Truelang

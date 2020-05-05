@@ -33,7 +33,7 @@ defMutWasm : List Type -> EltState -> EltOut
 defMutWasm stack state =
     let
         bad s =
-            Err { state = state, message = s }
+            Err <| prettyErrorMessage { state = state, message = s }
     in
     case stack of
         [] ->
@@ -82,7 +82,7 @@ defMutMeta : List Type -> EltState -> EltOut
 defMutMeta stack state =
     let
         bad s =
-            Err { state = state, message = s }
+            Err <| prettyErrorMessage { state = state, message = s }
     in
     case stack of
         [] ->
@@ -108,7 +108,7 @@ defConstMeta : List Type -> EltState -> EltOut
 defConstMeta stack state =
     let
         bad s =
-            Err { state = state, message = s }
+            Err <| prettyErrorMessage { state = state, message = s }
     in
     case stack of
         [] ->
@@ -139,7 +139,7 @@ defConstWasm : List Type -> EltState -> EltOut
 defConstWasm stack state =
     let
         bad s =
-            Err { state = state, message = s }
+            Err <| prettyErrorMessage { state = state, message = s }
     in
     case stack of
         [] ->
@@ -343,7 +343,7 @@ runTypeChecks atoms init =
             Ok <| makeWasmModule endState.wasmOut endState.wasmLocals
 
         Err err ->
-            Err <| prettyErrorMessage err
+            Err err
 
 
 deadEndsToString : List P.DeadEnd -> String
@@ -434,16 +434,16 @@ metaLoop : List Type -> EltState -> EltOut
 metaLoop stack state =
     case stack of
         [] ->
-            Err { state = state, message = "empty stack" }
+            Err <| prettyErrorMessage { state = state, message = "empty stack" }
 
         [ _ ] ->
-            Err { state = state, message = "only one thing on stack" }
+            Err <| prettyErrorMessage { state = state, message = "only one thing on stack" }
 
         (Tint i) :: (Tblock block) :: tack ->
             List.foldr (metaLoopHelp block) (Ok { state | stack = tack }) (List.range 1 i)
 
         other ->
-            Err { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
+            Err <| prettyErrorMessage { state = state, message = "expecting an int64 and a block on top of the stack, but got " ++ showTypeStack other }
 
 
 builtInNames : Map
@@ -505,7 +505,7 @@ metaLoopHelp : List (Located Atom) -> Int -> EltOut -> EltOut
 metaLoopHelp block counter stateResult =
     case stateResult of
         Err err ->
-            Err { err | message = "error in metaloop iteration " ++ String.fromInt counter ++ ": " ++ err.message }
+            Err <| "error in metaloop iteration " ++ String.fromInt counter ++ ": " ++ err
 
         Ok state ->
             runTypeChecksHelp Nothing block state
@@ -631,9 +631,10 @@ prettyPosition ( row, column ) =
 badStackEnd : List Type -> List Type -> String
 badStackEnd expected got =
     String.concat
-        [ "bad stack: got "
+        [ "Bad stack at program end.\n\n"
+        , "Got:\n\n"
         , showTypeStack got
-        , ", expected "
+        , "\nExpected:\n\n"
         , showTypeStack expected
         ]
 
@@ -662,10 +663,7 @@ runTypeChecksHelp stackEnd atoms state =
 
                 Just se ->
                     if not <| checkStackEnd state.stack se then
-                        Err
-                            { state = state
-                            , message = badStackEnd se state.stack
-                            }
+                        Err <| badStackEnd se state.stack
 
                     else
                         Ok state
@@ -683,7 +681,7 @@ processAtom : EltState -> Atom -> EltOut
 processAtom state atom =
     let
         bad s =
-            Err { state = state, message = s }
+            Err <| prettyErrorMessage { state = state, message = s }
     in
     case atom of
         Retrieve ->
@@ -731,12 +729,12 @@ processAtom state atom =
         MetaSwitch metaSwitch ->
             case state.stack of
                 [] ->
-                    Err { state = state, message = "empty stack" }
+                    Err <| prettyErrorMessage { state = state, message = "empty stack" }
 
                 s :: _ ->
                     case findPath s metaSwitch of
                         Err error ->
-                            Err { state = state, message = error }
+                            Err <| prettyErrorMessage { state = state, message = error }
 
                         Ok path ->
                             Ok { state | stack = Tblock path :: state.stack }
@@ -744,7 +742,7 @@ processAtom state atom =
         Runblock ->
             case state.stack of
                 [] ->
-                    Err { state = state, message = "empty stack" }
+                    bad "empty stack"
 
                 (Tblock block) :: tack ->
                     runTypeChecksHelp Nothing block { state | stack = tack }
@@ -758,7 +756,7 @@ processAtom state atom =
         TypeWrap type_ ->
             case ( state.stack, Dict.get type_ state.wrapperTypes ) of
                 ( [], _ ) ->
-                    Err { state = state, message = "empty stack" }
+                    bad "empty stack"
 
                 ( contained :: tack, Nothing ) ->
                     Ok
@@ -772,40 +770,34 @@ processAtom state atom =
                         Ok { state | stack = Twrapper type_ contained :: tack }
 
                     else
-                        Err { state = state, message = "type \"" ++ showTypeVal contained ++ "\" is not compatible with \"" ++ type_ ++ "\"" }
+                        bad <| "type \"" ++ showTypeVal contained ++ "\" is not compatible with \"" ++ type_ ++ "\""
 
         TypeUnwrap type_ ->
             case state.stack of
                 [] ->
-                    Err { state = state, message = "empty stack" }
+                    bad "empty stack"
 
                 (Twrapper wrapper wrapped) :: tack ->
                     if type_ == wrapper then
                         Ok { state | stack = wrapped :: tack }
 
                     else
-                        Err
-                            { state = state
-                            , message =
-                                String.concat
-                                    [ "expected \""
-                                    , type_
-                                    , "\", but got \""
-                                    , wrapper
-                                    ]
-                            }
-
-                other :: _ ->
-                    Err
-                        { state = state
-                        , message =
+                        bad <|
                             String.concat
                                 [ "expected \""
                                 , type_
-                                , "\", but got "
-                                , showTypeVal other
+                                , "\", but got \""
+                                , wrapper
                                 ]
-                        }
+
+                other :: _ ->
+                    bad <|
+                        String.concat
+                            [ "expected \""
+                            , type_
+                            , "\", but got "
+                            , showTypeVal other
+                            ]
 
         StringLiteral string ->
             Ok { state | stack = Tstring string :: state.stack }
@@ -824,7 +816,7 @@ loopHelp : List Type -> EltState -> EltOut
 loopHelp stack state =
     case stack of
         [] ->
-            Err { state = state, message = "empty stack" }
+            Err <| prettyErrorMessage { state = state, message = "empty stack" }
 
         (Tblock body) :: (Tblock break) :: tack ->
             let
@@ -839,24 +831,26 @@ loopHelp stack state =
             in
             case ( bodyEndResult, breakEndResult ) of
                 ( Err err, _ ) ->
-                    Err
-                        { message =
-                            String.concat
-                                [ "bad LOOP body: "
-                                , prettyErrorMessage err
-                                ]
-                        , state = state
-                        }
+                    Err <|
+                        prettyErrorMessage
+                            { message =
+                                String.concat
+                                    [ "bad LOOP body: "
+                                    , err
+                                    ]
+                            , state = state
+                            }
 
                 ( _, Err err ) ->
-                    Err
-                        { message =
-                            String.concat
-                                [ "bad LOOP break block: "
-                                , prettyErrorMessage err
-                                ]
-                        , state = state
-                        }
+                    Err <|
+                        prettyErrorMessage
+                            { message =
+                                String.concat
+                                    [ "bad LOOP break block: "
+                                    , err
+                                    ]
+                            , state = state
+                            }
 
                 ( Ok bodyEnd, Ok breakEnd ) ->
                     let
@@ -866,7 +860,7 @@ loopHelp stack state =
                     Ok { state | wasmOut = state.wasmOut ++ [ loopWasm ], stack = tack }
 
         _ ->
-            Err { message = "there's nothing to run", state = state }
+            Err <| prettyErrorMessage { message = "there's nothing to run", state = state }
 
 
 ifElseTypeHelp : List Type -> EltState -> EltOut
@@ -885,37 +879,31 @@ ifElseTypeHelp stack state =
 
                 switchEnd =
                     runTypeChecksHelp (Just [ Tbasic Bi32 ]) switch cleanStack
+
+                bad s =
+                    Err <| prettyErrorMessage { state = state, message = s }
             in
             case ( elseEnd, thenEnd, switchEnd ) of
                 ( Err err, _, _ ) ->
-                    Err
-                        { message =
-                            String.concat
-                                [ "bad ELSE block: "
-                                , prettyErrorMessage err
-                                ]
-                        , state = state
-                        }
+                    bad <|
+                        String.concat
+                            [ "bad ELSE block: "
+                            , err
+                            ]
 
                 ( _, Err err, _ ) ->
-                    Err
-                        { message =
-                            String.concat
-                                [ "bad IF block: "
-                                , prettyErrorMessage err
-                                ]
-                        , state = state
-                        }
+                    bad <|
+                        String.concat
+                            [ "bad IF block: "
+                            , err
+                            ]
 
                 ( _, _, Err err ) ->
-                    Err
-                        { message =
-                            String.concat
-                                [ "bad switch block in IFELSE: "
-                                , prettyErrorMessage err
-                                ]
-                        , state = state
-                        }
+                    bad <|
+                        String.concat
+                            [ "bad switch block in IFELSE: "
+                            , err
+                            ]
 
                 ( Ok elseE, Ok thenE, Ok switchE ) ->
                     let
@@ -928,15 +916,16 @@ ifElseTypeHelp stack state =
                     Ok { state | wasmOut = ifElseWasm :: state.wasmOut, stack = tack }
 
         bad ->
-            Err
-                { message =
-                    String.concat
-                        [ "bad stack: "
-                        , showTypeStack bad
-                        , ", expecting IF, ELSE, and SWITCH blocks"
-                        ]
-                , state = state
-                }
+            Err <|
+                prettyErrorMessage
+                    { message =
+                        String.concat
+                            [ "bad stack: "
+                            , showTypeStack bad
+                            , ", expecting IF, ELSE, and SWITCH blocks"
+                            ]
+                    , state = state
+                    }
 
 
 showAtoms : List Atom -> String
@@ -997,7 +986,7 @@ type alias TypeError =
 
 
 type alias EltOut =
-    Result TypeError EltState
+    Result String EltState
 
 
 showTypeVal : Type -> String
@@ -1013,10 +1002,10 @@ showTypeVal type_ =
             wrapper ++ "<" ++ showTypeVal wrapped ++ ">"
 
         Tint i ->
-            "int: " ++ String.fromInt i
+            "int " ++ String.fromInt i
 
         Tfloat f ->
-            "float: " ++ String.fromFloat f
+            "float " ++ String.fromFloat f
 
         Tstring s ->
             "\"" ++ showString s ++ "\""
@@ -1426,7 +1415,11 @@ importHelpP modules =
 
 showTypeStack : List Type -> String
 showTypeStack typestack =
-    "[" ++ (String.join ", " <| List.map showTypeVal typestack) ++ "]"
+    let
+        f t =
+            "    " ++ showTypeVal t ++ "\n"
+    in
+    String.concat <| List.map f typestack
 
 
 programBlockP : String -> List String -> P.Parser Atom
