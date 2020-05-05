@@ -1,15 +1,29 @@
-module Utils exposing (..)
+module Utils exposing
+    ( Code
+    , Document(..)
+    , Draft
+    , Message
+    , MsgOut(..)
+    , decodeDocument
+    , decodeDrafts
+    , decodeInbox
+    , encodeDraft
+    , encodeHumanMsg
+    , encodeMessage
+    , fontSize
+    , hash
+    , justs
+    , sansSerif
+    , showB64Error
+    )
 
 import Base64.Decode
-import Base64.Encode
 import Bytes
 import Bytes.Decode as D
 import Bytes.Encode as E
 import Dict
 import Element
 import Element.Font as Font
-import Json.Decode as Jd
-import Json.Encode as Je
 import SHA256
 
 
@@ -18,6 +32,7 @@ sansSerif =
     Font.family [ Font.typeface "EB Garamond" ]
 
 
+fontSize : Element.Attribute msg
 fontSize =
     Font.size 25
 
@@ -238,48 +253,6 @@ combineHelp result accum =
             Err a
 
 
-decodeReceipts : List String -> Result String (List Receipt)
-decodeReceipts raw =
-    combineResult <| List.map decodeReceipt raw
-
-
-decodeReceipt : String -> Result String Receipt
-decodeReceipt rawB64 =
-    case Base64.Decode.decode Base64.Decode.bytes rawB64 of
-        Err err ->
-            Err <|
-                "could not decode receipt base64: "
-                    ++ showB64Error err
-
-        Ok rawBytes ->
-            case D.decode receiptDecoder rawBytes of
-                Nothing ->
-                    Err "could not decode receipt bytes"
-
-                Just receipt ->
-                    Ok receipt
-
-
-type alias Receipt =
-    { recipient : Int
-    , signature : Bytes.Bytes
-    , hash : Bytes.Bytes
-    }
-
-
-receiptsDecoder : D.Decoder (List Receipt)
-receiptsDecoder =
-    list receiptDecoder
-
-
-receiptDecoder : D.Decoder Receipt
-receiptDecoder =
-    D.map3 Receipt
-        (D.unsignedInt32 Bytes.LE)
-        (D.bytes 96)
-        (D.bytes 32)
-
-
 encodeDocument : Document -> E.Encoder
 encodeDocument doc =
     let
@@ -320,52 +293,11 @@ encodeSizedString str =
         ]
 
 
-type alias Cache =
-    { newContacts : List Int
-    , programs : List Program
-    }
-
-
-encodeCache : Cache -> Bytes.Bytes
-encodeCache cache =
-    E.encode <| cacheEncoder cache
-
-
-encodeContacts : List Int -> E.Encoder
-encodeContacts contacts =
-    E.sequence <|
-        (E.unsignedInt32 Bytes.LE <| List.length contacts)
-            :: List.map (E.unsignedInt32 Bytes.LE) contacts
-
-
-encodeProgram : Program -> E.Encoder
-encodeProgram { code, versions } =
-    E.sequence
-        [ encodeSizedString code
-        , encodeList versions encodeVersion
-        ]
-
-
-encodeHumanMsgs : List HumanMsg -> E.Encoder
-encodeHumanMsgs msgs =
-    encodeList msgs encodeHumanMsg
-
-
 encodeList : List a -> (a -> E.Encoder) -> E.Encoder
 encodeList toEncode elementEncoder =
     E.sequence <|
         (E.unsignedInt32 Bytes.LE <| List.length toEncode)
             :: List.map elementEncoder toEncode
-
-
-toB64 : Bytes.Bytes -> String
-toB64 bs =
-    Base64.Encode.encode <| Base64.Encode.bytes bs
-
-
-encodePrograms : List Program -> E.Encoder
-encodePrograms programs =
-    encodeList programs encodeProgram
 
 
 encodeBytes : Bytes.Bytes -> E.Encoder
@@ -374,20 +306,6 @@ encodeBytes bytes =
         [ E.unsignedInt32 Bytes.LE <| Bytes.width bytes
         , E.bytes bytes
         ]
-
-
-cacheEncoder : Cache -> E.Encoder
-cacheEncoder { newContacts, programs } =
-    E.sequence
-        [ encodeContacts newContacts
-        , encodePrograms programs
-        ]
-
-
-type alias Program =
-    { code : String
-    , versions : List Version
-    }
 
 
 type alias Version =
@@ -419,14 +337,6 @@ justsHelp maybe accum =
             accum
 
 
-hashHumanMsg : HumanMsg -> Bytes.Bytes
-hashHumanMsg humanMsg =
-    SHA256.toBytes <|
-        SHA256.fromBytes <|
-            E.encode <|
-                encodeHumanMsg humanMsg
-
-
 type Document
     = Ordering (List Document)
     | SmallString String
@@ -436,14 +346,6 @@ type MsgOut
     = MakeMyName
     | WhitelistSomeone Int
     | SendThis HumanMsg
-
-
-hashDocument : Document -> Bytes.Bytes
-hashDocument document =
-    SHA256.toBytes <|
-        SHA256.fromBytes <|
-            E.encode <|
-                encodeDocument document
 
 
 encodeHumanMsg : HumanMsg -> E.Encoder
@@ -520,60 +422,10 @@ decodeInboxHelp rawMessages =
             Ok messages
 
 
-decodeEditorCache : String -> Result String Cache
-decodeEditorCache rawString =
-    if rawString == "There is no cache!" then
-        Ok { newContacts = [], programs = [] }
-
-    else
-        case Base64.Decode.decode Base64.Decode.bytes rawString of
-            Err err ->
-                Err <| "could not decode editor cache base64: " ++ showB64Error err
-
-            Ok rawBytes ->
-                case D.decode cacheDecoder rawBytes of
-                    Nothing ->
-                        Err "could not decode editor cache"
-
-                    Just cache ->
-                        Ok cache
-
-
-cacheDecoder : D.Decoder Cache
-cacheDecoder =
-    D.map2 Cache
-        (list (D.unsignedInt32 Bytes.LE))
-        (list decodeProgram)
-
-
-decodeProgram : D.Decoder Program
-decodeProgram =
-    D.map2 Program
-        sizedString
-        (list decodeVersion)
-
-
 sizedString : D.Decoder String
 sizedString =
     D.unsignedInt32 Bytes.LE
         |> D.andThen D.string
-
-
-decodeHumanMsg : D.Decoder HumanMsg
-decodeHumanMsg =
-    D.map (\{ to, code, version } -> { to = to, code = code, version = version }) <|
-        D.map3 HumanMsg
-            (D.unsignedInt32 Bytes.LE)
-            sizedString
-            decodeVersion
-
-
-decodeVersion : D.Decoder Version
-decodeVersion =
-    D.map3 Version
-        sizedString
-        sizedString
-        (D.unsignedInt32 Bytes.LE)
 
 
 decodeDocument : D.Decoder Document

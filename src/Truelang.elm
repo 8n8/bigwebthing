@@ -151,7 +151,7 @@ defConstWasm stack state =
         [ _, _ ] ->
             bad "only two things on stack"
 
-        key :: Tbasic basic :: (Tmap map) :: ack ->
+        key :: (Tbasic basic) :: (Tmap map) :: ack ->
             case lookup key map of
                 Nothing ->
                     Ok
@@ -233,8 +233,8 @@ declareLocals defs =
     String.join " " <| List.map declareLocal <| Dict.toList defs
 
 
-declareLocal : (Int, BasicType) -> String
-declareLocal (iota, basic) =
+declareLocal : ( Int, BasicType ) -> String
+declareLocal ( iota, basic ) =
     String.concat
         [ "(local $"
         , String.fromInt iota
