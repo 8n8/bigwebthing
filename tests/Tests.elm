@@ -48,4 +48,30 @@ Expected:
 )
 """
       )
+    , ( "0 .meta:toI64:;"
+      , Err <| String.dropLeft 1 """
+Bad stack at program end.
+
+Got:
+
+    i64
+
+Expected:
+
+    i32
+"""
+      )
+    , ( "0.0 .meta:toF32:;"
+      , Err <| String.dropLeft 1 """
+Bad stack at program end.
+
+Got:
+
+    f32
+
+Expected:
+
+    i32
+"""
+      )
     ]

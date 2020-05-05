@@ -188,6 +188,8 @@ type WasmOut
     | OsetLocal Int
     | OgetLocal Int
     | Oi32Const Int
+    | Oi64Const Int
+    | Of32Const Float
 
 
 type BasicType
@@ -290,6 +292,12 @@ wasmToString wasm =
 
         Oi32Const i ->
             "(i32.const " ++ String.fromInt i ++ ")"
+
+        Oi64Const i ->
+            "(i64.const " ++ String.fromInt i ++ ")"
+
+        Of32Const f ->
+            "(f32.const " ++ String.fromFloat f ++ ")"
 
 
 parse : Utils.Code -> Result String (List (Located Atom))
@@ -404,6 +412,8 @@ type BuiltIn
     | BwasmLoop
     | BwasmIfElse
     | BtoI32
+    | BtoI64
+    | BtoF32
 
 
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
@@ -434,19 +444,64 @@ runBuiltIn builtIn tack state =
             ifElseTypeHelp tack state
 
         BtoI32 ->
-            case tack of
-                [] ->
-                    Err <| prettyErrorMessage { state = state, message = "empty stack" }
+            toI32 tack state
 
-                (Tint i) :: ack ->
-                    Ok
-                        { state
-                            | stack = Tbasic Bi32 :: ack
-                            , wasmOut = Oi32Const i :: state.wasmOut
-                        }
+        BtoI64 ->
+            toI64 tack state
 
-                other :: ack ->
-                    Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
+        BtoF32 ->
+            toF32 tack state
+
+
+toF32 : List Type -> EltState -> EltOut
+toF32 tack state =
+    case tack of
+        [] ->
+            Err <| prettyErrorMessage { state = state, message = "empty stack" }
+
+        (Tfloat f) :: ack ->
+            Ok
+                { state
+                    | stack = Tbasic Bf32 :: ack
+                    , wasmOut = Of32Const f :: state.wasmOut
+                }
+
+        other :: ack ->
+            Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
+
+
+toI32 : List Type -> EltState -> EltOut
+toI32 tack state =
+    case tack of
+        [] ->
+            Err <| prettyErrorMessage { state = state, message = "empty stack" }
+
+        (Tint i) :: ack ->
+            Ok
+                { state
+                    | stack = Tbasic Bi32 :: ack
+                    , wasmOut = Oi32Const i :: state.wasmOut
+                }
+
+        other :: ack ->
+            Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
+
+
+toI64 : List Type -> EltState -> EltOut
+toI64 tack state =
+    case tack of
+        [] ->
+            Err <| prettyErrorMessage { state = state, message = "empty stack" }
+
+        (Tint i) :: ack ->
+            Ok
+                { state
+                    | stack = Tbasic Bi64 :: ack
+                    , wasmOut = Oi64Const i :: state.wasmOut
+                }
+
+        other :: ack ->
+            Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
 
 
 metaLoop : List Type -> EltState -> EltOut
@@ -520,6 +575,14 @@ metaDefs =
     , ( Tstring "toI32"
       , Internal
       , Meta Constant <| TbuiltIn BtoI32
+      )
+    , ( Tstring "toI64"
+      , Internal
+      , Meta Constant <| TbuiltIn BtoI64
+      )
+    , ( Tstring "toF32"
+      , Internal
+      , Meta Constant <| TbuiltIn BtoF32
       )
     ]
 
@@ -1073,6 +1136,12 @@ showBuiltIn builtIn =
         BtoI32 ->
             "toI32"
 
+        BtoI64 ->
+            "toI64"
+
+        BtoF32 ->
+            "toF32"
+
 
 showMap : Map -> String
 showMap map =
@@ -1193,7 +1262,7 @@ elementP modules moduleName =
         , dotP
         , retrieveP
         , programBlockP moduleName modules
-        , intLiteralP
+        , P.backtrackable intLiteralP
         , floatLiteralP
         , typeWrapP
         , typeUnwrapP
@@ -1417,7 +1486,13 @@ floatHelp =
         [ P.succeed 0
             |. P.symbol "."
             |. P.problem "floating point numbers must start with a digit, like 0.25"
-        , P.float
+        , P.number
+            { int = Nothing
+            , hex = Nothing
+            , octal = Nothing
+            , binary = Nothing
+            , float = Just identity
+            }
         ]
 
 
