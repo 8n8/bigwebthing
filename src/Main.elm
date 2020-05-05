@@ -1,22 +1,10 @@
 module Main exposing (main)
 
-import Base64
-import Base64.Decode
-import Base64.Encode
 import Browser
-import Bytes
-import Bytes.Decode as D
-import Bytes.Encode as E
 import Communicator
-import Dict
 import Editor
 import Element
-import Hex.Convert
 import Html
-import Http
-import Json.Decode as Jd
-import Json.Encode as Je
-import List.Nonempty as N
 
 
 type Msg
