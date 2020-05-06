@@ -478,7 +478,7 @@ update msg model =
             in
             case Truelang.compile draft.code of
                 Err err ->
-                    ( { model | opened = ODraft newDraft, compilerError = Just err }, Cmd.none )
+                    ( { model | opened = ODraft newDraft, compilerError = Just err, drafts = remainingDrafts }, Cmd.none )
 
                 Ok wasm ->
                     ( { model | opened = ODraft newDraft, drafts = remainingDrafts }, runWasm wasm draft.userInput )
@@ -493,7 +493,7 @@ update msg model =
             in
             case Truelang.compile message.code of
                 Err err ->
-                    ( { model | opened = OMessage { newMessage | document = Just <| Utils.SmallString <| "compiler error: " ++ err } }, Cmd.none )
+                    ( { model | opened = OMessage { newMessage | document = Just <| Utils.SmallString <| "compiler error: " ++ err }, messages = remainingMessages }, Cmd.none )
 
                 Ok wasm ->
                     ( { model | opened = OMessage newMessage, messages = remainingMessages }
