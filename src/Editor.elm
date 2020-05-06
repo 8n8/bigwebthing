@@ -78,7 +78,10 @@ replaceModule code oldName newCode =
             in
             case Dict.get oldName hashed of
                 Nothing ->
-                    code
+                    if oldName == "" then
+                        { code | modules = Set.toList <| Set.fromList <| newCode :: code.modules }
+                    else
+                        code
 
                 Just _ ->
                     let
@@ -432,6 +435,9 @@ update msg model =
 
         UpdatedCode { draft } ( oldName, newModuleCode ) ->
             let
+                _ = Debug.log "draft" draft
+                _ = Debug.log "oldName" oldName
+                _ = Debug.log "newModuleCode" newModuleCode
                 addedNewModule =
                     replaceModule draft.code oldName newModuleCode
 
@@ -458,11 +464,19 @@ update msg model =
             in
             case Truelang.compile addedNewModule of
                 Err err ->
-                    ( { model | opened = ODraft newOpened, compilerError = Just err }, cacheDrafts newDrafts )
+                    ( { model
+                        | opened = ODraft newOpened
+                        , compilerError = Just err
+                      }
+                    , cacheDrafts newDrafts
+                    )
 
                 Ok wasm ->
                     ( { model | opened = ODraft newOpened }
-                    , Cmd.batch [ runWasm wasm draft.userInput, cacheDrafts newDrafts ]
+                    , Cmd.batch
+                        [ runWasm wasm draft.userInput
+                        , cacheDrafts newDrafts
+                        ]
                     )
 
         MakeNewModule { draft, document } ->
