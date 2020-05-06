@@ -16,16 +16,16 @@ suite =
     describe "Truelang" <| List.map makeTest spec
 
 
-makeTest : ( String, String, Result String String ) -> Test
+makeTest : ( String, Utils.Code, Result String String ) -> Test
 makeTest ( name, input, output ) =
     test name <|
         \_ ->
-            Expect.equal (Truelang.compile { main = input, modules = [] }) output
+            Expect.equal (Truelang.compile input) output
 
 
 spec =
     [ ( "just one integer"
-      , "0"
+      , { main = "0", modules = [] }
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
@@ -39,19 +39,11 @@ Expected:
 """
       )
     , ( "very simple int32"
-      , "0 .meta:toI32:"
-      , Ok <| String.dropLeft 1 """
-(module
-    (import "env" "memory" (memory 1))
-    (func $main (result i32)
-        (i32.const 0)
-    )
-    (export "main" (func $main))
-)
-"""
+      , { main = "0 .meta:toI32:", modules = [] }
+      , simpleOk
       )
     , ( "very simple int64"
-      , "0 .meta:toI64:"
+      , { main = "0 .meta:toI64:", modules = [] }
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
@@ -65,7 +57,7 @@ Expected:
 """
       )
     , ( "very simple float32"
-      , "0.0 .meta:toF32:"
+      , { main = "0.0 .meta:toF32:", modules = [] }
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
@@ -79,8 +71,38 @@ Expected:
 """
       )
     , ( "empty program"
-      , ""
-      , Err <| String.dropLeft 1 """
+      , { main = "", modules = [] }
+      , emptyErr
+      )
+    , ( "basic import"
+      , { main = "import " ++ Utils.hash "", modules = [ "" ] }
+      , emptyErr
+      )
+    , ( "simple import"
+      , { main = "import " ++ Utils.hash libSimple, modules = [ libSimple ] }
+      , simpleOk
+      )
+    ]
+
+
+libSimple =
+    "0 .meta:toI32:"
+
+
+simpleOk =
+    Ok <| String.dropLeft 1 """
+(module
+    (import "env" "memory" (memory 1))
+    (func $main (result i32)
+        (i32.const 0)
+    )
+    (export "main" (func $main))
+)
+"""
+
+
+emptyErr =
+    Err <| String.dropLeft 1 """
 Bad stack at program end.
 
 Got:
@@ -91,5 +113,3 @@ Expected:
 
     i32
 """
-      )
-    ]
