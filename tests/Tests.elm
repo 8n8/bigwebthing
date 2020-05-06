@@ -39,7 +39,7 @@ Expected:
 """
       )
     , ( "very simple int32"
-      , "0 .meta:toI32:;"
+      , "0 .meta:toI32:"
       , Ok <| String.dropLeft 1 """
 (module
     (import "env" "memory" (memory 1))
@@ -51,7 +51,7 @@ Expected:
 """
       )
     , ( "very simple int64"
-      , "0 .meta:toI64:;"
+      , "0 .meta:toI64:"
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 
@@ -65,7 +65,7 @@ Expected:
 """
       )
     , ( "very simple float32"
-      , "0.0 .meta:toF32:;"
+      , "0.0 .meta:toF32:"
       , Err <| String.dropLeft 1 """
 Bad stack at program end.
 

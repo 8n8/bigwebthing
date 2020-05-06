@@ -466,7 +466,7 @@ toF32 tack state =
                     , wasmOut = Of32Const f :: state.wasmOut
                 }
 
-        other :: ack ->
+        other :: _ ->
             Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
 
 
@@ -483,7 +483,7 @@ toI32 tack state =
                     , wasmOut = Oi32Const i :: state.wasmOut
                 }
 
-        other :: ack ->
+        other :: _ ->
             Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
 
 
@@ -500,7 +500,7 @@ toI64 tack state =
                     , wasmOut = Oi64Const i :: state.wasmOut
                 }
 
-        other :: ack ->
+        other :: _ ->
             Err <| prettyErrorMessage { state = state, message = "expecting an integer, but got " ++ showTypeVal other }
 
 
@@ -799,6 +799,9 @@ processAtom state atom =
                                     , defUse = key :: state.defUse
                                 }
 
+                        Just ( _, Meta _ (TbuiltIn builtIn) ) ->
+                            runBuiltIn builtIn ack { state | defUse = key :: state.defUse }
+
                         Just ( _, Meta _ nonBasic ) ->
                             Ok
                                 { state
@@ -832,9 +835,6 @@ processAtom state atom =
 
                 (Tblock block) :: tack ->
                     runTypeChecksHelp Nothing block { state | stack = tack }
-
-                (TbuiltIn builtIn) :: tack ->
-                    runBuiltIn builtIn tack state
 
                 _ ->
                     bad "not runnable"
@@ -1494,19 +1494,6 @@ floatHelp =
             , float = Just identity
             }
         ]
-
-
-plainP : P.Parser Atom
-plainP =
-    P.oneOf <|
-        List.map plainHelpP <|
-            [ ( ".", DumpTopNames )
-            ]
-
-
-plainHelpP : ( String, Atom ) -> P.Parser Atom
-plainHelpP ( string, atom ) =
-    P.succeed atom |. P.keyword string
 
 
 located : String -> (String -> P.Parser a) -> P.Parser (Located a)
