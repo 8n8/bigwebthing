@@ -74,32 +74,28 @@ Expected:
       , { main = "", modules = [] }
       , emptyErr
       )
-    , ( "basic import"
-      , { main = "import " ++ Utils.hash "", modules = [ "" ] }
-      , emptyErr
-      )
     , ( "simple import"
-      , { main = "import " ++ Utils.hash libSimple, modules = [ libSimple ] }
+      , { main = "import simple " ++ Utils.hash libSimple, modules = [ libSimple ] }
       , simpleOk
       )
-    , ( "Meta bytes"
-      , { main = "Hi .meta:toUtf8:", modules = [] }
-      , Err <| String.dropLeft 1 """
-Bad stack at program end.
-
-Got:
-
-    bytes 2 0 0 0 72 105
-
-Expected:
-
-    i32
-"""
-      )
-    , ( "hi"
-      , { main = hiMain, modules = [ libString ] }
-      , hiWasm
-      )
+--     , ( "Meta bytes"
+--       , { main = "Hi .meta:toUtf8:", modules = [] }
+--       , Err <| String.dropLeft 1 """
+-- Bad stack at program end.
+-- 
+-- Got:
+-- 
+--     bytes 2 0 0 0 72 105
+-- 
+-- Expected:
+-- 
+--     i32
+-- """
+--       )
+--     , ( "hi"
+--       , { main = hiMain, modules = [ libString ] }
+--       , hiWasm
+--       )
     ]
 
 
@@ -164,8 +160,9 @@ hiWasm =
 """
 
 
-libSimple =
-    "0 .wasm:toI32:"
+libSimple = """module simple
+wasm.toI32(0)
+"""
 
 
 simpleOk =
