@@ -10,6 +10,7 @@ module Utils exposing
     , encodeDraft
     , encodeHumanMsg
     , encodeMessage
+    , encodeSizedString
     , fontSize
     , hash
     , justs

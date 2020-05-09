@@ -80,6 +80,7 @@ replaceModule code oldName newCode =
                 Nothing ->
                     if oldName == "" then
                         { code | modules = Set.toList <| Set.fromList <| newCode :: code.modules }
+
                     else
                         code
 
@@ -435,9 +436,6 @@ update msg model =
 
         UpdatedCode { draft } ( oldName, newModuleCode ) ->
             let
-                _ = Debug.log "draft" draft
-                _ = Debug.log "oldName" oldName
-                _ = Debug.log "newModuleCode" newModuleCode
                 addedNewModule =
                     replaceModule draft.code oldName newModuleCode
 

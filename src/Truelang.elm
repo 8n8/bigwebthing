@@ -1,5 +1,8 @@
-module Truelang exposing (compile)
+module Truelang exposing (compile, spaceyHex)
 
+import Bytes
+import Bytes.Decode as D
+import Bytes.Encode as E
 import Dict
 import Parser as P exposing ((|.), (|=))
 import Set
@@ -386,6 +389,7 @@ type Type
     | Tstring String
     | TbuiltIn BuiltIn
     | Tmap Map
+    | Tbytes (List Int)
 
 
 type alias Map =
@@ -414,6 +418,7 @@ type BuiltIn
     | BtoI32
     | BtoI64
     | BtoF32
+    | BtoUtf8
 
 
 runBuiltIn : BuiltIn -> List Type -> EltState -> EltOut
@@ -451,6 +456,53 @@ runBuiltIn builtIn tack state =
 
         BtoF32 ->
             toF32 tack state
+
+        BtoUtf8 ->
+            toUtf8 tack state
+
+
+stringToInts : String -> Maybe (List Int)
+stringToInts s =
+    decodeBytes <| E.encode <| Utils.encodeSizedString s
+
+
+decodeBytes : Bytes.Bytes -> Maybe (List Int)
+decodeBytes bs =
+    let
+        width =
+            Bytes.width bs
+    in
+    D.decode (D.loop ( [], 0 ) (decodeBytesHelp width)) bs
+
+
+decodeBytesHelp : Int -> ( List Int, Int ) -> D.Decoder (D.Step ( List Int, Int ) (List Int))
+decodeBytesHelp width ( accum, position ) =
+    if width == position then
+        D.succeed <| D.Done <| List.reverse accum
+
+    else
+        D.map (\b -> D.Loop ( b :: accum, position + 1 )) D.unsignedInt8
+
+
+toUtf8 : List Type -> EltState -> EltOut
+toUtf8 tack state =
+    case tack of
+        [] ->
+            Err <| prettyErrorMessage { state = state, message = "empty stack" }
+
+        (Tstring s) :: ack ->
+            case stringToInts s of
+                Nothing ->
+                    Err <| prettyErrorMessage { state = state, message = "could not encode string" }
+
+                Just ints ->
+                    Ok
+                        { state
+                            | stack = Tbytes ints :: ack
+                        }
+
+        other :: _ ->
+            Err <| prettyErrorMessage { state = state, message = "expecting a string, but got " ++ showTypeVal other }
 
 
 toF32 : List Type -> EltState -> EltOut
@@ -551,6 +603,18 @@ wasmDefs =
       , Internal
       , Meta Constant <| TbuiltIn BdefMutWasm
       )
+    , ( Tstring "toI32"
+      , Internal
+      , Meta Constant <| TbuiltIn BtoI32
+      )
+    , ( Tstring "toI64"
+      , Internal
+      , Meta Constant <| TbuiltIn BtoI64
+      )
+    , ( Tstring "toF32"
+      , Internal
+      , Meta Constant <| TbuiltIn BtoF32
+      )
     ]
 
 
@@ -572,17 +636,9 @@ metaDefs =
       , Internal
       , Meta Constant <| TbuiltIn BdefMutMeta
       )
-    , ( Tstring "toI32"
+    , ( Tstring "toUtf8"
       , Internal
-      , Meta Constant <| TbuiltIn BtoI32
-      )
-    , ( Tstring "toI64"
-      , Internal
-      , Meta Constant <| TbuiltIn BtoI64
-      )
-    , ( Tstring "toF32"
-      , Internal
-      , Meta Constant <| TbuiltIn BtoF32
+      , Meta Constant <| TbuiltIn BtoUtf8
       )
     ]
 
@@ -1105,6 +1161,34 @@ showTypeVal type_ =
         Tbasic basic ->
             showBasic basic
 
+        Tbytes bs ->
+            "bytes " ++ String.join " " (List.map String.fromInt bs)
+
+
+spaceyHex : String -> String
+spaceyHex hex =
+    Tuple.first <| String.foldl spaceyHexHelp ( "", Nothing ) hex
+
+
+spaceyHexHelp : Char -> ( String, Maybe Char ) -> ( String, Maybe Char )
+spaceyHexHelp ch ( accum, maybeCh ) =
+    case maybeCh of
+        Nothing ->
+            ( accum, Just ch )
+
+        Just leftOver ->
+            ( accum
+                ++ (if accum == "" then
+                        ""
+
+                    else
+                        " "
+                   )
+                ++ String.fromChar leftOver
+                ++ String.fromChar ch
+            , Nothing
+            )
+
 
 showBuiltIn : BuiltIn -> String
 showBuiltIn builtIn =
@@ -1141,6 +1225,9 @@ showBuiltIn builtIn =
 
         BtoF32 ->
             "toF32"
+
+        BtoUtf8 ->
+            "toUtf8"
 
 
 showMap : Map -> String
@@ -1254,6 +1341,12 @@ isSubType sub master =
         ( Tmap _, _ ) ->
             False
 
+        ( Tbytes b1, Tbytes b2 ) ->
+            b1 == b2
+
+        ( Tbytes _, _ ) ->
+            False
+
 
 elementP : List String -> String -> P.Parser Atom
 elementP modules moduleName =
@@ -1299,6 +1392,7 @@ stringHelp revChunks =
                 , P.map (\_ -> "\t") (P.token "t")
                 , P.map (\_ -> "\u{000D}") (P.token "r")
                 , P.map (\_ -> "\"") (P.token "\"")
+                , P.map (\_ -> "\\") (P.token "\\")
                 ]
         , P.chompWhile isUninteresting
             |> P.getChompedString
