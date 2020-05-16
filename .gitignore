@@ -12,3 +12,8 @@ main.js
 data/
 node_modules/
 static/bundle.js
+rust-hello-world/.appveyor.yml
+rust-hello-world/.cargo-ok
+rust-hello-world/.travis.yml
+rust-hello-world/pkg/
+rust-hello-world/target/

@@ -59,7 +59,7 @@ type alias Message =
     , time : Int
     , subject : String
     , userInput : String
-    , code : Code
+    , code : ( String, Bytes.Bytes )
     , blobs : Dict.Dict String Bytes.Bytes
     }
 
@@ -75,7 +75,7 @@ type alias Draft =
     , time : Int
     , subject : String
     , userInput : String
-    , code : Code
+    , code : Maybe ( String, Bytes.Bytes )
     , blobs : Dict.Dict String Bytes.Bytes
     }
 
@@ -99,7 +99,7 @@ decodeDraft =
         (D.unsignedInt32 Bytes.LE)
         sizedString
         sizedString
-        decodeCode
+        (decodeMaybe decodeCodeHelp)
         (D.map Dict.fromList <| list decodeBlob)
 
 
@@ -138,17 +138,29 @@ encodeMessage { to, from, time, subject, userInput, code, blobs } =
         , E.unsignedInt32 Bytes.LE time
         , encodeSizedString subject
         , encodeSizedString userInput
-        , encodeCode code
+        , encodeCodeHelp code
         , encodeList (Dict.toList blobs) encodeBlob
         ]
 
 
-encodeCode : Code -> E.Encoder
-encodeCode { main, modules } =
+encodeCode : Maybe ( String, Bytes.Bytes ) -> E.Encoder
+encodeCode code =
+    encodeMaybe code encodeCodeHelp
+
+
+encodeCodeHelp : ( String, Bytes.Bytes ) -> E.Encoder
+encodeCodeHelp ( name, code ) =
     E.sequence
-        [ encodeSizedString main
-        , encodeList modules encodeSizedString
+        [ encodeSizedString name
+        , encodeBytes code
         ]
+
+
+decodeCodeHelp : D.Decoder ( String, Bytes.Bytes )
+decodeCodeHelp =
+    D.map2 (\a b -> ( a, b ))
+        sizedString
+        decodeBytes
 
 
 encodeBlob : ( String, Bytes.Bytes ) -> E.Encoder
@@ -167,15 +179,8 @@ decodeMessage =
         (D.unsignedInt32 Bytes.LE)
         sizedString
         sizedString
-        decodeCode
+        decodeCodeHelp
         (D.map Dict.fromList <| list decodeBlob)
-
-
-decodeCode : D.Decoder Code
-decodeCode =
-    D.map2 Code
-        sizedString
-        (list sizedString)
 
 
 decodeBlob : D.Decoder ( String, Bytes.Bytes )

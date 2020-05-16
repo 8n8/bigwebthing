@@ -1269,6 +1269,7 @@ func (startHttpServer) io(inputChan chan inputT) {
 		func(w http.ResponseWriter, r *http.Request) {
 			// Turned off in devlopment, because webpack uses eval.
 			// w.Header().Add("Content-Security-Policy", csp)
+			w.Header().Add("Cache-Control", "no-cache")
 			handle, err := os.Open("index.html")
 			if err != nil {
 				http.Error(w, err.Error(), 500)
