@@ -881,7 +881,7 @@ subjectBox { draft, document } =
 
 userInputBox : OpenedDraft -> Element.Element Msg
 userInputBox { draft, document } =
-    Element.Input.multiline []
+    Element.Input.multiline [ monospace ]
         { onChange = \t -> UpdatedDraft { draft = { draft | userInput = t }, document = document }
         , text = draft.userInput
         , placeholder =
@@ -949,7 +949,7 @@ displayDocument document =
             Element.column [] <| List.map displayDocument documents
 
         Utils.SmallString s ->
-            Element.text s
+            Element.el [ monospace ] <| Element.text s
 
 
 makeNewDraft : Element.Element Msg
