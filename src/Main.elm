@@ -32,10 +32,10 @@ view : Model -> Html.Html Msg
 view model =
     Element.layout [] <|
         Element.column [ Element.padding 12 ]
-            [ Element.map Editor <|
-                Editor.view model.editor
-            , Element.map Communicator <|
+            [ Element.map Communicator <|
                 Communicator.view model.communicator
+            , Element.map Editor <|
+                Editor.view model.editor
             ]
 
 
