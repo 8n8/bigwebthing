@@ -1317,7 +1317,9 @@
                 cachegetUint8Memory0.buffer !== wasm.exports.memory.buffer
             ) {
                 // @ts-ignore
-                cachegetUint8Memory0 = new Uint8Array(wasm.exports.memory.buffer);
+                cachegetUint8Memory0 = new Uint8Array(
+                    wasm.exports.memory.buffer
+                );
             }
             return cachegetUint8Memory0;
         }
@@ -1377,7 +1379,9 @@
                 cachegetInt32Memory0.buffer !== wasm.exports.memory.buffer
             ) {
                 // @ts-ignore
-                cachegetInt32Memory0 = new Int32Array(wasm.exports.memory.buffer);
+                cachegetInt32Memory0 = new Int32Array(
+                    wasm.exports.memory.buffer
+                );
             }
             return cachegetInt32Memory0;
         }
@@ -1412,5 +1416,15 @@
         runWasm(toRun).then(function (encodedDocument: Uint8Array) {
             app.ports.wasmDocumentPort.send(fromBytes(encodedDocument));
         });
+    });
+
+    async function cacheBlob(b64Blob: string) {
+        const bytes = toBytes(b64Blob);
+        const hash = fromBytes(sha512(bytes).slice(0, 32));
+        await localSet(hash, bytes);
+    }
+
+    app.ports.cacheBlobPort.subscribe(function (blob: string) {
+        cacheBlob(blob);
     });
 })();

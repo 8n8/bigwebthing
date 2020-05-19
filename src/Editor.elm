@@ -69,6 +69,9 @@ port wasmDocumentPort : (String -> msg) -> Sub msg
 port runWasmPort : Je.Value -> Cmd msg
 
 
+port cacheBlobPort : String -> Cmd msg
+
+
 runWasm : Bytes.Bytes -> String -> Cmd msg
 runWasm wasm userInput =
     runWasmPort <|
