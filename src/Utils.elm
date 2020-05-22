@@ -59,8 +59,8 @@ type alias Message =
     , time : Int
     , subject : String
     , userInput : String
-    , code : ( String, Bytes.Bytes )
-    , blobs : Dict.Dict String Bytes.Bytes
+    , code : ( String, BlobName )
+    , blobs : Dict.Dict String BlobName
     }
 
 
@@ -75,32 +75,12 @@ type alias Draft =
     , time : Int
     , subject : String
     , userInput : String
-    , code : Maybe ( String, Bytes.Bytes )
-    , blobs : Dict.Dict String Bytes.Bytes
+    , code : Maybe ( String, BlobName )
+    , blobs : Dict.Dict String BlobName
     }
 
 
-encodeDraft : Draft -> E.Encoder
-encodeDraft { to, time, subject, userInput, code, blobs } =
-    E.sequence
-        [ encodeMaybe to (E.unsignedInt32 Bytes.LE)
-        , E.unsignedInt32 Bytes.LE time
-        , encodeSizedString subject
-        , encodeSizedString userInput
-        , encodeCode code
-        , encodeList (Dict.toList blobs) encodeBlob
-        ]
-
-
-decodeDraft : D.Decoder Draft
-decodeDraft =
-    map6 Draft
-        (decodeMaybe <| D.unsignedInt32 Bytes.LE)
-        (D.unsignedInt32 Bytes.LE)
-        sizedString
-        sizedString
-        (decodeMaybe decodeCodeHelp)
-        (D.map Dict.fromList <| list decodeBlob)
+type BlobName = BlobName Int
 
 
 encodeMaybe : Maybe a -> (a -> E.Encoder) -> E.Encoder
@@ -400,20 +380,6 @@ decodeDrafts rawDrafts =
             decodeDraftsHelp bytesList
 
 
-decodeDraftsHelp : List Bytes.Bytes -> Result String (List Draft)
-decodeDraftsHelp rawDrafts =
-    let
-        maybes =
-            List.map (D.decode decodeDraft) rawDrafts
-    in
-    case onlyIfAllJust maybes of
-        Nothing ->
-            Err "could not decode drafts bytes"
-
-        Just drafts ->
-            Ok drafts
-
-
 decodeInboxHelp : List Bytes.Bytes -> Result String (List Message)
 decodeInboxHelp rawMessages =
     let
@@ -428,68 +394,6 @@ decodeInboxHelp rawMessages =
             Ok messages
 
 
-sizedString : D.Decoder String
-sizedString =
-    D.unsignedInt32 Bytes.LE
-        |> D.andThen D.string
-
-
-decodeDocument : D.Decoder Document
-decodeDocument =
-    D.andThen decodeDocumentHelp D.unsignedInt8
-
-
-decodeOrdering : D.Decoder Document
-decodeOrdering =
-    D.map Ordering (list decodeDocument)
-
-
-decodeDocumentHelp : Int -> D.Decoder Document
-decodeDocumentHelp typeNum =
-    case typeNum of
-        0 ->
-            decodeOrdering
-
-        1 ->
-            D.map SmallString sizedString
-
-        _ ->
-            D.fail
-
-
-{-| Pinched from the Bytes documentation.
--}
-list : D.Decoder a -> D.Decoder (List a)
-list decoder =
-    D.unsignedInt32 Bytes.LE
-        |> D.andThen
-            (\len -> D.loop ( len, [] ) (listStep decoder))
-
-
 decodeBytes : D.Decoder Bytes.Bytes
 decodeBytes =
     D.unsignedInt32 Bytes.LE |> D.andThen D.bytes
-
-
-{-| Pinched from the Bytes documentation.
--}
-listStep :
-    D.Decoder a
-    -> ( Int, List a )
-    -> D.Decoder (D.Step ( Int, List a ) (List a))
-listStep decoder ( n, xs ) =
-    if n <= 0 then
-        D.succeed (D.Done xs)
-
-    else
-        D.map (\x -> D.Loop ( n - 1, x :: xs )) decoder
-
-
-showB64Error : Base64.Decode.Error -> String
-showB64Error error =
-    case error of
-        Base64.Decode.ValidationError ->
-            "validation error"
-
-        Base64.Decode.InvalidByteSequence ->
-            "invalid byte sequence"
