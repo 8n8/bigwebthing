@@ -4,6 +4,15 @@
     const base64js = require("base64-js");
     const nacl = require("tweetnacl");
 
+    async function localGet(key: string): Promise<any> {
+        const value = await localforage.getItem(key);
+        return value;
+    }
+
+    async function localSet(key: string, value: any): Promise<void> {
+        await localforage.setItem(key, value);
+    }
+
     function fromBytes(bytes: Uint8Array): string {
         return base64js.fromByteArray(bytes);
     }
@@ -14,121 +23,6 @@
 
     // @ts-ignore
     const app = Elm.Main.init({ node: document.getElementById("main") });
-
-    interface SignOpen {
-        signedMessage: string;
-        theirPublicKey: string;
-    }
-
-    app.ports.naclSignOpen.subscribe(function (p: SignOpen) {
-        const result = nacl.sign.open(
-            toBytes(p.signedMessage),
-            toBytes(p.theirPublicKey)
-        );
-        if (result === null) {
-            app.ports.naclSignOpenReturn({ message: "", err: true });
-            return;
-        }
-        app.ports.naclSignOpenReturn.send({
-            message: fromBytes(result),
-            err: false,
-        });
-    });
-
-    interface toSign {
-        message: string;
-        mySecretKey: string;
-    }
-
-    app.ports.naclSign.subscribe(function (p: toSign) {
-        const result = nacl.sign(toBytes(p.message), toBytes(p.mySecretKey));
-        app.ports.naclSignReturn.send(fromBytes(result));
-    });
-
-    app.ports.naclSignKeyPair.subscribe(function () {
-        const result = nacl.sign.keyPair();
-        app.ports.naclSignKeyPairReturn.send({
-            publicKey: fromBytes(result.publicKey),
-            secretKey: fromBytes(result.secretKey),
-        });
-    });
-
-    app.ports.naclBoxKeyPair.subscribe(function () {
-        const result = nacl.box.keyPair();
-        app.ports.naclBoxKeyPairReturn.send({
-            publicKey: fromBytes(result.publicKey),
-            secretKey: fromBytes(result.secretKey),
-        });
-    });
-
-    interface Box {
-        message: string;
-        nonce: string;
-        theirPublicKey: string;
-        mySecretKey: string;
-    }
-
-    app.ports.naclBox.subscribe(function (p: Box) {
-        const result = nacl.box(
-            toBytes(p.message),
-            toBytes(p.nonce),
-            toBytes(p.theirPublicKey),
-            toBytes(p.mySecretKey)
-        );
-        app.ports.naclBoxReturn.send(fromBytes(result));
-    });
-
-    interface BoxOpen {
-        box: string;
-        nonce: string;
-        theirPublicKey: string;
-        mySecretKey: string;
-    }
-
-    app.ports.naclBoxOpen.subscribe(function (p: BoxOpen) {
-        const result = nacl.box.open(
-            toBytes(p.box),
-            toBytes(p.nonce),
-            toBytes(p.theirPublicKey),
-            toBytes(p.mySecretKey)
-        );
-        if (result === null) {
-            app.ports.naclBoxOpenReturn.send({ message: "", err: true });
-            return;
-        }
-        app.ports.naclBoxOpenReturn.send({
-            message: fromBytes(result),
-            err: false,
-        });
-    });
-
-    interface KeyVal {
-        key: string;
-        value: string;
-    }
-
-    app.ports.localSet.subscribe(function (p: KeyVal) {
-        localforage.setItem(p.key, toBytes(p.value));
-    });
-
-    app.ports.localGet.subscribe(function (key: string) {
-        localforage.getItem(key, function (err: string, value: Uint8Array) {
-            app.ports.localGetReturn({
-                err: err,
-                value: fromBytes(value),
-            });
-        });
-    });
-
-    interface wasmToRun {
-        name: string;
-        userInput: string;
-    }
-
-    interface wasmResult {
-        err: string;
-        output: string;
-    }
 
     async function rustBindGenWrapper(
         wasm: any,
@@ -258,9 +152,206 @@
         }
     }
 
-    app.ports.sendWasmToRun.subscribe(function (p: wasmToRun) {
-        runWasm(p).then(function (result: wasmResult) {
-            app.ports.wasmOutput.send(result);
-        });
-    });
+    interface FromElm {
+        key: string;
+        value:
+            TupdatedUserInput |
+            TupdatedRecipient |
+            TupdatedSubject |
+            TnewCode |
+            TrequestBlob |
+            TmakeNewDraft |
+            TdeleteBlob |
+            TaddNewContact |
+            TrunDraftWasm |
+            TrunMessageWasm |
+            TsendDraft |
+            TnewBlob;
+    }
+
+    interface TupdatedUserInput {
+        id: string;
+        userInput: string
+    }
+
+    interface TupdatedRecipient {
+        id: string;
+        recipient: number;
+    }
+
+    interface TupdatedSubject {
+        id: string;
+        subject: string;
+    }
+
+    interface TnewCode {
+        code: string;
+        filename: string;
+    }
+
+    interface TrequestBlob {
+        id: string;
+    }
+
+    interface TmakeNewDraft {}
+
+    interface TdeleteBlob {
+        blobId: string;
+        draftId: string;
+    }
+
+    interface TaddNewContact {
+        contact: number;
+    }
+
+    interface TrunDraftWasm {
+        draftId: string;
+    }
+
+    interface TrunMessageWasm {
+        messageId: string;
+    }
+
+    interface TsendDraft {
+        draftId: string;
+    }
+
+    interface TnewBlob {
+        fileName: string;
+        draftId: string;
+        contents: string;
+    }
+
+    interface draftT {
+        to?: number;
+        time: number;
+        subject: string;
+        userInput: string;
+        code?: codeT;
+        blobs : {[id: string]: String};
+    }
+
+    interface codeT {
+        fileName: string;
+        blobId: string;
+    }
+
+    interface draftsT {
+        [id: string]: draftT;
+    }
+
+    let DRAFTS: draftsT = {};
+    async function getDraft(id: string): Promise<draftT | null> {
+        if (DRAFTS[id] === null) {
+            const draft = await localGet(id);
+            if (fromDisk === null) {
+                return null
+            }
+            DRAFTS[id] = draft;
+        }
+        return DRAFTS[id];
+    }
+
+    async function setDraft(id: string, draft: draftT) {
+        DRAFTS[id] = draft;
+        await localSet(id, draft);
+    }
+
+    async function updatedDraftUserInput(t: TupdatedUserInput) {
+        let draft: draftT = await getDraft(t.id);
+        if (draft === null) {
+            return;
+        }
+        draft.userInput = t.userInput;
+        setDraft(t.id, draft);
+        app.ports.jsToElm.send(
+            {key: "updatedDraft", value: {id: t.id, draft: draft}});
+    }
+
+    let IOTA = 0
+    async function newIota(): string {
+        IOTA = IOTA + 1;
+        await localSet("iota", IOTA);
+        return IOTA.toString();
+    }
+
+    async function newBlob(t: TnewBlob) {
+        let draft: draftT = await getDraft(t.draftId);
+        if (draft === null) {
+            return;
+        }
+        const contents: Uint8Array = toBytes(t.contents);
+        const blobId = newBlob();
+        await localSet(blobId, contents);
+        draft.code = {fileName: t.fileName, blobId: blobId};
+        await setDraft(t.id, draft);
+    }
+
+    async function sendDraft(t: TsendDraft) {
+        const draft = await getDraft(t.draftId);
+        if (!("to" in draft)) {
+            app.ports.jsToElm.send(
+                {key: "sendError", value: "no recipient"});
+        }
+        if (!("code" in draft)) {
+            app.ports.jsToElm.send(
+                {key: "sendError", value: "no code"})
+        }
+        const encodedDraft: Uint8Array = encodeDraft(draft);
+    }
+
+    async function processFromElm(f: FromElm) {
+        if (f.key === "updatedDraftUserInput") {
+            updatedDraftUserInput(f.value);
+            return;
+        }
+        if (f.key === "updatedRecipient") {
+            updatedRecipient(f.value);
+            return;
+        }
+        if (f.key === "updatedSubject") {
+            updatedSubject(f.value);
+            return;
+        }
+        if (f.key === "newCode") {
+            newCode(f.value);
+            return;
+        }
+        if (f.key === "requestBlob") {
+            requestBlob(f.value);
+            return;
+        }
+        if (f.key === "makeNewDraft") {
+            makeNewDraft(f.value);
+            return;
+        }
+        if (f.key === "deleteBlob") {
+            deleteBlob(f.value);
+            return;
+        }
+        if (f.key === "addNewContact") {
+            addNewContact(f.value);
+            return;
+        }
+        if (f.key === "runDraftWasm") {
+            runDraftWasm(f.value);
+            return;
+        }
+        if (f.key === "runMessageWasm") {
+            runMessageWasm(f.value);
+            return;
+        }
+        if (f.key === "sendDraft") {
+            sendDraft(f.value);
+            return;
+        }
+        if (f.key === "newBlob") {
+            newBlob(f.value as TnewBlob);
+            return;
+        }
+    }
+
+    app.ports.elmToJs.subscribe(function (f: FromElm) {
+        processFromElm(f);
+    })
 })();

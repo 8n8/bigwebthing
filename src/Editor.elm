@@ -12,22 +12,16 @@ import Base64.Decode
 import Base64.Encode
 import Bytes
 import Bytes.Decode as D
-import Http
-import Bytes.Encode as E
 import Dict
 import Element
 import Element.Font as Font
 import Element.Input
 import File
-import File.Download as Download
 import File.Select as Select
-import Hex.Convert
 import Json.Decode as Jd
 import Json.Encode as Je
 import Set
 import Task
-import Time
-import Element.Font as Font
 
 
 type alias Message =
@@ -36,12 +30,9 @@ type alias Message =
     , time : Int
     , subject : String
     , userInput : String
-    , code : ( String, BlobId )
-    , blobs : Dict.Dict Int String
+    , code : Code
+    , blobs : Dict.Dict String String
     }
-
-
-type BlobId = BlobId Int
 
 
 type alias Draft =
@@ -49,8 +40,8 @@ type alias Draft =
     , time : Int
     , subject : String
     , userInput : String
-    , code : Maybe { fileName : String, blobId : Int }
-    , blobs : Dict.Dict Int String
+    , code : Maybe Code
+    , blobs : Dict.Dict String String
     }
 
 
@@ -60,104 +51,15 @@ type alias Model =
     , sendToBox : Maybe Int
     , addContactBox : Maybe Int
     , addContactError : Maybe String
-    , messages : Dict.Dict Int Message
+    , messages : Dict.Dict String Message
     , opened : Opened
-    , drafts : Dict.Dict Int Draft
+    , drafts : Dict.Dict String Draft
     , internalError : Maybe String
-    , compilerError : Maybe String
+    , wasmError : Maybe String
     , outbox : List Message
     , sendMessageError : Maybe String
     , currentSendingId : Maybe Int
-    , sending : Dict.Dict Int Sending
-    , signingKeys : Maybe SigningKeys
-    , iota : Int
-    , processes : Dict.Dict Int ProcessStatus
     }
-
-
-type ProcessStatus
-    = PwhiteList WhiteListProgress
-    | PDownload DownloadProgress
-    | Pfailed String
-
-
-type DownloadProgress
-    = RequestingBlob String
-
-
-type WhiteListProgress
-    = MakingIdToken MakeIdTokenProgress
-    | MakingProofOfWork IdToken
-    | SendingRequest IdToken ProofOfWork
-
-
-type ProofOfWork = ProofOfWork Bytes.Bytes
-
-
-type IdToken = IdToken Bytes.Bytes
-
-
-type GetMyNameProgress
-    = GmakingProofOfWork ProofOfWorkProgress
-    | GgettingSigningKeys ProofOfWork
-    | GsendingRequest SigningKeys ProofOfWork
-
-
-type ProofOfWorkProgress
-    = PgettingInfo
-    | PaskJsForPow
-
-
-type MakeIdTokenProgress
-    = GettingMyName GetMyNameProgress
-    | GettingAuthCode MyName
-    | GettingSignature MyName AuthCode
-
-type AuthCode = AuthCode Bytes.Bytes
-
-type MyName = MyName Int
-
-
-type alias SigningKeys =
-    { public : Bytes.Bytes
-    , secret : Bytes.Bytes
-    }
-
-
-decodeSigningKeys : Bytes.Bytes -> Maybe SigningKeys
-decodeSigningKeys raw =
-    D.decode
-    (D.map2 SigningKeys
-        (D.bytes 32)
-        (D.bytes 64)) raw
-
-
-type alias Sending =
-    { message : Message
-    , progress : SendingProgress
-    }
-
-
-{-| The steps to send a message are:
-
-  - request signing and crypto keys from the DB if necessary
-  - generate new signing and crypto keys
-  - request my user ID name from the DB if necessary
-  - request my user ID from the server if necessary
-  - send all the blobs
-  - send the message in 15KB chunks
-
--}
-type SendingProgress
-    = RequestingSigningKeysFromDb
-    | RequestingCryptoKeysFromDb
-    | GeneratingSigningKeys
-    | GeneratingCryptoKeys
-    | RequestingMyIdFromDb
-    | RequestingMyIdFromServer
-    | SendingBlobs { sent : Set.Set String, notSent : Set.Set String }
-    | SendingChunks (List Bytes.Bytes)
-    | Failed String
 
 
 type Opened
@@ -167,7 +69,7 @@ type Opened
 
 
 type alias OpenedMessage =
-    { id : Int
+    { id : String
     , document : Maybe Document
     }
 
@@ -178,7 +80,7 @@ type Document
 
 
 type alias OpenedDraft =
-    { id : Int
+    { id : String
     , document : Maybe Document
     }
 
@@ -190,40 +92,111 @@ port jsToElm : (Je.Value -> msg) -> Sub msg
 
 
 type FromJs
-    = UpdatedDrafts (Dict.Dict Int Draft)
+    = UpdatedDraft String Draft
+    | UpdatedMessages (Dict.Dict String Message)
+    | WasmOutput String Bytes.Bytes
+    | SendError String
 
 
 type ToJs
-    = TupdatedDraftUserInput {pid : Pid, userInput : String}
-    | TupdatedRecipient { id : Int, recipient : Int }
-    | TnewCode { code : Bytes.Bytes, name : FileName }
-    | Twhitelist Int
-    | TrequestBlob Int
-    | TmakeNewDraft Int
-    | TdeleteBlob {blobId : Int, draftId : Int}
-    | TupdatedUserInput Int String
-    | TupdatedSubject Int String
+    = TupdatedUserInput { id : String, userInput : String }
+    | TupdatedRecipient { id : String, recipient : Int }
+    | TupdatedSubject { id : String, subject : String }
+    | TnewCode { code : Bytes.Bytes, filename : String }
+    | TrequestBlob String
+    | TmakeNewDraft
+    | TdeleteBlob { blobId : String, draftId : String }
+    | TaddNewContact Int
+    | TrunDraftWasm String
+    | TrunMessageWasm String
+    | TsendDraft String
+    | TnewBlob LoadedBlob
 
 
-type Pid = Pid Int
+kvHelp : String -> List ( String, Je.Value ) -> Je.Value
+kvHelp key value =
+    Je.object
+        [ ( "key", Je.string key )
+        , ( "value", Je.object value )
+        ]
 
 
 sendToJs : ToJs -> Cmd msg
 sendToJs toJs =
     elmToJs <|
-    case toJs of
-        TupdatedDraftUserInput {pid, userInput} ->
-            Je.object
-                [ ("key", Je.string "updatedDraftUserInput")
-                , ("pid", Je.int <| (\(Pid p) -> p) pid)
-                , ("userInput", Je.string userInput)
-                ]
-        TupdatedRecipient {id, recipient} ->
-            Je.object
-                [ ("key", Je.string "updatedRecipient")
-                , ("pid", Je.int id)
-                , ("recipient", Je.int recipient)
-                ]
+        case toJs of
+            TupdatedUserInput { id, userInput } ->
+                kvHelp "updatedDraftUserInput"
+                    [ ( "id", Je.string id )
+                    , ( "userInput", Je.string userInput )
+                    ]
+
+            TupdatedRecipient { id, recipient } ->
+                kvHelp "updatedRecipient"
+                    [ ( "id", Je.string id )
+                    , ( "recipient", Je.int recipient )
+                    ]
+
+            TupdatedSubject { id, subject } ->
+                kvHelp "updatedSubject"
+                    [ ( "id", Je.string id )
+                    , ( "subject", Je.string subject )
+                    ]
+
+            TnewCode { code, filename } ->
+                kvHelp "newCode"
+                    [ ( "code"
+                      , Je.string <|
+                            Base64.Encode.encode <|
+                                Base64.Encode.bytes code
+                      )
+                    , ( "filename", Je.string filename )
+                    ]
+
+            TrequestBlob blobId ->
+                kvHelp "requestBlob"
+                    [ ( "id", Je.string blobId )
+                    ]
+
+            TmakeNewDraft ->
+                kvHelp "makeNewDraft" []
+
+            TdeleteBlob { blobId, draftId } ->
+                kvHelp "deleteBlob"
+                    [ ( "blobId", Je.string blobId )
+                    , ( "draftId", Je.string draftId )
+                    ]
+
+            TaddNewContact contact ->
+                kvHelp "addNewContact"
+                    [ ( "contact", Je.int contact )
+                    ]
+
+            TrunDraftWasm draftId ->
+                kvHelp "runDraftWasm"
+                    [ ( "draftId", Je.string draftId )
+                    ]
+
+            TrunMessageWasm messageId ->
+                kvHelp "runMessageWasm"
+                    [ ( "messageId", Je.string messageId )
+                    ]
+
+            TsendDraft draftId ->
+                kvHelp "sendDraft"
+                    [ ( "draftId", Je.string draftId )
+                    ]
+
+            TnewBlob { fileName, draftId, contents } ->
+                kvHelp "newBlob"
+                    [ ( "fileName", Je.string fileName )
+                    , ( "draftId", Je.string draftId )
+                    , ( "contents"
+                      , Je.string <|
+                            Base64.Encode.encode <|
+                                Base64.Encode.bytes contents
+                      )
+                    ]
 
 
 subscriptions : Sub Msg
@@ -247,66 +220,40 @@ initModel =
     , sendMessageError = Nothing
     , drafts = Dict.empty
     , outbox = []
-    , compilerError = Nothing
+    , wasmError = Nothing
     , messages = Dict.empty
     , opened = Neither
     , currentSendingId = Nothing
-    , sending = Dict.empty
-    , iota = 0
-    , processes = Dict.empty
-    , signingKeys = Nothing
     }
 
 
 type Msg
     = AddNewContact
-    | DeleteBlob Int
-    | UpdatedUserInput Int String
-    | UpdatedSubject Int String
-    | NewPowInfo Int (Result Http.Error PowInfo)
+    | DeleteBlob String
+    | UpdatedUserInput String
+    | UpdatedSubject String
     | RawFromJs Je.Value
-    | ClickAddProgramButton Int
-    | RawWasmDocument String
+    | ClickAddProgramButton
     | UpdateContactBox String
-    | RetrievedEditorInfo Je.Value
-    | GoodWhitelist Int
-    | BadWhitelist String
     | CloseMessage
     | CloseDraft
-    | UpdatedRecipient Int String
-    | UpdatedDraft OpenedDraft
-    | OpenDraft Int
-    | OpenMessage Int
+    | UpdatedRecipient { id : String, rawRecipient : String }
+    | OpenDraft String
+    | OpenMessage String
     | MakeNewDraft
-    | TimeForNewDraft Time.Posix
-    | SendDraft Int
-    | SendMessageError String
-    | ClickAddBlobButton Int
-    | BlobSelected Int File.File
-    | BlobLoaded String Int Bytes.Bytes
-    | DownloadFile {fileName : String, blobId : Int}
+    | SendDraft String
+    | ClickAddBlobButton String
+    | BlobSelected String File.File
+    | BlobLoaded LoadedBlob
+    | DownloadFile String
     | ProgramSelected File.File
-    | ProgramLoaded FileName Bytes.Bytes
-
-type FileName = FileName String
+    | ProgramLoaded String Bytes.Bytes
 
 
-editorInfoDecoder : Jd.Decoder RawEditorInfo
-editorInfoDecoder =
-    Jd.map5 RawEditorInfo
-        (Jd.field "myName" Jd.int)
-        (Jd.field "myContacts" (Jd.list Jd.int))
-        (Jd.field "inbox" (Jd.list Jd.string))
-        (Jd.field "drafts" (Jd.list Jd.string))
-        (Jd.field "outbox" (Jd.list Jd.string))
-
-
-type alias RawEditorInfo =
-    { myName : Int
-    , myContacts : List Int
-    , inbox : List String
-    , drafts : List String
-    , outbox : List String
+type alias LoadedBlob =
+    { fileName : String
+    , draftId : String
+    , contents : Bytes.Bytes
     }
 
 
@@ -372,199 +319,15 @@ decodeDocumentHelp typeNum =
             D.fail
 
 
-rawWasmDocumentHelp : String -> Model -> ( Model, Cmd Msg )
-rawWasmDocumentHelp rawDocB64 model =
-    case Base64.Decode.decode Base64.Decode.bytes rawDocB64 of
-        Err err ->
-            ( { model
-                | internalError =
-                    Just <|
-                        showB64Error err
-              }
-            , Cmd.none
-            )
-
-        Ok rawBytes ->
-            case
-                ( model.opened
-                , D.decode decodeDocument rawBytes
-                )
-            of
-                ( Neither, _ ) ->
-                    ( { model
-                        | internalError = Just "received WASM document but no open message"
-                      }
-                    , Cmd.none
-                    )
-
-                ( ODraft draft, Just document ) ->
-                    ( { model
-                        | opened =
-                            ODraft
-                                { draft
-                                    | document = Just document
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-                ( ODraft draft, Nothing ) ->
-                    ( { model
-                        | opened =
-                            ODraft
-                                { draft
-                                    | document =
-                                        Just <|
-                                            SmallString "could not decode document generated by WASM"
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-                ( OMessage message, Just document ) ->
-                    ( { model
-                        | opened =
-                            OMessage
-                                { message
-                                    | document = Just document
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-                ( OMessage message, Nothing ) ->
-                    ( { model
-                        | opened =
-                            OMessage
-                                { message
-                                    | document =
-                                        Just <|
-                                            SmallString "could not decode document generated by WASM"
-                                }
-                      }
-                    , Cmd.none
-                    )
-
-
-type alias WasmResult =
-    { err : String
-    , output : String
-    }
-
-
-wasmOutputDecoder : Jd.Decoder WasmResult
-wasmOutputDecoder =
-    Jd.map2 WasmResult
-        (Jd.field "err" Jd.string)
-        (Jd.field "output" Jd.string)
-
-
-localGetDecoder : Jd.Decoder LocalGetResult
-localGetDecoder =
-    Jd.map2 LocalGetResult
-        (Jd.field "err" Jd.string)
-        (Jd.field "output" Jd.string)
-
-
-type alias LocalGetResult =
-    { err : String
-    , output : String
-    }
-
-
-decodeWasmOutput : Je.Value -> Result String Document
-decodeWasmOutput json =
-    case Jd.decodeValue wasmOutputDecoder json of
-        Err err ->
-            Err <|
-                "could not decode wasm output: "
-                    ++ Jd.errorToString err
-
-        Ok wasmResult ->
-            if wasmResult.err == "" then
-                case
-                    Base64.Decode.decode
-                        Base64.Decode.bytes
-                        wasmResult.output
-                of
-                    Err err ->
-                        Err <| showB64Error err
-
-                    Ok rawBytes ->
-                        case D.decode decodeDocument rawBytes of
-                            Nothing ->
-                                Err "could not decode document generated by WASM"
-
-                            Just document ->
-                                Ok document
-
-            else
-                Err wasmResult.err
-
-
-decodeLocalGetResult : Je.Value -> Result String Bytes.Bytes
-decodeLocalGetResult json =
-    case Jd.decodeValue localGetDecoder json of
-        Err err ->
-            Err <|
-                 "could not decode localget output: " ++ Jd.errorToString err
-
-        Ok {output, err} ->
-            if err == "" then
-                case Base64.Decode.decode Base64.Decode.bytes output of
-                    Err errb64 ->
-                        Err <| showB64Error errb64
-                    Ok rawBytes ->
-                        Ok rawBytes
-
-            else
-                Err err
-                                
-
-processWasmOutput : Je.Value -> Model -> ( Model, Cmd Msg )
-processWasmOutput json model =
-    case decodeWasmOutput json of
-        Err err ->
-            ( { model
-                | internalError = Just <| "could not decode wasm output: " ++ err
-              }
-            , Cmd.none
-            )
-
-        Ok document ->
-            case model.opened of
-                OMessage omsg ->
-                    ( { model
-                        | opened =
-                            OMessage
-                                { omsg | document = Just document }
-                      }
-                    , Cmd.none
-                    )
-
-                ODraft odraft ->
-                    ( { model
-                        | opened =
-                            ODraft
-                                { odraft | document = Just document }
-                      }
-                    , Cmd.none
-                    )
-
-                Neither ->
-                    ( model, Cmd.none )
-
-
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        RawWasmDocument rawDocB64 ->
-            rawWasmDocumentHelp rawDocB64 model
+        DownloadFile blobId ->
+            ( model
+            , sendToJs <| TrequestBlob blobId
+            )
 
-        DownloadFile {fileName, blobId} ->
-            ( { model | processes = Dict.insert model.iota (PDownload (RequestingBlob fileName)) model.processes }, sendToJs <| TrequestBlob blobId)
-
-        ClickAddProgramButton openedDraft ->
+        ClickAddProgramButton ->
             ( model
             , Select.file
                 [ "application/wasm" ]
@@ -574,14 +337,15 @@ update msg model =
         ProgramSelected file ->
             ( model
             , Task.perform
-                (ProgramLoaded (FileName <| File.name file)) <|
+                (ProgramLoaded (File.name file))
+              <|
                 File.toBytes file
             )
 
-        ProgramLoaded name fileBytes ->
+        ProgramLoaded filename fileBytes ->
             ( model
             , sendToJs <|
-                TnewCode { code = fileBytes, name = name }
+                TnewCode { code = fileBytes, filename = filename }
             )
 
         ClickAddBlobButton id ->
@@ -593,12 +357,9 @@ update msg model =
 
         BlobSelected id file ->
             ( model
-            , Task.perform (BlobLoaded (File.name file) id) <|
+            , Task.perform (\c -> BlobLoaded { fileName = File.name file, draftId = id, contents = c }) <|
                 File.toBytes file
             )
-
-        SendMessageError error ->
-            ( { model | sendMessageError = Just error }, Cmd.none )
 
         AddNewContact ->
             addNewContactHelp model
@@ -625,54 +386,284 @@ update msg model =
                         in
                         ( newModel, Cmd.none )
 
-        GoodWhitelist newContact ->
-            ( { model
-                | myContacts = Set.insert newContact model.myContacts
-              }
-            , Cmd.none
-            )
-
-        BadWhitelist error ->
-            ( { model | addContactError = Just error }, Cmd.none )
-
         CloseMessage ->
-            ( { model | opened = Neither
+            ( { model
+                | opened = Neither
               }
             , Cmd.none
             )
 
         CloseDraft ->
-            ( { model | opened = Neither } , Cmd.none)
+            ( { model | opened = Neither }, Cmd.none )
 
-        UpdatedRecipient id rawRecipient ->
-            (model
+        UpdatedRecipient { id, rawRecipient } ->
+            ( model
             , case String.toInt rawRecipient of
-                Nothing -> Cmd.none
+                Nothing ->
+                    Cmd.none
+
                 Just recipient ->
                     sendToJs <|
                         TupdatedRecipient
-                            {id = id, recipient = recipient}
+                            { id = id, recipient = recipient }
             )
 
         MakeNewDraft ->
-            ( model, Task.perform TimeForNewDraft Time.now )
-
-        TimeForNewDraft posixTime ->
-            ( { model | opened = ODraft { document = Nothing, id = model.iota }, iota = model.iota + 1 }, sendToJs <| TmakeNewDraft model.iota)
+            ( model, sendToJs TmakeNewDraft )
 
         DeleteBlob blobId ->
             case model.opened of
-                OMessage _ -> (model, Cmd.none)
-                ODraft {id} -> (model, sendToJs <| TdeleteBlob {blobId = blobId, draftId = id})
-                Neither -> (model, Cmd.none)
+                OMessage _ ->
+                    ( model, Cmd.none )
 
-        UpdatedUserInput draftId newUserInput ->
-            (model
-            , sendToJs <| TupdatedUserInput draftId newUserInput )
+                ODraft { id } ->
+                    ( model, sendToJs <| TdeleteBlob { blobId = blobId, draftId = id } )
 
-        UpdatedSubject draftId newSubject ->
-            (model
-            ,sendToJs <| TupdatedSubject draftId newSubject)
+                Neither ->
+                    ( model, Cmd.none )
+
+        UpdatedUserInput updated ->
+            case model.opened of
+                ODraft { id } ->
+                    ( model
+                    , sendToJs <|
+                        TupdatedUserInput
+                            { id = id, userInput = updated }
+                    )
+
+                OMessage _ ->
+                    ( model, Cmd.none )
+
+                Neither ->
+                    ( model, Cmd.none )
+
+        UpdatedSubject updated ->
+            case model.opened of
+                ODraft { id } ->
+                    ( model
+                    , sendToJs <|
+                        TupdatedSubject
+                            { id = id, subject = updated }
+                    )
+
+                OMessage _ ->
+                    ( model, Cmd.none )
+
+                Neither ->
+                    ( model, Cmd.none )
+
+        RawFromJs json ->
+            processRawFromJs json model
+
+        OpenDraft id ->
+            case Dict.get id model.drafts of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just { code } ->
+                    ( { model | opened = ODraft { id = id, document = Nothing } }
+                    , case code of
+                        Nothing ->
+                            Cmd.none
+
+                        Just _ ->
+                            sendToJs <| TrunDraftWasm id
+                    )
+
+        OpenMessage id ->
+            case Dict.get id model.messages of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just _ ->
+                    ( { model | opened = OMessage { id = id, document = Nothing } }
+                    , sendToJs <| TrunMessageWasm id
+                    )
+
+        SendDraft id ->
+            ( model, sendToJs <| TsendDraft id )
+
+        BlobLoaded loaded ->
+            ( model, sendToJs <| TnewBlob loaded )
+
+
+processRawFromJs : Je.Value -> Model -> ( Model, Cmd Msg )
+processRawFromJs json model =
+    case Jd.decodeValue fromJsDecoder json of
+        Err err ->
+            ( { model | internalError = Just <| Jd.errorToString err }
+            , Cmd.none
+            )
+
+        Ok fromJs ->
+            updateFromJs model fromJs
+
+
+type alias RawFromJsT =
+    { key : String
+    , value : String
+    }
+
+
+rawFromJsDecoder : Jd.Decoder RawFromJsT
+rawFromJsDecoder =
+    Jd.map2 RawFromJsT
+        (Jd.field "key" Jd.string)
+        (Jd.field "value" Jd.string)
+
+
+fromJsDecoder : Jd.Decoder FromJs
+fromJsDecoder =
+    Jd.andThen fromJsDecoderHelp rawFromJsDecoder
+
+
+fromJsDecoderHelp : RawFromJsT -> Jd.Decoder FromJs
+fromJsDecoderHelp { key, value } =
+    case key of
+        "sendError" ->
+            Jd.map SendError Jd.string
+
+        "updatedDraft" ->
+            updatedDraftDecoder
+
+        "updatedMessages" ->
+            messagesDecoder
+
+        "wasmOutput" ->
+            decodeWasmResult value
+
+        unknown ->
+            Jd.fail <| "unknown key: " ++ unknown
+
+
+type alias JsonWasmOutput =
+    { draftId : String
+    , wasmOutput : String
+    }
+
+
+decodeWasmResult : String -> Jd.Decoder FromJs
+decodeWasmResult json =
+    case Jd.decodeString jsonWasmOutputDecoder json of
+        Err err ->
+            Jd.fail <| Jd.errorToString err
+
+        Ok { draftId, wasmOutput } ->
+            case Base64.Decode.decode Base64.Decode.bytes wasmOutput of
+                Err err ->
+                    Jd.fail <| showB64Error err
+
+                Ok wasmBytes ->
+                    Jd.succeed <|
+                        WasmOutput draftId wasmBytes
+
+
+jsonWasmOutputDecoder : Jd.Decoder JsonWasmOutput
+jsonWasmOutputDecoder =
+    Jd.map2 JsonWasmOutput Jd.string Jd.string
+
+
+messagesDecoder : Jd.Decoder FromJs
+messagesDecoder =
+    Jd.map UpdatedMessages <| Jd.dict messageDecoder
+
+
+updatedDraftDecoder : Jd.Decoder FromJs
+updatedDraftDecoder =
+    Jd.map2 UpdatedDraft
+        (Jd.field "id" Jd.string)
+        (Jd.field "draft" draftDecoder)
+
+
+messageDecoder : Jd.Decoder Message
+messageDecoder =
+    Jd.map7 Message
+        (Jd.field "from" Jd.int)
+        (Jd.field "to" Jd.int)
+        (Jd.field "time" Jd.int)
+        (Jd.field "subject" Jd.string)
+        (Jd.field "userInput" Jd.string)
+        (Jd.field "code" codeDecoder)
+        (Jd.field "blobs" <| Jd.dict Jd.string)
+
+
+draftDecoder : Jd.Decoder Draft
+draftDecoder =
+    Jd.map6 Draft
+        (Jd.maybe <| Jd.field "to" Jd.int)
+        (Jd.field "time" Jd.int)
+        (Jd.field "subject" Jd.string)
+        (Jd.field "userInput" Jd.string)
+        (Jd.maybe <| Jd.field "code" codeDecoder)
+        (Jd.field "blobs" <| Jd.dict Jd.string)
+
+
+type alias Code =
+    { fileName : String
+    , blobId : String
+    }
+
+
+codeDecoder : Jd.Decoder Code
+codeDecoder =
+    Jd.map2 Code Jd.string Jd.string
+
+
+updateFromJs : Model -> FromJs -> ( Model, Cmd Msg )
+updateFromJs model fromJs =
+    case fromJs of
+        UpdatedDraft id draft ->
+            ( {model | drafts = Dict.insert id draft model.drafts }
+            , Cmd.none
+            )
+
+        UpdatedMessages messages ->
+            ( { model | messages = messages }, Cmd.none )
+
+        SendError error ->
+            ( { model | sendMessageError = Just error }, Cmd.none )
+
+        WasmOutput id output ->
+            case
+                ( model.opened
+                , D.decode decodeDocument output
+                )
+            of
+                ( Neither, _ ) ->
+                    ( model, Cmd.none )
+
+                ( ODraft draft, Just document ) ->
+                    if draft.id /= id then
+                        ( model, Cmd.none )
+
+                    else
+                        ( { model
+                            | opened =
+                                ODraft
+                                    { draft
+                                        | document = Just document
+                                    }
+                          }
+                        , Cmd.none
+                        )
+
+                ( _, Nothing ) ->
+                    ( { model | wasmError = Just "decoding error" }, Cmd.none )
+
+                ( OMessage message, Just document ) ->
+                    if message.id /= id then
+                        ( model, Cmd.none )
+
+                    else
+                        ( { model
+                            | opened =
+                                OMessage
+                                    { message
+                                        | document = Just document
+                                    }
+                          }
+                        , Cmd.none
+                        )
 
 
 fontSize : Element.Attribute msg
@@ -693,31 +684,34 @@ view model =
                 , addNewContact model.addContactBox model.addContactError
                 , viewMessages model.messages model.opened
                 , makeNewDraft
-                , editDrafts model.compilerError model.opened model.drafts
+                , editDrafts model.wasmError model.opened model.drafts
                 ]
 
 
-viewMessages : Dict.Dict Int Message -> Opened -> Element.Element Msg
+viewMessages : Dict.Dict String Message -> Opened -> Element.Element Msg
 viewMessages messages opened =
     case opened of
-        OMessage {id, document} ->
+        OMessage { id, document } ->
             case Dict.get id messages of
-                Nothing -> messageChooser messages
+                Nothing ->
+                    messageChooser messages
+
                 Just message ->
-                    viewMessage message {id=id, document=document}
+                    viewMessage message { id = id, document = document }
 
         _ ->
             messageChooser messages
 
 
-messageChooser : Dict.Dict Int Message -> Element.Element Msg
+messageChooser : Dict.Dict String Message -> Element.Element Msg
 messageChooser messages =
-    Element.column [] <| List.map messageChooserButton <|
-        Dict.toList messages
+    Element.column [] <|
+        List.map messageChooserButton <|
+            Dict.toList messages
 
 
-messageChooserButton : (Int, Message) -> Element.Element Msg
-messageChooserButton (id, message) =
+messageChooserButton : ( String, Message ) -> Element.Element Msg
+messageChooserButton ( id, message ) =
     Element.Input.button []
         { onPress = Just <| OpenMessage id
         , label = messageChooserLabel message
@@ -750,19 +744,19 @@ viewMessage message { document } =
         ]
 
 
-viewBlobs : Dict.Dict Int String -> Element.Element Msg
+viewBlobs : Dict.Dict String String -> Element.Element Msg
 viewBlobs blobs =
     Element.column [] <|
         List.map viewBlob <|
             Dict.toList blobs
 
 
-viewBlob : ( Int, String ) -> Element.Element Msg
+viewBlob : ( String, String ) -> Element.Element Msg
 viewBlob ( blobId, blobName ) =
     Element.row []
         [ Element.text blobName
         , Element.Input.button []
-            { onPress = Just <| DownloadFile {fileName = blobName, blobId = blobId}
+            { onPress = Just <| DownloadFile blobId
             , label = Element.text "Download"
             }
         ]
@@ -784,29 +778,31 @@ closeMessage =
         }
 
 
-editDrafts : Maybe String -> Opened -> Dict.Dict Int Draft -> Element.Element Msg
-editDrafts compilerError maybeOpenDraft drafts =
+editDrafts : Maybe String -> Opened -> Dict.Dict String Draft -> Element.Element Msg
+editDrafts wasmError maybeOpenDraft drafts =
     case maybeOpenDraft of
         ODraft openDraft ->
             case Dict.get openDraft.id drafts of
-                Nothing -> draftChooser drafts
+                Nothing ->
+                    draftChooser drafts
+
                 Just draft ->
-                    editDraft draft compilerError openDraft
+                    editDraft draft wasmError openDraft
 
         _ ->
             draftChooser drafts
 
 
 editDraft : Draft -> Maybe String -> OpenedDraft -> Element.Element Msg
-editDraft draft compilerError {id, document} =
+editDraft draft wasmError { id, document } =
     Element.column []
         [ closeDraft
         , toBox id draft
-        , subjectBox draft id
-        , userInputBox draft id
-        , addProgramButton id
+        , subjectBox draft
+        , userInputBox draft
+        , addProgramButton
         , showProgram draft.code
-        , case compilerError of
+        , case wasmError of
             Nothing ->
                 Element.none
 
@@ -824,29 +820,29 @@ editDraft draft compilerError {id, document} =
         ]
 
 
-showProgram : Maybe { fileName : String, blobId : Int } -> Element.Element Msg
+showProgram : Maybe Code -> Element.Element Msg
 showProgram code =
     case code of
         Nothing ->
             Element.none
 
-        Just { fileName, blobId } ->
-                Element.text fileName
+        Just { fileName } ->
+            Element.text fileName
 
 
-editBlobs : Dict.Dict Int String -> Element.Element Msg
+editBlobs : Dict.Dict String String -> Element.Element Msg
 editBlobs blobs =
     Element.column [] <|
         List.map editBlob <|
             Dict.toList blobs
 
 
-editBlob : ( Int, String ) -> Element.Element Msg
+editBlob : ( String, String ) -> Element.Element Msg
 editBlob ( blobId, blobName ) =
     Element.row []
         [ Element.text blobName
         , Element.Input.button []
-            { onPress = Just <| DownloadFile {fileName = blobName,  blobId = blobId}
+            { onPress = Just <| DownloadFile blobId
             , label = Element.text "Download"
             }
         , Element.Input.button []
@@ -856,7 +852,7 @@ editBlob ( blobId, blobName ) =
         ]
 
 
-sendDraft : Int -> Element.Element Msg
+sendDraft : String -> Element.Element Msg
 sendDraft id =
     Element.Input.button []
         { onPress = Just <| SendDraft id
@@ -864,10 +860,10 @@ sendDraft id =
         }
 
 
-toBox : Int -> Draft -> Element.Element Msg
+toBox : String -> Draft -> Element.Element Msg
 toBox id draft =
     Element.Input.text []
-        { onChange = UpdatedRecipient id
+        { onChange = \r -> UpdatedRecipient { id = id, rawRecipient = r }
         , text =
             case draft.to of
                 Nothing ->
@@ -891,58 +887,23 @@ addNewContactHelp model =
                 ( { model | addContactError = Just "Already a contact" }, Cmd.none )
 
             else
-                case model.myName of
-                    Nothing ->
-                        ( { model | processes = Dict.insert (model.iota + 1) (PwhiteList (MakingIdToken (GettingMyName (GmakingProofOfWork PgettingInfo)))) model.processes, iota = model.iota + 1 }, getProofOfWorkInfo model.iota )
-
-                    Just myName ->
-                        if myName == newContact then
-                            ( { model | addContactError = Just "You tried to add yourself" }, Cmd.none )
-
-                        else
-                            ( { model | processes = Dict.insert (model.iota + 1) (PwhiteList (MakingIdToken (GettingAuthCode (MyName myName)))) model.processes, iota = model.iota + 1 }, getAuthCode model.iota )
+                ( model, sendToJs <| TaddNewContact newContact )
 
 
-getProofOfWorkInfo : Int -> Cmd Msg
-getProofOfWorkInfo pid =
-    Http.post
-        { url = apiUrl
-        , body = Http.bytesBody
-            "application/octet-stream"
-            (E.encode <| E.unsignedInt8 3)
-        , expect = Http.expectBytes (NewPowInfo pid) decodePowInfo
-        }
-
-
-type alias PowInfo =
-    { difficulty : Int
-    , unique : Bytes.Bytes
-    }
-
-
-decodePowInfo : D.Decoder PowInfo
-decodePowInfo =
-    D.map2 PowInfo
-        D.unsignedInt8
-        (D.bytes 8)
-
-
-apiUrl = "http://localhost:3001/api"
-
-subjectBox : Draft -> Int -> Element.Element Msg
-subjectBox draft id =
+subjectBox : Draft -> Element.Element Msg
+subjectBox draft =
     Element.Input.text []
-        { onChange = UpdatedSubject id
+        { onChange = UpdatedSubject
         , text = draft.subject
         , placeholder = Just <| Element.Input.placeholder [] <| Element.text "Type the subject"
         , label = Element.Input.labelAbove [] <| Element.text "Subject:"
         }
 
 
-userInputBox : Draft -> Int -> Element.Element Msg
-userInputBox draft id =
+userInputBox : Draft -> Element.Element Msg
+userInputBox draft =
     Element.Input.multiline [ monospace ]
-        { onChange = UpdatedUserInput id
+        { onChange = UpdatedUserInput
         , text = draft.userInput
         , placeholder =
             Just <|
@@ -955,21 +916,22 @@ userInputBox draft id =
         }
 
 
-addProgramButton : Int -> Element.Element Msg
-addProgramButton id =
+addProgramButton : Element.Element Msg
+addProgramButton =
     Element.Input.button []
-        { onPress = Just <| ClickAddProgramButton id
+        { onPress = Just <| ClickAddProgramButton
         , label = Element.text "Add program"
         }
 
 
-draftChooser : Dict.Dict Int Draft -> Element.Element Msg
+draftChooser : Dict.Dict String Draft -> Element.Element Msg
 draftChooser drafts =
-    Element.column [] <| List.map showDraftButton <|
-        Dict.toList drafts
+    Element.column [] <|
+        List.map showDraftButton <|
+            Dict.toList drafts
 
 
-addBlobButton : Int -> Element.Element Msg
+addBlobButton : String -> Element.Element Msg
 addBlobButton id =
     Element.Input.button []
         { onPress = Just <| ClickAddBlobButton id
@@ -977,8 +939,8 @@ addBlobButton id =
         }
 
 
-showDraftButton : (Int, Draft) -> Element.Element Msg
-showDraftButton (id, draft) =
+showDraftButton : ( String, Draft ) -> Element.Element Msg
+showDraftButton ( id, draft ) =
     Element.Input.button []
         { onPress = Just <| OpenDraft id
         , label =
