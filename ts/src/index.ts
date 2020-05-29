@@ -298,6 +298,7 @@
                 {key: "sendError", value: "no code"})
         }
         const encodedDraft: Uint8Array = encodeDraft(draft);
+        const cryptoKeys
     }
 
     async function processFromElm(f: FromElm) {

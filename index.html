@@ -1,13 +1,26 @@
 <!DOCTYPE html>
 <html>
-	<head>
-		<title>BigWebThing</title>
-                <link href='/static/ebgaramond.css' rel='stylesheet'>
-                <link href='/static/ubuntuMono.css' rel='stylesheet'>
-	</head>
-	<body>
-		<div id="main"></div>
-	</body>
-	<script src="/static/main.js"></script>
-	<script src="/static/bundle.js"></script>
+    <head>
+        <title>BigWebThing</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href='/static/ebgaramond.css' rel='stylesheet'>
+        <link href='/static/ubuntuMono.css' rel='stylesheet'>
+        <link href='/static/ubuntu.css' rel='stylesheet'>
+        <link href='/static/styles.css' rel='stylesheet'>
+    </head>
+    <body>
+        <div id="topButtons">
+            <button type="button" id="inboxButton" class="topButton">Inbox</button>
+            <button type="button" id="draftsButton" class="topButton">Drafts</button>
+            <button type="button" id="contactsButton" class="topButton">Contacts</button>
+            <button type="button" id="settingsButton" class="settings">
+                <svg viewBox="0 0 100 65" width="24" height="24">
+                    <rect y="5" width="100" height="8"></rect>
+                    <rect y="30" width="100" height="8"></rect>
+                    <rect y="55" width="100" height="8"></rect>
+                </svg>
+            </button>
+        </div>
+    </body>
+    <script src="/static/main.js"></script>
 </html>

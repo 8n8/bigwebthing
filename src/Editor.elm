@@ -96,6 +96,7 @@ type FromJs
     | UpdatedMessages (Dict.Dict String Message)
     | WasmOutput String Bytes.Bytes
     | SendError String
+    | InternalError String
 
 
 type ToJs
@@ -126,7 +127,7 @@ sendToJs toJs =
     elmToJs <|
         case toJs of
             TupdatedUserInput { id, userInput } ->
-                kvHelp "updatedDraftUserInput"
+                kvHelp "updatedUserInput"
                     [ ( "id", Je.string id )
                     , ( "userInput", Je.string userInput )
                     ]
