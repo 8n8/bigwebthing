@@ -3,33 +3,24 @@
 }
 
 #adminButtons {
-    display: flex;
+    display: grid;
+    flex: wrap;
 }
 
 #appButtons {
-    display: flex;
-    margin: -5px -5px;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(6em, 1fr));
+    margin: 0px -5px;
 }
 
 #appButtons > button:hover {
-    background-color: rgb(204, 230, 255);
-}
-
-#appButtons > button, #appButtons > div {
-    margin: 5px 5px;
-    flex: 1;
-}
-
-#appButtons > div {
-    background-color: black;
-    height: 5px;
 }
 
 #appButtons > button {
     font-family: Ubuntu;
-    font-size: 1.4em;
-    padding: 30px 5px;
-    background-color: rgb(204, 230, 255);
+    font-size: 1.3em;
+    padding: 30px 0px;
     border: none;
+    margin: 3px;
+    background-color: rgb(204, 230, 255);
 }
