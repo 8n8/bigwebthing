@@ -9,17 +9,20 @@
         <link href='/static/styles.css' rel='stylesheet'>
     </head>
     <body>
-        <div id="topButtons">
-            <button type="button" id="inboxButton" class="topButton">Inbox</button>
-            <button type="button" id="draftsButton" class="topButton">Drafts</button>
-            <button type="button" id="contactsButton" class="topButton">Contacts</button>
-            <button type="button" id="settingsButton" class="settings">
-                <svg viewBox="0 0 100 65" width="24" height="24">
-                    <rect y="5" width="100" height="8"></rect>
-                    <rect y="30" width="100" height="8"></rect>
-                    <rect y="55" width="100" height="8"></rect>
-                </svg>
-            </button>
+        <div id="topbar">
+            <span>BigWebThing</span>
+            <div id="adminButtons">
+                <button type="button" id="pricingButton">Pricing</button>
+                <button type="button" id="helpButton">Help</button>
+                <button type="button" id="accountButton">Account</button>
+            </div>
+        </div>
+        <div id="appButtons">
+            <button type="button" id="inboxButton">Inbox</button>
+            <button type="button" id="outboxButton">Outbox</button>
+            <button type="button" id="draftsButton">Drafts</button>
+            <button type="button" id="contactsButton">Contacts</button>
+            <button type="button" id="writeButton">Write</button>
         </div>
     </body>
     <script src="/static/main.js"></script>
