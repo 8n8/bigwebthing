@@ -93,9 +93,18 @@ decodeInt foreign =
             Left $ "expecting number, got " <> valueType
 
 
+lookupMaybeInt :: String -> F.Foreign -> Either String (Maybe Int)
+lookupMaybeInt key object =
+    decodeMaybe key object decodeInt
+
 
 decodeDraft :: F.Foreign -> Either String Draft
 decodeDraft foreign = do
+    to <- lookupMaybeInt "to" foreign
+    time <- lookupMaybeInt "time" foreign
+    subject <- lookupString "subject" foreign
+    userInput <- lookupString "userInput" foreign
+
     
     
 
