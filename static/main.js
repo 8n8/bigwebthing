@@ -266,33 +266,6 @@ function noMessagesDom() {
     return p;
 }
 
-let STATE = {};
-
-localforage.getItem("cryptoKeys").then(function(keys) {
-    if (keys === null) {
-        STATE.keys = {
-            signing: nacl.sign.keyPair(),
-            box: nacl.box.keyPair(),
-        };
-    } else {
-        STATE.keys = keys;
-    };
-
-    const [powInfo, powErr] = await getPowInfo(); 
-    if (powErr !== "") {
-        STATE.error.concat(powErr);
-        return;
-    }
-
-    const pow = proofOfWork(powInfo);
-    const myNameRequest = makeMyNameRequest(
-        pow, STATE.keys.signing.publicKey)
-    const [rawMyName, myNameErr] = await apiRequest(myNameRequest);
-    if (myNameErr !== "") {
-        STATE.error.concat(powErr);
-
-});
-
 async function getKeys() {
     let keys = await localforage.getItem("crypto keys");
     if (keys === null) {
@@ -392,4 +365,31 @@ async function io(output, inputs) {
             el.onclick = output.value.onclick;
             return;
     }
+}
+
+function callback(input) {
+    
+}
+
+let state = {};
+let inputs = [];
+let outputs = initOutputs(inputs);
+let promises = [];
+state.inputs = inputs;
+while (true) {
+    for (const output of outputs) {
+        const numPromises = promises.length;
+        async function ioHelp() {
+            await io(output, inputs);
+            return numPromises - 1;
+        }
+        promises.push(ioHelp());
+    }
+    await Promise.race(promises).then((i) => promises.splice(i, 1));
+    for (const input of inputs) {
+        let newOutputs;
+        [newOutputs, state] = update(input, state);
+        outputs.concat(newOutputs);
+    }
+    inputs = [];
 }
