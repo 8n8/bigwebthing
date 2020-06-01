@@ -8,7 +8,6 @@ server.go
 README.pdf
 #*
 elm-stuff/
-main.js
 data/
 node_modules/
 static/bundle.js
