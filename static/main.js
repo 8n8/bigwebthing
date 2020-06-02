@@ -4,8 +4,8 @@ function inboxMenuItem(message, inputs) {
     const container = document.createElement("button");
     container.type = "button";
     container.classList.add("inboxItem");
-    container.appendChild(makeSubjectDom(message));
-    container.appendChild(makeFromDom(message));
+    container.appendChild(makeSubjectDom(message.subject));
+    container.appendChild(makeFromDom(message.from));
     container.onclick = function () {
         inputs.push({ key: "inboxMenuClick", value: message.id });
     };
@@ -21,42 +21,53 @@ function initOnClicks(inputs) {
         "drafts",
         "pricing",
         "account",
-        "help"];
+        "help",
+    ];
     let outputs = [];
     for (const button of buttons) {
-        const clickMessage = {key: "topButtonClick", value: button};
-        const onclick = function() {inputs.push(clickMessage)};
+        const clickMessage = { key: "topButtonClick", value: button };
+        const onclick = function () {
+            inputs.push(clickMessage);
+        };
         outputs.push({
             key: "addOnClick",
-            value: {id: button + "Button", onclick: onclick}});
+            value: { id: button + "Button", onclick: onclick },
+        });
     }
     return outputs;
 }
 
 function initOutputs(inputs) {
     return [
-        { key: "cache query", value: "page" },
-        { key: "cache query", value: "inbox" },
-        { key: "cache query", value: "drafts" },
-        { key: "cache query", value: "my name" },
-        ].concat(initOnClicks(inputs));
+        { key: "cacheQuery", value: "page" },
+        { key: "cacheQuery", value: "inbox" },
+        { key: "cacheQuery", value: "drafts" },
+        { key: "cacheQuery", value: "outbox" },
+        { key: "cacheQuery", value: "myName" },
+    ].concat(initOnClicks(inputs));
 }
 
-function makeSubjectDom(message) {
-    const subject = document.createElement("p");
-    if ("subject" in message) {
-        subject.textContent = "Subject: " + message.subject;
-    } else {
-        subject.textContent = "No subject";
-        subject.classList.add("noneMessage");
+function makeSubjectDom(subject) {
+    const p = document.createElement("p");
+    if (subject !== undefined) {
+        p.textContent = "Subject: " + subject;
+        return p;
     }
-    return subject;
+    p.textContent = "No subject";
+    p.classList.add("noneMessage");
+    return p;
 }
 
-function makeFromDom(message) {
-    const from = document.createElement("p");
-    from.textContent = "From: " + message.from;
-    return from;
+function makeToDom(to) {
+    const p = document.createElement("p");
+    p.textContent = "To: " + to;
+    return p;
+}
+
+function makeFromDom(from) {
+    const p = document.createElement("p");
+    p.textContent = "From: " + from;
+    return p;
 }
 
 function combine(a, b) {
@@ -124,26 +135,33 @@ function makeMyNameRequest(pow, publicSigningKey) {
 
 function turnButtonOn(id) {
     return [
-        {key: "addCssClass",
-         value: {id: id, cssClass: "selectedButton"}},
-        {key: "removeCssClass",
-         value: {id: id, cssClass: "notSelectedButton"}}]
+        { key: "addCssClass", value: { id: id, cssClass: "selectedButton" } },
+        {
+            key: "removeCssClass",
+            value: { id: id, cssClass: "notSelectedButton" },
+        },
+    ];
 }
 
 function turnButtonOff(id) {
     return [
-        {key: "addCssClass",
-         value: {id: id, cssClass "notSelectedButton"}},
-        {key: "removeCssClass",
-         value: {id: id, cssClass "selectedButton"}}];
+        {
+            key: "addCssClass",
+            value: { id: id, cssClass: "notSelectedButton" },
+        },
+        {
+            key: "removeCssClass",
+            value: { id: id, cssClass: "selectedButton" },
+        },
+    ];
 }
 
 function drawInboxItem(message, inputs) {
     const button = document.createElement("button");
     button.type = "button";
-    button.classList.add("inboxItem");
-    button.appendChild(makeSubjectDom(message));
-    button.appendChild(makeFromDom(message));
+    button.classList.add("messageButton");
+    button.appendChild(makeSubjectDom(message.subject));
+    button.appendChild(makeFromDom(message.from));
     button.onclick = function () {
         inputs.push({ key: "inboxMenuClick", value: message.id });
     };
@@ -151,82 +169,350 @@ function drawInboxItem(message, inputs) {
 }
 
 function drawInbox(state) {
-    let menu = [];
+    const inbox = [];
     for (message of state.messages) {
-        menu.push(drawInboxItem(message, state.inputs);
+        inbox.push(drawInboxItem(message, state.inputs));
     }
-    return [{
-        key: "newChildren",
-        value: {
-            parentId: "page",
-            children: menu}}]
+    return [
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: inbox },
+        },
+    ];
+}
+
+function drawOutboxItem(message, inputs) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.classList.add("messageButton");
+    button.appendChild(makeSubjectDom(message.subject));
+    button.appendChild(makeToDom(message.to));
+    button.onclick = function () {
+        inputs.push({ key: "outboxMenuClick", value: message.id });
+    };
+    return button;
+}
+
+// after here
+
+function drawOutbox(state) {
+    const outbox = [];
+    for (message of state.outbox) {
+        outbox.push(drawOutboxItem(message, state.inputs));
+    }
+    return [
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: outbox },
+        },
+    ];
+}
+
+function makeDraftToDom(to) {
+    const p = document.createElement("p");
+    if (to !== undefined) {
+        p.textContent = "To: " + to;
+        return p;
+    }
+    p.textContent = "No recipient";
+    p.classList.add("noneMessage");
+    return p;
+}
+
+function drawDraftsItem(draft, inputs) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.classList.add("messageButton");
+    button.appendChild(makeSubjectDom(draft.subject));
+    button.appendChild(makeDraftToDom(message.to));
+    button.onclick = function () {
+        inputs.push({ key: "draftsMenuClick", value: draft.id });
+    };
+    return button;
+}
+
+function drawDrafts(state) {
+    const drafts = [];
+    for (draft of state.drafts) {
+        drafts.push(drawDraftsItem(draft, state.inputs));
+    }
+    return [
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: drafts },
+        },
+    ];
+}
+
+function makeSubjectBox(subject, inputs) {
+    const id = "writerSubjectBox";
+    const container = document.createElement("div");
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.innerHTML = "Subject";
+    container.appendChild(label);
+
+    const box = document.createElement("input");
+    box.type = "text";
+    box.value = subject;
+    box.oninput = (e) => callback("updatedSubjectBox", e.target.value, inputs);
+    box.id = id;
+    container.appendChild(box);
+    return container;
+}
+
+function makeToBox(to, inputs, id) {
+    const id = "writerToBox";
+    const container = document.createElement("div");
+
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.innerHTML = "To";
+    container.appendChild(label);
+
+    const box = document.createElement("input");
+    box.type = "text";
+    box.value = to;
+    box.oninput = (e) => callback("updatedToBox", e.target.value, inputs);
+    box.id = id;
+    container.appendChild(box);
+    return container;
+}
+
+function addContactBox(boxContents, inputs) {
+    const id = "addContactBox";
+    const container = document.createElement("div");
+
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.innerHTML = "Add a new contact";
+    container.appendChild(label);
+
+    const box = document.createElement("input");
+    box.type = "text";
+    box.value = boxContents;
+    box.oninput = (e) =>
+        callback("updatedAddContactBox", e.target.value, inputs);
+    box.id = id;
+    container.appendChild(box);
+    return container;
+}
+
+function longestRow(rows) {
+    let longest = 0;
+    for (row of rows) {
+        const length = row.length;
+        if (length > longest) {
+            longest = length;
+        }
+    }
+    return longest;
+}
+
+function makeUserInputBox(userInput, inputs) {
+    const id = "writerUserInputBox";
+    const container = document.createElement("div");
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.innerHTML = "Message";
+    container.appendChild(label);
+
+    const box = document.createElement("textarea");
+    const rows = userInput.split("\n");
+    box.cols = longestRow(rows);
+    box.rows = rows.length;
+    box.oninput = (e) => callback("updatedUserInput", e.target.value, inputs);
+    box.id = id;
+    container.appendChild(box);
+    return container;
+}
+
+function codeUploaderHelp(inputs) {
+    const id = "writerCodeUploader";
+    const container = document.createElement("div");
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.innerHTML = "Upload code";
+    container.appendChild(label);
+
+    const browse = document.createElement("input");
+    browse.type = "file";
+    browse.id = id;
+    browse.addEventListener(
+        "change",
+        () => callback("codeFilesUpload", this.files, inputs),
+        false
+    );
+    container.appendChild(browse);
+    return container;
+}
+
+function prettyBytes(n) {
+    if (n < 1000) {
+        return n + "B";
+    }
+
+    if (n < 1000000) {
+        return Math.round(n / 1000) + "KB";
+    }
+
+    if (n < 1000000000) {
+        return Math.round(n / 1000000) + "MB";
+    }
+}
+
+function makeCodeUploader(code, inputs) {
+    if (code === undefined) {
+        return codeUploaderHelp(state.inputs);
+    }
+
+    const div = document.createElement("div");
+
+    const title = document.createElement("h1");
+    title.textContent("Message program");
+    div.appendChild(title);
+
+    const filename = document.createElement("span");
+    filename.textContent = code.filename;
+    div.appendChild(filename);
+
+    const size = document.createElement("span");
+    size.textContent = "Size: " + prettyBytes(size);
+    div.appendChild(size);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.onclick = function () {
+        callback("deleteCode", code.draftId, inputs);
+    };
+    deleteButton.textContent = "Delete";
+    div.appendChild(deleteButton);
+
+    return div;
+}
+
+function drawWrite(state) {
+    let draft;
+    if (state.openedDraft === undefined) {
+        state.openedDraft = {
+            to: "",
+            subject: "",
+            userInput: "",
+            blobIds: [],
+        };
+    } else {
+        draft = state.openedDraft;
+    }
+
+    const children = [];
+
+    const subjectBox = makeSubjectBox(draft.subject, state.inputs);
+    children.push(subjectBox);
+
+    const toBox = makeToBox(draft.to, state.inputs);
+    children.push(toBox);
+
+    const userInput = makeUserInputBox(draft.userInput, state.inputs);
+    children.push(userInput);
+
+    const codeUploader = makeCodeUploader(draft.code, state.inputs);
+    children.push(codeUploader);
+
+    return [
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: children },
+        },
+    ];
+}
+
+function drawContact(contact, inputs) {
+    const div = document.createElement("div");
+    div.classList.add("contactView");
+
+    const name = document.createElement("span");
+    name.textContent = contact;
+    div.appendChild(name);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.textContent = "Delete";
+    deleteButton.onclick = function () {
+        callback("deleteContact", contact, inputs);
+    };
+    div.append(deleteButton);
+
+    return div;
+}
+
+function drawContacts(state) {
+    const children = [];
+
+    const myName = state.myName === undefined ? "Requesting..." : state.myName;
+    children.push(myNameDom(myName));
+
+    children.push(addContactBox(state.addContactBox, state.inputs));
+
+    const h1 = document.createElement("h1");
+    h1.textContent = "My contacts";
+    children.append(h1);
+
+    for (contact of state.contacts) {
+        children.push(drawContact(contact, state.inputs));
+    }
+    return [
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: children },
+        },
+    ];
+}
+
+function drawPricing(state) {
+    const span = document.createElement("span");
+    span.textContent = "TODO";
+    return [
+        { key: "newChildren", value: { parentId: "page", children: [span] } },
+    ];
+}
+
+function drawAccount(state) {
+    const span = document.createElement("span");
+    span.textContent = "TODO";
+    return [
+        { key: "newChildren", value: { parentId: "page", children: [span] } },
+    ];
+}
+
+function drawHelp(state) {
+    const span = document.createElement("span");
+    span.textContent = "TODO";
+    return [
+        { key: "newChildren", value: { parentId: "page", children: [span] } },
+    ];
 }
 
 const drawFunc = {
-    "inbox": drawInbox,
-    "write": drawWrite,
-    "contacts": drawContacts,
-    "outbox": drawOutbox,
-    "drafts": drawDrafts,
-    "pricing": drawPricing,
-    "account": drawAccount,
-    "help": drawHelp};
-
+    inbox: drawInbox,
+    write: drawWrite,
+    contacts: drawContacts,
+    outbox: drawOutbox,
+    drafts: drawDrafts,
+    pricing: drawPricing,
+    account: drawAccount,
+    help: drawHelp,
+};
 
 function drawPage(page, oldPage, state) {
     let buttonOn = [];
     let buttonOff = [];
     if (page !== maybeOldPage) {
         buttonOff =
-            oldPage === undefined ?
-            [] :
-            turnButtonOff(oldPage + "Button");
+            oldPage === undefined ? [] : turnButtonOff(oldPage + "Button");
 
         buttonOn = turnButtonOn(page + "Button");
     }
     const drawJobs = drawFunc[page](state);
     return drawJobs.concat(buttonOn).concat(buttonOff);
-}
-
-function updateOnCacheResponse(response, state) {
-    switch (response.key) {
-        case "page":
-            if (response.value === null) {
-                state.page = "inbox";
-            }
-            const oldPage = state.page;
-            state.page = response.value;
-            return [drawPage(response.value, oldPage, state), state];
-
-        case "my name":
-            if (response.value === null) {
-                return [
-                    [
-                        {
-                            key: "request name from server",
-                            value: state.cryptoKeys,
-                        },
-                    ],
-                    state,
-                ];
-            }
-            state.myName = response.value;
-            return [[{ key: "draw", value: state }], state];
-
-        case "inbox":
-            if (response.value === null) {
-                state.inbox = [];
-            }
-            state.inbox = response.value;
-            return [[{ key: "draw", value: state }], state];
-
-        case "drafts":
-            if (response.value === null) {
-                state.drafts = [];
-            }
-            state.drafts = response.value;
-            return [[{ key: "draw", value: state }], state];
-    }
 }
 
 function oneByte(route) {
@@ -235,6 +521,61 @@ function oneByte(route) {
     view[0] = route;
     return view;
 }
+
+function myNameDom(myName) {
+    const p = document.createElement("p");
+    p.textContent = "My username is: " + myName;
+    return p;
+}
+
+function myNameFromCache(maybeMyName, state) {
+    if (maybeMyName === null) {
+        return [[{ key: "requestMyName", value: state.cryptoKeys }], state];
+    }
+    state.myName = maybeMyName;
+    if (state.page === "contacts") {
+        const outputs = [
+            {
+                key: "newChildren",
+                value: { parentId: "myName", children: [maybeMyName] },
+            },
+        ];
+        return [outputs, state];
+    }
+    return [[], state];
+}
+
+function inboxFromCache(inbox, state) {
+    if (inbox === null) {
+        state.inbox = [];
+    }
+    state.inbox = inbox;
+    return [[{ key: "draw", value: state }], state];
+}
+
+function draftsFromCache(drafts, state) {
+    if (drafts === null) {
+        state.drafts = [];
+    }
+    state.drafts = drafts;
+    return [[{ key: "draw", value: state }], state];
+}
+
+function pageFromCache(page, state) {
+    if (page === null) {
+        state.page = "inbox";
+    }
+    const oldPage = state.page;
+    state.page = page;
+    return [drawPage(page, oldPage, state), state];
+}
+
+const updateOnCacheResponse = {
+    page: pageFromCache,
+    myName: myNameFromCache,
+    inbox: inboxFromCache,
+    drafts: draftsFromCache,
+};
 
 function update(input, state) {
     switch (input.key) {
@@ -303,12 +644,22 @@ async function apiRequest(requestBody) {
     return [bodyArray, ""];
 }
 
-async function requestName(maybeKeys, inputs) {
+function addCssClass(toAdd, inputs) {
+    const el = document.getElementById(toAdd.id);
+    el.classList.add(toAdd.cssClass);
+}
+
+function removeCssClass(toRemove, inputs) {
+    const el = document.getElementById(toRemove.id);
+    el.classList.remove(toRemove.cssClass);
+}
+
+async function requestMyName(maybeKeys, inputs) {
     const keys = maybeKeys === undefined ? await getKeys() : maybeKeys;
 
     let [powInfo, err] = await getPowInfo();
     if (err !== "") {
-        inputs.push({ key: "error", value: err });
+        callback("error", err, inputs);
         return;
     }
     const pow = proofOfWork(powInfo);
@@ -316,80 +667,62 @@ async function requestName(maybeKeys, inputs) {
     const request = makeMyNameRequest(pow, keys.signing.publicKey);
     const [response, responseErr] = await apiRequest(request);
     if (responseErr !== "") {
-        return [0, err];
+        callback("error", responseErr, inputs);
+        return;
     }
-    return [decodeInt(response), ""];
+    callback("myName", decodeInt(response), inputs);
 }
 
-async function io(output, inputs) {
-    switch (output.key) {
-        case "cache query":
-            const value = await localforage.getItem(output.value);
-            inputs.push({
-                key: "cache response",
-                value: { key: output.value, value: value },
-            });
-            return;
+async function cacheQuery(key, inputs) {
+    const value = await localforage.getItem(key);
+    callback("cacheResponse", { key: key, value: value }, inputs);
+}
 
-        case "request name from server":
-            requestName(output.value, inputs);
-            return;
-
-        case "addCssClass":
-            const el = document.getElementById(output.value.id);
-            el.classList.add(output.value.cssClass);
-            return;
-
-        case "removeCssClass":
-            const el = document.getElementById(output.value.id);
-            el.classList.remove(output.value.cssClass);
-            return;
-
-        case "init draw":
-            initDraw(inputs);
-            return;
-
-        case "newChildren":
-            const x = output.value;
-            const parentEl = document.getElementById(x.parentId);
-            while (parentEl.firstChild) {
-                parentEl.removeChild(parentEl.lastChild);
-            };
-            for (child of x.children) {
-                parentEl.appendChild(child);
-            };
-            return;
-
-        case "addOnClick":
-            const el = document.getElementById(output.value.id);
-            el.onclick = output.value.onclick;
-            return;
+function newChildren(key, dontCare) {
+    const parentEl = document.getElementById(key.parentId);
+    while (parentEl.firstChild) {
+        parentEl.removeChild(parentEl.lastChild);
+    }
+    for (child of key.children) {
+        parentEl.appendChild(child);
     }
 }
 
-function callback(input) {
-    
+function addOnClick(key, dontCare) {
+    const el = document.getElementById(key.id);
+    el.onclick = key.onclick;
 }
 
-let state = {};
-let inputs = [];
-let outputs = initOutputs(inputs);
-let promises = [];
-state.inputs = inputs;
-while (true) {
-    for (const output of outputs) {
-        const numPromises = promises.length;
-        async function ioHelp() {
-            await io(output, inputs);
-            return numPromises - 1;
+const io = {
+    cacheQuery: cacheQuery,
+    requestMyName: requestMyName,
+    addCssClass: addCssClass,
+    removeCssClass: removeCssClass,
+    newChildren: newChildren,
+    addOnclick: addOnclick,
+};
+
+function callback(key, value, inputs) {
+    inputs.push({ key: key, value: value });
+    mainTick();
+}
+
+let mainTick;
+{
+    const state = {};
+    const inputs = [];
+    const outputs = initOutputs(inputs);
+    state.inputs = inputs;
+
+    mainTick = () => {
+        for (const output of outputs) {
+            io[output.key](output.value, inputs);
         }
-        promises.push(ioHelp());
-    }
-    await Promise.race(promises).then((i) => promises.splice(i, 1));
-    for (const input of inputs) {
-        let newOutputs;
-        [newOutputs, state] = update(input, state);
-        outputs.concat(newOutputs);
-    }
-    inputs = [];
+        for (const input of inputs) {
+            let newOutputs;
+            [newOutputs, state] = update(input, state);
+            outputs.concat(newOutputs);
+        }
+        inputs.length = 0;
+    };
 }
