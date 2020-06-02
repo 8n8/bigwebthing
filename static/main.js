@@ -261,7 +261,7 @@ function makeSubjectBox(subject, inputs) {
     return container;
 }
 
-function makeToBox(to, inputs, id) {
+function makeToBox(to, inputs) {
     const id = "writerToBox";
     const container = document.createElement("div");
 
@@ -593,8 +593,7 @@ function update(input, state) {
 }
 
 function formatHttpError(body, statusCode) {
-    return;
-    "bad response: " +
+    return "bad response: " +
         response.status +
         ": " +
         String.fromCharChode.apply(null, arrToNums(body));
@@ -628,7 +627,7 @@ async function getPowInfo() {
 }
 
 async function apiRequest(requestBody) {
-    const response: Response = await fetch("/api", {
+    const response = await fetch("/api", {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: requestBody,
@@ -688,7 +687,7 @@ function newChildren(key, dontCare) {
     }
 }
 
-function addOnClick(key, dontCare) {
+function addOnclick(key, dontCare) {
     const el = document.getElementById(key.id);
     el.onclick = key.onclick;
 }
