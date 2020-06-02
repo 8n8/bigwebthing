@@ -593,10 +593,12 @@ function update(input, state) {
 }
 
 function formatHttpError(body, statusCode) {
-    return "bad response: " +
+    return (
+        "bad response: " +
         response.status +
         ": " +
-        String.fromCharChode.apply(null, arrToNums(body));
+        String.fromCharChode.apply(null, arrToNums(body))
+    );
 }
 
 function noMessagesDom() {
@@ -714,6 +716,7 @@ let mainTick;
     state.inputs = inputs;
 
     mainTick = () => {
+        debugger;
         for (const output of outputs) {
             io[output.key](output.value, inputs);
         }
@@ -725,3 +728,4 @@ let mainTick;
         inputs.length = 0;
     };
 }
+mainTick();
