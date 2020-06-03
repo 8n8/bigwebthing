@@ -11,10 +11,9 @@ function initOnClicks(inputs) {
         "account",
         "help",
     ];
-    let outputs = [];
+    const outputs = [];
     for (const button of buttons) {
-        const onclick = () =>
-            callback("topButtonClick", button, inputs);
+        const onclick = () => callback("topButtonClick", button, inputs);
         outputs.push({
             key: "addOnclick",
             value: { id: button + "Button", onclick: onclick },
@@ -61,8 +60,8 @@ function makeFromDom(from) {
 function combine(a, b) {
     const lena = a.length;
     const lenb = b.length;
-    let buf = new ArrayBuffer(lena + lenb);
-    let combined = new Uint8Array(buf);
+    const buf = new ArrayBuffer(lena + lenb);
+    const combined = new Uint8Array(buf);
     for (let i = 0; i < lena; i++) {
         combined[i] = a[i];
     }
@@ -91,9 +90,9 @@ function isDifficult(hash, difficulty) {
 }
 
 function proofOfWork(powInfo) {
-    let buffer = new ArrayBuffer(8);
-    let bufferView = new Uint8Array(buffer);
-    let counter = new Int32Array(buffer);
+    const buffer = new ArrayBuffer(8);
+    const bufferView = new Uint8Array(buffer);
+    const counter = new Int32Array(buffer);
     while (true) {
         const combined = combine(powInfo.unique, bufferView);
         const hash = nacl.hash(combined).slice(0, 32);
@@ -105,12 +104,12 @@ function proofOfWork(powInfo) {
 }
 
 function uint8Array(length) {
-    let buffer = new ArrayBuffer(length);
+    const buffer = new ArrayBuffer(length);
     return new Uint8Array(buffer);
 }
 
 function makeMyNameRequest(pow, publicSigningKey) {
-    let request = uint8Array(49);
+    const request = uint8Array(49);
     request[0] = 1;
     for (let i = 0; i < 16; i++) {
         request[i + 1] = pow[i];
@@ -157,8 +156,16 @@ function drawInboxItem(message, inputs) {
 }
 
 function drawInbox(state) {
+    if (state.inboxSummary.length === 0) {
+        return [
+            {
+                key: "newChildren",
+                value: { parentId: "page", children: [noMessagesDom()] },
+            },
+        ];
+    }
     const inbox = [];
-    for (message of state.inboxSummary) {
+    for (const message of state.inboxSummary) {
         inbox.push(drawInboxItem(message, state.inputs));
     }
     return [
@@ -185,7 +192,7 @@ function drawOutboxItem(message, inputs) {
 
 function drawOutbox(state) {
     const outbox = [];
-    for (message of state.outboxSummary) {
+    for (const message of state.outboxSummary) {
         outbox.push(drawOutboxItem(message, state.inputs));
     }
     return [
@@ -212,7 +219,7 @@ function drawDraftsItem(draft, inputs) {
     button.type = "button";
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(draft.subject));
-    button.appendChild(makeDraftToDom(message.to));
+    button.appendChild(makeDraftToDom(draft.to));
     button.onclick = function () {
         inputs.push({ key: "draftsMenuClick", value: draft.id });
     };
@@ -221,7 +228,7 @@ function drawDraftsItem(draft, inputs) {
 
 function drawDrafts(state) {
     const drafts = [];
-    for (draft of state.draftsSummary) {
+    for (const draftSummary of state.draftsSummary) {
         drafts.push(drawDraftsItem(draftSummary, state.inputs));
     }
     return [
@@ -288,7 +295,7 @@ function addContactBox(boxContents, inputs) {
 
 function longestRow(rows) {
     let longest = 0;
-    for (row of rows) {
+    for (const row of rows) {
         const length = row.length;
         if (length > longest) {
             longest = length;
@@ -351,7 +358,7 @@ function prettyBytes(n) {
 
 function makeCodeUploader(code, inputs) {
     if (code === undefined) {
-        return codeUploaderHelp(state.inputs);
+        return codeUploaderHelp(inputs);
     }
 
     const div = document.createElement("div");
@@ -445,7 +452,7 @@ function drawContacts(state) {
     h1.textContent = "My contacts";
     children.append(h1);
 
-    for (contact of state.contacts) {
+    for (const contact of state.contacts) {
         children.push(drawContact(contact, state.inputs));
     }
     return [
@@ -494,19 +501,19 @@ const drawFunc = {
 function drawPage(oldPage, state) {
     let buttonOn = [];
     let buttonOff = [];
-    if (state.page !== maybeOldPage) {
+    if (state.page !== oldPage) {
         buttonOff =
             oldPage === undefined ? [] : turnButtonOff(oldPage + "Button");
 
-        buttonOn = turnButtonOn(page + "Button");
+        buttonOn = turnButtonOn(state.page + "Button");
     }
     const drawJobs = drawFunc[state.page](state);
     return drawJobs.concat(buttonOn).concat(buttonOff);
 }
 
 function oneByte(route) {
-    let buffer = new ArrayBuffer(1);
-    let view = new Uint8Array(buffer);
+    const buffer = new ArrayBuffer(1);
+    const view = new Uint8Array(buffer);
     view[0] = route;
     return view;
 }
@@ -535,14 +542,14 @@ function myNameFromCache(maybeMyName, state) {
 }
 
 function inboxIdsFromCache(inboxIds, state) {
-    if (inbox === null) {
-        state.inbox = [];
+    if (inboxIds === null) {
+        state.inboxIds = [];
     }
-    state.inboxIds = inbox;
+    state.inboxIds = inboxIds;
     return [[{ key: "draw", value: state }], state];
 }
 
-function draftIdsFromCache(draftsIds, state) {
+function draftIdsFromCache(draftIds, state) {
     if (draftIds === null) {
         state.draftIds = [];
     }
@@ -628,8 +635,7 @@ function setItem(key, value) {
 }
 
 function newSubject(draftId, draftsSummary, subject) {
-    let draftSummary;
-    for (draft of draftsSummary) {
+    for (const draft of draftsSummary) {
         if (draft.id === draftId) {
             draft.subject = subject;
             break;
@@ -637,7 +643,6 @@ function newSubject(draftId, draftsSummary, subject) {
     }
     return draftsSummary;
 }
-
 
 function updatedSubjectBox(subject, state) {
     if (state.openDraft === undefined) {
@@ -649,7 +654,10 @@ function updatedSubjectBox(subject, state) {
     }
     state.openDraft.subject = subject;
     state.draftsSummary = newSubject(
-        state.openDraft.id, state.draftsSummary, subject);
+        state.openDraft.id,
+        state.draftsSummary,
+        subject
+    );
     const ioJobs = [
         {
             key: "updateTextBox",
@@ -736,23 +744,38 @@ function updateOnAddContactButtonClick(dontCare, state) {
     if (state.contacts.has(contact)) {
         const err = contact + " is already in your contacts";
         state.addContactError = err;
-        return [[{key: "addContactError", value: err}], state];
+        return [[{ key: "addContactError", value: err }], state];
     }
     state.contacts.add(contact);
     state.addContactBox = "";
     return [
-        [{key: "updateTextBox",
-          value: {id: "addContactBox", value: ""}}],
-        state];
+        [{ key: "updateTextBox", value: { id: "addContactBox", value: "" } }],
+        state,
+    ];
 }
 
 function updatedAddContactBox(contact, state) {
     if (!validRecipient(contact)) {
         return [
-            [{ key: "updateTextBox", value: { id: "addContactBox", value: ""}}], state]
+            [
+                {
+                    key: "updateTextBox",
+                    value: { id: "addContactBox", value: "" },
+                },
+            ],
+            state,
+        ];
     }
     state.addContactBox = contact;
-    return [{key: "updateTextBox", value: { id: "addContactBox", value: contact}}], state];
+    return [
+        [
+            {
+                key: "updateTextBox",
+                value: { id: "addContactBox", value: contact },
+            },
+        ],
+        state,
+    ];
 }
 
 function updatedUserInput(userInput, state) {
@@ -761,15 +784,17 @@ function updatedUserInput(userInput, state) {
     }
     if (state.openDraft.id === undefined) {
         state.openDraft.id = state.iota;
-        state.iota +=1 ;
+        state.iota += 1;
     }
     state.openDraft.userInput = userInput;
-    const ioJobs =[
+    const ioJobs = [
         {
             key: "updatedTextBox",
-            value: {id: "writerUserInputBox", value: userInput}},
+            value: { id: "writerUserInputBox", value: userInput },
+        },
         setItem("iota", state.iota),
-        setItem(state.openDraft.id, state.openDraft)];
+        setItem(state.openDraft.id, state.openDraft),
+    ];
     return [ioJobs, state];
 }
 
@@ -783,12 +808,16 @@ function updateOnCodeUpload(code, state) {
     }
     state.openDraft.code = code;
     const ioJobs = [
-        { key: "replaceDomWith",
-          value: {
-            id: "codeUploader",
-            newDom: makeCodeUploader(code, state.inputs)}},
+        {
+            key: "replaceDomWith",
+            value: {
+                id: "codeUploader",
+                newDom: makeCodeUploader(code, state.inputs),
+            },
+        },
         setItem("iota", state.iota),
-        setItem(state.openDraft.id, state.openDraft)];
+        setItem(state.openDraft.id, state.openDraft),
+    ];
     return [ioJobs, state];
 }
 
@@ -799,20 +828,24 @@ function updateOnDeleteCode(draftId, state) {
     const openDraft = state.openDraft;
     delete openDraft.code;
     const ioJobs = [
-        {key: "replaceDomWith",
-         value: {
-            id: "codeUploader",
-            newDom: makeCodeUploader(undefined, state.inputs)}},
-        setItem(state.openDraft.id, state.openDraft)];
+        {
+            key: "replaceDomWith",
+            value: {
+                id: "codeUploader",
+                newDom: makeCodeUploader(undefined, state.inputs),
+            },
+        },
+        setItem(state.openDraft.id, state.openDraft),
+    ];
     return [ioJobs, state];
 }
 
 function updateOnDeleteContact(contact, state) {
     state.contacts.delete(contact);
     return [
-        drawContacts(state).push(
-            setItem("contacts", state.contacts)),
-        state];
+        drawContacts(state).push(setItem("contacts", state.contacts)),
+        state,
+    ];
 }
 
 function updateOnTopButtonClick(button, state) {
@@ -823,9 +856,7 @@ function updateOnTopButtonClick(button, state) {
     const oldPage = state.page;
     state.page = button;
 
-    return [
-        drawPage(oldPage, state).push(setItem("page", button)),
-        state];
+    return [drawPage(oldPage, state).push(setItem("page", button)), state];
 }
 
 const update = {
@@ -843,13 +874,22 @@ const update = {
     uploadedCodeFile: updateOnCodeUpload,
     deleteCode: updateOnDeleteCode,
     deleteContact: updateOnDeleteContact,
-    topButtonClick updateOnTopButtonClick,
+    topButtonClick: updateOnTopButtonClick,
 };
+
+function arrToNums(arr) {
+    const numbers = [];
+    const lenArr = arr.length;
+    for (let i = 0; i < lenArr; i++) {
+        numbers.push(arr[i]);
+    }
+    return numbers;
+}
 
 function formatHttpError(body, statusCode) {
     return (
         "bad response: " +
-        response.status +
+        statusCode +
         ": " +
         String.fromCharChode.apply(null, arrToNums(body))
     );
@@ -912,7 +952,7 @@ function removeCssClass(toRemove, inputs) {
 async function requestMyName(maybeKeys, inputs) {
     const keys = maybeKeys === undefined ? await getKeys() : maybeKeys;
 
-    let [powInfo, err] = await getPowInfo();
+    const [powInfo, err] = await getPowInfo();
     if (err !== "") {
         callback("error", err, inputs);
         return;
@@ -938,7 +978,7 @@ function newChildren(key, dontCare) {
     while (parentEl.firstChild) {
         parentEl.removeChild(parentEl.lastChild);
     }
-    for (child of key.children) {
+    for (const child of key.children) {
         parentEl.appendChild(child);
     }
 }
@@ -1006,11 +1046,14 @@ async function codeFilesUpload(files, inputs) {
     const contents = await file.arrayBuffer();
     callback(
         "uploadedCodeFile",
-        {contents: contents,
-         name: file.name,
-         size: file.size,
-         mime: file.type},
-        inputs);
+        {
+            contents: contents,
+            name: file.name,
+            size: file.size,
+            mime: file.type,
+        },
+        inputs
+    );
 }
 
 function replaceDomWith(newDom, dontCare) {
@@ -1048,7 +1091,6 @@ let mainTick;
 
     mainTick = () => {
         for (const output of outputs) {
-            debugger;
             const iof = io[output.key];
             iof(output.value, inputs);
         }
