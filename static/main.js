@@ -30,7 +30,7 @@ function initOnClicks(inputs) {
             inputs.push(clickMessage);
         };
         outputs.push({
-            key: "addOnClick",
+            key: "addOnclick",
             value: { id: button + "Button", onclick: onclick },
         });
     }
@@ -39,11 +39,13 @@ function initOnClicks(inputs) {
 
 function initOutputs(inputs) {
     return [
+        { key: "cacheQuery", value: "iota" },
         { key: "cacheQuery", value: "page" },
-        { key: "cacheQuery", value: "inbox" },
-        { key: "cacheQuery", value: "drafts" },
-        { key: "cacheQuery", value: "outbox" },
+        { key: "cacheQuery", value: "inboxIds" },
+        { key: "cacheQuery", value: "draftIds" },
+        { key: "cacheQuery", value: "outboxIds" },
         { key: "cacheQuery", value: "myName" },
+        { key: "cacheQuery", value: "contacts" },
     ].concat(initOnClicks(inputs));
 }
 
@@ -170,7 +172,7 @@ function drawInboxItem(message, inputs) {
 
 function drawInbox(state) {
     const inbox = [];
-    for (message of state.messages) {
+    for (message of state.inboxSummary) {
         inbox.push(drawInboxItem(message, state.inputs));
     }
     return [
@@ -197,7 +199,7 @@ function drawOutboxItem(message, inputs) {
 
 function drawOutbox(state) {
     const outbox = [];
-    for (message of state.outbox) {
+    for (message of state.outboxSummary) {
         outbox.push(drawOutboxItem(message, state.inputs));
     }
     return [
@@ -233,8 +235,8 @@ function drawDraftsItem(draft, inputs) {
 
 function drawDrafts(state) {
     const drafts = [];
-    for (draft of state.drafts) {
-        drafts.push(drawDraftsItem(draft, state.inputs));
+    for (draft of state.draftsSummary) {
+        drafts.push(drawDraftsItem(draftSummary, state.inputs));
     }
     return [
         {
@@ -367,6 +369,7 @@ function makeCodeUploader(code, inputs) {
     }
 
     const div = document.createElement("div");
+    div.id = "codeUploader";
 
     const title = document.createElement("h1");
     title.textContent("Message program");
@@ -377,7 +380,7 @@ function makeCodeUploader(code, inputs) {
     div.appendChild(filename);
 
     const size = document.createElement("span");
-    size.textContent = "Size: " + prettyBytes(size);
+    size.textContent = "Size: " + prettyBytes(code.size);
     div.appendChild(size);
 
     const deleteButton = document.createElement("button");
@@ -545,52 +548,302 @@ function myNameFromCache(maybeMyName, state) {
     return [[], state];
 }
 
-function inboxFromCache(inbox, state) {
+function inboxIdsFromCache(inboxIds, state) {
     if (inbox === null) {
         state.inbox = [];
     }
-    state.inbox = inbox;
+    state.inboxIds = inbox;
     return [[{ key: "draw", value: state }], state];
 }
 
-function draftsFromCache(drafts, state) {
-    if (drafts === null) {
-        state.drafts = [];
+function draftIdsFromCache(draftsIds, state) {
+    if (draftIds === null) {
+        state.draftIds = [];
     }
-    state.drafts = drafts;
+    state.draftIds = draftIds;
+    return [[{ key: "draw", value: state }], state];
+}
+
+function outboxIdsFromCache(outboxIds, state) {
+    if (outboxIds === null) {
+        state.outboxIds = [];
+    }
+    state.outboxIds = outboxIds;
     return [[{ key: "draw", value: state }], state];
 }
 
 function pageFromCache(page, state) {
-    if (page === null) {
-        state.page = "inbox";
+    state.page = page;
+    if (page === "inbox" || page === null) {
+        if (
+            state.openedMessage === undefined &&
+            state.inboxSummary === undefined
+        ) {
+            return [[{ key: "getInboxSummary", value: state.inboxIds }], state];
+        }
+    }
+    if (
+        page === "drafts" &&
+        state.openedDraft === undefined &&
+        state.draftsSummary === undefined
+    ) {
+        return [[{ key: "getDraftsSummary", value: state.draftIds }], state];
+    }
+    if (
+        page === "outbox" &&
+        state.openedSent === undefined &&
+        state.outboxSummary === undefined
+    ) {
+        return [[{ key: "getOutboxSummary", value: state.outboxIds }], state];
     }
     const oldPage = state.page;
-    state.page = page;
     return [drawPage(page, oldPage, state), state];
 }
 
-const updateOnCacheResponse = {
+function iotaFromCache(iota, state) {
+    state.iota = iota === null ? 0 : iota;
+    return [[], state];
+}
+
+function contactsFromCache(contacts, state) {
+    if (contacts === null) {
+        return [[], state];
+    }
+    state.contacts = contacts;
+    return [[], state];
+}
+
+const updateOnCacheResponseSwitch = {
     page: pageFromCache,
     myName: myNameFromCache,
-    inbox: inboxFromCache,
-    drafts: draftsFromCache,
+    inboxIds: inboxIdsFromCache,
+    draftIds: draftIdsFromCache,
+    outboxIds: outboxIdsFromCache,
+    iotaIds: iotaFromCache,
+    contacts: contactsFromCache,
 };
 
-function update(input, state) {
-    switch (input.key) {
-        case "cache response":
-            return updateOnCacheResponse(input.value, state);
-
-        case "error":
-            state.error = input.value;
-            return [[{ key: "draw", value: state }], state];
-
-        case "new name":
-            state.myName = input.value;
-            return [[{ key: "draw", value: state }], state];
-    }
+function updateError(error, state) {
+    state.error = error;
+    return [[{ key: "draw", value: state }], state];
 }
+
+function updateNewName(newName, state) {
+    state.myName = newName;
+    return [[{ key: "draw", value: state }], state];
+}
+
+function setItem(key, value) {
+    return {
+        key: "cacheValue",
+        value: { key: key, value: value },
+    };
+}
+
+function newSubject(draftId, draftsSummary, subject) {
+    let draftSummary;
+    for (draft of draftsSummary) {
+        if (draft.id === draftId) {
+            draft.subject = subject;
+            break;
+        }
+    }
+    return draftsSummary;
+}
+
+
+function updatedSubjectBox(subject, state) {
+    if (state.openDraft === undefined) {
+        return [[], state];
+    }
+    if (state.openDraft.id === undefined) {
+        state.openDraft.id = state.iota.toString();
+        state.iota += 1;
+    }
+    state.openDraft.subject = subject;
+    state.draftsSummary = newSubject(
+        state.openDraft.id, state.draftsSummary, subject);
+    const ioJobs = [
+        {
+            key: "updateTextBox",
+            value: { id: "writerSubjectBox", value: subject },
+        },
+        setItem("iota", state.iota),
+        setItem(state.openDraft.id, state.openDraft),
+    ];
+    return [ioJobs, state];
+}
+
+function validRecipient(recipient) {
+    if (recipient === "") {
+        return false;
+    }
+    if (recipient === "0") {
+        return true;
+    }
+    if (recipient[0] === "0") {
+        return false;
+    }
+    const digits = Set(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    for (const c of recipient) {
+        if (!digits.has(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function updatedToBox(to, state) {
+    if (state.openDraft === undefined) {
+        return [[], state];
+    }
+    if (!validRecipient(to)) {
+        return [
+            [{ key: "updateTextBox", value: { id: "writerToBox", value: "" } }],
+            state,
+        ];
+    }
+    if (state.openDraft.id === undefined) {
+        state.openDraft.id = state.iota.toString();
+        state.iota += 1;
+    }
+    state.openDraft.to = to;
+    const ioJobs = [
+        { key: "updateTextBox", value: { id: "writerToBox", value: to } },
+        setItem("iota", state.iota),
+        setItem(state.openDraft.id, state.openDraft),
+    ];
+    return [ioJobs, state];
+}
+
+function updateOnDraftsSummary(draftsSummary, state) {
+    if (state.page !== "drafts" || state.openedDraft !== undefined) {
+        return [[], state];
+    }
+    state.draftsSummary = draftsSummary;
+    return [drawDrafts(state), state];
+}
+
+function updateOnOutboxSummary(outboxSummary, state) {
+    if (state.page !== "outbox" || state.openedSent !== undefined) {
+        return [[], state];
+    }
+    state.outboxSummary = outboxSummary;
+    return [drawOutbox(state), state];
+}
+
+function updateOnInboxSummary(inboxSummary, state) {
+    if (state.page !== "inbox" || state.openedMessageIn !== undefined) {
+        return [[], state];
+    }
+    state.inboxSummary = inboxSummary;
+    return [drawInbox(state), state];
+}
+
+function updateOnCacheResponse(response, state) {
+    return updateOnCacheResponseSwitch[response.key](response.value, state);
+}
+
+function updateOnAddContactButtonClick(dontCare, state) {
+    const contact = state.addContactBox;
+    if (state.contacts.has(contact)) {
+        const err = contact + " is already in your contacts";
+        state.addContactError = err;
+        return [[{key: "addContactError", value: err}], state];
+    }
+    state.contacts.add(contact);
+    state.addContactBox = "";
+    return [
+        [{key: "updateTextBox",
+          value: {id: "addContactBox", value: ""}}],
+        state];
+}
+
+function updatedAddContactBox(contact, state) {
+    if (!validRecipient(contact)) {
+        return [
+            [{ key: "updateTextBox", value: { id: "addContactBox", value: ""}}], state]
+    }
+    state.addContactBox = contact;
+    return [{key: "updateTextBox", value: { id: "addContactBox", value: contact}}], state];
+}
+
+function updatedUserInput(userInput, state) {
+    if (state.openDraft === undefined) {
+        return [[], state];
+    }
+    if (state.openDraft.id === undefined) {
+        state.openDraft.id = state.iota;
+        state.iota +=1 ;
+    }
+    state.openDraft.userInput = userInput;
+    const ioJobs =[
+        {
+            key: "updatedTextBox",
+            value: {id: "writerUserInputBox", value: userInput}},
+        setItem("iota", state.iota),
+        setItem(state.openDraft.id, state.openDraft)];
+    return [ioJobs, state];
+}
+
+function updateOnCodeUpload(code, state) {
+    if (state.openedDraft === undefined) {
+        return [[], state];
+    }
+    if (state.openDraft.id === undefined) {
+        state.openDraft.id = state.iota;
+        state.iota += 1;
+    }
+    state.openDraft.code = code;
+    const ioJobs = [
+        { key: "replaceDomWith",
+          value: {
+            id: "codeUploader",
+            newDom: makeCodeUploader(code, state.inputs)}},
+        setItem("iota", state.iota),
+        setItem(state.openDraft.id, state.openDraft)];
+    return [ioJobs, state];
+}
+
+function updateOnDeleteCode(draftId, state) {
+    if (state.openDraft === undefined) {
+        return [[], state];
+    }
+    const openDraft = state.openDraft;
+    delete openDraft.code;
+    const ioJobs = [
+        {key: "replaceDomWith",
+         value: {
+            id: "codeUploader",
+            newDom: makeCodeUploader(undefined, state.inputs)}},
+        setItem(state.openDraft.id, state.openDraft)];
+    return [ioJobs, state];
+}
+
+function updateOnDeleteContact(contact, state) {
+    state.contacts.delete(contact);
+    return [
+        drawContacts(state).push(
+            setItem("contacts", state.contacts)),
+        state];
+}
+
+const update = {
+    cacheResponse: updateOnCacheResponse,
+    error: updateError,
+    myNewName: updateNewName,
+    updatedSubjectBox: updatedSubjectBox,
+    updatedUserInput: updatedUserInput,
+    updatedToBox: updatedToBox,
+    draftsSummary: updateOnDraftsSummary,
+    outboxSummary: updateOnOutboxSummary,
+    inboxSummary: updateOnInboxSummary,
+    addContactButtonClick: updateOnAddContactButtonClick,
+    updatedAddContactBox: updatedAddContactBox,
+    uploadedCodeFile: updateOnCodeUpload,
+    deleteCode: updateOnDeleteCode,
+    deleteContact: updateOnDeleteContact,
+};
 
 function formatHttpError(body, statusCode) {
     return (
@@ -609,13 +862,13 @@ function noMessagesDom() {
 }
 
 async function getKeys() {
-    let keys = await localforage.getItem("crypto keys");
+    let keys = await localforage.getItem("cryptoKeys");
     if (keys === null) {
         keys = {
             signing: nacl.sign.keyPair(),
             box: nacl.box.keyPair(),
         };
-        await localforage.setItem("crypto keys", keys);
+        await localforage.setItem("cryptoKeys", keys);
     }
     return keys;
 }
@@ -671,7 +924,7 @@ async function requestMyName(maybeKeys, inputs) {
         callback("error", responseErr, inputs);
         return;
     }
-    callback("myName", decodeInt(response), inputs);
+    callback("myNewName", decodeInt(response), inputs);
 }
 
 async function cacheQuery(key, inputs) {
@@ -694,6 +947,76 @@ function addOnclick(key, dontCare) {
     el.onclick = key.onclick;
 }
 
+function cacheValue(toCache, dontCare) {
+    localforage.setItem(toCache.key, toCache.value);
+}
+
+function updateTextBox(toAdd, dontCare) {
+    const box = document.getElementById(toAdd.id);
+    box.value = toAdd.value;
+}
+
+async function getInboxSummary(inboxIds, inputs) {
+    const summaries = [];
+    for (const id of inboxIds) {
+        const message = await localforage.getItem(id);
+        const summary = {
+            subject: message.subject,
+            id: id,
+            from: message.from,
+            time: message.time,
+        };
+        summaries.push(summary);
+    }
+    callback("inboxSummary", summaries, inputs);
+}
+
+async function getDraftsSummary(draftIds, inputs) {
+    const summaries = [];
+    for (const id of draftIds) {
+        const draft = await localforage.getItem(id);
+        const summary = {
+            subject: draft.subject,
+            id: id,
+            to: draft.to,
+        };
+        summaries.push(summary);
+    }
+    callback("draftsSummary", summaries, inputs);
+}
+
+async function getOutboxSummary(outboxIds, inputs) {
+    const summaries = [];
+    for (const id of outboxIds) {
+        const message = await localforage.getItem(id);
+        const summary = {
+            subject: message.subject,
+            id: id,
+            to: message.to,
+            time: message.time,
+        };
+        summaries.push(summary);
+    }
+    callback("outboxSummary", summaries, inputs);
+}
+
+async function codeFilesUpload(files, inputs) {
+    const file = files[0];
+    const contents = await file.arrayBuffer();
+    callback(
+        "uploadedCodeFile",
+        {contents: contents,
+         name: file.name,
+         size: file.size,
+         mime: file.type},
+        inputs);
+}
+
+function replaceDomWith(newDom, dontCare) {
+    const old = document.getElementById(newDom.id);
+    old.replaceWith(newDom.newDom);
+}
+
 const io = {
     cacheQuery: cacheQuery,
     requestMyName: requestMyName,
@@ -701,6 +1024,13 @@ const io = {
     removeCssClass: removeCssClass,
     newChildren: newChildren,
     addOnclick: addOnclick,
+    cacheValue: cacheValue,
+    updateTextBox: updateTextBox,
+    getInboxSummary: getInboxSummary,
+    getDraftsSummary: getDraftsSummary,
+    getOutboxSummary: getOutboxSummary,
+    codeFilesUpload: codeFilesUpload,
+    replaceDomWith: replaceDomWith,
 };
 
 function callback(key, value, inputs) {
@@ -710,19 +1040,20 @@ function callback(key, value, inputs) {
 
 let mainTick;
 {
-    const state = {};
+    let state = {};
     const inputs = [];
     const outputs = initOutputs(inputs);
     state.inputs = inputs;
 
     mainTick = () => {
-        debugger;
         for (const output of outputs) {
-            io[output.key](output.value, inputs);
+            debugger;
+            const iof = io[output.key];
+            iof(output.value, inputs);
         }
         for (const input of inputs) {
             let newOutputs;
-            [newOutputs, state] = update(input, state);
+            [newOutputs, state] = update[input.key](input.value, state);
             outputs.concat(newOutputs);
         }
         inputs.length = 0;
