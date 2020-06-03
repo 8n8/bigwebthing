@@ -1,17 +1,5 @@
 "use strict";
 
-function inboxMenuItem(message, inputs) {
-    const container = document.createElement("button");
-    container.type = "button";
-    container.classList.add("inboxItem");
-    container.appendChild(makeSubjectDom(message.subject));
-    container.appendChild(makeFromDom(message.from));
-    container.onclick = function () {
-        inputs.push({ key: "inboxMenuClick", value: message.id });
-    };
-    return container;
-}
-
 function initOnClicks(inputs) {
     const buttons = [
         "write",
@@ -25,10 +13,8 @@ function initOnClicks(inputs) {
     ];
     let outputs = [];
     for (const button of buttons) {
-        const clickMessage = { key: "topButtonClick", value: button };
-        const onclick = function () {
-            inputs.push(clickMessage);
-        };
+        const onclick = () =>
+            callback("topButtonClick", button, inputs);
         outputs.push({
             key: "addOnclick",
             value: { id: button + "Button", onclick: onclick },
@@ -505,16 +491,16 @@ const drawFunc = {
     help: drawHelp,
 };
 
-function drawPage(page, oldPage, state) {
+function drawPage(oldPage, state) {
     let buttonOn = [];
     let buttonOff = [];
-    if (page !== maybeOldPage) {
+    if (state.page !== maybeOldPage) {
         buttonOff =
             oldPage === undefined ? [] : turnButtonOff(oldPage + "Button");
 
         buttonOn = turnButtonOn(page + "Button");
     }
-    const drawJobs = drawFunc[page](state);
+    const drawJobs = drawFunc[state.page](state);
     return drawJobs.concat(buttonOn).concat(buttonOff);
 }
 
@@ -597,7 +583,8 @@ function pageFromCache(page, state) {
         return [[{ key: "getOutboxSummary", value: state.outboxIds }], state];
     }
     const oldPage = state.page;
-    return [drawPage(page, oldPage, state), state];
+    state.page = page;
+    return [drawPage(oldPage, state), state];
 }
 
 function iotaFromCache(iota, state) {
@@ -828,6 +815,19 @@ function updateOnDeleteContact(contact, state) {
         state];
 }
 
+function updateOnTopButtonClick(button, state) {
+    if (state.page === button) {
+        return [[], state];
+    }
+
+    const oldPage = state.page;
+    state.page = button;
+
+    return [
+        drawPage(oldPage, state).push(setItem("page", button)),
+        state];
+}
+
 const update = {
     cacheResponse: updateOnCacheResponse,
     error: updateError,
@@ -843,6 +843,7 @@ const update = {
     uploadedCodeFile: updateOnCodeUpload,
     deleteCode: updateOnDeleteCode,
     deleteContact: updateOnDeleteContact,
+    topButtonClick updateOnTopButtonClick,
 };
 
 function formatHttpError(body, statusCode) {
