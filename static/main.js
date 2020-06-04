@@ -1338,7 +1338,7 @@ class Wasm {
         return this._getMem8().subarray(ptr / 1, ptr / 1 + len);
     }
 
-    bigWebThing(s) {
+    _run(s) {
         const ptr0 = this._passStringToWasm(
             s,
             this.wasm.exports.__wbindgen_malloc,
@@ -1351,6 +1351,14 @@ class Wasm {
         const v1 = this._getArrayU8FromWasm0(r0, r1).slice();
         this.wasm.exports.__wbindgen_free(r0, r1 * 1);
         return v1;
+    }
+
+    bigWebThing(s) {
+        try {
+            return this._run(s);
+        } catch (err) {
+            tick("error", err);
+        }
     }
 }
 
