@@ -581,32 +581,47 @@ function makeCodeUploader(code) {
     return div;
 }
 
+function makeBlobUploader(blobs) {
+    const id = "writerBlobUploader";
+    const container = document.createElement("div");
+
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.innerHTML = "Attach a file";
+    container.appendChild(label);
+
+    const browse = document.createElement("input");
+    browse.type = "file";
+    browse.id = id;
+    browse.multiple = true;
+    browse.addEventListener(
+        "change",
+        () => tick("blobFilesUpload", this.files),
+        false
+    );
+    container.appendChild(browse);
+
+    return container;
+}
+
 function drawWrite(state) {
-    let draft;
-    if (state.openedDraft === undefined) {
-        state.openedDraft = {
+    let draft = state.openDraft;
+    if (draft === undefined) {
+        draft = {
             to: "",
             subject: "",
             userInput: "",
             blobIds: [],
         };
-    } else {
-        draft = state.openedDraft;
     }
 
-    const children = [];
-
-    const subjectBox = makeSubjectBox(draft.subject);
-    children.push(subjectBox);
-
-    const toBox = makeToBox(draft.to);
-    children.push(toBox);
-
-    const userInput = makeUserInputBox(draft.userInput);
-    children.push(userInput);
-
-    const codeUploader = makeCodeUploader(draft.code);
-    children.push(codeUploader);
+    const children = [
+        makeSubjectBox(draft.subject),
+        makeToBox(draft.to),
+        makeUserInputBox(draft.userInput),
+        makeCodeUploader(draft.code),
+        makeBlobUploader(draft.blobs),
+    ];
 
     return [
         {
@@ -769,7 +784,7 @@ function pageFromCache(page, state) {
     }
     if (
         page === "drafts" &&
-        state.openedDraft === undefined &&
+        state.openDraft === undefined &&
         state.draftsSummary === undefined
     ) {
         return [[{ key: "getDraftsSummary", value: state.draftIds }], state];
@@ -904,7 +919,7 @@ function updatedToBox(to, state) {
 }
 
 function updateOnDraftsSummary(draftsSummary, state) {
-    if (state.page !== "drafts" || state.openedDraft !== undefined) {
+    if (state.page !== "drafts" || state.openDraft !== undefined) {
         return [[], state];
     }
     state.draftsSummary = draftsSummary;
@@ -991,7 +1006,7 @@ function updatedUserInput(userInput, state) {
 }
 
 function updateOnCodeUpload(code, state) {
-    if (state.openedDraft === undefined) {
+    if (state.openDraft === undefined) {
         return [[], state];
     }
     if (state.openDraft.id === undefined) {
