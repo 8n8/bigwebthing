@@ -1,4 +1,4 @@
-"use strict";
+("use strict");
 
 function initOnClick(button) {
     return {
@@ -136,7 +136,10 @@ function makeMyNameRequest(pow, publicSigningKey) {
 
 function turnButtonOn(id) {
     return [
-        { key: "addCssClass", value: { id: id, cssClass: "selectedButton" } },
+        {
+            key: "addCssClass",
+            value: { id: id, cssClass: "selectedButton" },
+        },
         {
             key: "removeCssClass",
             value: { id: id, cssClass: "notSelectedButton" },
@@ -319,7 +322,7 @@ function makeCodeView(code) {
     return div;
 }
 
-function makeBlobsView(blobs) {
+function makeInboxBlobsView(blobs) {
     const div = document.createElement("div");
     for (const blob of blobs) {
         div.appendChild(makeBlobView(blob));
@@ -337,11 +340,14 @@ function drawInboxItemView(message) {
     ];
 
     if (message.blobs !== undefined) {
-        children.push(makeBlobsView(message.blobs));
+        children.push(makeInboxBlobsView(message.blobs));
     }
 
     return [
-        { key: "newChildren", value: { parentId: "page", children: children } },
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: children },
+        },
     ];
 }
 
@@ -581,7 +587,49 @@ function makeCodeUploader(code) {
     return div;
 }
 
-function makeBlobUploader(blobs) {
+function makeBlobViewer(blob) {
+    const container = document.createElement("div");
+
+    const filename = document.createElement("p");
+    filename.textContent = blob.filename;
+    container.appendChild(filename);
+
+    const size = document.createElement("p");
+    size.textContent = "Size: " + prettyBytes(blob.size);
+    container.appendChild(size);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.onclick = () =>
+        tick("deleteBlob", { draftId: blob.draftId, blobId: blob.id });
+    deleteButton.textContent = "Delete";
+    container.appendChild(deleteButton);
+
+    const downloadButton = document.createElement("button");
+    downloadButton.type = "button";
+    downloadButton.onclick = () => tick("downloadBlob", blob);
+    downloadButton.textContent = "Download";
+    container.appendChild(downloadButton);
+
+    return container;
+}
+
+function makeBlobsViewer(blobs) {
+    const container = document.createElement("div");
+    container.id = "writerBlobsViewer";
+
+    const title = document.createElement("h1");
+    title.textContent = "Attached files";
+    container.appendChild(title);
+
+    for (const blob of blobs) {
+        container.appendChild(makeBlobViewer(blob));
+    }
+
+    return container;
+}
+
+function makeBlobUploader() {
     const id = "writerBlobUploader";
     const container = document.createElement("div");
 
@@ -620,7 +668,8 @@ function drawWrite(state) {
         makeToBox(draft.to),
         makeUserInputBox(draft.userInput),
         makeCodeUploader(draft.code),
-        makeBlobUploader(draft.blobs),
+        makeBlobsViewer(draft.blobs),
+        makeBlobUploader(),
     ];
 
     return [
@@ -674,7 +723,10 @@ function drawPricing(state) {
     const span = document.createElement("span");
     span.textContent = "TODO";
     return [
-        { key: "newChildren", value: { parentId: "page", children: [span] } },
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: [span] },
+        },
     ];
 }
 
@@ -682,7 +734,10 @@ function drawAccount(state) {
     const span = document.createElement("span");
     span.textContent = "TODO";
     return [
-        { key: "newChildren", value: { parentId: "page", children: [span] } },
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: [span] },
+        },
     ];
 }
 
@@ -690,7 +745,10 @@ function drawHelp(state) {
     const span = document.createElement("span");
     span.textContent = "TODO";
     return [
-        { key: "newChildren", value: { parentId: "page", children: [span] } },
+        {
+            key: "newChildren",
+            value: { parentId: "page", children: [span] },
+        },
     ];
 }
 
@@ -901,7 +959,12 @@ function updatedToBox(to, state) {
     }
     if (!validRecipient(to)) {
         return [
-            [{ key: "updateTextBox", value: { id: "writerToBox", value: "" } }],
+            [
+                {
+                    key: "updateTextBox",
+                    value: { id: "writerToBox", value: "" },
+                },
+            ],
             state,
         ];
     }
@@ -956,7 +1019,12 @@ function updateOnAddContactButtonClick(dontCare, state) {
     state.contacts.add(contact);
     state.addContactBox = "";
     return [
-        [{ key: "updateTextBox", value: { id: "addContactBox", value: "" } }],
+        [
+            {
+                key: "updateTextBox",
+                value: { id: "addContactBox", value: "" },
+            },
+        ],
         state,
     ];
 }
@@ -1082,6 +1150,55 @@ function updateOnLookedUpInboxMessage(message, state) {
     return [drawInbox(state), state];
 }
 
+function updateOnDeleteBlob(ids, state) {
+    if (state.openDraft === undefined) {
+        return [[], state];
+    }
+
+    const oldBlobs = state.openDraft.blobs;
+
+    const newBlobs = [];
+    for (const oldBlob of oldBlobs) {
+        if (oldBlob.id === ids.blobId && oldBlob.draftId === ids.draftId) {
+            continue;
+        }
+        newBlobs.push(oldBlob);
+    }
+    state.openDraft.blobs = newBlobs;
+
+    return [
+        [
+            setItem(ids.draftId, state.openDraft),
+            {
+                key: "replaceDomWith",
+                value: {
+                    id: "writerBlobsViewer",
+                    newDom: makeBlobsViewer(newBlobs),
+                },
+            },
+        ],
+        state,
+    ];
+}
+
+function findBlob(blobs, id) {
+    for (const blob in blobs) {
+        if (blob.id === id) return blob;
+    }
+}
+
+function kv(key, value) {
+    return { key: key, value: value };
+}
+
+function updateOnDownloadBlob(ids, state) {
+    if (state.openDraft === undefined) {
+        return [[], state];
+    }
+    const blob = findBlob(state.openedDraft.blobs, ids.blobId);
+    return [kv("downloadBlob", blob), state];
+}
+
 const update = {
     cacheResponse: updateOnCacheResponse,
     error: updateError,
@@ -1101,6 +1218,8 @@ const update = {
     inboxMenuClick: updateOnInboxMenuClick,
     init: updateOnInit,
     lookedUpInboxMessage: updateOnLookedUpInboxMessage,
+    deleteBlob: updateOnDeleteBlob,
+    downloadBlob: updateOnDownloadBlob,
 };
 
 function arrToNums(arr) {
@@ -1385,6 +1504,22 @@ async function lookupInboxMessage(id) {
     tick("lookedUpInboxMessage", message);
 }
 
+async function downloadBlob(blobInfo) {
+    const loaded = await localforage.getItem(blobInfo.id);
+    const blob = new Blob([loaded], { type: blobInfo.mime });
+
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = blobInfo.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    window.URL.revokeObjectURL(url);
+}
+
 const io = {
     cacheQuery: cacheQuery,
     requestMyName: requestMyName,
@@ -1400,6 +1535,7 @@ const io = {
     codeFilesUpload: codeFilesUpload,
     replaceDomWith: replaceDomWith,
     lookupInboxMessage: lookupInboxMessage,
+    downloadBlob: downloadBlob,
 };
 
 let tick;
