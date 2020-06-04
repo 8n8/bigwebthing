@@ -10,6 +10,13 @@ function initOnClick(button) {
     };
 }
 
+function replaceChildren(parentId, newChildren) {
+    return {
+        key: "replaceChildren",
+        value: { parentId: parentId, children: newChildren },
+    };
+}
+
 function initOnClicks() {
     const buttons = [
         "write",
@@ -343,12 +350,7 @@ function drawInboxItemView(message) {
         children.push(makeInboxBlobsView(message.blobs));
     }
 
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: children },
-        },
-    ];
+    return [replaceChildren("page", children)];
 }
 
 function drawInboxMenuItem(message) {
@@ -363,12 +365,7 @@ function drawInboxMenuItem(message) {
 
 function drawInbox(state) {
     if (state.inboxSummary.length === 0) {
-        return [
-            {
-                key: "replaceChildren",
-                value: { parentId: "page", children: [noMessagesDom()] },
-            },
-        ];
+        return [replaceChildren("page", [noMessagesDom()])];
     }
     if (state.inboxItem !== undefined) {
         return drawInboxItemView(state.openedInboxItem);
@@ -377,12 +374,7 @@ function drawInbox(state) {
     for (const message of state.inboxSummary) {
         inbox.push(drawInboxMenuItem(message));
     }
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: inbox },
-        },
-    ];
+    return [replaceChildren("page", inbox)];
 }
 
 function drawOutboxItem(message) {
@@ -400,12 +392,7 @@ function drawOutbox(state) {
     for (const message of state.outboxSummary) {
         outbox.push(drawOutboxItem(message));
     }
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: outbox },
-        },
-    ];
+    return [replaceChildren("page", outbox)];
 }
 
 function makeDraftToDom(to) {
@@ -434,12 +421,7 @@ function drawDrafts(state) {
     for (const draftSummary of state.draftsSummary) {
         drafts.push(drawDraftsItem(draftSummary));
     }
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: drafts },
-        },
-    ];
+    return [replaceChildren("page", drafts)];
 }
 
 function makeSubjectBox(subject) {
@@ -672,12 +654,7 @@ function drawWrite(state) {
         makeBlobUploader(),
     ];
 
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: children },
-        },
-    ];
+    return [replaceChildren("page", children)];
 }
 
 function drawContact(contact) {
@@ -711,45 +688,25 @@ function drawContacts(state) {
     for (const contact of state.contacts) {
         children.push(drawContact(contact));
     }
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: children },
-        },
-    ];
+    return [replaceChildren("page", children)];
 }
 
 function drawPricing(state) {
     const span = document.createElement("span");
     span.textContent = "TODO";
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: [span] },
-        },
-    ];
+    return [replaceChildren("page", [span])];
 }
 
 function drawAccount(state) {
     const span = document.createElement("span");
     span.textContent = "TODO";
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: [span] },
-        },
-    ];
+    return [replaceChildren("page", [span])];
 }
 
 function drawHelp(state) {
     const span = document.createElement("span");
     span.textContent = "TODO";
-    return [
-        {
-            key: "replaceChildren",
-            value: { parentId: "page", children: [span] },
-        },
-    ];
+    return [replaceChildren("page", [span])];
 }
 
 const drawFunc = {
@@ -795,12 +752,7 @@ function myNameFromCache(maybeMyName, state) {
     }
     state.myName = maybeMyName;
     if (state.page === "contacts") {
-        const outputs = [
-            {
-                key: "replaceChildren",
-                value: { parentId: "myName", children: [maybeMyName] },
-            },
-        ];
+        const outputs = [replaceChildren("myName", [maybeMyName])];
         return [outputs, state];
     }
     return [[], state];
@@ -1318,7 +1270,7 @@ async function cacheQuery(key) {
     tick("cacheResponse", { key: key, value: value });
 }
 
-function replaceChildren(key) {
+function ioReplaceChildren(key) {
     const parentEl = document.getElementById(key.parentId);
     while (parentEl.firstChild) {
         parentEl.removeChild(parentEl.lastChild);
@@ -1525,7 +1477,7 @@ const io = {
     requestMyName: requestMyName,
     addCssClass: addCssClass,
     removeCssClass: removeCssClass,
-    replaceChildren: replaceChildren,
+    replaceChildren: ioReplaceChildren,
     addOnclick: addOnclick,
     cacheValue: cacheValue,
     updateTextBox: updateTextBox,
