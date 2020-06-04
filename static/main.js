@@ -1280,19 +1280,19 @@ class Wasm {
         this.mem32 = new Int32Array(this.wasm.exports.memory.buffer);
     }
 
-    getMem8() {
+    _getMem8() {
         if (this.mem8 !== this.wasm.exports.memory.buffer) {
             this.mem8 = new Uint8Array(this.wasm.exports.memory.buffer);
         }
         return this.mem8;
     }
 
-    passStringToWasm(arg, malloc, realloc) {
+    _passStringToWasm(arg, malloc, realloc) {
         const cachedTextEncoder = new TextEncoder();
         if (realloc === undefined) {
             const buf = cachedTextEncoder.encode(arg);
             const ptr = malloc(buf.length);
-            this.getMem8()
+            this._getMem8()
                 .subarray(ptr, ptr + buf.length)
                 .set(buf);
             this.WASM_VECTOR_LEN = buf.length;
@@ -1302,7 +1302,7 @@ class Wasm {
         let len = arg.length;
         let ptr = malloc(len);
 
-        const mem = this.getMem8();
+        const mem = this._getMem8();
 
         let offset = 0;
 
@@ -1318,7 +1318,7 @@ class Wasm {
             }
             ptr = realloc(ptr, len, (len = offset + arg.length * 3));
 
-            const view = this.getMem8().subarray(ptr + offset, ptr + len);
+            const view = this._getMem8().subarray(ptr + offset, ptr + len);
             const ret = cachedTextEncoder.encodeInto(arg, view);
             offset += ret.written ? ret.written : 0;
         }
@@ -1327,28 +1327,28 @@ class Wasm {
         return ptr;
     }
 
-    getMem32() {
+    _getMem32() {
         if (this.mem32.buffer !== this.wasm.exports.memory.buffer) {
             this.mem32 = new Int32Array(this.wasm.exports.memory.buffer);
         }
         return this.mem32;
     }
 
-    getArrayU8FromWasm0(ptr, len) {
-        return this.getMem8().subarray(ptr / 1, ptr / 1 + len);
+    _getArrayU8FromWasm0(ptr, len) {
+        return this._getMem8().subarray(ptr / 1, ptr / 1 + len);
     }
 
     bigWebThing(s) {
-        const ptr0 = this.passStringToWasm(
+        const ptr0 = this._passStringToWasm(
             s,
             this.wasm.exports.__wbindgen_malloc,
             this.wasm.exports.__wbindgen_realloc
         );
         const len0 = this.WASM_VECTOR_LEN;
         this.wasm.exports.big_web_thing(8, ptr0, len0);
-        const r0 = this.getMem32()[8 / 4 + 0];
-        const r1 = this.getMem32()[8 / 4 + 1];
-        const v1 = this.getArrayU8FromWasm0(r0, r1).slice();
+        const r0 = this._getMem32()[8 / 4 + 0];
+        const r1 = this._getMem32()[8 / 4 + 1];
+        const v1 = this._getArrayU8FromWasm0(r0, r1).slice();
         this.wasm.exports.__wbindgen_free(r0, r1 * 1);
         return v1;
     }
