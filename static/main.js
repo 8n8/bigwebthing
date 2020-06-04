@@ -345,7 +345,7 @@ function drawInboxItemView(message) {
 
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: children },
         },
     ];
@@ -365,7 +365,7 @@ function drawInbox(state) {
     if (state.inboxSummary.length === 0) {
         return [
             {
-                key: "newChildren",
+                key: "replaceChildren",
                 value: { parentId: "page", children: [noMessagesDom()] },
             },
         ];
@@ -379,7 +379,7 @@ function drawInbox(state) {
     }
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: inbox },
         },
     ];
@@ -402,7 +402,7 @@ function drawOutbox(state) {
     }
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: outbox },
         },
     ];
@@ -436,7 +436,7 @@ function drawDrafts(state) {
     }
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: drafts },
         },
     ];
@@ -674,7 +674,7 @@ function drawWrite(state) {
 
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: children },
         },
     ];
@@ -713,7 +713,7 @@ function drawContacts(state) {
     }
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: children },
         },
     ];
@@ -724,7 +724,7 @@ function drawPricing(state) {
     span.textContent = "TODO";
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: [span] },
         },
     ];
@@ -735,7 +735,7 @@ function drawAccount(state) {
     span.textContent = "TODO";
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: [span] },
         },
     ];
@@ -746,7 +746,7 @@ function drawHelp(state) {
     span.textContent = "TODO";
     return [
         {
-            key: "newChildren",
+            key: "replaceChildren",
             value: { parentId: "page", children: [span] },
         },
     ];
@@ -797,7 +797,7 @@ function myNameFromCache(maybeMyName, state) {
     if (state.page === "contacts") {
         const outputs = [
             {
-                key: "newChildren",
+                key: "replaceChildren",
                 value: { parentId: "myName", children: [maybeMyName] },
             },
         ];
@@ -1318,7 +1318,7 @@ async function cacheQuery(key) {
     tick("cacheResponse", { key: key, value: value });
 }
 
-function newChildren(key) {
+function replaceChildren(key) {
     const parentEl = document.getElementById(key.parentId);
     while (parentEl.firstChild) {
         parentEl.removeChild(parentEl.lastChild);
@@ -1525,7 +1525,7 @@ const io = {
     requestMyName: requestMyName,
     addCssClass: addCssClass,
     removeCssClass: removeCssClass,
-    newChildren: newChildren,
+    replaceChildren: replaceChildren,
     addOnclick: addOnclick,
     cacheValue: cacheValue,
     updateTextBox: updateTextBox,
