@@ -1,6 +1,16 @@
 "use strict";
 
-function initOnClicks(inputs) {
+function initOnClick(button) {
+    return {
+        key: "addOnclick",
+        value: {
+            id: button + "Button",
+            onclick: () => tick("topButtonClick", button),
+        },
+    };
+}
+
+function initOnClicks() {
     const buttons = [
         "write",
         "contacts",
@@ -13,16 +23,12 @@ function initOnClicks(inputs) {
     ];
     const outputs = [];
     for (const button of buttons) {
-        const onclick = () => callback("topButtonClick", button, inputs);
-        outputs.push({
-            key: "addOnclick",
-            value: { id: button + "Button", onclick: onclick },
-        });
+        outputs.push(initOnClick(button));
     }
     return outputs;
 }
 
-function initOutputs(inputs) {
+function initOutputs() {
     return [
         { key: "cacheQuery", value: "iota" },
         { key: "cacheQuery", value: "page" },
@@ -31,7 +37,7 @@ function initOutputs(inputs) {
         { key: "cacheQuery", value: "outboxIds" },
         { key: "cacheQuery", value: "myName" },
         { key: "cacheQuery", value: "contacts" },
-    ].concat(initOnClicks(inputs));
+    ].concat(initOnClicks());
 }
 
 function makeSubjectDom(subject) {
@@ -70,6 +76,14 @@ function combine(a, b) {
         combined[i] = bval;
     }
     return combined;
+}
+
+function decodeInt32(fourBytes) {
+    let result = 0;
+    for (let i = 0; i < 4; i++) {
+        result += fourBytes[i] * Math.pow(256, i);
+    }
+    return result;
 }
 
 function decodeInt(eightBytes) {
@@ -143,15 +157,201 @@ function turnButtonOff(id) {
     ];
 }
 
-function drawInboxItem(message, inputs) {
+function makeSubjectView(subject) {
+    const p = document.createElement("p");
+    if (subject === undefined) {
+        p.textContent = "No subject";
+        p.classList.add("noneMessage");
+        return p;
+    }
+    p.textContent = subject;
+    return p;
+}
+
+function makeFromView(from) {
+    const p = document.createElement("p");
+    p.textContent = from;
+    return p;
+}
+
+function decodeSmallString(raw, i) {
+    const rawLen = raw.length;
+    if (rawLen < 4 + i) {
+        return [
+            null,
+            "smallstring at position " +
+                i +
+                " is only " +
+                (rawLen - i) +
+                " bytes long",
+        ];
+    }
+    const stringLength = decodeInt32(raw.slice(i, i + 4));
+    i += 4;
+    const stringBytes = raw.slice(i, i + stringLength);
+    const decoded = new TextDecoder().decode(stringBytes);
+    return [{ key: "smallString", value: decoded }, ""];
+}
+
+function decodeOrdering(raw, i) {
+    const rawLen = raw.length;
+    if (rawLen < 4 + i) {
+        return [
+            {},
+            "ordering at position " +
+                i +
+                " is only " +
+                (rawLen - i) +
+                " bytes long",
+        ];
+    }
+    const numElements = decodeInt32(raw.slice(i, i + 4));
+    i += 4;
+    const ordering = [];
+    for (let _ = 0; _ < numElements; _++) {
+        let doc, err;
+        [doc, err, i] = decodeDocumentHelp(raw, i);
+        if (err !== "") {
+            return [null, err, i];
+        }
+        ordering.push(doc);
+    }
+    return [{ key: "ordering", value: ordering }, "", i];
+}
+
+function decodeDocument(raw) {
+    const [doc, err, i] = decodeDocumentHelp(raw, 0);
+    if (err !== "") {
+        return [null, err + ": " + i];
+    }
+    const rawLength = raw.length;
+    if (i < rawLength - 1) {
+        return [
+            null,
+            "could not decode whole document: stopped at position " + i,
+        ];
+    }
+    return [doc, ""];
+}
+
+function decodeDocumentHelp(raw, i) {
+    if (raw.length === 0) {
+        return [{}, "empty"];
+    }
+    const indicator = raw[0];
+    switch (indicator) {
+        case 0:
+            return decodeOrdering(raw, 1);
+        case 1:
+            return decodeSmallString(raw, 1);
+    }
+    return [null, "bad indicator: " + indicator, i];
+}
+
+function makeOutputErr(err) {
+    const p = document.createElement("p");
+    p.textContent = "Internal error in message program: " + err;
+    return p;
+}
+
+function makeSmallStringView(smallString) {
+    const pre = document.createElement("pre");
+    pre.textContent = smallString;
+    return pre;
+}
+
+function makeOrderingView(ordering) {
+    const div = document.createElement("div");
+    for (const o of ordering) {
+        const el = makeOutputViewHelp(o);
+        div.appendChild(el);
+    }
+    return div;
+}
+
+function makeOutputViewHelp(doc) {
+    switch (doc.key) {
+        case "smallString":
+            return makeSmallStringView(doc.value);
+        case "ordering":
+            return makeOrderingView(doc.value);
+    }
+}
+
+function makeOutputView(output) {
+    const [doc, decodeErr] = decodeDocument(output, 0);
+    if (decodeErr !== "") {
+        return makeOutputErr(decodeErr);
+    }
+    return makeOutputViewHelp(doc);
+}
+
+function makeUserInputView(userInput) {
+    const pre = document.createElement("pre");
+    pre.textContent = userInput;
+    return pre;
+}
+
+function makeBlobView(blob) {
+    const div = document.createElement("div");
+
+    const name = document.createElement("p");
+    name.textContent = blob.name;
+
+    const size = document.createElement("p");
+    size.textContent = prettyBytes(blob.size);
+
+    const mime = document.createElement("p");
+    mime.textContent = "File type: " + blob.mime;
+
+    return div;
+}
+
+function makeCodeView(code) {
+    const div = document.createElement("div");
+
+    const name = document.createElement("p");
+    name.textContent = code.name;
+
+    const size = document.createElement("p");
+    size.textContent = prettyBytes(code.size);
+
+    return div;
+}
+
+function makeBlobsView(blobs) {
+    const div = document.createElement("div");
+    for (const blob of blobs) {
+        div.appendChild(makeBlobView(blob));
+    }
+    return div;
+}
+
+function drawInboxItemView(message) {
+    const children = [
+        makeSubjectView(message.subject),
+        makeFromView(message.from),
+        makeOutputView(message.output),
+        makeUserInputView(message.userInput),
+        makeCodeView(message.code),
+    ];
+
+    if (message.blobs !== undefined) {
+        children.push(makeBlobsView(message.blobs));
+    }
+
+    return [
+        { key: "newChildren", value: { parentId: "page", children: children } },
+    ];
+}
+
+function drawInboxMenuItem(message) {
     const button = document.createElement("button");
     button.type = "button";
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(message.subject));
     button.appendChild(makeFromDom(message.from));
-    button.onclick = function () {
-        inputs.push({ key: "inboxMenuClick", value: message.id });
-    };
+    button.onclick = () => tick("inboxMenuClick", message.id);
     return button;
 }
 
@@ -164,9 +364,12 @@ function drawInbox(state) {
             },
         ];
     }
+    if (state.inboxItem !== undefined) {
+        return drawInboxItemView(state.openedInboxItem);
+    }
     const inbox = [];
     for (const message of state.inboxSummary) {
-        inbox.push(drawInboxItem(message, state.inputs));
+        inbox.push(drawInboxMenuItem(message));
     }
     return [
         {
@@ -176,24 +379,20 @@ function drawInbox(state) {
     ];
 }
 
-function drawOutboxItem(message, inputs) {
+function drawOutboxItem(message) {
     const button = document.createElement("button");
     button.type = "button";
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(message.subject));
     button.appendChild(makeToDom(message.to));
-    button.onclick = function () {
-        inputs.push({ key: "outboxMenuClick", value: message.id });
-    };
+    button.onclick = () => tick("outboxMenuClick", message.id);
     return button;
 }
-
-// after here
 
 function drawOutbox(state) {
     const outbox = [];
     for (const message of state.outboxSummary) {
-        outbox.push(drawOutboxItem(message, state.inputs));
+        outbox.push(drawOutboxItem(message));
     }
     return [
         {
@@ -214,22 +413,20 @@ function makeDraftToDom(to) {
     return p;
 }
 
-function drawDraftsItem(draft, inputs) {
+function drawDraftsItem(draft) {
     const button = document.createElement("button");
     button.type = "button";
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(draft.subject));
     button.appendChild(makeDraftToDom(draft.to));
-    button.onclick = function () {
-        inputs.push({ key: "draftsMenuClick", value: draft.id });
-    };
+    button.onclick = () => tick("draftsMenuClick", draft.id);
     return button;
 }
 
 function drawDrafts(state) {
     const drafts = [];
     for (const draftSummary of state.draftsSummary) {
-        drafts.push(drawDraftsItem(draftSummary, state.inputs));
+        drafts.push(drawDraftsItem(draftSummary));
     }
     return [
         {
@@ -239,7 +436,7 @@ function drawDrafts(state) {
     ];
 }
 
-function makeSubjectBox(subject, inputs) {
+function makeSubjectBox(subject) {
     const id = "writerSubjectBox";
     const container = document.createElement("div");
     const label = document.createElement("label");
@@ -250,13 +447,13 @@ function makeSubjectBox(subject, inputs) {
     const box = document.createElement("input");
     box.type = "text";
     box.value = subject;
-    box.oninput = (e) => callback("updatedSubjectBox", e.target.value, inputs);
+    box.oninput = (e) => tick("updatedSubjectBox", e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
 }
 
-function makeToBox(to, inputs) {
+function makeToBox(to) {
     const id = "writerToBox";
     const container = document.createElement("div");
 
@@ -268,13 +465,13 @@ function makeToBox(to, inputs) {
     const box = document.createElement("input");
     box.type = "text";
     box.value = to;
-    box.oninput = (e) => callback("updatedToBox", e.target.value, inputs);
+    box.oninput = (e) => tick("updatedToBox", e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
 }
 
-function addContactBox(boxContents, inputs) {
+function addContactBox(boxContents) {
     const id = "addContactBox";
     const container = document.createElement("div");
 
@@ -286,8 +483,7 @@ function addContactBox(boxContents, inputs) {
     const box = document.createElement("input");
     box.type = "text";
     box.value = boxContents;
-    box.oninput = (e) =>
-        callback("updatedAddContactBox", e.target.value, inputs);
+    box.oninput = (e) => tick("updatedAddContactBox", e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
@@ -304,7 +500,7 @@ function longestRow(rows) {
     return longest;
 }
 
-function makeUserInputBox(userInput, inputs) {
+function makeUserInputBox(userInput) {
     const id = "writerUserInputBox";
     const container = document.createElement("div");
     const label = document.createElement("label");
@@ -316,13 +512,13 @@ function makeUserInputBox(userInput, inputs) {
     const rows = userInput.split("\n");
     box.cols = longestRow(rows);
     box.rows = rows.length;
-    box.oninput = (e) => callback("updatedUserInput", e.target.value, inputs);
+    box.oninput = (e) => tick("updatedUserInput", e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
 }
 
-function codeUploaderHelp(inputs) {
+function codeUploaderHelp() {
     const id = "writerCodeUploader";
     const container = document.createElement("div");
     const label = document.createElement("label");
@@ -335,7 +531,7 @@ function codeUploaderHelp(inputs) {
     browse.id = id;
     browse.addEventListener(
         "change",
-        () => callback("codeFilesUpload", this.files, inputs),
+        () => tick("codeFilesUpload", this.files),
         false
     );
     container.appendChild(browse);
@@ -356,9 +552,9 @@ function prettyBytes(n) {
     }
 }
 
-function makeCodeUploader(code, inputs) {
+function makeCodeUploader(code) {
     if (code === undefined) {
-        return codeUploaderHelp(inputs);
+        return codeUploaderHelp();
     }
 
     const div = document.createElement("div");
@@ -378,9 +574,7 @@ function makeCodeUploader(code, inputs) {
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
-    deleteButton.onclick = function () {
-        callback("deleteCode", code.draftId, inputs);
-    };
+    deleteButton.onclick = () => tick("deleteCode", code.draftId);
     deleteButton.textContent = "Delete";
     div.appendChild(deleteButton);
 
@@ -402,16 +596,16 @@ function drawWrite(state) {
 
     const children = [];
 
-    const subjectBox = makeSubjectBox(draft.subject, state.inputs);
+    const subjectBox = makeSubjectBox(draft.subject);
     children.push(subjectBox);
 
-    const toBox = makeToBox(draft.to, state.inputs);
+    const toBox = makeToBox(draft.to);
     children.push(toBox);
 
-    const userInput = makeUserInputBox(draft.userInput, state.inputs);
+    const userInput = makeUserInputBox(draft.userInput);
     children.push(userInput);
 
-    const codeUploader = makeCodeUploader(draft.code, state.inputs);
+    const codeUploader = makeCodeUploader(draft.code);
     children.push(codeUploader);
 
     return [
@@ -422,7 +616,7 @@ function drawWrite(state) {
     ];
 }
 
-function drawContact(contact, inputs) {
+function drawContact(contact) {
     const div = document.createElement("div");
     div.classList.add("contactView");
 
@@ -432,9 +626,7 @@ function drawContact(contact, inputs) {
 
     const deleteButton = document.createElement("button");
     deleteButton.textContent = "Delete";
-    deleteButton.onclick = function () {
-        callback("deleteContact", contact, inputs);
-    };
+    deleteButton.onclick = () => tick("deleteContact", contact);
     div.append(deleteButton);
 
     return div;
@@ -446,14 +638,14 @@ function drawContacts(state) {
     const myName = state.myName === undefined ? "Requesting..." : state.myName;
     children.push(myNameDom(myName));
 
-    children.push(addContactBox(state.addContactBox, state.inputs));
+    children.push(addContactBox(state.addContactBox));
 
     const h1 = document.createElement("h1");
     h1.textContent = "My contacts";
     children.append(h1);
 
     for (const contact of state.contacts) {
-        children.push(drawContact(contact, state.inputs));
+        children.push(drawContact(contact));
     }
     return [
         {
@@ -569,7 +761,7 @@ function pageFromCache(page, state) {
     state.page = page;
     if (page === "inbox" || page === null) {
         if (
-            state.openedMessage === undefined &&
+            state.openedInboxItem === undefined &&
             state.inboxSummary === undefined
         ) {
             return [[{ key: "getInboxSummary", value: state.inboxIds }], state];
@@ -728,7 +920,7 @@ function updateOnOutboxSummary(outboxSummary, state) {
 }
 
 function updateOnInboxSummary(inboxSummary, state) {
-    if (state.page !== "inbox" || state.openedMessageIn !== undefined) {
+    if (state.page !== "inbox" || state.openedInboxItem !== undefined) {
         return [[], state];
     }
     state.inboxSummary = inboxSummary;
@@ -812,7 +1004,7 @@ function updateOnCodeUpload(code, state) {
             key: "replaceDomWith",
             value: {
                 id: "codeUploader",
-                newDom: makeCodeUploader(code, state.inputs),
+                newDom: makeCodeUploader(code),
             },
         },
         setItem("iota", state.iota),
@@ -832,7 +1024,7 @@ function updateOnDeleteCode(draftId, state) {
             key: "replaceDomWith",
             value: {
                 id: "codeUploader",
-                newDom: makeCodeUploader(undefined, state.inputs),
+                newDom: makeCodeUploader(undefined),
             },
         },
         setItem(state.openDraft.id, state.openDraft),
@@ -859,6 +1051,22 @@ function updateOnTopButtonClick(button, state) {
     return [drawPage(oldPage, state).push(setItem("page", button)), state];
 }
 
+function updateOnInboxMenuClick(messageId, state) {
+    return [[{ key: "lookupInboxMessage", value: messageId }], state];
+}
+
+function updateOnInit(dontCare, state) {
+    return [initOutputs(), state];
+}
+
+function updateOnLookedUpInboxMessage(message, state) {
+    if (state.page !== "inbox") {
+        return [[], state];
+    }
+    state.openedInboxItem = message;
+    return [drawInbox(state), state];
+}
+
 const update = {
     cacheResponse: updateOnCacheResponse,
     error: updateError,
@@ -875,6 +1083,9 @@ const update = {
     deleteCode: updateOnDeleteCode,
     deleteContact: updateOnDeleteContact,
     topButtonClick: updateOnTopButtonClick,
+    inboxMenuClick: updateOnInboxMenuClick,
+    init: updateOnInit,
+    lookedUpInboxMessage: updateOnLookedUpInboxMessage,
 };
 
 function arrToNums(arr) {
@@ -939,22 +1150,22 @@ async function apiRequest(requestBody) {
     return [bodyArray, ""];
 }
 
-function addCssClass(toAdd, inputs) {
+function addCssClass(toAdd) {
     const el = document.getElementById(toAdd.id);
     el.classList.add(toAdd.cssClass);
 }
 
-function removeCssClass(toRemove, inputs) {
+function removeCssClass(toRemove) {
     const el = document.getElementById(toRemove.id);
     el.classList.remove(toRemove.cssClass);
 }
 
-async function requestMyName(maybeKeys, inputs) {
+async function requestMyName(maybeKeys) {
     const keys = maybeKeys === undefined ? await getKeys() : maybeKeys;
 
     const [powInfo, err] = await getPowInfo();
     if (err !== "") {
-        callback("error", err, inputs);
+        tick("error", err);
         return;
     }
     const pow = proofOfWork(powInfo);
@@ -962,18 +1173,18 @@ async function requestMyName(maybeKeys, inputs) {
     const request = makeMyNameRequest(pow, keys.signing.publicKey);
     const [response, responseErr] = await apiRequest(request);
     if (responseErr !== "") {
-        callback("error", responseErr, inputs);
+        tick("error", responseErr);
         return;
     }
-    callback("myNewName", decodeInt(response), inputs);
+    tick("myNewName", decodeInt(response));
 }
 
-async function cacheQuery(key, inputs) {
+async function cacheQuery(key) {
     const value = await localforage.getItem(key);
-    callback("cacheResponse", { key: key, value: value }, inputs);
+    tick("cacheResponse", { key: key, value: value });
 }
 
-function newChildren(key, dontCare) {
+function newChildren(key) {
     const parentEl = document.getElementById(key.parentId);
     while (parentEl.firstChild) {
         parentEl.removeChild(parentEl.lastChild);
@@ -983,12 +1194,12 @@ function newChildren(key, dontCare) {
     }
 }
 
-function addOnclick(key, dontCare) {
+function addOnclick(key) {
     const el = document.getElementById(key.id);
     el.onclick = key.onclick;
 }
 
-function cacheValue(toCache, dontCare) {
+function cacheValue(toCache) {
     localforage.setItem(toCache.key, toCache.value);
 }
 
@@ -997,7 +1208,7 @@ function updateTextBox(toAdd, dontCare) {
     box.value = toAdd.value;
 }
 
-async function getInboxSummary(inboxIds, inputs) {
+async function getInboxSummary(inboxIds) {
     const summaries = [];
     for (const id of inboxIds) {
         const message = await localforage.getItem(id);
@@ -1009,10 +1220,10 @@ async function getInboxSummary(inboxIds, inputs) {
         };
         summaries.push(summary);
     }
-    callback("inboxSummary", summaries, inputs);
+    tick("inboxSummary", summaries);
 }
 
-async function getDraftsSummary(draftIds, inputs) {
+async function getDraftsSummary(draftIds) {
     const summaries = [];
     for (const id of draftIds) {
         const draft = await localforage.getItem(id);
@@ -1023,10 +1234,10 @@ async function getDraftsSummary(draftIds, inputs) {
         };
         summaries.push(summary);
     }
-    callback("draftsSummary", summaries, inputs);
+    tick("draftsSummary", summaries);
 }
 
-async function getOutboxSummary(outboxIds, inputs) {
+async function getOutboxSummary(outboxIds) {
     const summaries = [];
     for (const id of outboxIds) {
         const message = await localforage.getItem(id);
@@ -1038,27 +1249,117 @@ async function getOutboxSummary(outboxIds, inputs) {
         };
         summaries.push(summary);
     }
-    callback("outboxSummary", summaries, inputs);
+    tick("outboxSummary", summaries);
 }
 
-async function codeFilesUpload(files, inputs) {
+async function codeFilesUpload(files) {
     const file = files[0];
     const contents = await file.arrayBuffer();
-    callback(
-        "uploadedCodeFile",
-        {
-            contents: contents,
-            name: file.name,
-            size: file.size,
-            mime: file.type,
-        },
-        inputs
-    );
+    tick("uploadedCodeFile", {
+        contents: contents,
+        name: file.name,
+        size: file.size,
+        mime: file.type,
+    });
 }
 
-function replaceDomWith(newDom, dontCare) {
+function replaceDomWith(newDom) {
     const old = document.getElementById(newDom.id);
     old.replaceWith(newDom.newDom);
+}
+
+// For interacting with the WASM generated by Rust. It just wraps
+// up a slightly tidied-up version of the code generated by
+// wasm-pack.
+class Wasm {
+    async init(codeBytes) {
+        const module_ = await WebAssembly.compile(this.codeBytes);
+        this.wasm = await WebAssembly.instantiate(module_, {});
+        this.WASM_VECTOR_LEN = 0;
+        this.mem8 = new Uint8Array(this.wasm.exports.memory.buffer);
+        this.mem32 = new Int32Array(this.wasm.exports.memory.buffer);
+    }
+
+    getMem8() {
+        if (this.mem8 !== this.wasm.exports.memory.buffer) {
+            this.mem8 = new Uint8Array(this.wasm.exports.memory.buffer);
+        }
+        return this.mem8;
+    }
+
+    passStringToWasm(arg, malloc, realloc) {
+        const cachedTextEncoder = new TextEncoder();
+        if (realloc === undefined) {
+            const buf = cachedTextEncoder.encode(arg);
+            const ptr = malloc(buf.length);
+            this.getMem8()
+                .subarray(ptr, ptr + buf.length)
+                .set(buf);
+            this.WASM_VECTOR_LEN = buf.length;
+            return ptr;
+        }
+
+        let len = arg.length;
+        let ptr = malloc(len);
+
+        const mem = this.getMem8();
+
+        let offset = 0;
+
+        for (; offset < len; offset++) {
+            const code = arg.charCodeAt(offset);
+            if (code > 0x7f) break;
+            mem[ptr + offset] = code;
+        }
+
+        if (offset !== len) {
+            if (offset !== 0) {
+                arg = arg.slice(offset);
+            }
+            ptr = realloc(ptr, len, (len = offset + arg.length * 3));
+
+            const view = this.getMem8().subarray(ptr + offset, ptr + len);
+            const ret = cachedTextEncoder.encodeInto(arg, view);
+            offset += ret.written ? ret.written : 0;
+        }
+
+        this.WASM_VECTOR_LEN = offset;
+        return ptr;
+    }
+
+    getMem32() {
+        if (this.mem32.buffer !== this.wasm.exports.memory.buffer) {
+            this.mem32 = new Int32Array(this.wasm.exports.memory.buffer);
+        }
+        return this.mem32;
+    }
+
+    getArrayU8FromWasm0(ptr, len) {
+        return this.getMem8().subarray(ptr / 1, ptr / 1 + len);
+    }
+
+    bigWebThing(s) {
+        const ptr0 = this.passStringToWasm(
+            s,
+            this.wasm.exports.__wbindgen_malloc,
+            this.wasm.exports.__wbindgen_realloc
+        );
+        const len0 = this.WASM_VECTOR_LEN;
+        this.wasm.exports.big_web_thing(8, ptr0, len0);
+        const r0 = this.getMem32()[8 / 4 + 0];
+        const r1 = this.getMem32()[8 / 4 + 1];
+        const v1 = this.getArrayU8FromWasm0(r0, r1).slice();
+        this.wasm.exports.__wbindgen_free(r0, r1 * 1);
+        return v1;
+    }
+}
+
+async function lookupInboxMessage(id) {
+    const message = localforage.getItem(id);
+    const compiled = new Wasm();
+    await compiled.init(message.code.contents);
+    message.output = compiled.bigWebThing(message.userInput);
+    tick("lookedUpInboxMessage", message);
 }
 
 const io = {
@@ -1075,31 +1376,22 @@ const io = {
     getOutboxSummary: getOutboxSummary,
     codeFilesUpload: codeFilesUpload,
     replaceDomWith: replaceDomWith,
+    lookupInboxMessage: lookupInboxMessage,
 };
 
-function callback(key, value, inputs) {
-    inputs.push({ key: key, value: value });
-    mainTick();
-}
-
-let mainTick;
+let tick;
 {
     let state = {};
-    const inputs = [];
-    const outputs = initOutputs(inputs);
-    state.inputs = inputs;
+    const outputs = [];
 
-    mainTick = () => {
+    tick = (inputKey, inputValue) => {
         for (const output of outputs) {
-            const iof = io[output.key];
-            iof(output.value, inputs);
+            io[output.key](output.value);
         }
-        for (const input of inputs) {
-            let newOutputs;
-            [newOutputs, state] = update[input.key](input.value, state);
-            outputs.concat(newOutputs);
-        }
-        inputs.length = 0;
+        let newOutputs;
+        [newOutputs, state] = update[inputKey](inputValue, state);
+        outputs.concat(newOutputs);
     };
+
+    tick("init", "");
 }
-mainTick();
