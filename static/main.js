@@ -1027,7 +1027,7 @@ function updatedUserInput(userInput, state) {
 
 function updateOnCodeUpload(code, state) {
     if (state.openDraft === undefined) {
-        return [[], state];
+        state.openDraft = {};
     }
     if (state.openDraft.id === undefined) {
         state.openDraft.id = state.iota;
@@ -1035,13 +1035,10 @@ function updateOnCodeUpload(code, state) {
     }
     state.openDraft.code = code;
     const ioJobs = [
-        {
-            key: "replaceDomWith",
-            value: {
-                id: "codeUploader",
-                newDom: makeCodeUploader(code),
-            },
-        },
+        kv("replaceDomWith", {
+            id: "codeUploader",
+            newDom: makeCodeUploader(code),
+        }),
         setItem("iota", state.iota),
         setItem(state.openDraft.id, state.openDraft),
     ];
@@ -1151,6 +1148,47 @@ function updateOnDownloadBlob(ids, state) {
     return [kv("downloadBlob", blob), state];
 }
 
+function updateOnCodeFilesUpload(files, state) {
+    return kv("codeFilesUpload", files);
+}
+
+function updateOnBlobFilesUpload(files, state) {
+    return kv("blobFilesUpload", { files: files, draftId: state.openDraft.id });
+}
+
+function updateOnBlobUpload(blobUpload, state) {
+    if (state.openDraft === undefined) {
+        state.openDraft = {};
+    }
+    if (state.openDraft.id === undefined) {
+        state.openDraft.id = state.iota;
+        state.iota += 1;
+    }
+    if (state.openDraft.blobs === undefined) {
+        state.openDraft.blobs = [];
+    }
+    const blobId = state.iota;
+    state.iota += 1;
+    const blob = {
+        name: blobUpload.name,
+        size: blobUpload.size,
+        mime: blobUpload.mime,
+        id: blobId,
+    };
+    state.iota += 1;
+    state.openDraft.blobs.push(blob);
+    const ioJobs = [
+        kv("replaceDomWith", {
+            id: "writerBlobsViewer",
+            newDom: makeBlobsViewer(state.openDraft.blobs),
+        }),
+        setItem("iota", state.iota),
+        setItem(state.openDraft.id, state.openDraft),
+        setItem(blobId, blobUpload.contents),
+    ];
+    return [ioJobs, state];
+}
+
 const update = {
     cacheResponse: updateOnCacheResponse,
     error: updateError,
@@ -1172,6 +1210,9 @@ const update = {
     lookedUpInboxMessage: updateOnLookedUpInboxMessage,
     deleteBlob: updateOnDeleteBlob,
     downloadBlob: updateOnDownloadBlob,
+    codeFilesUpload: updateOnCodeFilesUpload,
+    blobFilesUpload: updateOnBlobFilesUpload,
+    uploadedBlob: updateOnBlobUpload,
 };
 
 function arrToNums(arr) {
@@ -1472,6 +1513,18 @@ async function downloadBlob(blobInfo) {
     window.URL.revokeObjectURL(url);
 }
 
+async function blobFilesUpload(info) {
+    for (const file of info.files) {
+        const contents = await file.arrayBuffer();
+        tick("uploadedBlob", {
+            contents: contents,
+            name: file.name,
+            size: file.size,
+            mime: file.type,
+        });
+    }
+}
+
 const io = {
     cacheQuery: cacheQuery,
     requestMyName: requestMyName,
@@ -1485,6 +1538,7 @@ const io = {
     getDraftsSummary: getDraftsSummary,
     getOutboxSummary: getOutboxSummary,
     codeFilesUpload: codeFilesUpload,
+    blobFilesUpload: blobFilesUpload,
     replaceDomWith: replaceDomWith,
     lookupInboxMessage: lookupInboxMessage,
     downloadBlob: downloadBlob,
