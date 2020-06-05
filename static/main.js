@@ -826,7 +826,7 @@ function pageFromCache(page, state) {
     state.page = page;
     if (page === "inbox" || page === null) {
         if (
-            state.openedInboxItem === undefined &&
+            state.openInboxItem === undefined &&
             state.inboxSummary === undefined
         ) {
             return [[{ key: "getInboxSummary", value: state.inboxIds }], state];
@@ -841,7 +841,7 @@ function pageFromCache(page, state) {
     }
     if (
         page === "outbox" &&
-        state.openedSent === undefined &&
+        state.openSent === undefined &&
         state.outboxSummary === undefined
     ) {
         return [[{ key: "getOutboxSummary", value: state.outboxIds }], state];
@@ -982,7 +982,7 @@ function onDraftsSummary(draftsSummary, state) {
 }
 
 function onOutboxSummary(outboxSummary, state) {
-    if (state.page !== "outbox" || state.openedSent !== undefined) {
+    if (state.page !== "outbox" || state.openSent !== undefined) {
         return [[], state];
     }
     state.outboxSummary = outboxSummary;
@@ -990,7 +990,7 @@ function onOutboxSummary(outboxSummary, state) {
 }
 
 function onInboxSummary(inboxSummary, state) {
-    if (state.page !== "inbox" || state.openedInboxItem !== undefined) {
+    if (state.page !== "inbox" || state.openInboxItem !== undefined) {
         return [[], state];
     }
     state.inboxSummary = inboxSummary;
@@ -1152,7 +1152,7 @@ function onLookedUpInboxMessage(message, state) {
     if (state.page !== "inbox") {
         return [[], state];
     }
-    state.openedInboxItem = message;
+    state.openInboxItem = message;
     return [drawInbox(state), state];
 }
 
@@ -1160,7 +1160,7 @@ function onLookedUpOutboxMessage(message, state) {
     if (state.page !== "outbox") {
         return [[], state];
     }
-    state.openedOutboxItem = message;
+    state.openOutboxItem = message;
     return [drawOutbox(state), state];
 }
 
@@ -1209,7 +1209,7 @@ function onDownloadBlob(ids, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
-    const blob = findBlob(state.openedDraft.blobs, ids.blobId);
+    const blob = findBlob(state.openDraft.blobs, ids.blobId);
     return [kv("downloadBlob", blob), state];
 }
 
