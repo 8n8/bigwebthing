@@ -1605,7 +1605,7 @@ let tick;
         let outputs;
         [outputs, state] = update(inputValue, state);
         for (const output of outputs) {
-            output.key(output.value);
+            output.io(output.value);
         }
     };
 
