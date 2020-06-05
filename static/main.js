@@ -5,7 +5,7 @@ function initOnClick(button) {
         key: "addOnclick",
         value: {
             id: button + "Button",
-            onclick: () => tick("topButtonClick", button),
+            onclick: () => tick(onTopButtonClick, button),
         },
     };
 }
@@ -337,7 +337,7 @@ function makeInboxBlobsView(blobs) {
     return div;
 }
 
-function drawInboxItemView(message) {
+function drawBoxItemView(message) {
     const children = [
         makeSubjectView(message.subject),
         makeFromView(message.from),
@@ -353,13 +353,17 @@ function drawInboxItemView(message) {
     return [replaceChildren("page", children)];
 }
 
+function onOutboxMenuClick(messageId, state) {
+    return [[kv("lookupOutboxMessage", messageId)], state];
+}
+
 function drawInboxMenuItem(message) {
     const button = document.createElement("button");
     button.type = "button";
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(message.subject));
     button.appendChild(makeFromDom(message.from));
-    button.onclick = () => tick("inboxMenuClick", message.id);
+    button.onclick = () => tick(onInboxMenuClick, message.id);
     return button;
 }
 
@@ -368,7 +372,7 @@ function drawInbox(state) {
         return [replaceChildren("page", [noMessagesDom()])];
     }
     if (state.inboxItem !== undefined) {
-        return drawInboxItemView(state.openedInboxItem);
+        return drawBoxItemView(state.inboxItem);
     }
     const inbox = [];
     for (const message of state.inboxSummary) {
@@ -383,11 +387,17 @@ function drawOutboxItem(message) {
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(message.subject));
     button.appendChild(makeToDom(message.to));
-    button.onclick = () => tick("outboxMenuClick", message.id);
+    button.onclick = () => tick(onOutboxMenuClick, message.id);
     return button;
 }
 
 function drawOutbox(state) {
+    if (state.outboxSummary.length === 0) {
+        return [replaceChildren("page", [noMessagesDom()])];
+    }
+    if (state.outboxItem !== undefined) {
+        return drawBoxItemView(state.outboxItem);
+    }
     const outbox = [];
     for (const message of state.outboxSummary) {
         outbox.push(drawOutboxItem(message));
@@ -412,11 +422,17 @@ function drawDraftsItem(draft) {
     button.classList.add("messageButton");
     button.appendChild(makeSubjectDom(draft.subject));
     button.appendChild(makeDraftToDom(draft.to));
-    button.onclick = () => tick("draftsMenuClick", draft.id);
+    button.onclick = () => tick(onDraftsMenuClick, draft.id);
     return button;
 }
 
-function drawDrafts(state) {
+function drawDrafts(state, output) {
+    if (state.draftsSummary.length === 0) {
+        return [replaceChildren("page", [noMessagesDom()])];
+    }
+    if (state.openDraft !== undefined) {
+        return drawWrite(state.openDraft);
+    }
     const drafts = [];
     for (const draftSummary of state.draftsSummary) {
         drafts.push(drawDraftsItem(draftSummary));
@@ -435,7 +451,7 @@ function makeSubjectBox(subject) {
     const box = document.createElement("input");
     box.type = "text";
     box.value = subject;
-    box.oninput = (e) => tick("updatedSubjectBox", e.target.value);
+    box.oninput = (e) => tick(onUpdatedSubjectBox, e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
@@ -453,7 +469,7 @@ function makeToBox(to) {
     const box = document.createElement("input");
     box.type = "text";
     box.value = to;
-    box.oninput = (e) => tick("updatedToBox", e.target.value);
+    box.oninput = (e) => tick(onUpdatedToBox, e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
@@ -471,9 +487,16 @@ function addContactBox(boxContents) {
     const box = document.createElement("input");
     box.type = "text";
     box.value = boxContents;
-    box.oninput = (e) => tick("updatedAddContactBox", e.target.value);
+    box.oninput = (e) => tick(onUpdatedAddContactBox, e.target.value);
     box.id = id;
     container.appendChild(box);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Add contact";
+    button.onclick = () => tick(onAddContactButtonClick, "");
+    container.appendChild(button);
+
     return container;
 }
 
@@ -500,7 +523,7 @@ function makeUserInputBox(userInput) {
     const rows = userInput.split("\n");
     box.cols = longestRow(rows);
     box.rows = rows.length;
-    box.oninput = (e) => tick("updatedUserInput", e.target.value);
+    box.oninput = (e) => tick(onUpdatedUserInput, e.target.value);
     box.id = id;
     container.appendChild(box);
     return container;
@@ -519,7 +542,7 @@ function codeUploaderHelp() {
     browse.id = id;
     browse.addEventListener(
         "change",
-        () => tick("codeFilesUpload", this.files),
+        () => tick(onCodeFilesUpload, this.files),
         false
     );
     container.appendChild(browse);
@@ -562,7 +585,7 @@ function makeCodeUploader(code) {
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
-    deleteButton.onclick = () => tick("deleteCode", code.draftId);
+    deleteButton.onclick = () => tick(onDeleteCode, code.draftId);
     deleteButton.textContent = "Delete";
     div.appendChild(deleteButton);
 
@@ -583,13 +606,13 @@ function makeBlobViewer(blob) {
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.onclick = () =>
-        tick("deleteBlob", { draftId: blob.draftId, blobId: blob.id });
+        tick(onDeleteBlob, { draftId: blob.draftId, blobId: blob.id });
     deleteButton.textContent = "Delete";
     container.appendChild(deleteButton);
 
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
-    downloadButton.onclick = () => tick("downloadBlob", blob);
+    downloadButton.onclick = () => tick(onDownloadBlob, blob);
     downloadButton.textContent = "Download";
     container.appendChild(downloadButton);
 
@@ -626,7 +649,7 @@ function makeBlobUploader() {
     browse.multiple = true;
     browse.addEventListener(
         "change",
-        () => tick("blobFilesUpload", this.files),
+        () => tick(onBlobFilesUpload, this.files),
         false
     );
     container.appendChild(browse);
@@ -649,12 +672,29 @@ function drawWrite(state) {
         makeSubjectBox(draft.subject),
         makeToBox(draft.to),
         makeUserInputBox(draft.userInput),
-        makeCodeUploader(draft.code),
-        makeBlobsViewer(draft.blobs),
-        makeBlobUploader(),
     ];
 
-    return [replaceChildren("page", children)];
+    if (state.draftOutput !== undefined) {
+        children.push(makeOutputView(state.draftOutput));
+    }
+
+    children.push(makeBlobsViewer(draft.blobs));
+    children.push(makeBlobUploader());
+    children.push(makeCodeUploader(draft.code));
+
+    const runner = kv("runWasm", {
+        userInput: "userInput",
+        runner: state.wasmRunner,
+        code: draft.code,
+    });
+
+    return [replaceChildren("page", children), runner];
+}
+
+function onNewOutput(output, state) {
+    if (state.openDraft === undefined) return [[], state];
+    state.draftOutput = output;
+    return [drawWrite(state), state];
 }
 
 function drawContact(contact) {
@@ -667,7 +707,7 @@ function drawContact(contact) {
 
     const deleteButton = document.createElement("button");
     deleteButton.textContent = "Delete";
-    deleteButton.onclick = () => tick("deleteContact", contact);
+    deleteButton.onclick = () => tick(onDeleteContact, contact);
     div.append(deleteButton);
 
     return div;
@@ -834,12 +874,12 @@ const updateOnCacheResponseSwitch = {
     contacts: contactsFromCache,
 };
 
-function updateError(error, state) {
+function onError(error, state) {
     state.error = error;
     return [[{ key: "draw", value: state }], state];
 }
 
-function updateNewName(newName, state) {
+function onNewName(newName, state) {
     state.myName = newName;
     return [[{ key: "draw", value: state }], state];
 }
@@ -861,7 +901,7 @@ function newSubject(draftId, draftsSummary, subject) {
     return draftsSummary;
 }
 
-function updatedSubjectBox(subject, state) {
+function onUpdatedSubjectBox(subject, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
@@ -905,7 +945,7 @@ function validRecipient(recipient) {
     return true;
 }
 
-function updatedToBox(to, state) {
+function onUpdatedToBox(to, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
@@ -933,7 +973,7 @@ function updatedToBox(to, state) {
     return [ioJobs, state];
 }
 
-function updateOnDraftsSummary(draftsSummary, state) {
+function onDraftsSummary(draftsSummary, state) {
     if (state.page !== "drafts" || state.openDraft !== undefined) {
         return [[], state];
     }
@@ -941,7 +981,7 @@ function updateOnDraftsSummary(draftsSummary, state) {
     return [drawDrafts(state), state];
 }
 
-function updateOnOutboxSummary(outboxSummary, state) {
+function onOutboxSummary(outboxSummary, state) {
     if (state.page !== "outbox" || state.openedSent !== undefined) {
         return [[], state];
     }
@@ -949,7 +989,7 @@ function updateOnOutboxSummary(outboxSummary, state) {
     return [drawOutbox(state), state];
 }
 
-function updateOnInboxSummary(inboxSummary, state) {
+function onInboxSummary(inboxSummary, state) {
     if (state.page !== "inbox" || state.openedInboxItem !== undefined) {
         return [[], state];
     }
@@ -957,11 +997,11 @@ function updateOnInboxSummary(inboxSummary, state) {
     return [drawInbox(state), state];
 }
 
-function updateOnCacheResponse(response, state) {
+function onCacheResponse(response, state) {
     return updateOnCacheResponseSwitch[response.key](response.value, state);
 }
 
-function updateOnAddContactButtonClick(dontCare, state) {
+function onAddContactButtonClick(dontCare, state) {
     const contact = state.addContactBox;
     if (state.contacts.has(contact)) {
         const err = contact + " is already in your contacts";
@@ -981,7 +1021,7 @@ function updateOnAddContactButtonClick(dontCare, state) {
     ];
 }
 
-function updatedAddContactBox(contact, state) {
+function onUpdatedAddContactBox(contact, state) {
     if (!validRecipient(contact)) {
         return [
             [
@@ -1005,7 +1045,7 @@ function updatedAddContactBox(contact, state) {
     ];
 }
 
-function updatedUserInput(userInput, state) {
+function onUpdatedUserInput(userInput, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
@@ -1025,7 +1065,7 @@ function updatedUserInput(userInput, state) {
     return [ioJobs, state];
 }
 
-function updateOnCodeUpload(code, state) {
+function onCodeUpload(code, state) {
     if (state.openDraft === undefined) {
         state.openDraft = {};
     }
@@ -1045,7 +1085,7 @@ function updateOnCodeUpload(code, state) {
     return [ioJobs, state];
 }
 
-function updateOnDeleteCode(draftId, state) {
+function onDeleteCode(draftId, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
@@ -1064,7 +1104,7 @@ function updateOnDeleteCode(draftId, state) {
     return [ioJobs, state];
 }
 
-function updateOnDeleteContact(contact, state) {
+function onDeleteContact(contact, state) {
     state.contacts.delete(contact);
     return [
         drawContacts(state).push(setItem("contacts", state.contacts)),
@@ -1072,7 +1112,7 @@ function updateOnDeleteContact(contact, state) {
     ];
 }
 
-function updateOnTopButtonClick(button, state) {
+function onTopButtonClick(button, state) {
     if (state.page === button) {
         return [[], state];
     }
@@ -1083,15 +1123,27 @@ function updateOnTopButtonClick(button, state) {
     return [drawPage(oldPage, state).push(setItem("page", button)), state];
 }
 
-function updateOnInboxMenuClick(messageId, state) {
-    return [[{ key: "lookupInboxMessage", value: messageId }], state];
+function onDraftsMenuClick(messageId, state) {
+    return [[kv("lookupDraft", messageId)], state];
 }
 
-function updateOnInit(dontCare, state) {
+function onInboxMenuClick(messageId, state) {
+    return [[kv("lookupInboxMessage", messageId)], state];
+}
+
+function onInit(dontCare, state) {
     return [initOutputs(), state];
 }
 
-function updateOnLookedUpInboxMessage(message, state) {
+function onLookedUpDraft(message, state) {
+    if (state.page !== "drafts") {
+        return [[], state];
+    }
+    state.openDraft = message;
+    return [drawDrafts(state), state];
+}
+
+function onLookedUpInboxMessage(message, state) {
     if (state.page !== "inbox") {
         return [[], state];
     }
@@ -1099,7 +1151,15 @@ function updateOnLookedUpInboxMessage(message, state) {
     return [drawInbox(state), state];
 }
 
-function updateOnDeleteBlob(ids, state) {
+function onLookedUpOutboxMessage(message, state) {
+    if (state.page !== "outbox") {
+        return [[], state];
+    }
+    state.openedOutboxItem = message;
+    return [drawOutbox(state), state];
+}
+
+function onDeleteBlob(ids, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
@@ -1140,7 +1200,7 @@ function kv(key, value) {
     return { key: key, value: value };
 }
 
-function updateOnDownloadBlob(ids, state) {
+function onDownloadBlob(ids, state) {
     if (state.openDraft === undefined) {
         return [[], state];
     }
@@ -1148,15 +1208,15 @@ function updateOnDownloadBlob(ids, state) {
     return [kv("downloadBlob", blob), state];
 }
 
-function updateOnCodeFilesUpload(files, state) {
+function onCodeFilesUpload(files, state) {
     return kv("codeFilesUpload", files);
 }
 
-function updateOnBlobFilesUpload(files, state) {
+function onBlobFilesUpload(files, state) {
     return kv("blobFilesUpload", { files: files, draftId: state.openDraft.id });
 }
 
-function updateOnBlobUpload(blobUpload, state) {
+function onBlobUpload(blobUpload, state) {
     if (state.openDraft === undefined) {
         state.openDraft = {};
     }
@@ -1188,32 +1248,6 @@ function updateOnBlobUpload(blobUpload, state) {
     ];
     return [ioJobs, state];
 }
-
-const update = {
-    cacheResponse: updateOnCacheResponse,
-    error: updateError,
-    myNewName: updateNewName,
-    updatedSubjectBox: updatedSubjectBox,
-    updatedUserInput: updatedUserInput,
-    updatedToBox: updatedToBox,
-    draftsSummary: updateOnDraftsSummary,
-    outboxSummary: updateOnOutboxSummary,
-    inboxSummary: updateOnInboxSummary,
-    addContactButtonClick: updateOnAddContactButtonClick,
-    updatedAddContactBox: updatedAddContactBox,
-    uploadedCodeFile: updateOnCodeUpload,
-    deleteCode: updateOnDeleteCode,
-    deleteContact: updateOnDeleteContact,
-    topButtonClick: updateOnTopButtonClick,
-    inboxMenuClick: updateOnInboxMenuClick,
-    init: updateOnInit,
-    lookedUpInboxMessage: updateOnLookedUpInboxMessage,
-    deleteBlob: updateOnDeleteBlob,
-    downloadBlob: updateOnDownloadBlob,
-    codeFilesUpload: updateOnCodeFilesUpload,
-    blobFilesUpload: updateOnBlobFilesUpload,
-    uploadedBlob: updateOnBlobUpload,
-};
 
 function arrToNums(arr) {
     const numbers = [];
@@ -1292,7 +1326,7 @@ async function requestMyName(maybeKeys) {
 
     const [powInfo, err] = await getPowInfo();
     if (err !== "") {
-        tick("error", err);
+        tick(onError, err);
         return;
     }
     const pow = proofOfWork(powInfo);
@@ -1300,15 +1334,15 @@ async function requestMyName(maybeKeys) {
     const request = makeMyNameRequest(pow, keys.signing.publicKey);
     const [response, responseErr] = await apiRequest(request);
     if (responseErr !== "") {
-        tick("error", responseErr);
+        tick(onError, responseErr);
         return;
     }
-    tick("myNewName", decodeInt(response));
+    tick(onNewName, decodeInt(response));
 }
 
 async function cacheQuery(key) {
     const value = await localforage.getItem(key);
-    tick("cacheResponse", { key: key, value: value });
+    tick(onCacheResponse, { key: key, value: value });
 }
 
 function ioReplaceChildren(key) {
@@ -1347,7 +1381,7 @@ async function getInboxSummary(inboxIds) {
         };
         summaries.push(summary);
     }
-    tick("inboxSummary", summaries);
+    tick(onInboxSummary, summaries);
 }
 
 async function getDraftsSummary(draftIds) {
@@ -1361,7 +1395,7 @@ async function getDraftsSummary(draftIds) {
         };
         summaries.push(summary);
     }
-    tick("draftsSummary", summaries);
+    tick(onDraftsSummary, summaries);
 }
 
 async function getOutboxSummary(outboxIds) {
@@ -1376,13 +1410,13 @@ async function getOutboxSummary(outboxIds) {
         };
         summaries.push(summary);
     }
-    tick("outboxSummary", summaries);
+    tick(onOutboxSummary, summaries);
 }
 
 async function codeFilesUpload(files) {
     const file = files[0];
     const contents = await file.arrayBuffer();
-    tick("uploadedCodeFile", {
+    tick(onCodeUpload, {
         contents: contents,
         name: file.name,
         size: file.size,
@@ -1484,17 +1518,22 @@ class Wasm {
         try {
             return this._run(s);
         } catch (err) {
-            tick("error", err);
+            tick(onError, err);
         }
     }
 }
 
+async function lookupDraft(id) {
+    const message = await localforage.getItem(id);
+    tick(onLookedUpDraft, message);
+}
+
 async function lookupInboxMessage(id) {
-    const message = localforage.getItem(id);
+    const message = await localforage.getItem(id);
     const compiled = new Wasm();
     await compiled.init(message.code.contents);
     message.output = compiled.bigWebThing(message.userInput);
-    tick("lookedUpInboxMessage", message);
+    tick(onLookedUpInboxMessage, message);
 }
 
 async function downloadBlob(blobInfo) {
@@ -1516,13 +1555,32 @@ async function downloadBlob(blobInfo) {
 async function blobFilesUpload(info) {
     for (const file of info.files) {
         const contents = await file.arrayBuffer();
-        tick("uploadedBlob", {
+        tick(onBlobUpload, {
             contents: contents,
             name: file.name,
             size: file.size,
             mime: file.type,
         });
     }
+}
+
+async function lookupOutboxMessage(id) {
+    const message = await localforage.getItem(id);
+    const compiled = new Wasm();
+    await compiled.init(message.code.contents);
+    message.output = compiled.bigWebThing(message.userInput);
+    tick(onLookedUpOutboxMessage, message);
+}
+
+async function runWasm(o) {
+    if (o.code === undefined) return;
+    let runner = o.runner;
+    if (runner === undefined) {
+        runner = new Wasm();
+        await runner.init(o.code);
+    }
+    const output = runner.bigWebThing(o.userInput);
+    tick(onNewOutput, output);
 }
 
 const io = {
@@ -1541,22 +1599,23 @@ const io = {
     blobFilesUpload: blobFilesUpload,
     replaceDomWith: replaceDomWith,
     lookupInboxMessage: lookupInboxMessage,
+    lookupOutboxMessage: lookupOutboxMessage,
+    lookupDraft: lookupDraft,
     downloadBlob: downloadBlob,
+    runWasm: runWasm,
 };
 
 let tick;
 {
     let state = {};
-    const outputs = [];
 
-    tick = (inputKey, inputValue) => {
+    tick = (update, inputValue) => {
+        let outputs;
+        [outputs, state] = update(inputValue, state);
         for (const output of outputs) {
             io[output.key](output.value);
         }
-        let newOutputs;
-        [newOutputs, state] = update[inputKey](inputValue, state);
-        outputs.concat(newOutputs);
     };
 
-    tick("init", "");
+    tick(onInit, "");
 }
