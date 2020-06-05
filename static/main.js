@@ -1001,7 +1001,7 @@ function onCacheResponse(response, state) {
     return updateOnCacheResponseSwitch[response.key](response.value, state);
 }
 
-function onAddContactButtonClick(dontCare, state) {
+function onAddContactButtonClick(_, state) {
     const contact = state.addContactBox;
     if (state.contacts.has(contact)) {
         const err = contact + " is already in your contacts";
@@ -1136,7 +1136,7 @@ function onInboxMenuClick(messageId, state) {
     return [[kv("lookupInboxMessage", messageId)], state];
 }
 
-function onInit(dontCare, state) {
+function onInit(_, state) {
     return [initOutputs(), state];
 }
 
@@ -1369,7 +1369,7 @@ function cacheValue(toCache) {
     localforage.setItem(toCache.key, toCache.value);
 }
 
-function updateTextBox(toAdd, dontCare) {
+function updateTextBox(toAdd, _) {
     const box = document.getElementById(toAdd.id);
     box.value = toAdd.value;
 }
