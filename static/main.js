@@ -683,7 +683,7 @@ function drawWrite(state) {
     children.push(makeCodeUploader(draft.code));
 
     const runner = kv("runWasm", {
-        userInput: "userInput",
+        userInput: draft.userInput,
         runner: state.wasmRunner,
         code: draft.code,
     });
@@ -1061,6 +1061,11 @@ function onUpdatedUserInput(userInput, state) {
         },
         setItem("iota", state.iota),
         setItem(state.openDraft.id, state.openDraft),
+        kv("runWasm", {
+            userInput: userInput,
+            runner: state.wasmRunner,
+            code: state.openDraft.code,
+        }),
     ];
     return [ioJobs, state];
 }
