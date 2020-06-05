@@ -2,7 +2,7 @@
 
 function initOnClick(button) {
     return {
-        key: "addOnclick",
+        io: addOnclick,
         value: {
             id: button + "Button",
             onclick: () => tick(onTopButtonClick, button),
@@ -12,7 +12,7 @@ function initOnClick(button) {
 
 function replaceChildren(parentId, newChildren) {
     return {
-        key: "replaceChildren",
+        io: ioReplaceChildren,
         value: { parentId: parentId, children: newChildren },
     };
 }
@@ -37,13 +37,13 @@ function initOnClicks() {
 
 function initOutputs() {
     return [
-        { key: "cacheQuery", value: "iota" },
-        { key: "cacheQuery", value: "page" },
-        { key: "cacheQuery", value: "inboxIds" },
-        { key: "cacheQuery", value: "draftIds" },
-        { key: "cacheQuery", value: "outboxIds" },
-        { key: "cacheQuery", value: "myName" },
-        { key: "cacheQuery", value: "contacts" },
+        { io: cacheQuery, value: "iota" },
+        { io: cacheQuery, value: "page" },
+        { io: cacheQuery, value: "inboxIds" },
+        { io: cacheQuery, value: "draftIds" },
+        { io: cacheQuery, value: "outboxIds" },
+        { io: cacheQuery, value: "myName" },
+        { io: cacheQuery, value: "contacts" },
     ].concat(initOnClicks());
 }
 
@@ -144,11 +144,11 @@ function makeMyNameRequest(pow, publicSigningKey) {
 function turnButtonOn(id) {
     return [
         {
-            key: "addCssClass",
+            io: addCssClass,
             value: { id: id, cssClass: "selectedButton" },
         },
         {
-            key: "removeCssClass",
+            io: removeCssClass,
             value: { id: id, cssClass: "notSelectedButton" },
         },
     ];
@@ -157,11 +157,11 @@ function turnButtonOn(id) {
 function turnButtonOff(id) {
     return [
         {
-            key: "addCssClass",
+            io: addCssClass,
             value: { id: id, cssClass: "notSelectedButton" },
         },
         {
-            key: "removeCssClass",
+            io: removeCssClass,
             value: { id: id, cssClass: "selectedButton" },
         },
     ];
@@ -354,7 +354,7 @@ function drawBoxItemView(message) {
 }
 
 function onOutboxMenuClick(messageId, state) {
-    return [[kv("lookupOutboxMessage", messageId)], state];
+    return [[kv(lookupOutboxMessage, messageId)], state];
 }
 
 function drawInboxMenuItem(message) {
@@ -682,7 +682,7 @@ function drawWrite(state) {
     children.push(makeBlobUploader());
     children.push(makeCodeUploader(draft.code));
 
-    const runner = kv("runWasm", {
+    const runner = kv(runWasm, {
         userInput: draft.userInput,
         runner: state.wasmRunner,
         code: draft.code,
@@ -788,7 +788,7 @@ function myNameDom(myName) {
 
 function myNameFromCache(maybeMyName, state) {
     if (maybeMyName === null) {
-        return [[{ key: "requestMyName", value: state.cryptoKeys }], state];
+        return [[{ io: requestMyName, value: state.cryptoKeys }], state];
     }
     state.myName = maybeMyName;
     if (state.page === "contacts") {
@@ -799,27 +799,36 @@ function myNameFromCache(maybeMyName, state) {
 }
 
 function inboxIdsFromCache(inboxIds, state) {
+    if (state.page !== "inbox") {
+        return [[], state];
+    }
     if (inboxIds === null) {
         state.inboxIds = [];
     }
     state.inboxIds = inboxIds;
-    return [[{ key: "draw", value: state }], state];
+    return [drawPage(null, state), state];
 }
 
 function draftIdsFromCache(draftIds, state) {
+    if (state.page !== "drafts") {
+        return [[], state];
+    }
     if (draftIds === null) {
         state.draftIds = [];
     }
     state.draftIds = draftIds;
-    return [[{ key: "draw", value: state }], state];
+    return [drawPage(null, state), state];
 }
 
 function outboxIdsFromCache(outboxIds, state) {
+    if (state.page !== "outbox") {
+        return [[], state];
+    }
     if (outboxIds === null) {
         state.outboxIds = [];
     }
     state.outboxIds = outboxIds;
-    return [[{ key: "draw", value: state }], state];
+    return [drawPage(null, state), state];
 }
 
 function pageFromCache(page, state) {
@@ -829,7 +838,7 @@ function pageFromCache(page, state) {
             state.openInboxItem === undefined &&
             state.inboxSummary === undefined
         ) {
-            return [[{ key: "getInboxSummary", value: state.inboxIds }], state];
+            return [[{ key: getInboxSummary, value: state.inboxIds }], state];
         }
     }
     if (
@@ -837,14 +846,14 @@ function pageFromCache(page, state) {
         state.openDraft === undefined &&
         state.draftsSummary === undefined
     ) {
-        return [[{ key: "getDraftsSummary", value: state.draftIds }], state];
+        return [[{ key: getDraftsSummary, value: state.draftIds }], state];
     }
     if (
         page === "outbox" &&
         state.openSent === undefined &&
         state.outboxSummary === undefined
     ) {
-        return [[{ key: "getOutboxSummary", value: state.outboxIds }], state];
+        return [[{ key: getOutboxSummary, value: state.outboxIds }], state];
     }
     const oldPage = state.page;
     state.page = page;
@@ -886,7 +895,7 @@ function onNewName(newName, state) {
 
 function setItem(key, value) {
     return {
-        key: "cacheValue",
+        key: cacheValue,
         value: { key: key, value: value },
     };
 }
@@ -917,7 +926,7 @@ function onUpdatedSubjectBox(subject, state) {
     );
     const ioJobs = [
         {
-            key: "updateTextBox",
+            key: updateTextBox,
             value: { id: "writerSubjectBox", value: subject },
         },
         setItem("iota", state.iota),
@@ -953,7 +962,7 @@ function onUpdatedToBox(to, state) {
         return [
             [
                 {
-                    key: "updateTextBox",
+                    key: updateTextBox,
                     value: { id: "writerToBox", value: "" },
                 },
             ],
@@ -966,7 +975,7 @@ function onUpdatedToBox(to, state) {
     }
     state.openDraft.to = to;
     const ioJobs = [
-        { key: "updateTextBox", value: { id: "writerToBox", value: to } },
+        { key: updateTextBox, value: { id: "writerToBox", value: to } },
         setItem("iota", state.iota),
         setItem(state.openDraft.id, state.openDraft),
     ];
@@ -1013,7 +1022,7 @@ function onAddContactButtonClick(_, state) {
     return [
         [
             {
-                key: "updateTextBox",
+                key: updateTextBox,
                 value: { id: "addContactBox", value: "" },
             },
         ],
@@ -1026,7 +1035,7 @@ function onUpdatedAddContactBox(contact, state) {
         return [
             [
                 {
-                    key: "updateTextBox",
+                    key: updateTextBox,
                     value: { id: "addContactBox", value: "" },
                 },
             ],
@@ -1037,7 +1046,7 @@ function onUpdatedAddContactBox(contact, state) {
     return [
         [
             {
-                key: "updateTextBox",
+                key: updateTextBox,
                 value: { id: "addContactBox", value: contact },
             },
         ],
@@ -1061,7 +1070,7 @@ function onUpdatedUserInput(userInput, state) {
         },
         setItem("iota", state.iota),
         setItem(state.openDraft.id, state.openDraft),
-        kv("runWasm", {
+        kv(runWasm, {
             userInput: userInput,
             runner: state.wasmRunner,
             code: state.openDraft.code,
@@ -1080,7 +1089,7 @@ function onCodeUpload(code, state) {
     }
     state.openDraft.code = code;
     const ioJobs = [
-        kv("replaceDomWith", {
+        kv(replaceDomWith, {
             id: "codeUploader",
             newDom: makeCodeUploader(code),
         }),
@@ -1098,7 +1107,7 @@ function onDeleteCode(draftId, state) {
     delete openDraft.code;
     const ioJobs = [
         {
-            key: "replaceDomWith",
+            key: replaceDomWith,
             value: {
                 id: "codeUploader",
                 newDom: makeCodeUploader(undefined),
@@ -1129,11 +1138,11 @@ function onTopButtonClick(button, state) {
 }
 
 function onDraftsMenuClick(messageId, state) {
-    return [[kv("lookupDraft", messageId)], state];
+    return [[kv(lookupDraft, messageId)], state];
 }
 
 function onInboxMenuClick(messageId, state) {
-    return [[kv("lookupInboxMessage", messageId)], state];
+    return [[kv(lookupInboxMessage, messageId)], state];
 }
 
 function onInit(_, state) {
@@ -1184,7 +1193,7 @@ function onDeleteBlob(ids, state) {
         [
             setItem(ids.draftId, state.openDraft),
             {
-                key: "replaceDomWith",
+                key: replaceDomWith,
                 value: {
                     id: "writerBlobsViewer",
                     newDom: makeBlobsViewer(newBlobs),
@@ -1210,15 +1219,15 @@ function onDownloadBlob(ids, state) {
         return [[], state];
     }
     const blob = findBlob(state.openDraft.blobs, ids.blobId);
-    return [kv("downloadBlob", blob), state];
+    return [kv(downloadBlob, blob), state];
 }
 
 function onCodeFilesUpload(files, state) {
-    return kv("codeFilesUpload", files);
+    return kv(codeFilesUpload, files);
 }
 
 function onBlobFilesUpload(files, state) {
-    return kv("blobFilesUpload", { files: files, draftId: state.openDraft.id });
+    return kv(blobFilesUpload, { files: files, draftId: state.openDraft.id });
 }
 
 function onBlobUpload(blobUpload, state) {
@@ -1243,7 +1252,7 @@ function onBlobUpload(blobUpload, state) {
     state.iota += 1;
     state.openDraft.blobs.push(blob);
     const ioJobs = [
-        kv("replaceDomWith", {
+        kv(replaceDomWith, {
             id: "writerBlobsViewer",
             newDom: makeBlobsViewer(state.openDraft.blobs),
         }),
@@ -1588,28 +1597,6 @@ async function runWasm(o) {
     tick(onNewOutput, output);
 }
 
-const io = {
-    cacheQuery: cacheQuery,
-    requestMyName: requestMyName,
-    addCssClass: addCssClass,
-    removeCssClass: removeCssClass,
-    replaceChildren: ioReplaceChildren,
-    addOnclick: addOnclick,
-    cacheValue: cacheValue,
-    updateTextBox: updateTextBox,
-    getInboxSummary: getInboxSummary,
-    getDraftsSummary: getDraftsSummary,
-    getOutboxSummary: getOutboxSummary,
-    codeFilesUpload: codeFilesUpload,
-    blobFilesUpload: blobFilesUpload,
-    replaceDomWith: replaceDomWith,
-    lookupInboxMessage: lookupInboxMessage,
-    lookupOutboxMessage: lookupOutboxMessage,
-    lookupDraft: lookupDraft,
-    downloadBlob: downloadBlob,
-    runWasm: runWasm,
-};
-
 let tick;
 {
     let state = {};
@@ -1618,7 +1605,7 @@ let tick;
         let outputs;
         [outputs, state] = update(inputValue, state);
         for (const output of outputs) {
-            io[output.key](output.value);
+            output.key(output.value);
         }
     };
 
