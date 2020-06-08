@@ -103,13 +103,10 @@ const createMembers = `
 	CREATE TABLE IF NOT EXISTS members (name INTEGER UNIQUE NOT NULL);`
 
 const createFriendlyNames = `
-	CREATE TABLE IF NOT EXISTS friendlynames (key BLOB UNIQUE NOT NULL);`
+	CREATE TABLE IF NOT EXISTS friendlynames (keys BLOB UNIQUE NOT NULL);`
 
 const createWhitelist = `
 	CREATE TABLE IF NOT EXISTS whitelist (owner INTEGER NOT NULL, sender INTEGER NOT NULL);`
-
-const createEncryptionKeys = `
-	CREATE TABLE IF NOT EXISTS encryptionkeys (owner INTEGER UNIQUE NOT NULL, key BLOB UNIQUE NOT NULL);`
 
 func createDatabase() error {
 	database, err := sql.Open("sqlite3", dbFileName)
@@ -118,7 +115,7 @@ func createDatabase() error {
 		return err
 	}
 	defer database.Close()
-	for _, command := range []string{createMembers, createFriendlyNames, createWhitelist, createEncryptionKeys} {
+	for _, command := range []string{createMembers, createFriendlyNames, createWhitelist} {
 		_, err = database.Exec(command)
 		if err != nil {
 			return err
@@ -144,7 +141,7 @@ func loadMembers(database *sql.DB) (map[int]struct{}, error) {
 }
 
 func loadFriendlyNames(database *sql.DB) ([][]byte, error) {
-	rows, err := database.Query("SELECT key FROM friendlynames")
+	rows, err := database.Query("SELECT keys FROM friendlynames")
 	var friendlyNames [][]byte
 	if err != nil {
 		err = fmt.Errorf("could not load friendlynames: %v", err)
@@ -175,21 +172,6 @@ func loadWhitelists(database *sql.DB) (map[int]map[int]struct{}, error) {
 		whitelists[owner] = whitelist
 	}
 	return whitelists, nil
-}
-
-func loadEncryptionKeys(database *sql.DB) (map[int][]byte, error) {
-	rows, err := database.Query("SELECT owner, key FROM encryptionkeys")
-	keys := make(map[int][]byte)
-	if err != nil {
-		return keys, err
-	}
-	for rows.Next() {
-		var owner int
-		key := make([]byte, 32)
-		rows.Scan(&owner, &key)
-		keys[owner] = key
-	}
-	return keys, nil
 }
 
 func loadInt(filename string) (int, error) {
@@ -235,12 +217,6 @@ func (loadData) io(inputChannel chan inputT) {
 		return
 	}
 
-	encryptionKeys, err := loadEncryptionKeys(database)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-
 	powCounter, err := loadInt(uniquePowFileName)
 	if err != nil {
 		powCounter = 0
@@ -252,23 +228,21 @@ func (loadData) io(inputChannel chan inputT) {
 	}
 
 	loaded := loadedData{
-		members:        members,
-		friendlyNames:  friendlyNames,
-		powCounter:     powCounter,
-		authUnique:     authUnique,
-		whitelists:     whitelists,
-		encryptionKeys: encryptionKeys,
+		members:       members,
+		friendlyNames: friendlyNames,
+		powCounter:    powCounter,
+		authUnique:    authUnique,
+		whitelists:    whitelists,
 	}
 	inputChannel <- loaded
 }
 
 type loadedData struct {
-	members        map[int]struct{}
-	friendlyNames  [][]byte
-	powCounter     int
-	authUnique     int
-	whitelists     map[int]map[int]struct{}
-	encryptionKeys map[int][]byte
+	members       map[int]struct{}
+	friendlyNames [][]byte
+	powCounter    int
+	authUnique    int
+	whitelists    map[int]map[int]struct{}
 }
 
 func (l loadedData) update(state stateT) (stateT, []outputT) {
@@ -277,7 +251,6 @@ func (l loadedData) update(state stateT) (stateT, []outputT) {
 	state.proofOfWork.unique = l.powCounter
 	state.authUnique = l.authUnique
 	state.whitelists = l.whitelists
-	state.encryptionKeys = l.encryptionKeys
 	return state, []outputT{}
 }
 
@@ -342,8 +315,6 @@ func parseRequest(body []byte) parsedRequestT {
 		return parseUnwhitelistSomeone(body)
 	case 12:
 		return parseUploadEncryptionKey(body)
-	case 13:
-		return parseDownloadEncryptionKey(body)
 	}
 
 	return badRequest{"bad route", 400}
@@ -365,31 +336,13 @@ func parseUploadEncryptionKey(body []byte) parsedRequestT {
 	}
 }
 
-type encryptionKeyRequest int
-
-func parseDownloadEncryptionKey(body []byte) parsedRequestT {
-	if len(body) != 9 {
-		return badRequest{"length of body is not 9", 400}
-	}
-	name := decodeInt(body[1:])
-	return encryptionKeyRequest(name)
-}
-
-func (e encryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
-	key, ok := state.encryptionKeys[int(e)]
-	if !ok {
-		return state, []outputT{badResponse{"no key", 400, responseChan}}
-	}
-	return state, []outputT{sendHttpResponse{responseChan, goodHttpResponse(key)}}
-}
-
 func (u uploadEncryptionKeyRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 
 	if u.Owner >= len(state.friendlyNames) {
 		return state, []outputT{badResponse{"who are you?", 400, responseChan}}
 	}
 
-	signingKey := state.friendlyNames[u.Owner]
+	signingKey := state.friendlyNames[u.Owner][:32]
 	var signingKeyArr [32]byte
 	copy(signingKeyArr[:], signingKey)
 	_, okSignature := sign.Open(make([]byte, 0), u.SignedKey, &signingKeyArr)
@@ -731,15 +684,6 @@ type sendMessageRequest struct {
 	message   []byte
 }
 
-func getMemberId(key []byte, members [][]byte) (int, bool) {
-	for i, member := range members {
-		if equalBytes(member, key) {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
 func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	bad := func(message string, code int) []outputT {
 		return []outputT{badResponse{message, code, responseChan}}
@@ -878,7 +822,7 @@ func validToken(token idTokenT, unused []int, friendlyNames [][]byte) ([]int, er
 	if token.senderId >= len(friendlyNames) {
 		return unused, errors.New("unknown sender")
 	}
-	senderKey := friendlyNames[token.senderId]
+	senderKey := friendlyNames[token.senderId][:32]
 	var keyArr [32]byte
 	copy(keyArr[:], senderKey)
 	signed, ok := sign.Open([]byte{}, token.signature, &keyArr)
@@ -1068,8 +1012,8 @@ func (name lookupNameT) updateOnRequest(state stateT, httpResponseChan chan http
 	if len(state.friendlyNames) <= int(name) {
 		return state, []outputT{badResponse{"unknown name", 400, httpResponseChan}}
 	}
-	key := state.friendlyNames[int(name)]
-	return state, []outputT{nameLookupResponse{key, httpResponseChan}}
+	keys := state.friendlyNames[int(name)]
+	return state, []outputT{nameLookupResponse{keys, httpResponseChan}}
 }
 
 type nameLookupResponse struct {
@@ -1223,8 +1167,8 @@ func (b badResponse) io(inputChannel chan inputT) {
 }
 
 func parseMakeFriendlyName(body []byte) parsedRequestT {
-	if len(body) != 49 {
-		return badRequest{"body is not 49 bytes", 400}
+	if len(body) != 81 {
+		return badRequest{"body is not 81 bytes", 400}
 	}
 
 	proofOfWork := proofOfWorkT{
@@ -1234,7 +1178,7 @@ func parseMakeFriendlyName(body []byte) parsedRequestT {
 
 	return makeFriendlyNameRequest{
 		ProofOfWork: proofOfWork,
-		NewKey:      body[17:49],
+		NewKey:      body[17:81],
 	}
 }
 
