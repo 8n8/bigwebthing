@@ -10,6 +10,44 @@ function initOnClick(button) {
     };
 }
 
+function encodeString(s) {
+    const encoder = new TextEncoder();
+    const encoded = encoder.encode(s);
+    const len = encodeInt(encoded.length);
+    return combine(len, encoded);
+}
+
+function combineMany(bs) {
+    let totalLength = 0;
+    for (const b of bs) {
+        totalLength += b.length;
+    }
+
+    const buf = new ArrayBuffer(totalLength);
+    const result = new Uint8Array(buf);
+
+    let i = 0;
+    for (const b of bs) {
+        for (const bel of b) {
+            result[i] = bel;
+            i += 1;
+        }
+    }
+
+    return result;
+}
+
+function encodeDraft(draft) {
+    return combineMany(
+        oneByte(0),
+        encodeInt(draft.to),
+        encodeString(draft.subject),
+        encodeString(draft.userInput),
+        encodeInt(draft.code.length),
+        draft.code
+    );
+}
+
 function replaceChildren(parentId, newChildren) {
     return {
         io: ioReplaceChildren,
@@ -85,10 +123,11 @@ function combine(a, b) {
     return combined;
 }
 
-function decodeInt32(fourBytes) {
-    let result = 0;
-    for (let i = 0; i < 4; i++) {
-        result += fourBytes[i] * Math.pow(256, i);
+function encodeInt(n) {
+    const buf = new ArrayBuffer(8);
+    const result = new Uint8Array(buf);
+    for (let i = 0; i < 8; i++) {
+        result[i] = n >> (i * 8) && 0xff;
     }
     return result;
 }
@@ -122,23 +161,6 @@ function proofOfWork(powInfo) {
         }
         counter[0] = counter[0] + 1;
     }
-}
-
-function uint8Array(length) {
-    const buffer = new ArrayBuffer(length);
-    return new Uint8Array(buffer);
-}
-
-function makeMyNameRequest(pow, publicSigningKey) {
-    const request = uint8Array(49);
-    request[0] = 1;
-    for (let i = 0; i < 16; i++) {
-        request[i + 1] = pow[i];
-    }
-    for (let i = 0; i < 32; i++) {
-        request[i + 17] = publicSigningKey[i];
-    }
-    return request;
 }
 
 function turnButtonOn(id) {
@@ -196,7 +218,7 @@ function decodeSmallString(raw, i) {
                 " bytes long",
         ];
     }
-    const stringLength = decodeInt32(raw.slice(i, i + 4));
+    const stringLength = decodeInt(raw.slice(i, i + 4));
     i += 4;
     const stringBytes = raw.slice(i, i + stringLength);
     const decoded = new TextDecoder().decode(stringBytes);
@@ -215,7 +237,7 @@ function decodeOrdering(raw, i) {
                 " bytes long",
         ];
     }
-    const numElements = decodeInt32(raw.slice(i, i + 4));
+    const numElements = decodeInt(raw.slice(i, i + 4));
     i += 4;
     const ordering = [];
     for (let _ = 0; _ < numElements; _++) {
@@ -657,6 +679,40 @@ function makeBlobUploader() {
     return container;
 }
 
+function onSendButtonClick(_, state) {
+    if (!readyToSend(state.openDraft)) {
+        return [[], state];
+    }
+    return [
+        {
+            io: sendDraft,
+            value: {
+                draft: state.openDraft,
+                keys: state.cryptoKeys,
+                toKeys: state.contacts[state.openDraft.to],
+                myName: state.myName,
+            },
+        },
+        state,
+    ];
+}
+
+function makeSendButton() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Send";
+    button.onclick = () => tick(onSendButtonClick, null);
+    return button;
+}
+
+function readyToSend(draft) {
+    return (
+        draft !== undefined &&
+        draft.to !== undefined &&
+        draft.code !== undefined
+    );
+}
+
 function drawWrite(state) {
     let draft = state.openDraft;
     if (draft === undefined) {
@@ -669,6 +725,7 @@ function drawWrite(state) {
     }
 
     const children = [
+        makeSendButton(),
         makeSubjectBox(draft.subject),
         makeToBox(draft.to),
         makeUserInputBox(draft.userInput),
@@ -679,7 +736,9 @@ function drawWrite(state) {
     }
 
     children.push(makeBlobsViewer(draft.blobs));
-    children.push(makeBlobUploader());
+    if (readyToSend(draft)) {
+        children.push(makeBlobUploader());
+    }
     children.push(makeCodeUploader(draft.code));
 
     const runner = kv(runWasm, {
@@ -725,7 +784,7 @@ function drawContacts(state) {
     h1.textContent = "My contacts";
     children.append(h1);
 
-    for (const contact of state.contacts) {
+    for (const contact in state.contacts) {
         children.push(drawContact(contact));
     }
     return [replaceChildren("page", children)];
@@ -895,7 +954,7 @@ function onNewName(newName, state) {
 
 function setItem(key, value) {
     return {
-        key: cacheValue,
+        io: cacheValue,
         value: { key: key, value: value },
     };
 }
@@ -1012,18 +1071,21 @@ function onCacheResponse(response, state) {
 
 function onAddContactButtonClick(_, state) {
     const contact = state.addContactBox;
-    if (state.contacts.has(contact)) {
+    if (contact in state.contacts) {
         const err = contact + " is already in your contacts";
         state.addContactError = err;
-        return [[{ key: "addContactError", value: err }], state];
+        return [[{ io: onError, value: err }], state];
     }
-    state.contacts.add(contact);
     state.addContactBox = "";
     return [
         [
             {
-                key: updateTextBox,
+                io: updateTextBox,
                 value: { id: "addContactBox", value: "" },
+            },
+            {
+                io: downloadContactKeys,
+                value: contact,
             },
         ],
         state,
@@ -1241,7 +1303,9 @@ function onBlobUpload(blobUpload, state) {
     if (state.openDraft.blobs === undefined) {
         state.openDraft.blobs = [];
     }
-    const blobId = state.iota;
+    const blobId = base64.fromBytes(
+        nacl.hash(blobUpload.contents).slice(0, 32)
+    );
     state.iota += 1;
     const blob = {
         name: blobUpload.name,
@@ -1286,6 +1350,97 @@ function noMessagesDom() {
     p.textContent = "You have no messages yet.";
     p.classList.add("noneMessage");
     return p;
+}
+
+/*
+A chunk is like this:
++ 4 bytes: 32-bit counter, starting at 0
++ 4 bytes: total number of chunks in message
++ 32 bytes: hash of complete message
++ <= 15kB: chunk */
+function chopMessageIntoChunks(message) {
+    const chunkLength = 15000;
+    const hash = nacl.hash(message).slice(0, 32);
+    const numChunks = Math.ceil(message.length / chunkLength);
+    const numChunksBytes = encodeInt(numChunks);
+    const chunks = [];
+    for (let i = 0; i < numChunks; i++) {
+        const chunkNum = encodeInt(i);
+        const chunkStart = i * chunkLength;
+        const chunkEnd = (i + 1) * chunkLength;
+        const chunkBase = message.slice(chunkStart, chunkEnd);
+        const combined = combineMany(chunkNum, numChunksBytes, hash, chunkBase);
+        chunks.push(combined);
+    }
+    return chunks;
+}
+
+function makeIdToken(route, message, authCode, secretSign, myName) {
+    const toSign = combineMany(oneByte(route), message, authCode);
+    const hash = nacl.hash(toSign).slice(0, 32);
+    const signature = nacl.sign(hash, secretSign);
+    return combineMany(encodeInt(myName), authCode, signature);
+}
+
+function onNewContact(arg, state) {
+    state.contacts[arg.id] = arg.keys;
+    const ioJobs = [setItem("contacts", state.contacts)];
+    if (state.page === "contacts") {
+        ioJobs.push(drawContacts(state));
+    }
+    return [ioJobs, state];
+}
+
+function constructCtoCMessage(chunk, to, keys, authCode, myName) {
+    const encodedTo = encodeInt(to);
+    const idToken = makeIdToken(
+        8,
+        combine(encodedTo, chunk),
+        authCode,
+        keys.signing.secretKey,
+        myName
+    );
+    return combineMany(oneByte(8), idToken, encodedTo, chunk);
+}
+
+function onReceivingContactKeys(keys, state) {
+    state.contacts[keys.id] = {
+        signing: keys.raw.slice(0, 32),
+        encryption: keys.raw.slice(32, 64),
+    };
+    const whitelist = {
+        io: sendWhitelistRequest,
+        value: {
+            id: keys.id,
+            myKeys: state.myKeys,
+            myName: state.myName,
+            theirKeys: state.contacts[keys.id],
+        },
+    };
+    return [[whitelist], state];
+}
+
+function removeDraft(id, draftsSummary) {
+    const newSummary = [];
+    for (const draft of draftsSummary) {
+        if (draft.id === id) {
+            continue;
+        }
+        newSummary.push(draft);
+    }
+    return newSummary;
+}
+
+function onDraftSent(draft, state) {
+    state.draftsSummary = removeDraft(draft.id, state.draftsSummary);
+    state.outboxSummary.push(draft);
+    return [
+        [
+            setItem("draftsSummary", state.draftsSummary),
+            setItem("outboxSummary", state.outboxSummary),
+        ],
+        state,
+    ];
 }
 
 async function getKeys() {
@@ -1345,7 +1500,13 @@ async function requestMyName(maybeKeys) {
     }
     const pow = proofOfWork(powInfo);
 
-    const request = makeMyNameRequest(pow, keys.signing.publicKey);
+    const request = combineMany(
+        oneByte(1),
+        pow,
+        keys.signing.publicKey,
+        keys.encryption.publicKey
+    );
+
     const [response, responseErr] = await apiRequest(request);
     if (responseErr !== "") {
         tick(onError, responseErr);
@@ -1381,6 +1542,48 @@ function cacheValue(toCache) {
 function updateTextBox(toAdd, _) {
     const box = document.getElementById(toAdd.id);
     box.value = toAdd.value;
+}
+
+async function sendWhitelistRequest(arg) {
+    const [powInfo, powErr] = await getPowInfo();
+    if (powErr !== "") {
+        tick(onError, powErr);
+        return;
+    }
+
+    const pow = proofOfWork(powInfo);
+    const [authCode, authErr] = await apiRequest(oneByte(1));
+    if (authErr !== "") {
+        tick(onError, authErr);
+        return;
+    }
+
+    const idToken = makeIdToken(
+        10,
+        combine(pow, encodeInt(arg.id)),
+        authCode,
+        arg.myKeys.signing.secretKey,
+        arg.myName
+    );
+
+    const request = combineMany([oneByte(10), idToken, pow, encodeInt(arg.id)]);
+    const [_, responseErr] = await apiRequest(request);
+    if (responseErr !== "") {
+        tick(onError, responseErr);
+        return;
+    }
+
+    tick(onNewContact, { id: arg.id, keys: arg.keys });
+}
+
+async function downloadContactKeys(id) {
+    const request = combine(oneByte(2), encodeInt(id));
+    const [response, responseErr] = await apiRequest(request);
+    if (responseErr !== "") {
+        tick(onError, responseErr);
+        return;
+    }
+    tick(onReceivingContactKeys, { raw: response, id: id });
 }
 
 async function getInboxSummary(inboxIds) {
@@ -1595,6 +1798,98 @@ async function runWasm(o) {
     }
     const output = runner.bigWebThing(o.userInput);
     tick(onNewOutput, output);
+}
+
+async function makeNonce() {
+    const maybeCounter = await localforage.getItem("nonceCounter");
+    const counter = maybeCounter === null ? 0 : maybeCounter;
+    const buffer = new ArrayBuffer(24);
+    const result = new Uint8Array(buffer);
+    const asI32s = new Int32Array(buffer);
+    asI32s[0] = counter;
+    await localforage.setItem("nonceCounter", counter + 1);
+    return result;
+}
+
+async function sendChunk(chunk, toKeys, myKeys, myName, to) {
+    const [authCode, authErr] = await apiRequest(oneByte(1));
+    if (authErr !== "") {
+        return authErr;
+    }
+    const nonce = await makeNonce();
+    const encrypted = nacl.box(
+        chunk,
+        nonce,
+        toKeys.encryption,
+        myKeys.encryption.secretKey
+    );
+    const withNonce = combine(nonce, encrypted);
+    const request = constructCtoCMessage(
+        withNonce,
+        to,
+        myKeys,
+        authCode,
+        myName
+    );
+    const [_, responseErr] = await apiRequest(request);
+    if (responseErr !== "") {
+        return responseErr;
+    }
+    return "";
+}
+
+async function sendBytes(bytes, myKeys, myName, to, toKeys) {
+    const chunks = chopMessageIntoChunks(bytes);
+    const chunksLength = chunks.length;
+    for (let i = 0; i < chunksLength; i++) {
+        const err = await sendChunk(chunks[i], toKeys, myKeys, myName, to);
+        if (err !== "") {
+            tick(onError, err);
+            return;
+        }
+    }
+}
+
+async function encodeBlob(blob) {
+    const contents = await localforage.getItem(blob.id);
+    return combineMany(
+        oneByte(1),
+        encodeString(blob.filename),
+        encodeString(blob.mime),
+        contents
+    );
+}
+
+async function sendDraft(arg) {
+    const draft = arg.draft;
+    const myKeys = arg.keys;
+    const myName = arg.myName;
+    const to = draft.to;
+    const toKeys = arg.toKeys;
+
+    const encodedDraft = encodeDraft(draft);
+    const draftErr = await sendBytes(encodedDraft, myKeys, myName, to, toKeys);
+    if (draftErr !== "") {
+        tick(onError, draftErr);
+        return;
+    }
+
+    for (const blob of draft.blobs) {
+        const encodedBlob = await encodeBlob(blob);
+        const blobErr = await sendBytes(
+            encodedBlob,
+            myKeys,
+            myName,
+            to,
+            toKeys
+        );
+        if (blobErr !== "") {
+            tick(onError, blobErr);
+            return;
+        }
+    }
+    arg.draft.to = to;
+    tick(onDraftSent(arg.draft));
 }
 
 let tick;
