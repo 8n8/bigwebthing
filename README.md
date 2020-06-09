@@ -44,13 +44,13 @@ These are the types of messages that the server will accept:
 1. (Free) Make a friendly name for a public signing key:
 + 0x01
 + 16 bytes: proof of work
-+ 32 bytes: public signing key
++ 64 bytes: public signing key + public encryption key
 Response is an 8 byte name.
 
-2. (Free) Retrieve key for name
+2. (Free) Retrieve keys for name
 + 0x02
 + 8 bytes: name - the name to look up
-The response is the 32-byte public key attached to the name.
+The response is the public signing key + public encryption key, 32 bytes each, 64 total.
 
 3. (Free) Get proof of work difficulty and key
 + 0x03
@@ -106,26 +106,18 @@ The response is:
 + 8 bytes: uploader name
 + 96 bytes: signed public encryption key
 
-13. (Free) Download public encryption key
-+ 0x0D
-+ 8 bytes: name of owner of key
-The response is the 96-byte signed public encryption key.
-
 ### Client API
 
 This is what happens to a message as it is sent and received:
 
-1. It starts as a Utils.Message in Elm. Utils.Message is defined as follows:
+1. It starts as an object in Javascript with these fields:
 
-   type alias Message =
-    { from : Int
-    , to : Int
-    , time : Int
-    , subject : String
-    , userInput : String
-    , code : Dict.Dict String String
-    , blobs : Dict.Dict String Bytes.Bytes
-    }
+    + to: the recipient's ID number
+    + time: POSIX time
+    + subject: string
+    + userInput: string
+    + code: mainly the id of a blob of bytes in the DB
+    + blobs: an array of mainly the id of a blob of bytes in the DB
 
 2. The message is encoded to bytes as shown in the 'encodeMessage' function in Utils.elm.
 

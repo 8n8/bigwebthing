@@ -1,0 +1,65 @@
+#topbar {
+    display: flex;
+    margin: 0px 0px 10px 0px;
+}
+
+.inboxItem {
+}
+
+.noneMessage {
+    font-style: italic;
+}
+
+#topbar > span {
+    flex: 0 0 auto;
+}
+
+#logo {
+    font-family: Ubuntu;
+    color: rgb(0, 119, 255);
+    font-size: 1.8em;
+}
+
+#adminButtons {
+    display: flex;
+    flex: 1 0 auto;
+    justify-content: flex-end;
+}
+
+#adminButtons > button {
+    border: none;
+    background-color: white;
+    font-size: 0.9em;
+    padding: 9px 4px;
+    font-family: Ubuntu;
+}
+
+#appButtons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(6em, 1fr));
+    margin: 0px -5px;
+}
+
+#appButtons > button:hover {
+    background-color: rgb(179, 218, 255);
+}
+
+button::-moz-focus-inner {
+    border: 0;
+}
+
+.selectedButton {
+    background-color: rgb(0, 132, 255);
+}
+
+.notSelectedButton {
+    background-color: rgb(204, 230, 255);
+}
+
+#appButtons > button {
+    font-family: Ubuntu;
+    font-size: 1.3em;
+    padding: 30px 0px;
+    border: none;
+    margin: 4px;
+}

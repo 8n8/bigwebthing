@@ -1,16 +1,34 @@
 <!DOCTYPE html>
 <html>
-	<head>
-		<title>BigWebThing</title>
-		<script src="/static/localforage.min.js"></script>
-		<script src="/static/nacl-fast.min.js"></script>
-		<script src="/static/base64js.min.js"></script>
-		<script src="/static/main.js"></script>
-                <link href='/static/ebgaramond.css' rel='stylesheet'>
-                <link href='/static/ubuntuMono.css' rel='stylesheet'>
-	</head>
-	<body>
-		<div id="main"></div>
-	</body>
-	<script src="/static/elm.js"></script>
+    <head>
+        <title>BigWebThing</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href='/static/ebgaramond.css' rel='stylesheet'>
+        <link href='/static/ubuntuMono.css' rel='stylesheet'>
+        <link href='/static/ubuntu.css' rel='stylesheet'>
+        <link href='/static/styles.css' rel='stylesheet'>
+    </head>
+    <body>
+        <div id="topbar">
+            <span id=logo>BigWebThing</span>
+            <div id="adminButtons">
+                <button type="button" id="pricingButton">Pricing</button>
+                <button type="button" id="accountButton">Account</button>
+                <button type="button" id="helpButton">Help</button>
+            </div>
+        </div>
+        <div id="appButtons">
+            <button type="button" id="writeButton">Write</button>
+            <button type="button" id="contactsButton">Contacts</button>
+            <button type="button" id="inboxButton">Inbox</button>
+            <button type="button" id="outboxButton">Outbox</button>
+            <button type="button" id="draftsButton">Drafts</button>
+        </div>
+        <div id="page">
+        </div>
+    </body>
+    <script src="/static/localforage.min.js"></script>
+    <script src="/static/nacl-fast.min.js"></script>
+    <script src="/static/base64js.min.js"></script>
+    <script src="/static/main.js"></script>
 </html>
