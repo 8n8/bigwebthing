@@ -33,6 +33,8 @@ The server checks that the first part is indeed something that it recently gave 
 
 Messages are sent to the server in HTTP requests. The server will not accept messages greater than 16KB.
 
+The client can also make a websocket connection with the server, which the server will send any new messages through.
+
 Some APIs are only accessible to certain users and must have an identity token as follows:
 + 8 bytes: ID of sender
 + 8 bytes: authentication code downloaded from the server earlier
@@ -86,9 +88,7 @@ The response is a unique 8 bytes, that is, the server must never respond in the 
 9. (Paid) Retrieve message
 + 0x09
 + 112 bytes: identity token
-The response is:
-+ 0x01 if there are messages or 0x00 if there aren't
-+ the message - as in (8) above, if there is one
+The server will upgrade this to a websocket, down which it will send any messages, as in (8) above.
 
 10. (Free) Whitelist someone
 + 0x0A
