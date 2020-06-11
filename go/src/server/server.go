@@ -811,53 +811,11 @@ func (s sendMessage) io(inputChannel chan inputT) {
 	}
 }
 
-func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
-	token := idTokenT(r)
-	newAuthCodes, err := validToken(token, state.authCodes, state.friendlyNames)
-	if err != nil {
-		return state, []outputT{badResponse{"bad ID token: " + err.Error(), 400, responseChan}}
-	}
-	state.authCodes = newAuthCodes
-	return state, []outputT{collectMessage{token.senderId, responseChan}}
-}
-
-type collectMessage struct {
-	addressee int
-	channel   chan httpResponseT
-}
-
 const inboxesDir = dataDir + "/inboxes"
 
 func userMessagePath(name int) string {
 	nameString := strconv.FormatInt(int64(name), 10)
 	return inboxesDir + "/" + nameString
-}
-
-func (c collectMessage) io(inputChannel chan inputT) {
-	messagesDir := userMessagePath(c.addressee)
-	messageFileNames, err := ioutil.ReadDir(messagesDir)
-	if err != nil {
-		c.channel <- goodHttpResponse([]byte{0})
-		return
-	}
-	if len(messageFileNames) == 0 {
-		c.channel <- goodHttpResponse([]byte{0})
-		return
-	}
-	fileInfo := messageFileNames[0]
-	filename := fileInfo.Name()
-	filepath := messagesDir + "/" + filename
-
-	message, err := ioutil.ReadFile(filepath)
-	if err != nil {
-		inputChannel <- fatalError{err}
-		return
-	}
-	c.channel <- goodHttpResponse(append([]byte{1}, message...))
-	err = os.Remove(filepath)
-	if err != nil {
-		inputChannel <- fatalError{err}
-	}
 }
 
 type addAMemberRequest struct {
