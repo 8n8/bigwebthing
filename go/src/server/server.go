@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/nacl/sign"
 	"io"
@@ -55,6 +56,7 @@ func decodeInt(bs []byte) int {
 }
 
 type stateT struct {
+	toChans        map[int]websocketChans
 	fatalErr       error
 	proofOfWork    proofOfWorkState
 	friendlyNames  [][]byte
@@ -185,6 +187,29 @@ func loadInt(filename string) (int, error) {
 	return decodeInt(raw), nil
 }
 
+type sendMessages struct {
+	id  int
+	chs websocketChans
+}
+
+func (s sendMessages) io(inputChan chan inputT) {
+	messagesDir := userMessagePath(s.id)
+	messageFileNames, err := ioutil.ReadDir(messagesDir)
+	if err != nil {
+		return
+	}
+	for _, fileInfo := range messageFileNames {
+		filename := fileInfo.Name()
+		filepath := messagesDir + "/" + filename
+
+		message, err := ioutil.ReadFile(filepath)
+		if err != nil {
+			return
+		}
+		s.chs.good <- goodHttpResponse(message)
+	}
+}
+
 func (loadData) io(inputChannel chan inputT) {
 	err := createDatabase()
 	if err != nil {
@@ -308,7 +333,7 @@ func parseRequest(body []byte) parsedRequestT {
 	case 8:
 		return parseSendMessage(body)
 	case 9:
-		return parseRetrieveMessage(body)
+		return parseDeleteMessage(body)
 	case 10:
 		return parseWhitelistSomeone(body)
 	case 11:
@@ -323,6 +348,39 @@ func parseRequest(body []byte) parsedRequestT {
 type uploadEncryptionKeyRequest struct {
 	Owner     int
 	SignedKey []byte
+}
+
+type deleteMessageT struct {
+	idToken     idTokenT
+	messageHash []byte
+}
+
+func parseDeleteMessage(body []byte) parsedRequestT {
+	if len(body) != 145 {
+		return badRequest{"length of body is not 145", 400}
+	}
+	idToken := parseIdToken(body)
+	return deleteMessageT{
+		idToken:     idToken,
+		messageHash: body[113:145],
+	}
+}
+
+func (d deleteMessageT) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
+	newAuthCodes, err := validToken(d.idToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, []outputT{badResponse{"bad ID token: " + err.Error(), 400, responseChan}}
+	}
+	state.authCodes = newAuthCodes
+	filename := base64.URLEncoding.EncodeToString(d.messageHash)
+	filepath := userMessagePath(d.idToken.senderId) + "/" + filename
+	return state, []outputT{deleteFileT(filepath)}
+}
+
+type deleteFileT string
+
+func (d deleteFileT) io(inputChannel chan inputT) {
+	os.Remove(string(d))
 }
 
 func parseUploadEncryptionKey(body []byte) parsedRequestT {
@@ -709,7 +767,13 @@ func (s sendMessageRequest) updateOnRequest(state stateT, responseChan chan http
 	if (!senderIsMember) && (!recipientIsMember) {
 		return state, bad("neither sender nor recipient are members", 400)
 	}
-	return state, []outputT{sendMessage{s.recipient, s.message, responseChan}}
+	recipientChannels, recipientConnected := state.toChans[s.recipient]
+	return state, []outputT{sendMessage{
+		recipient:          s.recipient,
+		message:            s.message,
+		channel:            responseChan,
+		recipientConnected: recipientConnected,
+		recipientChannel:   recipientChannels.good}}
 }
 
 type hiddenError chan httpResponseT
@@ -719,13 +783,15 @@ func (h hiddenError) io(inputChannel chan inputT) {
 }
 
 type sendMessage struct {
-	recipient int
-	message   []byte
-	channel   chan httpResponseT
+	recipient          int
+	message            []byte
+	channel            chan httpResponseT
+	recipientConnected bool
+	recipientChannel   chan []byte
 }
 
 func (s sendMessage) io(inputChannel chan inputT) {
-	messagesDir := userMessagePath(int(s.recipient))
+	messagesDir := userMessagePath(s.recipient)
 	err := os.MkdirAll(messagesDir, 0755)
 	if err != nil {
 		inputChannel <- fatalError{err}
@@ -740,6 +806,9 @@ func (s sendMessage) io(inputChannel chan inputT) {
 		return
 	}
 	s.channel <- goodHttpResponse([]byte{})
+	if s.recipientConnected {
+		s.recipientChannel <- s.message
+	}
 }
 
 func parseRetrieveMessage(body []byte) parsedRequestT {
@@ -1202,7 +1271,87 @@ func httpApiHandler(inputChan chan inputT, w http.ResponseWriter, r *http.Reques
 	response.respond(w)
 }
 
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
+func websocketsHandler(
+	inputChan chan inputT, w http.ResponseWriter, r *http.Request) {
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	conn.SetReadLimit(16000)
+
+	_, maybeIdToken, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
+	chans := websocketChans{
+		good: make(chan []byte),
+		kill: make(chan struct{}),
+	}
+	inputChan <- websocketIdToken{
+		maybeIdToken: maybeIdToken,
+		chans:        chans,
+	}
+
+	go func() {
+		for {
+			err := conn.WriteMessage(
+				websocket.BinaryMessage, <-chans.good)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	<-chans.kill
+}
+
+type websocketChans struct {
+	good chan []byte
+	kill chan struct{}
+}
+
+type websocketIdToken struct {
+	chans        websocketChans
+	maybeIdToken []byte
+}
+
+func (w websocketIdToken) update(state stateT) (stateT, []outputT) {
+	if len(w.maybeIdToken) != 112 {
+		return state, []outputT{badWebsocketAuth(w.chans.kill)}
+	}
+	idToken := parseIdToken(w.maybeIdToken)
+	newAuthCodes, err := validToken(
+		idToken, state.authCodes, state.friendlyNames)
+	if err != nil {
+		return state, []outputT{badWebsocketAuth(w.chans.kill)}
+	}
+	state.authCodes = newAuthCodes
+	state.toChans[idToken.senderId] = w.chans
+	sender := sendMessages{
+		id:  idToken.senderId,
+		chs: w.chans,
+	}
+	return state, []outputT{sender}
+}
+
+type badWebsocketAuth chan struct{}
+
+func (b badWebsocketAuth) io(inputChan chan inputT) {
+	b <- struct{}{}
+}
+
 func (startHttpServer) io(inputChan chan inputT) {
+	http.HandleFunc(
+		"/downloadmessages",
+		func(w http.ResponseWriter, r *http.Request) {
+			websocketsHandler(inputChan, w, r)
+		})
 	http.HandleFunc(
 		"/api",
 		func(w http.ResponseWriter, r *http.Request) {
@@ -1211,7 +1360,7 @@ func (startHttpServer) io(inputChan chan inputT) {
 	http.HandleFunc(
 		"/",
 		func(w http.ResponseWriter, r *http.Request) {
-			// Turned off in devlopment, because webpack uses eval.
+			// Turned off in development, because webpack uses eval.
 			// w.Header().Add("Content-Security-Policy", csp)
 			w.Header().Add("Cache-Control", "no-cache")
 			handle, err := os.Open("index.html")

@@ -85,10 +85,10 @@ The response is a unique 8 bytes, that is, the server must never respond in the 
 + 8 bytes: recipient id
 + message
 
-9. (Paid) Retrieve message
+9. (Free) Delete message from server
 + 0x09
 + 112 bytes: identity token
-The server will upgrade this to a websocket, down which it will send any messages, as in (8) above.
++ 32 bytes: sha512[:32] hash of the message
 
 10. (Free) Whitelist someone
 + 0x0A
@@ -105,6 +105,10 @@ The server will upgrade this to a websocket, down which it will send any message
 + 0x0C
 + 8 bytes: uploader name
 + 96 bytes: signed public encryption key
+
+#### Downloading messages
+
+Connect to "/downloadmessages" with websockets. The client should upload an identity token initially, and thereafter the server will send all the client's messages down it.
 
 ### Client API
 
