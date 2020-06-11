@@ -811,16 +811,6 @@ func (s sendMessage) io(inputChannel chan inputT) {
 	}
 }
 
-func parseRetrieveMessage(body []byte) parsedRequestT {
-	if len(body) != 113 {
-		return badRequest{"body not 113 bytes", 400}
-	}
-	idToken := parseIdToken(body)
-	return retrieveMessageRequest(idToken)
-}
-
-type retrieveMessageRequest idTokenT
-
 func (r retrieveMessageRequest) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
 	token := idTokenT(r)
 	newAuthCodes, err := validToken(token, state.authCodes, state.friendlyNames)
