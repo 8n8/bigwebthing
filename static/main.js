@@ -1,15 +1,41 @@
 (function () {
   ('use strict')
 
-  function initOnClick (button) {
+  function initOnClick (page) {
     return {
       io: addOnclick,
       value: {
-        id: button + 'Button',
-        onclick: () => tick(onTopButtonClick, button)
+        id: page + 'Button',
+        onclick: () => tick(onTopButtonClick, page)
       }
     }
   }
+
+  function getItem (key) {
+    return { io: cacheQuery, value: key }
+  }
+
+  const initOutputs = [
+    'write',
+    'contacts',
+    'inbox',
+    'drafts',
+    'sent',
+    'sending',
+    'pricing',
+    'account',
+    'help'
+  ].map(initOnClick).concat([
+    'iota',
+    'page',
+    'inboxSummary',
+    'draftsSummary',
+    'sendingSummary',
+    'sentSummary',
+    'myName',
+    'contacts'
+  ].map(getItem)).push(
+    { io: makeWebsocket, value: '' })
 
   function encodeString (s) {
     const encoder = new TextEncoder()
@@ -64,39 +90,6 @@
       io: ioReplaceChildren,
       value: { parentId: parentId, children: newChildren }
     }
-  }
-
-  function initOnClicks () {
-    const buttons = [
-      'write',
-      'contacts',
-      'inbox',
-      'outbox',
-      'drafts',
-      'pricing',
-      'account',
-      'help'
-    ]
-    const outputs = []
-    for (const button of buttons) {
-      outputs.push(initOnClick(button))
-    }
-    return outputs
-  }
-
-  function initOutputs () {
-    return [
-      { io: cacheQuery, value: 'iota' },
-      { io: cacheQuery, value: 'page' },
-      { io: cacheQuery, value: 'inboxIds' },
-      { io: cacheQuery, value: 'draftIds' },
-      { io: cacheQuery, value: 'outboxIds' },
-      { io: cacheQuery, value: 'myName' },
-      { io: cacheQuery, value: 'contacts' },
-      { io: cacheQuery, value: 'sending' },
-      { io: cacheQuery, value: 'sent' },
-      { io: makeWebsocket, value: '' }
-    ].concat(initOnClicks())
   }
 
   function makeSubjectDom (subject) {
@@ -1054,6 +1047,7 @@
     sending: drawSending,
     sent: drawSent
   }
+
   function drawPage (oldPage, state) {
     let buttonOn = []
     let buttonOff = []
@@ -1424,9 +1418,7 @@
   }
 
   function onTopButtonClick (button, state) {
-    if (state.page === button) {
-      return [[], state]
-    }
+    if (state.page === button) return [[], state]
 
     const oldPage = state.page
     state.page = button
@@ -1443,7 +1435,7 @@
   }
 
   function onInit (_, state) {
-    return [initOutputs(), state]
+    return [initOutputs, state]
   }
 
   function onLookedUpDraft (message, state) {
