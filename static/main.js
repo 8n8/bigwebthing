@@ -38,14 +38,24 @@
     return result
   }
 
+  function encodeBlobs (blobs) {
+    const parts = []
+    parts.push(encodeInt32(blobs.length))
+    for (const blob of blobs) {
+      parts.push(encodeBlob(blob))
+    }
+    return combineMany(parts)
+  }
+
   function encodeDraft (draft) {
-    return combineMany(
+    return combineMany([
       oneByte(0),
       encodeInt(draft.to),
       encodeString(draft.subject),
       encodeString(draft.userInput),
       encodeInt(draft.code.length),
-      draft.code
+      draft.code,
+      encodeBlobs(draft.blobs)]
     )
   }
 
@@ -82,7 +92,10 @@
       { io: cacheQuery, value: 'draftIds' },
       { io: cacheQuery, value: 'outboxIds' },
       { io: cacheQuery, value: 'myName' },
-      { io: cacheQuery, value: 'contacts' }
+      { io: cacheQuery, value: 'contacts' },
+      { io: cacheQuery, value: 'sending' },
+      { io: cacheQuery, value: 'sent' },
+      { io: makeWebsocket, value: '' }
     ].concat(initOnClicks())
   }
 
@@ -129,6 +142,23 @@
     const result = new Uint8Array(buf)
     for (let i = 0; i < 8; i++) {
       result[i] = n >> (i * 8) && 0xff
+    }
+    return result
+  }
+
+  function encodeInt32 (n) {
+    const buf = new ArrayBuffer(4)
+    const result = new Uint8Array(buf)
+    for (let i = 0; i < 4; i++) {
+      result[i] = n >> (i * 8) && 0xff
+    }
+    return result
+  }
+
+  function decodeInt32 (fourBytes) {
+    let result = 0
+    for (let i = 0; i < 4; i++) {
+      result += fourBytes[i] * Math.pow(256, i)
     }
     return result
   }
@@ -203,7 +233,7 @@
 
   function makeFromView (from) {
     const p = document.createElement('p')
-    p.textContent = from
+    p.textContent = 'From: ' + from
     return p
   }
 
@@ -751,6 +781,112 @@
     return [replaceChildren('page', children), runner]
   }
 
+  function onNewWebsocket (socket, state) {
+    state.websocket = socket
+    return [[], state]
+  }
+
+  function onBadWebsocket (_, state) {
+    return [makeWebsocket, state]
+  }
+
+  function decodeIdToken (raw) {
+    return {
+      senderId: raw.slice(0, 8),
+      authCode: raw.slice(8, 16),
+      signature: raw.slice(16, 112)
+    }
+  }
+
+  function equalBytes (a, b) {
+    const lena = a.length
+    const lenb = b.length
+    if (lena !== lenb) return false
+    for (let i = 0; i < lena; i++) {
+      if (b[i] !== a[i]) return false
+    }
+    return true
+  }
+
+  function validIdToken (idToken, msgHash, theirSigningKey) {
+    const signed = nacl.sign.open(idToken, theirSigningKey)
+    return (signed !== null) && equalBytes(signed, msgHash)
+  }
+
+  function decryptMessage (message, state) {
+    if (message.length < 122) {
+      return ['', 'message is less than 122 bytes long']
+    }
+
+    const idToken = decodeIdToken(message.slice(1, 113))
+
+    const signHash = nacl.hash(combineMany(
+      oneByte(8), idToken.authCode, message.slice(121))).slice(0, 32)
+
+    const sender = decodeInt(idToken.senderId)
+
+    const theirKeys = state.contacts[sender]
+    if (theirKeys === undefined) {
+      return ['', 'sender is not in contacts']
+    }
+
+    if (!validIdToken(idToken, signHash, theirKeys.signing)) {
+      return ['', 'bad ID token']
+    }
+
+    const decrypted = nacl.box.open(
+      message.slice(153),
+      message.slice(121, 153),
+      theirKeys.encryption,
+      state.myKeys.encryption.secret)
+
+    if (decrypted === null) {
+      return ['', 'could not decrypt chunk']
+    }
+    return [decrypted, '']
+  }
+
+  function decodeMessage (decrypted) {
+    const counter = decodeInt32(decrypted.slice(0, 4))
+    const totalChunks = decodeInt32(decrypted.slice(4, 8))
+    const totalHash = decrypted.slice(8, 40)
+    const chunk = decrypted.slice(40)
+
+    return {
+      counter: counter,
+      totalChunks: totalChunks,
+      totalHash: totalHash,
+      chunk: chunk
+    }
+  }
+
+  function onNewMessage (message, state) {
+    const [decrypted, decErr] = decryptMessage(message, state)
+    if (decErr !== '') return [[], state]
+
+    const hash = nacl.hash(decrypted).slice(0, 32)
+    const name = base64js.fromBytes(hash)
+
+    const decoded = decodeMessage(decrypted)
+
+    state.downloads.push(name)
+
+    const ioJobs = [
+      {
+        io: stitchUpMessages,
+        value: {
+          downloads: state.downloads,
+          message: decoded,
+          name: name,
+          hash: nacl.hash(message).slice(0, 32),
+          myKeys: state.myKeys,
+          myName: state.myName
+        }
+      }
+    ]
+    return [ioJobs, state]
+  }
+
   function onNewOutput (output, state) {
     if (state.openDraft === undefined) return [[], state]
     state.draftOutput = output
@@ -809,6 +945,103 @@
     return [replaceChildren('page', [span])]
   }
 
+  function makeToView (to) {
+    const p = document.element('p')
+    p.textContent = 'To: ' + to
+    return p
+  }
+
+  function drawSentingItemView (message) {
+    const children = [
+      makeSubjectView(message.subject),
+      makeToView(message.to),
+      makeOutputView(message.output),
+      makeUserInputView(message.userInput),
+      makeCodeView(message.code)]
+    if (message.blobs !== undefined) {
+      children.push(makeInboxBlobsView(message.blobs))
+    }
+    return [replaceChildren('page', children)]
+  }
+
+  function drawSentingMenuItem (message, onClick) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.classList.add('messageButton')
+    button.appendChild(makeSubjectDom(message.subject))
+    button.appendChild(makeToDom(message.to))
+    button.onclick = () => tick(onClick, message.id)
+    return button
+  }
+
+  function onSendingMenuClick (messageId, state) {
+    return [[kv(lookupSendingMessage, messageId)], state]
+  }
+
+  function onSentMenuClick (messageId, state) {
+    return [[kv(lookupSentMessage, messageId)], state]
+  }
+
+  function onLookedUpSendingMessage (message, state) {
+    if (state.page !== 'sending') {
+      return [[], state]
+    }
+    state.openSendingItem = message
+    return [drawSending(state), state]
+  }
+
+  function onLookedUpSentMessage (message, state) {
+    if (state.page !== 'sent') {
+      return [[], state]
+    }
+    state.openSentItem = message
+    return [drawSent(state), state]
+  }
+
+  async function lookupSendingMessage (id) {
+    const message = await localforage.getItem(id)
+    const compiled = new Wasm()
+    await compiled.init(message.code.contents)
+    message.output = compiled.bigWebThing(message.userInput)
+    tick(onLookedUpSendingMessage, message)
+  }
+
+  async function lookupSentMessage (id) {
+    const message = await localforage.getItem(id)
+    const compiled = new Wasm()
+    await compiled.init(message.code.contents)
+    message.output = compiled.bigWebThing(message.userInput)
+    tick(onLookedUpSentMessage, message)
+  }
+
+  function drawSending (state) {
+    if (state.sendingSummary.length === 0) {
+      return [replaceChildren('page', [noMessagesDom()])]
+    }
+    if (state.sendingItem !== undefined) {
+      return drawSentingItemView(state.sendingItem)
+    }
+    const sending = []
+    for (const message of state.sendingSummary) {
+      sending.push(drawSentingMenuItem(message, onSendingMenuClick))
+    }
+    return [replaceChildren('page', sending)]
+  }
+
+  function drawSent (state) {
+    if (state.sentSummary.length === 0) {
+      return [replaceChildren('page', [noMessagesDom()])]
+    }
+    if (state.sentItem !== undefined) {
+      return drawSentingItemView(state.sentItem)
+    }
+    const sent = []
+    for (const message of state.sentSummary) {
+      sent.push(drawSentingMenuItem(message, onSentMenuClick))
+    }
+    return [replaceChildren('page', sent)]
+  }
+
   const drawFunc = {
     inbox: drawInbox,
     write: drawWrite,
@@ -817,9 +1050,10 @@
     drafts: drawDrafts,
     pricing: drawPricing,
     account: drawAccount,
-    help: drawHelp
+    help: drawHelp,
+    sending: drawSending,
+    sent: drawSent
   }
-
   function drawPage (oldPage, state) {
     let buttonOn = []
     let buttonOff = []
@@ -1304,7 +1538,7 @@
     if (state.openDraft.blobs === undefined) {
       state.openDraft.blobs = []
     }
-    const blobId = base64.fromBytes(
+    const blobId = base64js.fromBytes(
       nacl.hash(blobUpload.contents).slice(0, 32)
     )
     state.iota += 1
@@ -1353,12 +1587,11 @@
     return p
   }
 
-  /*
-A chunk is like this:
-+ 4 bytes: 32-bit counter, starting at 0
-+ 4 bytes: total number of chunks in message
-+ 32 bytes: hash of complete message
-+ <= 15kB: chunk */
+  // A chunk is like this:
+  // + 4 bytes: 32-bit counter, starting at 0
+  // + 4 bytes: total number of chunks in message
+  // + 32 bytes: hash of complete message
+  // + <= 15kB: chunk
   function chopMessageIntoChunks (message) {
     const chunkLength = 15000
     const hash = nacl.hash(message).slice(0, 32)
@@ -1839,6 +2072,58 @@ A chunk is like this:
     return ''
   }
 
+  function onNewReceipt (receipt, state) {
+    const idToken = decodeIdToken(receipt.idToken)
+    const msg = combineMany(8, receipt.hash, idToken.authCode)
+    const msgHash = nacl.hash(msg).slice(0, 32)
+    const theirKeys = state.contacts[idToken.senderId]
+    if (theirKeys === undefined) {
+      return [[], state]
+    }
+    if (!validIdToken(idToken, msgHash, theirKeys.signing)) {
+      return [[], state]
+    }
+
+    const sendingSummary = state.sendingSummary
+
+    const sending = sendingSummary[idToken.msgHash]
+    if (sending === undefined) {
+      return [[], state]
+    }
+
+    delete sendingSummary[msgHash]
+    state.sendingSummary = sendingSummary
+    sending.receipt = receipt
+    state.sentSummary = sending
+
+    const ioJobs = [
+      setItem('sendingSummary', state.sendingSummary),
+      setItem('sentSummary', state.sentSummary)]
+
+    if (state.page === 'sending') {
+      ioJobs.concat(drawSending(state.sendingSummary))
+    }
+    if (state.page === 'sent') {
+      ioJobs.concat(drawSent(state.sentSummary))
+    }
+
+    return [ioJobs, state]
+  }
+
+  function onNewUnpacked (v, state) {
+    state.inboxSummary.push(v.summary)
+    const theirKeys = state.contacts[v.summary.from]
+    if (theirKeys === undefined) {
+      return [[], state]
+    }
+    return [[
+      setItem('inboxSummary', state.inboxSummary),
+      {
+        io: sendReceipt,
+        value: { theirKeys: theirKeys, hash: v.hash, myKeys: state.myKeys, myName: state.myName, to: v.summary.from }
+      }], state]
+  }
+
   async function sendBytes (bytes, myKeys, myName, to, toKeys) {
     const chunks = chopMessageIntoChunks(bytes)
     const chunksLength = chunks.length
@@ -1851,13 +2136,12 @@ A chunk is like this:
     }
   }
 
-  async function encodeBlob (blob) {
-    const contents = await localforage.getItem(blob.id)
+  function encodeBlob (blob) {
     return combineMany(
-      oneByte(1),
       encodeString(blob.filename),
       encodeString(blob.mime),
-      contents
+      encodeInt(blob.contents.length),
+      blob.contents
     )
   }
 
@@ -1868,29 +2152,213 @@ A chunk is like this:
     const to = draft.to
     const toKeys = arg.toKeys
 
-    const encodedDraft = encodeDraft(draft)
-    const draftErr = await sendBytes(encodedDraft, myKeys, myName, to, toKeys)
+    const encodedDraft = await encodeDraft(draft)
+    const draftErr = await sendBytes(
+      encodedDraft, myKeys, myName, to, toKeys)
     if (draftErr !== '') {
       tick(onError, draftErr)
+    }
+
+    tick(onDraftSent(arg.draft))
+  }
+
+  function makeWebsocket (_) {
+    const socket = new WebSocket('/downloadMessages')
+    socket.onopen = (_) => tick(onNewWebsocket, socket)
+    socket.onmessage = (e) => tick(onNewMessage, e.data)
+    socket.onclose = (_) => tick(onBadWebsocket, '')
+    socket.onerror = (_) => tick(onBadWebsocket, '')
+  }
+
+  async function getMatchingNames (totalHash, downloads) {
+    const names = []
+    for (const name of downloads) {
+      const contents = await localforage.getItem(name)
+      if (equalBytes(contents.totalHash, totalHash)) {
+        names.push(name)
+      }
+    }
+    return names
+  }
+
+  async function getBlobs (relevantNames) {
+    const blobs = []
+    for (const name of relevantNames) {
+      blobs.push(await localforage.getItem(name))
+    }
+    return blobs
+  }
+
+  async function deleteRemote (hash, mySecretSign, myName) {
+    const [authCode, authErr] = await apiRequest(oneByte(1))
+    if (authErr !== '') return
+    const idToken = makeIdToken(
+      9, hash, authCode, mySecretSign, myName)
+
+    const request = combineMany(oneByte(9), idToken, hash)
+    await apiRequest(request)
+  }
+
+  function joinChunks (chunks) {
+    const assembled = []
+    for (const chunk of chunks) {
+      assembled.push(chunk.chunk)
+    }
+    return combineMany(assembled)
+  }
+
+  function sortChunks (chunks) {
+    chunks.sort((c1, c2) => c1.counter - c2.counter)
+    return chunks
+  }
+
+  function chunksAllThere (sortedChunks) {
+    const chunksLength = sortedChunks.length
+    if (chunksLength === 0) return false
+
+    if (chunksLength !== sortedChunks[0].totalChunks) return false
+
+    for (let i = 0; i < chunksLength; i++) {
+      if (sortedChunks[i].counter !== i) {
+        return false
+      }
+    }
+    return true
+  }
+
+  function unpackDownloads (chunks) {
+    const sorted = sortChunks(chunks)
+    if (!chunksAllThere(sorted)) return
+    return joinChunks(sorted)
+  }
+
+  async function getId () {
+    const id = await localforage.getItem('iota')
+    if (id === null) {
+      await localforage.setItem('iota', 0)
+      return '0'
+    }
+    await localforage.setItem('iota', id + 1)
+    return id
+  }
+
+  async function writeToDisk (decoded) {
+    const id = getId()
+    await localforage.setItem(id, decoded)
+    return id
+  }
+
+  function decodeBlob (raw, i) {
+    const dec = new TextDecoder()
+    const fileNameLength = decodeInt(raw.slice(i, i + 8))
+    i += 8
+    const fileName = dec.decode(raw.slice(i, i + fileNameLength))
+    i += fileNameLength
+    const mimeLength = decodeInt(raw.slice(i, i + 8))
+    const mime = dec.decode(raw.slice(i, i + mimeLength))
+    const blobLength = decodeInt(raw.slice(i, i + 8))
+    i += 8
+    const contents = raw.slice(i, i + blobLength)
+    i += blobLength
+    return [{
+      filename: fileName,
+      mime: mime,
+      contents: contents
+    }, i]
+  }
+
+  function decodeBlobs (raw) {
+    let i = 0
+    const numBlobs = decodeInt32(raw.slice(i, i + 4))
+    i += 4
+    const blobs = []
+    for (let _ = 0; _ < numBlobs; _++) {
+      let decoded
+      [decoded, i] = decodeBlob(raw, i)
+      blobs.push(decoded)
+    }
+    return blobs
+  }
+
+  function decodeDraft (raw) {
+    let i = 0
+    const to = decodeInt(raw.slice(i, i + 8))
+    const dec = new TextDecoder()
+    i += 8
+    const subjectLength = decodeInt(raw.slice(i, i + 8))
+    i += 8
+    const subject = dec.decode(raw.slice(i, i + subjectLength))
+    i += subjectLength
+    const userInputLength = decodeInt(raw.slice(i, i + 8))
+    i += 8
+    const userInput = dec.decode(raw.slice(i, i + userInputLength))
+    i += userInputLength
+    const codeLength = decodeInt(raw.slice(i, i + 8))
+    i += 8
+    const code = raw.slice(i, i + codeLength)
+    i += codeLength
+    const blobs = decodeBlobs(raw.slice(i))
+    return {
+      to: to,
+      subject: subject,
+      userInput: userInput,
+      code: code,
+      blobs: blobs
+    }
+  }
+
+  function decodeUnpacked (raw) {
+    const rawLength = raw.length
+    if (rawLength === 0) return
+
+    const indicator = raw[0]
+    if (indicator === 0) {
+      return decodeDraft(raw.slice(1))
+    }
+    if (indicator === 1) {
+      return raw.slice(1)
+    }
+  }
+
+  async function sendReceipt (v) {
+    await sendBytes(v.hash, v.myKeys, v.myName, v.to, v.theirKeys)
+  }
+
+  async function stitchUpMessages (v) {
+    await localforage.setItem(v.name, v.message)
+    await localforage.setItem('downloads', v.downloads)
+    deleteRemote(v.hash, v.myKeys.signing.secret, v.myName)
+
+    const relevantNames = await getMatchingNames(
+      v.message.totalHash, v.downloads)
+
+    const relevantBlobs = await getBlobs(relevantNames)
+
+    const unpacked = unpackDownloads(relevantBlobs)
+    if (unpacked === undefined) return
+
+    for (const name of relevantNames) {
+      localforage.removeItem(name)
+    }
+
+    const decoded = decodeUnpacked(unpacked)
+
+    if (decoded.subject === undefined) {
+      tick(onNewReceipt, decoded)
       return
     }
 
-    for (const blob of draft.blobs) {
-      const encodedBlob = await encodeBlob(blob)
-      const blobErr = await sendBytes(
-        encodedBlob,
-        myKeys,
-        myName,
-        to,
-        toKeys
-      )
-      if (blobErr !== '') {
-        tick(onError, blobErr)
-        return
-      }
+    const id = await writeToDisk(decoded)
+    const summary = {
+      subject: decoded.subject,
+      from: decoded.from,
+      id: id,
+      time: decoded.time
     }
-    arg.draft.to = to
-    tick(onDraftSent(arg.draft))
+
+    tick(
+      onNewUnpacked,
+      { summary: summary, hash: nacl.hash(unpacked).slice(0, 32) })
   }
 
   let tick
