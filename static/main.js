@@ -220,7 +220,7 @@
     const rawLen = raw.length
     if (rawLen < 4 + i) {
       return [
-        {},
+        null,
         'ordering at position ' +
                 i +
                 ' is only ' +
@@ -259,7 +259,7 @@
 
   function decodeDocumentHelp (raw, i) {
     if (raw.length === 0) {
-      return [{}, 'empty']
+      return [null, 'empty', i]
     }
     const indicator = raw[0]
     switch (indicator) {
