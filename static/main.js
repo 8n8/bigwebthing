@@ -1123,7 +1123,7 @@
     draftsSummary: draftsSummaryFromCache,
     sentSummary: sentSummaryFromCache,
     sendingSummary: sendingSummaryFromCache,
-    iotaIds: iotaFromCache,
+    iota: iotaFromCache,
     contacts: contactsFromCache
   }
 
