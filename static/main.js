@@ -835,16 +835,11 @@
   }
 
   function decodeMessage (decrypted) {
-    const counter = decodeInt32(decrypted.slice(0, 4))
-    const totalChunks = decodeInt32(decrypted.slice(4, 8))
-    const totalHash = decrypted.slice(8, 40)
-    const chunk = decrypted.slice(40)
-
     return {
-      counter: counter,
-      totalChunks: totalChunks,
-      totalHash: totalHash,
-      chunk: chunk
+      counter: decodeInt32(decrypted.slice(0, 4)),
+      totalChunks: decodeInt32(decrypted.slice(4, 8)),
+      totalHash: decrypted.slice(8, 40),
+      chunk: decrypted.slice(40)
     }
   }
 
