@@ -127,12 +127,11 @@
   }
 
   function encodeInt32 (n) {
-    const buf = new ArrayBuffer(4)
-    const result = new Uint8Array(buf)
+    const encoded = new Uint8Array(new ArrayBuffer(4))
     for (let i = 0; i < 4; i++) {
-      result[i] = n >> (i * 8) && 0xff
+      encoded[i] = n >> (i * 8) && 0xff
     }
-    return result
+    return encoded
   }
 
   function decodeInt32 (fourBytes) {
