@@ -865,6 +865,9 @@
 
     state.downloads.push(name)
 
+    const id = state.iota
+    state.iota += 1
+
     const ioJobs = [
       {
         io: stitchUpMessages,
@@ -874,9 +877,11 @@
           name: name,
           hash: nacl.hash(message).slice(0, 32),
           myKeys: state.myKeys,
-          myName: state.myName
+          myName: state.myName,
+          id: id
         }
-      }
+      },
+      setItem('iota', state.iota)
     ]
     return [ioJobs, state]
   }
@@ -1945,9 +1950,19 @@
     return [ioJobs, state]
   }
 
-  function onNewUnpacked (v, state) {
-    state.inboxSummary.push(v.summary)
-    const theirKeys = state.contacts[v.summary.from]
+  function onNewUnpacked (message, id, state) {
+    const ids = []
+    for (const _ of message.blobs) {
+      ids.push(state.iota)
+      state.iota += 1
+    }
+
+    return [[() => writeToDisk(message, id, ids)], state]
+  }
+
+  function onNewSummary (summary, hash, state) {
+    state.inboxSummary.push(summary)
+    const theirKeys = state.contacts[summary.from]
     if (theirKeys === undefined) {
       return [[], state]
     }
@@ -1955,7 +1970,7 @@
       setItem('inboxSummary', state.inboxSummary),
       {
         io: sendReceipt,
-        value: { theirKeys: theirKeys, hash: v.hash, myKeys: state.myKeys, myName: state.myName, to: v.summary.from }
+        value: { theirKeys: theirKeys, hash: hash, myKeys: state.myKeys, myName: state.myName, to: summary.from }
       }], state]
   }
 
@@ -2058,20 +2073,10 @@
     return joinChunks(sorted)
   }
 
-  async function getId () {
-    const id = await localforage.getItem('iota')
-    if (id === null) {
-      await localforage.setItem('iota', 0)
-      return '0'
-    }
-    await localforage.setItem('iota', id + 1)
-    return id
-  }
-
-  async function writeToDisk (decoded) {
+  async function writeToDisk (decoded, id, ids) {
     const smallBlobs = []
     for (const blob of decoded.blobs) {
-      const blobId = await getId()
+      const blobId = ids.pop()
       smallBlobs.push({
         mime: blob.mime,
         filename: blob.filename,
@@ -2080,7 +2085,6 @@
       })
       await localforage.setItem(blobId, decoded.contents)
     }
-    const id = getId()
     decoded.blobs = smallBlobs
     await localforage.setItem(id, decoded)
     return id
@@ -2186,17 +2190,15 @@
       return
     }
 
-    const id = await writeToDisk(decoded)
+    tick((state) => onNewUnpacked(decoded, v.id, state))
     const summary = {
       subject: decoded.subject,
       from: decoded.from,
-      id: id,
+      id: v.id,
       time: decoded.time
     }
-
-    tick(
-      onNewUnpacked,
-      { summary: summary, hash: nacl.hash(unpacked).slice(0, 32) })
+    const hash = nacl.hash(unpacked.slice(0, 32))
+    tick((state) => onNewSummary(summary, hash, state))
   }
 
   let tick
