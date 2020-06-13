@@ -211,8 +211,9 @@
     const stringLength = decodeInt64(raw.slice(i, i + 8))
     i += 8
     const stringBytes = raw.slice(i, i + stringLength)
+    i += stringLength
     const decoded = new TextDecoder().decode(stringBytes)
-    return [{ key: 'smallString', value: decoded }, '']
+    return [{ key: 'smallString', value: decoded }, '', i]
   }
 
   function decodeOrdering (raw, i) {
@@ -263,9 +264,9 @@
     const indicator = raw[0]
     switch (indicator) {
       case 0:
-        return decodeOrdering(raw, 1)
+        return decodeOrdering(raw, i + 1)
       case 1:
-        return decodeSmallString(raw, 1)
+        return decodeSmallString(raw, i + 1)
     }
     return [null, 'bad indicator: ' + indicator, i]
   }
