@@ -1834,9 +1834,8 @@
 
   async function blobFilesUpload (files) {
     for (const file of files) {
-      const contents = await file.arrayBuffer()
       tick(onBlobUpload, {
-        contents: contents,
+        contents: await file.arrayBuffer(),
         name: file.name,
         size: file.size,
         mime: file.type
