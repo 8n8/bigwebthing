@@ -92,10 +92,7 @@
   }
 
   function replaceChildren (parentId, newChildren) {
-    return {
-      io: ioReplaceChildren,
-      value: { parentId: parentId, children: newChildren }
-    }
+    return () => ioReplaceChildren(parentId, newChildren)
   }
 
   function makeSubjectDom (subject) {
@@ -1688,7 +1685,7 @@
     tick(onCacheResponse, { key: key, value: value })
   }
 
-  function ioReplaceChildren (v) {
+  function ioReplaceChildren (parentId, newChildren) {
     const parentElement = document.getElementById(v.parentId)
     while (parentElement.firstChild) {
       parentElement.removeChild(parentElement.lastChild)
