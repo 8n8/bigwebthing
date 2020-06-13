@@ -726,11 +726,7 @@
   }
 
   function readyToSend (draft) {
-    return (
-      draft !== undefined &&
-        draft.to !== undefined &&
-        draft.code !== undefined
-    )
+    return (draft !== undefined && draft.to !== undefined)
   }
 
   function drawWrite (state) {
@@ -1202,7 +1198,7 @@
     }
     state.openDraft.to = to
     const ioJobs = [
-      () => updateTextBox('writerToBox', to),
+      drawWrite(state),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft)
     ]
