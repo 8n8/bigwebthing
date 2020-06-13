@@ -361,10 +361,6 @@
     return [replaceChildren('page', children)]
   }
 
-  function onOutboxMenuClick (messageId, state) {
-    return [[() => lookupOutboxMessage(messageId)], state]
-  }
-
   const days = {
     0: 'Sunday',
     1: 'Monday',
@@ -440,30 +436,6 @@
       inbox.push(drawInboxMenuItem(message))
     }
     return [replaceChildren('page', inbox)]
-  }
-
-  function drawOutboxItem (message) {
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.classList.add('messageButton')
-    button.appendChild(makeSubjectDom(message.subject))
-    button.appendChild(makeToDom(message.to))
-    button.onclick = () => tick(onOutboxMenuClick, message.id)
-    return button
-  }
-
-  function drawOutbox (state) {
-    if (state.outboxSummary.length === 0) {
-      return [replaceChildren('page', [noMessagesDom()])]
-    }
-    if (state.outboxItem !== undefined) {
-      return drawBoxItemView(state.outboxItem)
-    }
-    const outbox = []
-    for (const message of state.outboxSummary) {
-      outbox.push(drawOutboxItem(message))
-    }
-    return [replaceChildren('page', outbox)]
   }
 
   function makeDraftToDom (to) {
@@ -1067,7 +1039,6 @@
     inbox: drawInbox,
     write: drawWrite,
     contacts: drawContacts,
-    outbox: drawOutbox,
     drafts: drawDrafts,
     pricing: drawPricing,
     account: drawAccount,
@@ -1404,14 +1375,6 @@
     }
     state.openInboxItem = message
     return [drawInbox(state), state]
-  }
-
-  function onLookedUpOutboxMessage (message, state) {
-    if (state.page !== 'outbox') {
-      return [[], state]
-    }
-    state.openOutboxItem = message
-    return [drawOutbox(state), state]
   }
 
   function onDeleteBlob (ids, state) {
@@ -1908,14 +1871,6 @@
         mime: file.type
       })
     }
-  }
-
-  async function lookupOutboxMessage (id) {
-    const message = await localforage.getItem(id)
-    const compiled = new Wasm()
-    await compiled.init(message.code.contents)
-    message.output = compiled.bigWebThing(message.userInput)
-    tick(onLookedUpOutboxMessage, message)
   }
 
   async function runWasm (o) {
