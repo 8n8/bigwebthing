@@ -1196,15 +1196,7 @@
       state.openDraft = {}
     }
     if (!validRecipient(to)) {
-      return [
-        [
-          {
-            key: updateTextBox,
-            value: { id: 'writerToBox', value: '' }
-          }
-        ],
-        state
-      ]
+      return [[() => updateTextBox('writerToBox', '')], state]
     }
     if (state.openDraft.id === undefined) {
       state.openDraft.id = state.iota.toString()
@@ -1212,7 +1204,7 @@
     }
     state.openDraft.to = to
     const ioJobs = [
-      { key: updateTextBox, value: { id: 'writerToBox', value: to } },
+      () => updateTextBox('writerToBox', to),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft)
     ]
@@ -1245,26 +1237,10 @@
 
   function onUpdatedAddContactBox (contact, state) {
     if (!validRecipient(contact)) {
-      return [
-        [
-          {
-            key: updateTextBox,
-            value: { id: 'addContactBox', value: '' }
-          }
-        ],
-        state
-      ]
+      return [[() => updateTextBox('addContactBox', '')], state]
     }
     state.addContactBox = contact
-    return [
-      [
-        {
-          key: updateTextBox,
-          value: { id: 'addContactBox', value: contact }
-        }
-      ],
-      state
-    ]
+    return [[() => updateTextBox('addContactBox', contact)], state]
   }
 
   function onUpdatedUserInput (userInput, state) {
@@ -1277,10 +1253,7 @@
     }
     state.openDraft.userInput = userInput
     const ioJobs = [
-      {
-        key: 'updatedTextBox',
-        value: { id: 'writerUserInputBox', value: userInput }
-      },
+      () => updateTextBox('writerUserInputBox', userInput),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft),
       kv(runWasm, {
