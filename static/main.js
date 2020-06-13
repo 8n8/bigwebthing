@@ -707,19 +707,12 @@
   }
 
   function onSendButtonClick (_, state) {
-    if (!readyToSend(state.openDraft)) {
-      return [[], state]
-    }
     return [
-      {
-        io: sendDraft,
-        value: {
-          draft: state.openDraft,
-          keys: state.cryptoKeys,
-          toKeys: state.contacts[state.openDraft.to],
-          myName: state.myName
-        }
-      },
+      () => sendDraft(
+        state.openDraft,
+        state.myKeys,
+        state.myName,
+        state.contacts[state.openDraft.to]),
       state
     ]
   }
@@ -752,11 +745,12 @@
     }
 
     const children = [
-      makeSendButton(),
       makeSubjectBox(draft.subject),
       makeToBox(draft.to),
       makeUserInputBox(draft.userInput)
     ]
+
+    if (readyToSend(draft)) children.push(makeSendButton())
 
     if (state.draftOutput !== undefined) {
       children.push(makeOutputView(state.draftOutput))
@@ -1966,21 +1960,15 @@
     }
   }
 
-  async function sendDraft (arg) {
-    const draft = arg.draft
-    const myKeys = arg.keys
-    const myName = arg.myName
-    const to = draft.to
-    const toKeys = arg.toKeys
-
+  async function sendDraft (draft, myKeys, myName, toKeys) {
     const encodedDraft = await encodeDraft(draft)
     const draftErr = await sendBytes(
-      encodedDraft, myKeys, myName, to, toKeys)
+      encodedDraft, myKeys, myName, draft.to, toKeys)
     if (draftErr !== '') {
       tick(onError, draftErr)
     }
 
-    tick(onDraftSent(arg.draft))
+    tick(onDraftSent(draft))
   }
 
   function makeWebsocket () {
