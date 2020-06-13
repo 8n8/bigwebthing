@@ -807,7 +807,9 @@
     const idToken = decodeIdToken(message.slice(1, 113))
 
     const signHash = nacl.hash(combine([
-      oneByte(8), idToken.authCode, message.slice(121)])).slice(0, 32)
+      oneByte(8),
+      message.slice(121),
+      idToken.authCode])).slice(0, 32)
 
     const sender = decodeInt64(idToken.senderId)
 
