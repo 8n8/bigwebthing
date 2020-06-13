@@ -59,7 +59,7 @@
     return combineMany(
       encodeString(blob.filename),
       encodeString(blob.mime),
-      encodeInt(blob.contents.length),
+      encodeInt64(blob.contents.length),
       blob.contents
     )
   }
@@ -76,17 +76,17 @@
   function encodeString (s) {
     const encoder = new TextEncoder()
     const encoded = encoder.encode(s)
-    const len = encodeInt(encoded.length)
+    const len = encodeInt64(encoded.length)
     return combine(len, encoded)
   }
 
   function encodeDraft (draft) {
     return combineMany([
       oneByte(0),
-      encodeInt(draft.to),
+      encodeInt64(draft.to),
       encodeString(draft.subject),
       encodeString(draft.userInput),
-      encodeInt(draft.code.length),
+      encodeInt64(draft.code.length),
       draft.code,
       encodeBlobs(draft.blobs)]
     )
@@ -137,7 +137,7 @@
     return combined
   }
 
-  function encodeInt (n) {
+  function encodeInt64 (n) {
     const buf = new ArrayBuffer(8)
     const result = new Uint8Array(buf)
     for (let i = 0; i < 8; i++) {
@@ -1595,10 +1595,10 @@
     const chunkLength = 15000
     const hash = nacl.hash(message).slice(0, 32)
     const numChunks = Math.ceil(message.length / chunkLength)
-    const numChunksBytes = encodeInt(numChunks)
+    const numChunksBytes = encodeInt64(numChunks)
     const chunks = []
     for (let i = 0; i < numChunks; i++) {
-      const chunkNum = encodeInt(i)
+      const chunkNum = encodeInt64(i)
       const chunkStart = i * chunkLength
       const chunkEnd = (i + 1) * chunkLength
       const chunkBase = message.slice(chunkStart, chunkEnd)
@@ -1612,7 +1612,7 @@
     const toSign = combineMany(oneByte(route), message, authCode)
     const hash = nacl.hash(toSign).slice(0, 32)
     const signature = nacl.sign(hash, secretSign)
-    return combineMany(encodeInt(myName), authCode, signature)
+    return combineMany(encodeInt64(myName), authCode, signature)
   }
 
   function onNewContact (arg, state) {
@@ -1625,7 +1625,7 @@
   }
 
   function constructCtoCMessage (chunk, to, keys, authCode, myName) {
-    const encodedTo = encodeInt(to)
+    const encodedTo = encodeInt64(to)
     const idToken = makeIdToken(
       8,
       combine(encodedTo, chunk),
@@ -1793,13 +1793,13 @@
 
     const idToken = makeIdToken(
       10,
-      combine(pow, encodeInt(arg.id)),
+      combine(pow, encodeInt64(arg.id)),
       authCode,
       arg.myKeys.signing.secretKey,
       arg.myName
     )
 
-    const request = combineMany([oneByte(10), idToken, pow, encodeInt(arg.id)])
+    const request = combineMany([oneByte(10), idToken, pow, encodeInt64(arg.id)])
     const [_, responseErr] = await apiRequest(request)
     if (responseErr !== '') {
       tick(onError, responseErr)
@@ -1810,7 +1810,7 @@
   }
 
   async function downloadContactKeys (id) {
-    const request = combine(oneByte(2), encodeInt(id))
+    const request = combine(oneByte(2), encodeInt64(id))
     const [response, responseErr] = await apiRequest(request)
     if (responseErr !== '') {
       tick(onError, responseErr)
