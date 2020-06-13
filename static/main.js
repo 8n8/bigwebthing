@@ -55,6 +55,15 @@
     return combined
   }
 
+  function encodeBlob (blob) {
+    return combineMany(
+      encodeString(blob.filename),
+      encodeString(blob.mime),
+      encodeInt(blob.contents.length),
+      blob.contents
+    )
+  }
+
   function encodeBlobs (blobs) {
     const parts = []
     parts.push(encodeInt32(blobs.length))
@@ -2124,15 +2133,6 @@
         return
       }
     }
-  }
-
-  function encodeBlob (blob) {
-    return combineMany(
-      encodeString(blob.filename),
-      encodeString(blob.mime),
-      encodeInt(blob.contents.length),
-      blob.contents
-    )
   }
 
   async function sendDraft (arg) {
