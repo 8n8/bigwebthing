@@ -661,7 +661,7 @@
 
     const downloadButton = document.createElement('button')
     downloadButton.type = 'button'
-    downloadButton.onclick = () => tick(onDownloadBlob, blob)
+    downloadButton.onclick = () => tick(onDownloadBlob, blob.id)
     downloadButton.textContent = 'Download'
     container.appendChild(downloadButton)
 
@@ -1392,11 +1392,11 @@
     }
   }
 
-  function onDownloadBlob (ids, state) {
+  function onDownloadBlob (blobId, state) {
     if (state.openDraft === undefined) {
       return [[], state]
     }
-    const blob = findBlob(state.openDraft.blobs, ids.blobId)
+    const blob = findBlob(state.openDraft.blobs, blobId)
     return [[() => downloadBlob(blob)], state]
   }
 
