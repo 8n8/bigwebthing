@@ -302,7 +302,7 @@
   }
 
   function makeOutputView (output) {
-    const [doc, decodeErr] = decodeDocument(output, 0)
+    const [doc, decodeErr] = decodeDocument(output)
     if (decodeErr !== '') {
       return makeOutputErr(decodeErr)
     }
