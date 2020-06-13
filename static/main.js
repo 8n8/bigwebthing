@@ -581,6 +581,7 @@
   function codeUploaderHelp () {
     const id = 'writerCodeUploader'
     const container = document.createElement('div')
+
     const label = document.createElement('label')
     label.setAttribute('for', id)
     label.innerHTML = 'Upload code'
@@ -595,6 +596,7 @@
       false
     )
     container.appendChild(browse)
+
     return container
   }
 
@@ -602,13 +604,11 @@
     if (n < 1000) {
       return n + 'B'
     }
-
-    if (n < 1000000) {
+    if (n < 1e6) {
       return Math.round(n / 1000) + 'KB'
     }
-
-    if (n < 1000000000) {
-      return Math.round(n / 1000000) + 'MB'
+    if (n < 1e9) {
+      return Math.round(n / 1e6) + 'MB'
     }
   }
 
@@ -621,7 +621,7 @@
     div.id = 'codeUploader'
 
     const title = document.createElement('h1')
-    title.textContent('Message program')
+    title.textContent = 'Message program'
     div.appendChild(title)
 
     const filename = document.createElement('span')
@@ -1289,14 +1289,9 @@
     }
     const openDraft = state.openDraft
     delete openDraft.code
+    const newUploader = makeCodeUploader(undefined)
     const ioJobs = [
-      {
-        key: replaceDomWith,
-        value: {
-          id: 'codeUploader',
-          newDom: makeCodeUploader(undefined)
-        }
-      },
+      () => replaceDomWith('codeUploader', newUploader),
       setItem(state.openDraft.id, state.openDraft)
     ]
     return [ioJobs, state]
