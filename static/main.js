@@ -449,7 +449,7 @@
     return p
   }
 
-  function drawDraftsItem (draft) {
+  function drawDraftsMenuItem (draft) {
     const button = document.createElement('button')
     button.type = 'button'
     button.classList.add('messageButton')
@@ -468,7 +468,7 @@
     }
     const drafts = []
     for (const draftSummary of state.draftsSummary) {
-      drafts.push(drawDraftsItem(draftSummary))
+      drafts.push(drawDraftsMenuItem(draftSummary))
     }
     return [replaceChildren('page', drafts)]
   }
@@ -476,6 +476,7 @@
   function makeSubjectBox (subject) {
     const id = 'writerSubjectBox'
     const container = document.createElement('div')
+
     const label = document.createElement('label')
     label.setAttribute('for', id)
     label.innerHTML = 'Subject'
@@ -487,6 +488,7 @@
     box.oninput = (e) => tick(onUpdatedSubjectBox, e.target.value)
     box.id = id
     container.appendChild(box)
+
     return container
   }
 
@@ -505,6 +507,7 @@
     box.oninput = (e) => tick(onUpdatedToBox, e.target.value)
     box.id = id
     container.appendChild(box)
+
     return container
   }
 
@@ -1146,7 +1149,7 @@
 
   function onUpdatedSubjectBox (subject, state) {
     if (state.openDraft === undefined) {
-      return [[], state]
+      state.openDraft = {}
     }
     if (state.openDraft.id === undefined) {
       state.openDraft.id = state.iota.toString()
@@ -1190,7 +1193,7 @@
 
   function onUpdatedToBox (to, state) {
     if (state.openDraft === undefined) {
-      return [[], state]
+      state.openDraft = {}
     }
     if (!validRecipient(to)) {
       return [
@@ -1266,7 +1269,7 @@
 
   function onUpdatedUserInput (userInput, state) {
     if (state.openDraft === undefined) {
-      return [[], state]
+      state.openDraft = {}
     }
     if (state.openDraft.id === undefined) {
       state.openDraft.id = state.iota
@@ -1843,8 +1846,7 @@
   }
 
   async function lookupDraft (id) {
-    const message = await localforage.getItem(id)
-    tick(onLookedUpDraft, message)
+    tick(onLookedUpDraft, await localforage.getItem(id))
   }
 
   async function lookupInboxMessage (id) {
