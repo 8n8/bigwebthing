@@ -365,6 +365,56 @@
     return [[() => lookupOutboxMessage(messageId)], state]
   }
 
+  const days = {
+    0: 'Sunday',
+    1: 'Monday',
+    2: 'Tuesday',
+    3: 'Wednesday',
+    4: 'Thursday',
+    5: 'Friday',
+    6: 'Saturday'
+  }
+
+  const months = {
+    0: 'January',
+    1: 'February',
+    2: 'March',
+    3: 'April',
+    4: 'May',
+    5: 'June',
+    6: 'July',
+    7: 'August',
+    8: 'September',
+    9: 'October',
+    10: 'November',
+    11: 'December'
+  }
+
+  function formatTime (intTime) {
+    const d = new Date(intTime)
+    const hours = d.getHours()
+    return [
+      hours > 12 ? hours - 12 : hours,
+      ':',
+      d.getMinutes(),
+      hours > 12 ? 'p' : 'a',
+      'm ',
+      days[d.getDay()],
+      ' ',
+      d.getDate(),
+      ' ',
+      months[d.getMonth()],
+      ' ',
+      d.getFullYear()
+    ].join('')
+  }
+
+  function makeTimeDom (time) {
+    const p = document.getElementById('p')
+    p.textContent = formatTime(time)
+    return p
+  }
+
   function drawInboxMenuItem (message) {
     const button = document.createElement('button')
     button.type = 'button'
@@ -373,6 +423,7 @@
       button.appendChild(makeSubjectDom(message.subject))
     }
     button.appendChild(makeFromDom(message.from))
+    button.appendChild(makeTimeDom(message.time))
     button.onclick = () => tick(onInboxMenuClick, message.id)
     return button
   }
@@ -1327,11 +1378,11 @@
   }
 
   function onDraftsMenuClick (messageId, state) {
-    return [[kv(lookupDraft, messageId)], state]
+    return [[() => lookupDraft(messageId)], state]
   }
 
   function onInboxMenuClick (messageId, state) {
-    return [[kv(lookupInboxMessage, messageId)], state]
+    return [[() => lookupInboxMessage(messageId)], state]
   }
 
   function onInit (_, state) {
