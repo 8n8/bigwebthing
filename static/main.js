@@ -32,6 +32,7 @@
     'sentSummary',
     'myName',
     'contacts',
+    'downloads',
     'iota'
   ].map(getItem)).push(() => makeWebsocket())
 
@@ -1103,6 +1104,14 @@
     return [[], state]
   }
 
+  function downloadsFromCache (downloads, state) {
+    if (downloads === null) {
+      return [[], state]
+    }
+    state.downloads = downloads
+    return [[], state]
+  }
+
   const updateOnCacheResponseSwitch = {
     myName: myNameFromCache,
     inboxSummary: inboxSummaryFromCache,
@@ -1110,7 +1119,8 @@
     sentSummary: sentSummaryFromCache,
     sendingSummary: sendingSummaryFromCache,
     iota: iotaFromCache,
-    contacts: contactsFromCache
+    contacts: contactsFromCache,
+    downloads: downloadsFromCache
   }
 
   function onError (error, state) {
