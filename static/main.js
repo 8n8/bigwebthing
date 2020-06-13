@@ -858,18 +858,15 @@
     state.iota += 1
 
     const ioJobs = [
-      {
-        io: stitchUpMessages,
-        value: {
-          downloads: state.downloads,
-          message: decoded,
-          name: name,
-          hash: nacl.hash(message).slice(0, 32),
-          myKeys: state.myKeys,
-          myName: state.myName,
-          id: id
-        }
-      },
+      () => stitchUpMessages({
+        downloads: state.downloads,
+        message: decoded,
+        name: name,
+        hash: nacl.hash(message).slice(0, 32),
+        myKeys: state.myKeys,
+        myName: state.myName,
+        id: id
+      }),
       setItem('iota', state.iota)
     ]
     return [ioJobs, state]
@@ -1920,14 +1917,29 @@
     return [ioJobs, state]
   }
 
-  function onNewUnpacked (message, id, state) {
+  function removeUsed (downloads, usedUp) {
+    const asSet = new Set(usedUp)
+    const newDownloads = []
+    for (const download of downloads) {
+      if (asSet.has(download)) continue
+      newDownloads.push(download)
+    }
+    return newDownloads
+  }
+
+  function onNewUnpacked (v, state) {
     const ids = []
-    for (const _ of message.blobs) {
+    for (const _ of v.message.blobs) {
       ids.push(state.iota)
       state.iota += 1
     }
+    state.downloads = removeUsed(state.downloads, v.usedUp)
 
-    return [[() => writeToDisk(message, id, ids)], state]
+    return [
+      [() => writeToDisk(v.message, v.id, ids),
+        setItem('downloads', state.downloads)
+      ],
+      state]
   }
 
   function onNewSummary (summary, hash, state) {
@@ -2154,7 +2166,7 @@
       return
     }
 
-    tick((state) => onNewUnpacked(decoded, v.id, state))
+    tick(onNewUnpacked, { message: decoded, id: v.id, usedUp: relevantNames })
     const summary = {
       subject: decoded.subject,
       from: decoded.from,
