@@ -151,11 +151,7 @@
   }
 
   function isDifficult (hash, difficulty) {
-    for (let i = 0; i < 32; i++) {
-      if (hash[i] < difficulty) {
-        return false
-      }
-    }
+    for (const h of hash) if (h < difficulty) return false
     return true
   }
 
