@@ -27,7 +27,6 @@
     'help'
   ].map(initOnClick).concat([
     'iota',
-    'page',
     'inboxSummary',
     'draftsSummary',
     'sendingSummary',
@@ -73,9 +72,9 @@
     return combineMany(parts)
   }
 
-  function encodeString (s) {
+  function encodeString (string) {
     const encoder = new TextEncoder()
-    const encoded = encoder.encode(s)
+    const encoded = encoder.encode(string)
     const len = encodeInt64(encoded.length)
     return combine(len, encoded)
   }
@@ -1055,19 +1054,6 @@
     sent: drawSent
   }
 
-  function drawPage (oldPage, state) {
-    let buttonOn = []
-    let buttonOff = []
-    if (state.page !== oldPage) {
-      buttonOff =
-            oldPage === undefined ? [] : turnButtonOff(oldPage + 'Button')
-
-      buttonOn = turnButtonOn(state.page + 'Button')
-    }
-    const drawJobs = drawFunc[state.page](state)
-    return drawJobs.concat(buttonOn).concat(buttonOff)
-  }
-
   function oneByte (route) {
     const buffer = new ArrayBuffer(1)
     const view = new Uint8Array(buffer)
@@ -1093,66 +1079,28 @@
     return [[], state]
   }
 
-  function inboxIdsFromCache (inboxIds, state) {
-    if (state.page !== 'inbox') {
-      return [[], state]
-    }
-    if (inboxIds === null) {
-      state.inboxIds = []
-    }
-    state.inboxIds = inboxIds
-    return [drawPage(null, state), state]
+  function sentSummaryFromCache (summary, state) {
+    if (state.page !== 'sent') return [[], state]
+    state.sentSummary = summary === null ? [] : summary
+    return [drawSent(state), state]
   }
 
-  function draftIdsFromCache (draftIds, state) {
-    if (state.page !== 'drafts') {
-      return [[], state]
-    }
-    if (draftIds === null) {
-      state.draftIds = []
-    }
-    state.draftIds = draftIds
-    return [drawPage(null, state), state]
+  function sendingSummaryFromCache (summary, state) {
+    if (state.page !== 'sending') return [[], state]
+    state.sendingSummary = summary === null ? [] : summary
+    return [drawSending(state), state]
   }
 
-  function outboxIdsFromCache (outboxIds, state) {
-    if (state.page !== 'outbox') {
-      return [[], state]
-    }
-    if (outboxIds === null) {
-      state.outboxIds = []
-    }
-    state.outboxIds = outboxIds
-    return [drawPage(null, state), state]
+  function inboxSummaryFromCache (summary, state) {
+    if (state.page !== 'inbox') return [[], state]
+    state.inboxSummary = summary === null ? [] : summary
+    return [drawInbox(state), state]
   }
 
-  function pageFromCache (page, state) {
-    state.page = page
-    if (page === 'inbox' || page === null) {
-      if (
-        state.openInboxItem === undefined &&
-            state.inboxSummary === undefined
-      ) {
-        return [[{ key: getInboxSummary, value: state.inboxIds }], state]
-      }
-    }
-    if (
-      page === 'drafts' &&
-        state.openDraft === undefined &&
-        state.draftsSummary === undefined
-    ) {
-      return [[{ key: getDraftsSummary, value: state.draftIds }], state]
-    }
-    if (
-      page === 'outbox' &&
-        state.openSent === undefined &&
-        state.outboxSummary === undefined
-    ) {
-      return [[{ key: getOutboxSummary, value: state.outboxIds }], state]
-    }
-    const oldPage = state.page
-    state.page = page
-    return [drawPage(oldPage, state), state]
+  function draftsSummaryFromCache (summary, state) {
+    if (state.page !== 'drafts') return [[], state]
+    state.draftsSummary = summary === null ? [] : summary
+    return [drawDrafts(state), state]
   }
 
   function iotaFromCache (iota, state) {
@@ -1169,11 +1117,11 @@
   }
 
   const updateOnCacheResponseSwitch = {
-    page: pageFromCache,
     myName: myNameFromCache,
-    inboxIds: inboxIdsFromCache,
-    draftIds: draftIdsFromCache,
-    outboxIds: outboxIdsFromCache,
+    inboxSummary: inboxSummaryFromCache,
+    draftsSummary: draftsSummaryFromCache,
+    sentSummary: sentSummaryFromCache,
+    sendingSummary: sendingSummaryFromCache,
     iotaIds: iotaFromCache,
     contacts: contactsFromCache
   }
@@ -1275,30 +1223,6 @@
       setItem(state.openDraft.id, state.openDraft)
     ]
     return [ioJobs, state]
-  }
-
-  function onDraftsSummary (draftsSummary, state) {
-    if (state.page !== 'drafts' || state.openDraft !== undefined) {
-      return [[], state]
-    }
-    state.draftsSummary = draftsSummary
-    return [drawDrafts(state), state]
-  }
-
-  function onOutboxSummary (outboxSummary, state) {
-    if (state.page !== 'outbox' || state.openSent !== undefined) {
-      return [[], state]
-    }
-    state.outboxSummary = outboxSummary
-    return [drawOutbox(state), state]
-  }
-
-  function onInboxSummary (inboxSummary, state) {
-    if (state.page !== 'inbox' || state.openInboxItem !== undefined) {
-      return [[], state]
-    }
-    state.inboxSummary = inboxSummary
-    return [drawInbox(state), state]
   }
 
   function onCacheResponse (response, state) {
@@ -1424,13 +1348,17 @@
     ]
   }
 
-  function onTopButtonClick (button, state) {
-    if (state.page === button) return [[], state]
+  function onTopButtonClick (page, state) {
+    if (state.page === page) return [[], state]
 
     const oldPage = state.page
-    state.page = button
+    state.page = page
 
-    return [drawPage(oldPage, state).push(setItem('page', button)), state]
+    return [
+      drawFunc[page](state)
+        .concat(turnButtonOff(oldPage + 'Button'))
+        .concat(turnButtonOn(page + 'Button')),
+      state]
   }
 
   function onDraftsMenuClick (messageId, state) {
@@ -1817,50 +1745,6 @@
       return
     }
     tick(onReceivingContactKeys, { raw: response, id: id })
-  }
-
-  async function getInboxSummary (inboxIds) {
-    const summaries = []
-    for (const id of inboxIds) {
-      const message = await localforage.getItem(id)
-      const summary = {
-        subject: message.subject,
-        id: id,
-        from: message.from,
-        time: message.time
-      }
-      summaries.push(summary)
-    }
-    tick(onInboxSummary, summaries)
-  }
-
-  async function getDraftsSummary (draftIds) {
-    const summaries = []
-    for (const id of draftIds) {
-      const draft = await localforage.getItem(id)
-      const summary = {
-        subject: draft.subject,
-        id: id,
-        to: draft.to
-      }
-      summaries.push(summary)
-    }
-    tick(onDraftsSummary, summaries)
-  }
-
-  async function getOutboxSummary (outboxIds) {
-    const summaries = []
-    for (const id of outboxIds) {
-      const message = await localforage.getItem(id)
-      const summary = {
-        subject: message.subject,
-        id: id,
-        to: message.to,
-        time: message.time
-      }
-      summaries.push(summary)
-    }
-    tick(onOutboxSummary, summaries)
   }
 
   async function codeFilesUpload (files) {
@@ -2353,7 +2237,7 @@
 
   let tick
   {
-    let state = {}
+    let state = { page: 'inbox' }
 
     tick = (update, inputValue) => {
       let outputs;
