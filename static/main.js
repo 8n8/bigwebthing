@@ -367,7 +367,7 @@
   }
 
   function onOutboxMenuClick (messageId, state) {
-    return [[kv(lookupOutboxMessage, messageId)], state]
+    return [[() => lookupOutboxMessage(messageId)], state]
   }
 
   function drawInboxMenuItem (message) {
@@ -1477,7 +1477,7 @@
 
   function noMessagesDom () {
     const p = document.createElement('p')
-    p.textContent = 'You have no messages yet.'
+    p.textContent = 'There are no messages in this folder.'
     p.classList.add('noneMessage')
     return p
   }
