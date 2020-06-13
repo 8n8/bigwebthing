@@ -35,7 +35,7 @@
     'iota'
   ].map(getItem)).push(() => makeWebsocket())
 
-  function combineMany (uint8arrays) {
+  function combine (uint8arrays) {
     let totalLength = 0
     for (const uint8array of uint8arrays) {
       totalLength += uint8array.length
@@ -55,11 +55,11 @@
   }
 
   function encodeBlob (blob) {
-    return combineMany(
+    return combine([
       encodeString(blob.filename),
       encodeString(blob.mime),
       encodeInt64(blob.contents.length),
-      blob.contents
+      blob.contents]
     )
   }
 
@@ -69,18 +69,18 @@
     for (const blob of blobs) {
       parts.push(encodeBlob(blob))
     }
-    return combineMany(parts)
+    return combine(parts)
   }
 
   function encodeString (string) {
     const encoder = new TextEncoder()
     const encoded = encoder.encode(string)
     const len = encodeInt64(encoded.length)
-    return combine(len, encoded)
+    return combine([len, encoded])
   }
 
   function encodeDraft (draft) {
-    return combineMany([
+    return combine([
       oneByte(0),
       encodeInt64(draft.to),
       encodeString(draft.subject),
@@ -116,21 +116,6 @@
     const p = document.createElement('p')
     p.textContent = 'From: ' + from
     return p
-  }
-
-  function combine (a, b) {
-    const lena = a.length
-    const lenb = b.length
-    const buf = new ArrayBuffer(lena + lenb)
-    const combined = new Uint8Array(buf)
-    for (let i = 0; i < lena; i++) {
-      combined[i] = a[i]
-    }
-    for (let i = lena; i < lena + lenb; i++) {
-      const bval = b[i - lena]
-      combined[i] = bval
-    }
-    return combined
   }
 
   function encodeInt64 (n) {
@@ -181,7 +166,7 @@
     const bufferView = new Uint8Array(buffer)
     const counter = new Int32Array(buffer)
     while (true) {
-      const combined = combine(powInfo.unique, bufferView)
+      const combined = combine([powInfo.unique, bufferView])
       const hash = nacl.hash(combined).slice(0, 32)
       if (isDifficult(hash, powInfo.difficulty)) {
         return combined
@@ -827,8 +812,8 @@
 
     const idToken = decodeIdToken(message.slice(1, 113))
 
-    const signHash = nacl.hash(combineMany(
-      oneByte(8), idToken.authCode, message.slice(121))).slice(0, 32)
+    const signHash = nacl.hash(combine([
+      oneByte(8), idToken.authCode, message.slice(121)])).slice(0, 32)
 
     const sender = decodeInt(idToken.senderId)
 
@@ -1534,17 +1519,17 @@
       const chunkStart = i * chunkLength
       const chunkEnd = (i + 1) * chunkLength
       const chunkBase = message.slice(chunkStart, chunkEnd)
-      const combined = combineMany(chunkNum, numChunksBytes, hash, chunkBase)
+      const combined = combine([chunkNum, numChunksBytes, hash, chunkBase])
       chunks.push(combined)
     }
     return chunks
   }
 
   function makeIdToken (route, message, authCode, secretSign, myName) {
-    const toSign = combineMany(oneByte(route), message, authCode)
+    const toSign = combine([oneByte(route), message, authCode])
     const hash = nacl.hash(toSign).slice(0, 32)
     const signature = nacl.sign(hash, secretSign)
-    return combineMany(encodeInt64(myName), authCode, signature)
+    return combine([encodeInt64(myName), authCode, signature])
   }
 
   function onNewContact (arg, state) {
@@ -1560,12 +1545,12 @@
     const encodedTo = encodeInt64(to)
     const idToken = makeIdToken(
       8,
-      combine(encodedTo, chunk),
+      combine([encodedTo, chunk]),
       authCode,
       keys.signing.secretKey,
       myName
     )
-    return combineMany(oneByte(8), idToken, encodedTo, chunk)
+    return combine([oneByte(8), idToken, encodedTo, chunk])
   }
 
   function onReceivingContactKeys (keys, state) {
@@ -1665,11 +1650,11 @@
     }
     const pow = proofOfWork(powInfo)
 
-    const request = combineMany(
+    const request = combine([
       oneByte(1),
       pow,
       keys.signing.publicKey,
-      keys.encryption.publicKey
+      keys.encryption.publicKey]
     )
 
     const [response, responseErr] = await apiRequest(request)
@@ -1686,11 +1671,11 @@
   }
 
   function ioReplaceChildren (parentId, newChildren) {
-    const parentElement = document.getElementById(v.parentId)
+    const parentElement = document.getElementById(parentId)
     while (parentElement.firstChild) {
       parentElement.removeChild(parentElement.lastChild)
     }
-    for (const child of v.children) {
+    for (const child of newChildren) {
       parentElement.appendChild(child)
     }
   }
@@ -1720,13 +1705,13 @@
 
     const idToken = makeIdToken(
       10,
-      combine(pow, encodeInt64(arg.id)),
+      combine([pow, encodeInt64(arg.id)]),
       authCode,
       arg.myKeys.signing.secretKey,
       arg.myName
     )
 
-    const request = combineMany([oneByte(10), idToken, pow, encodeInt64(arg.id)])
+    const request = combine([oneByte(10), idToken, pow, encodeInt64(arg.id)])
     const [_, responseErr] = await apiRequest(request)
     if (responseErr !== '') {
       tick(onError, responseErr)
@@ -1737,7 +1722,7 @@
   }
 
   async function downloadContactKeys (id) {
-    const request = combine(oneByte(2), encodeInt64(id))
+    const request = combine([oneByte(2), encodeInt64(id)])
     const [response, responseErr] = await apiRequest(request)
     if (responseErr !== '') {
       tick(onError, responseErr)
@@ -1939,7 +1924,7 @@
       toKeys.encryption,
       myKeys.encryption.secretKey
     )
-    const withNonce = combine(nonce, encrypted)
+    const withNonce = combine([nonce, encrypted])
     const request = constructCtoCMessage(
       withNonce,
       to,
@@ -1956,7 +1941,7 @@
 
   function onNewReceipt (receipt, state) {
     const idToken = decodeIdToken(receipt.idToken)
-    const msg = combineMany(8, receipt.hash, idToken.authCode)
+    const msg = combine([oneByte(8), receipt.hash, idToken.authCode])
     const msgHash = nacl.hash(msg).slice(0, 32)
     const theirKeys = state.contacts[idToken.senderId]
     if (theirKeys === undefined) {
@@ -2068,7 +2053,7 @@
     const idToken = makeIdToken(
       9, hash, authCode, mySecretSign, myName)
 
-    const request = combineMany(oneByte(9), idToken, hash)
+    const request = combine([oneByte(9), idToken, hash])
     await apiRequest(request)
   }
 
@@ -2077,7 +2062,7 @@
     for (const chunk of chunks) {
       assembled.push(chunk.chunk)
     }
-    return combineMany(assembled)
+    return combine(assembled)
   }
 
   function sortChunks (chunks) {
