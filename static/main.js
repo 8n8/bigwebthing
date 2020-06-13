@@ -561,6 +561,7 @@
   function makeUserInputBox (userInput) {
     const id = 'writerUserInputBox'
     const container = document.createElement('div')
+
     const label = document.createElement('label')
     label.setAttribute('for', id)
     label.innerHTML = 'Message'
@@ -569,10 +570,11 @@
     const box = document.createElement('textarea')
     const rows = userInput.split('\n')
     box.cols = longestRow(rows)
-    box.rows = rows.length
+    box.rows = rows.length + 1
     box.oninput = (e) => tick(onUpdatedUserInput, e.target.value)
     box.id = id
     container.appendChild(box)
+
     return container
   }
 
