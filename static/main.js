@@ -768,11 +768,8 @@
     }
     children.push(makeCodeUploader(draft.code))
 
-    const runner = kv(runWasm, {
-      userInput: draft.userInput,
-      runner: state.wasmRunner,
-      code: draft.code
-    })
+    const runner = () =>
+      runWasm(draft.userInput, draft.wasmRunner, draft.code)
 
     return [replaceChildren('page', children), runner]
   }
@@ -978,11 +975,11 @@
   }
 
   function onSendingMenuClick (messageId, state) {
-    return [[kv(lookupSendingMessage, messageId)], state]
+    return [[() => lookupSendingMessage(messageId)], state]
   }
 
   function onSentMenuClick (messageId, state) {
-    return [[kv(lookupSentMessage, messageId)], state]
+    return [[() => lookupSentMessage(messageId)], state]
   }
 
   function onLookedUpSendingMessage (message, state) {
@@ -1263,11 +1260,8 @@
       () => updateTextBox('writerUserInputBox', userInput),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft),
-      kv(runWasm, {
-        userInput: userInput,
-        runner: state.wasmRunner,
-        code: state.openDraft.code
-      })
+      () => runWasm(
+        userInput, state.openDraft.wasmRunner, state.openDraft.code)
     ]
     return [ioJobs, state]
   }
@@ -1282,10 +1276,7 @@
     }
     state.openDraft.code = code
     const ioJobs = [
-      kv(replaceDomWith, {
-        id: 'codeUploader',
-        newDom: makeCodeUploader(code)
-      }),
+      () => replaceDomWith('codeUploader', makeCodeUploader(code)),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft)
     ]
@@ -1407,24 +1398,20 @@
     }
   }
 
-  function kv (key, value) {
-    return { key: key, value: value }
-  }
-
   function onDownloadBlob (ids, state) {
     if (state.openDraft === undefined) {
       return [[], state]
     }
     const blob = findBlob(state.openDraft.blobs, ids.blobId)
-    return [kv(downloadBlob, blob), state]
+    return [[() => downloadBlob(blob)], state]
   }
 
   function onCodeFilesUpload (files, state) {
-    return kv(codeFilesUpload, files)
+    return [[() => codeFilesUpload(files)], state]
   }
 
   function onBlobFilesUpload (files, state) {
-    return kv(blobFilesUpload, { files: files, draftId: state.openDraft.id })
+    return [[() => blobFilesUpload(files)], state]
   }
 
   function onBlobUpload (blobUpload, state) {
@@ -1450,11 +1437,9 @@
     }
     state.iota += 1
     state.openDraft.blobs.push(blob)
+    const newBlobsViewer = makeBlobsViewer(state.openDraft.blobs)
     const ioJobs = [
-      kv(replaceDomWith, {
-        id: 'writerBlobsViewer',
-        newDom: makeBlobsViewer(state.openDraft.blobs)
-      }),
+      () => replaceDomWith('writerBlobsViewer', newBlobsViewer),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft),
       setItem(blobId, blobUpload.contents)
@@ -1853,8 +1838,8 @@
     window.URL.revokeObjectURL(url)
   }
 
-  async function blobFilesUpload (info) {
-    for (const file of info.files) {
+  async function blobFilesUpload (files) {
+    for (const file of files) {
       const contents = await file.arrayBuffer()
       tick(onBlobUpload, {
         contents: contents,
@@ -1865,14 +1850,14 @@
     }
   }
 
-  async function runWasm (o) {
-    if (o.code === undefined) return
-    let runner = o.runner
+  async function runWasm (userInput, oldRunner, code) {
+    if (code === undefined) return
+    let runner = oldRunner
     if (runner === undefined) {
       runner = new Wasm()
-      await runner.init(o.code)
+      await runner.init(code)
     }
-    const output = runner.bigWebThing(o.userInput)
+    const output = runner.bigWebThing(userInput)
     tick(onNewOutput, output)
   }
 
