@@ -634,7 +634,7 @@
 
     const deleteButton = document.createElement('button')
     deleteButton.type = 'button'
-    deleteButton.onclick = () => tick(onDeleteCode, code.draftId)
+    deleteButton.onclick = () => tick(onDeleteCode, '')
     deleteButton.textContent = 'Delete'
     div.appendChild(deleteButton)
 
@@ -1283,7 +1283,7 @@
     return [ioJobs, state]
   }
 
-  function onDeleteCode (draftId, state) {
+  function onDeleteCode (_, state) {
     if (state.openDraft === undefined) {
       return [[], state]
     }
@@ -1365,23 +1365,22 @@
 
     const newBlobs = []
     for (const oldBlob of oldBlobs) {
-      if (oldBlob.id === ids.blobId && oldBlob.draftId === ids.draftId) {
+      if (
+        oldBlob.id === ids.blobId &&
+        oldBlob.draftId === ids.draftId) {
         continue
       }
       newBlobs.push(oldBlob)
     }
     state.openDraft.blobs = newBlobs
 
+    const newDom = makeBlobsViewer(newBlobs)
+
     return [
       [
         setItem(ids.draftId, state.openDraft),
-        {
-          key: replaceDomWith,
-          value: {
-            id: 'writerBlobsViewer',
-            newDom: makeBlobsViewer(newBlobs)
-          }
-        }
+        () => localforage.removeItem(ids.blobId),
+        () => replaceDomWith('writerBlobsViewer', newDom)
       ],
       state
     ]
