@@ -142,7 +142,7 @@
     return result
   }
 
-  function decodeInt (eightBytes) {
+  function decodeInt64 (eightBytes) {
     let result = 0
     for (let i = 0; i < 8; i++) {
       result += eightBytes[i] * Math.pow(256, i)
@@ -228,8 +228,8 @@
                 ' bytes long'
       ]
     }
-    const stringLength = decodeInt(raw.slice(i, i + 4))
-    i += 4
+    const stringLength = decodeInt64(raw.slice(i, i + 8))
+    i += 8
     const stringBytes = raw.slice(i, i + stringLength)
     const decoded = new TextDecoder().decode(stringBytes)
     return [{ key: 'smallString', value: decoded }, '']
@@ -247,7 +247,7 @@
                 ' bytes long'
       ]
     }
-    const numElements = decodeInt(raw.slice(i, i + 4))
+    const numElements = decodeInt32(raw.slice(i, i + 4))
     i += 4
     const ordering = []
     for (let _ = 0; _ < numElements; _++) {
@@ -813,7 +813,7 @@
     const signHash = nacl.hash(combine([
       oneByte(8), idToken.authCode, message.slice(121)])).slice(0, 32)
 
-    const sender = decodeInt(idToken.senderId)
+    const sender = decodeInt64(idToken.senderId)
 
     const theirKeys = state.contacts[sender]
     if (theirKeys === undefined) {
@@ -1660,7 +1660,7 @@
       tick(onError, responseErr)
       return
     }
-    tick(onNewName, decodeInt(response))
+    tick(onNewName, decodeInt64(response))
   }
 
   async function cacheQuery (key) {
@@ -2106,13 +2106,13 @@
 
   function decodeBlob (raw, i) {
     const dec = new TextDecoder()
-    const fileNameLength = decodeInt(raw.slice(i, i + 8))
+    const fileNameLength = decodeInt64(raw.slice(i, i + 8))
     i += 8
     const fileName = dec.decode(raw.slice(i, i + fileNameLength))
     i += fileNameLength
-    const mimeLength = decodeInt(raw.slice(i, i + 8))
+    const mimeLength = decodeInt64(raw.slice(i, i + 8))
     const mime = dec.decode(raw.slice(i, i + mimeLength))
-    const blobLength = decodeInt(raw.slice(i, i + 8))
+    const blobLength = decodeInt64(raw.slice(i, i + 8))
     i += 8
     const contents = raw.slice(i, i + blobLength)
     i += blobLength
@@ -2138,18 +2138,18 @@
 
   function decodeDraft (raw) {
     let i = 0
-    const to = decodeInt(raw.slice(i, i + 8))
+    const to = decodeInt64(raw.slice(i, i + 8))
     const dec = new TextDecoder()
     i += 8
-    const subjectLength = decodeInt(raw.slice(i, i + 8))
+    const subjectLength = decodeInt64(raw.slice(i, i + 8))
     i += 8
     const subject = dec.decode(raw.slice(i, i + subjectLength))
     i += subjectLength
-    const userInputLength = decodeInt(raw.slice(i, i + 8))
+    const userInputLength = decodeInt64(raw.slice(i, i + 8))
     i += 8
     const userInput = dec.decode(raw.slice(i, i + userInputLength))
     i += userInputLength
-    const codeLength = decodeInt(raw.slice(i, i + 8))
+    const codeLength = decodeInt64(raw.slice(i, i + 8))
     i += 8
     const code = raw.slice(i, i + codeLength)
     i += codeLength
