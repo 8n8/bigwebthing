@@ -748,15 +748,14 @@
 
     if (readyToSend(draft)) children.push(makeSendButton())
 
-    if (state.draftOutput !== undefined) {
-      children.push(makeOutputView(state.draftOutput))
+    if (draft.output !== undefined) {
+      children.push(makeOutputView(draft.output))
     }
 
-    children.push(makeBlobsViewer(draft.blobs))
-    if (readyToSend(draft)) {
-      children.push(makeBlobUploader())
-    }
-    children.push(makeCodeUploader(draft.code))
+    children.concat([
+      makeBlobsViewer(draft.blobs),
+      makeBlobUploader(),
+      makeCodeUploader(draft.code)])
 
     const runner = () =>
       runWasm(draft.userInput, draft.wasmRunner, draft.code)
@@ -877,7 +876,7 @@
 
   function onNewOutput (output, state) {
     if (state.openDraft === undefined) return [[], state]
-    state.draftOutput = output
+    state.openDraft.output = output
     return [drawWrite(state), state]
   }
 
