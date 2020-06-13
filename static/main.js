@@ -428,8 +428,8 @@
     if (state.inboxSummary.length === 0) {
       return [replaceChildren('page', [noMessagesDom()])]
     }
-    if (state.inboxItem !== undefined) {
-      return drawBoxItemView(state.inboxItem)
+    if (state.openInboxItem !== undefined) {
+      return drawBoxItemView(state.openInboxItem)
     }
     const inbox = []
     for (const message of state.inboxSummary) {
@@ -1336,8 +1336,18 @@
     ]
   }
 
+  function clearMessageViews (state) {
+    delete state.openInboxItem
+    delete state.openDraft
+    delete state.openSentItem
+    delete state.openSendingItem
+    return state
+  }
+
   function onTopButtonClick (page, state) {
     if (state.page === page) return [[], state]
+
+    state = clearMessageViews(state)
 
     const oldPage = state.page
     state.page = page
