@@ -169,28 +169,14 @@
 
   function turnButtonOn (id) {
     return [
-      {
-        io: addCssClass,
-        value: { id: id, cssClass: 'selectedButton' }
-      },
-      {
-        io: removeCssClass,
-        value: { id: id, cssClass: 'notSelectedButton' }
-      }
-    ]
+      () => addCssClass(id, 'selectedButton'),
+      () => removeCssClass(id, 'notSelectedButton')]
   }
 
   function turnButtonOff (id) {
     return [
-      {
-        io: addCssClass,
-        value: { id: id, cssClass: 'notSelectedButton' }
-      },
-      {
-        io: removeCssClass,
-        value: { id: id, cssClass: 'selectedButton' }
-      }
-    ]
+      () => addCssClass(id, 'notSelectedButton'),
+      () => removeCssClass(id, 'selectedButton')]
   }
 
   function makeSubjectView (subject) {
@@ -1622,14 +1608,14 @@
     return [bodyArray, '']
   }
 
-  function addCssClass (toAdd) {
-    const el = document.getElementById(toAdd.id)
-    el.classList.add(toAdd.cssClass)
+  function addCssClass (id, cssClass) {
+    const el = document.getElementById(id)
+    el.classList.add(cssClass)
   }
 
-  function removeCssClass (toRemove) {
-    const el = document.getElementById(toRemove.id)
-    el.classList.remove(toRemove.cssClass)
+  function removeCssClass (id, cssClass) {
+    const el = document.getElementById(id)
+    el.classList.remove(cssClass)
   }
 
   async function requestMyName (maybeKeys) {
