@@ -769,7 +769,11 @@
   }
 
   function onBadWebsocket (_, state) {
-    return [makeWebsocket, state]
+    return [makeWebsocketAfterDelay, state]
+  }
+
+  function makeWebsocketAfterDelay () {
+    window.setTimeout(makeWebsocket, 3e4)
   }
 
   function decodeIdToken (raw) {
