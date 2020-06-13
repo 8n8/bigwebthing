@@ -990,6 +990,7 @@
     button.classList.add('messageButton')
     button.appendChild(makeSubjectDom(message.subject))
     button.appendChild(makeToDom(message.to))
+    button.appendChild(makeTimeDom(message.time))
     button.onclick = () => tick(onClick, message.id)
     return button
   }
