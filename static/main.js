@@ -2072,8 +2072,7 @@
       await localforage.setItem(blobId, decoded.contents)
     }
     decoded.blobs = smallBlobs
-    await localforage.setItem(id, decoded)
-    return id
+    localforage.setItem(id, decoded)
   }
 
   function decodeBlob (raw, i) {
