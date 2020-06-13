@@ -162,10 +162,8 @@
     while (true) {
       const combined = combine([powInfo.unique, bufferView])
       const hash = nacl.hash(combined).slice(0, 32)
-      if (isDifficult(hash, powInfo.difficulty)) {
-        return combined
-      }
-      counter[0] = counter[0] + 1
+      if (isDifficult(hash, powInfo.difficulty)) return combined
+      counter[0] += 1
     }
   }
 
