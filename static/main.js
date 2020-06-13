@@ -97,12 +97,7 @@
 
   function makeSubjectDom (subject) {
     const p = document.createElement('p')
-    if (subject !== undefined) {
-      p.textContent = 'Subject: ' + subject
-      return p
-    }
-    p.textContent = 'No subject'
-    p.classList.add('noneMessage')
+    p.textContent = 'Subject: ' + subject
     return p
   }
 
@@ -374,7 +369,9 @@
     const button = document.createElement('button')
     button.type = 'button'
     button.classList.add('messageButton')
-    button.appendChild(makeSubjectDom(message.subject))
+    if (message.subject !== undefined) {
+      button.appendChild(makeSubjectDom(message.subject))
+    }
     button.appendChild(makeFromDom(message.from))
     button.onclick = () => tick(onInboxMenuClick, message.id)
     return button
