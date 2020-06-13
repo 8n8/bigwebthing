@@ -34,34 +34,25 @@
     'sentSummary',
     'myName',
     'contacts'
-  ].map(getItem)).push(
-    { io: makeWebsocket, value: '' })
+  ].map(getItem)).push(() => makeWebsocket())
 
-  function encodeString (s) {
-    const encoder = new TextEncoder()
-    const encoded = encoder.encode(s)
-    const len = encodeInt(encoded.length)
-    return combine(len, encoded)
-  }
-
-  function combineMany (bs) {
+  function combineMany (uint8arrays) {
     let totalLength = 0
-    for (const b of bs) {
-      totalLength += b.length
+    for (const uint8array of uint8arrays) {
+      totalLength += uint8array.length
     }
 
-    const buf = new ArrayBuffer(totalLength)
-    const result = new Uint8Array(buf)
+    const combined = new Uint8Array(new ArrayBuffer(totalLength))
 
     let i = 0
-    for (const b of bs) {
-      for (const bel of b) {
-        result[i] = bel
+    for (const uint8array of uint8arrays) {
+      for (const uint8 of uint8array) {
+        combined[i] = uint8
         i += 1
       }
     }
 
-    return result
+    return combined
   }
 
   function encodeBlobs (blobs) {
@@ -71,6 +62,13 @@
       parts.push(encodeBlob(blob))
     }
     return combineMany(parts)
+  }
+
+  function encodeString (s) {
+    const encoder = new TextEncoder()
+    const encoded = encoder.encode(s)
+    const len = encodeInt(encoded.length)
+    return combine(len, encoded)
   }
 
   function encodeDraft (draft) {
@@ -2154,7 +2152,7 @@
     tick(onDraftSent(arg.draft))
   }
 
-  function makeWebsocket (_) {
+  function makeWebsocket () {
     const socket = new WebSocket('/downloadMessages')
     socket.onopen = (_) => tick(onNewWebsocket, socket)
     socket.onmessage = (e) => tick(onNewMessage, e.data)
@@ -2361,7 +2359,7 @@
       let outputs;
       [outputs, state] = update(inputValue, state)
       for (const output of outputs) {
-        output.io(output.value)
+        output()
       }
     }
 
