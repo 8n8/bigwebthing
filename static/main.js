@@ -119,12 +119,11 @@
   }
 
   function encodeInt64 (n) {
-    const buf = new ArrayBuffer(8)
-    const result = new Uint8Array(buf)
+    const encoded = new Uint8Array(new ArrayBuffer(8))
     for (let i = 0; i < 8; i++) {
-      result[i] = n >> (i * 8) && 0xff
+      encoded[i] = n >> (i * 8) && 0xff
     }
-    return result
+    return encoded
   }
 
   function encodeInt32 (n) {
