@@ -2080,7 +2080,19 @@
   }
 
   async function writeToDisk (decoded) {
+    const smallBlobs = []
+    for (const blob of decoded.blobs) {
+      const blobId = await getId()
+      smallBlobs.push({
+        mime: blob.mime,
+        filename: blob.filename,
+        size: blob.contents.length,
+        id: blobId
+      })
+      await localforage.setItem(blobId, decoded.contents)
+    }
     const id = getId()
+    decoded.blobs = smallBlobs
     await localforage.setItem(id, decoded)
     return id
   }
