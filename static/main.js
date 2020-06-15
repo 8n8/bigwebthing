@@ -1225,6 +1225,7 @@
   }
 
   function onUpdatedToBox (to, state) {
+    delete state.addContactError
     if (state.openDraft === undefined) {
       state.openDraft = {}
     }
