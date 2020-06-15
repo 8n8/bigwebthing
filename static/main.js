@@ -1525,8 +1525,7 @@
       value: {
         id: keys.id,
         myKeys: state.myKeys,
-        myName: state.myName,
-        theirKeys: state.contacts[keys.id]
+        myName: state.myName
       }
     }
     return [[whitelist], state]
