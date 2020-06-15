@@ -1022,7 +1022,8 @@
       return drawSentingItemView(state.sendingItem)
     }
     const sending = []
-    for (const message of state.sendingSummary) {
+    for (const messageHash in state.sendingSummary) {
+      const message = state.sendingSummary[messageHash]
       sending.push(drawSentingMenuItem(message, onSendingMenuClick))
     }
     return [replaceChildren('page', sending)]
