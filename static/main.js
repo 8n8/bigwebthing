@@ -1967,10 +1967,9 @@
     }
     return [[
       setItem('inboxSummary', state.inboxSummary),
-      {
-        io: sendReceipt,
-        value: { theirKeys: theirKeys, hash: hash, myKeys: state.myKeys, myName: state.myName, to: summary.from }
-      }], state]
+      () => sendReceipt(
+        theirKeys, hash, state.myKeys, state.myName, summary.from)
+    ], state]
   }
 
   async function sendBytes (bytes, myKeys, myName, to, toKeys) {
@@ -2171,8 +2170,8 @@
     }
   }
 
-  async function sendReceipt (v) {
-    await sendBytes(v.hash, v.myKeys, v.myName, v.to, v.theirKeys)
+  async function sendReceipt (theirKeys, hash, myKeys, myName, to) {
+    await sendBytes(hash, myKeys, myName, to, theirKeys)
   }
 
   async function stitchUpMessages (v) {
@@ -2193,6 +2192,8 @@
     }
 
     const decoded = decodeUnpacked(unpacked)
+
+    if (decoded.time > new Date().valueOf()) return
 
     if (decoded.subject === undefined) {
       tick(onNewReceipt, decoded)
