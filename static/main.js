@@ -1476,9 +1476,8 @@
 
   function arrToNums (arr) {
     const numbers = []
-    const lenArr = arr.length
-    for (let i = 0; i < lenArr; i++) {
-      numbers.push(arr[i])
+    for (const a of arr) {
+      numbers.push(a)
     }
     return numbers
   }
