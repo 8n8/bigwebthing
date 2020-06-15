@@ -80,14 +80,23 @@
     return combine([len, encoded])
   }
 
+  function encodeBytes (bytes) {
+    return combine([encodeInt64(bytes.length), bytes])
+  }
+
+  function encodeCode (code) {
+    return combine([
+      encodeString(code.filename),
+      encodeBytes(code.contents)])
+  }
+
   function encodeDraft (draft, fullBlobs) {
     return combine([
       oneByte(0),
       encodeInt64(draft.to),
       encodeString(draft.subject),
       encodeString(draft.userInput),
-      encodeInt64(draft.code.length),
-      draft.code,
+      encodeCode(draft.code),
       encodeBlobs(fullBlobs)]
     )
   }
@@ -325,10 +334,11 @@
     const div = document.createElement('div')
 
     const name = document.createElement('p')
-    name.textContent = code.name
+    name.textContent = code.filename
 
     const size = document.createElement('p')
-    size.textContent = prettyBytes(code.size)
+    const codeSize = code.contents.length
+    size.textContent = prettyBytes(codeSize)
 
     return div
   }
@@ -2123,8 +2133,7 @@
     }, i]
   }
 
-  function decodeBlobs (raw) {
-    let i = 0
+  function decodeBlobs (raw, i) {
     const numBlobs = decodeInt32(raw.slice(i, i + 4))
     i += 4
     const blobs = []
@@ -2133,7 +2142,21 @@
       [decoded, i] = decodeBlob(raw, i)
       blobs.push(decoded)
     }
-    return blobs
+    return [blobs, i]
+  }
+
+  function decodeCode (raw, i) {
+    const filenameLength = decodeInt64(raw.slice(i, i + 8))
+    i += 8
+    const filename = new TextDecoder().decode(
+      raw.slice(i, i + filenameLength))
+    i += filenameLength
+
+    const codeLength = decodeInt64(raw.slice(i, i + 8))
+    i += 8
+    const code = raw.slice(i, i + codeLength)
+    i += codeLength
+    return [{ contents: code, filename: filename }, i]
   }
 
   function decodeDraft (raw) {
@@ -2149,11 +2172,12 @@
     i += 8
     const userInput = dec.decode(raw.slice(i, i + userInputLength))
     i += userInputLength
-    const codeLength = decodeInt64(raw.slice(i, i + 8))
-    i += 8
-    const code = raw.slice(i, i + codeLength)
-    i += codeLength
-    const blobs = decodeBlobs(raw.slice(i))
+
+    let code
+    [code, i] = decodeCode(raw, i)
+
+    let blobs
+    [blobs, i] = decodeBlobs(raw.slice(i))
     return {
       to: to,
       subject: subject,
