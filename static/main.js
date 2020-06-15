@@ -1294,7 +1294,9 @@
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft),
       () => runWasm(
-        userInput, state.openDraft.wasmRunner, state.openDraft.code)
+        userInput,
+        state.openDraft.wasmRunner,
+        state.openDraft.code.contents)
     ]
     return [ioJobs, state]
   }
@@ -1311,7 +1313,11 @@
     const ioJobs = [
       () => replaceDomWith('codeUploader', makeCodeUploader(code)),
       setItem('iota', state.iota),
-      setItem(state.openDraft.id, state.openDraft)
+      setItem(state.openDraft.id, state.openDraft),
+      () => runWasm(
+        state.openDraft.userInput,
+        undefined,
+        code.contents)
     ]
     return [ioJobs, state]
   }
@@ -1888,8 +1894,10 @@
     }
   }
 
-  async function runWasm (userInput, oldRunner, code) {
+  async function runWasm (maybeUserInput, oldRunner, code) {
     if (code === undefined) return
+    const userInput =
+      maybeUserInput === undefined ? '' : maybeUserInput
     let runner = oldRunner
     if (runner === undefined) {
       runner = new Wasm()
