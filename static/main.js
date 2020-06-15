@@ -80,7 +80,7 @@
     return combine([len, encoded])
   }
 
-  function encodeDraft (draft) {
+  function encodeDraft (draft, fullBlobs) {
     return combine([
       oneByte(0),
       encodeInt64(draft.to),
@@ -88,7 +88,7 @@
       encodeString(draft.userInput),
       encodeInt64(draft.code.length),
       draft.code,
-      encodeBlobs(draft.blobs)]
+      encodeBlobs(fullBlobs)]
     )
   }
 
@@ -1978,8 +1978,21 @@
     }
   }
 
+  async function loadBlobs (blobs) {
+    const fullBlobs = []
+    for (const blob of blobs) {
+      fullBlobs.push({
+        mime: blob.mime,
+        filename: blob.filename,
+        contents: await localforage.getItem(blob.id)
+      })
+    }
+    return fullBlobs
+  }
+
   async function sendDraft (draft, myKeys, myName, toKeys) {
-    const encodedDraft = await encodeDraft(draft)
+    const fullBlobs = await loadBlobs(draft.blobs)
+    const encodedDraft = encodeDraft(draft, fullBlobs)
     const draftErr = await sendBytes(
       encodedDraft, myKeys, myName, draft.to, toKeys)
     if (draftErr !== '') {
