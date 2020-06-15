@@ -1751,7 +1751,6 @@
     tick(onCodeUpload, {
       contents: contents,
       name: file.name,
-      size: file.size,
       mime: file.type
     })
   }
