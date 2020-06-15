@@ -643,7 +643,7 @@
     div.appendChild(filename)
 
     const size = document.createElement('span')
-    size.textContent = 'Size: ' + prettyBytes(code.size)
+    size.textContent = 'Size: ' + prettyBytes(code.contents.length)
     div.appendChild(size)
 
     const deleteButton = document.createElement('button')
@@ -1361,11 +1361,14 @@
     const oldPage = state.page
     state.page = page
 
-    return [
-      drawFunc[page](state)
-        .concat(turnButtonOff(oldPage + 'Button'))
-        .concat(turnButtonOn(page + 'Button')),
-      state]
+    const ioJobs = drawFunc[page](state)
+    ioJobs.concat(turnButtonOn(page + 'Button'))
+
+    if (oldPage !== undefined) {
+      ioJobs.concat(turnButtonOff(oldPage + 'Button'))
+    }
+
+    return [ioJobs, state]
   }
 
   function onDraftsMenuClick (messageId, state) {
