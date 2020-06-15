@@ -1074,7 +1074,7 @@
 
   function myNameFromCache (maybeMyName, state) {
     if (maybeMyName === null) {
-      return [[{ io: requestMyName, value: state.cryptoKeys }], state]
+      return [[{ io: requestMyName, value: state.myKeys }], state]
     }
     state.myName = maybeMyName
     if (state.page === 'contacts') {
@@ -1580,13 +1580,13 @@
   }
 
   async function getKeys () {
-    let keys = await localforage.getItem('cryptoKeys')
+    let keys = await localforage.getItem('myKeys')
     if (keys === null) {
       keys = {
         signing: nacl.sign.keyPair(),
         box: nacl.box.keyPair()
       }
-      await localforage.setItem('cryptoKeys', keys)
+      await localforage.setItem('myKeys', keys)
       tick(onNewCryptoKeys, keys)
     }
     return keys
