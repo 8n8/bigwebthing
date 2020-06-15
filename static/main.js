@@ -868,7 +868,7 @@
 
     state.downloads.push(name)
 
-    const id = state.iota
+    const id = state.iota.toString()
     state.iota += 1
 
     const ioJobs = [
@@ -1448,23 +1448,21 @@
       state.openDraft = {}
     }
     if (state.openDraft.id === undefined) {
-      state.openDraft.id = state.iota
+      state.openDraft.id = state.iota.toString()
       state.iota += 1
     }
     if (state.openDraft.blobs === undefined) {
       state.openDraft.blobs = []
     }
-    const blobId = base64js.fromBytes(
-      nacl.hash(blobUpload.contents).slice(0, 32)
-    )
+    const blobId = state.iota.toString()
     state.iota += 1
+
     const blob = {
       name: blobUpload.name,
       size: blobUpload.size,
       mime: blobUpload.mime,
       id: blobId
     }
-    state.iota += 1
     state.openDraft.blobs.push(blob)
     const newBlobsViewer = makeBlobsViewer(state.openDraft.blobs)
     const ioJobs = [
