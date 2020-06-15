@@ -177,11 +177,6 @@
 
   function makeSubjectView (subject) {
     const p = document.createElement('p')
-    if (subject === undefined) {
-      p.textContent = 'No subject'
-      p.classList.add('noneMessage')
-      return p
-    }
     p.textContent = subject
     return p
   }
@@ -347,13 +342,16 @@
   }
 
   function drawBoxItemView (message) {
-    const children = [
-      makeSubjectView(message.subject),
+    const children = []
+    if (message.subject !== undefined) {
+      children.push(makeSubjectView(message.subject))
+    }
+    children.concat([
       makeFromView(message.from),
       makeOutputView(message.output),
       makeUserInputView(message.userInput),
       makeCodeView(message.code)
-    ]
+    ])
 
     if (message.blobs !== undefined) {
       children.push(makeInboxBlobsView(message.blobs))
@@ -940,12 +938,15 @@
   }
 
   function drawSentingItemView (message) {
-    const children = [
-      makeSubjectView(message.subject),
+    const children = []
+    if (message.subject !== undefined) {
+      children.push(makeSubjectView(message.subject))
+    }
+    children.concat([
       makeToView(message.to),
       makeOutputView(message.output),
       makeUserInputView(message.userInput),
-      makeCodeView(message.code)]
+      makeCodeView(message.code)])
     if (message.blobs !== undefined) {
       children.push(makeInboxBlobsView(message.blobs))
     }
