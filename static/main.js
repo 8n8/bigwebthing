@@ -835,7 +835,7 @@
       message.slice(153),
       message.slice(121, 153),
       theirKeys.encryption,
-      state.myKeys.encryption.secret)
+      state.myKeys.encryption.secretKey)
 
     if (decrypted === null) {
       return ['', 'could not decrypt chunk']
@@ -2207,7 +2207,7 @@
   async function stitchUpMessages (v) {
     await localforage.setItem(v.name, v.message)
     await localforage.setItem('downloads', v.downloads)
-    deleteRemote(v.hash, v.myKeys.signing.secret, v.myName)
+    deleteRemote(v.hash, v.myKeys.signing.secretKey, v.myName)
 
     const relevantNames = await getMatchingNames(
       v.message.totalHash, v.downloads)
