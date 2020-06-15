@@ -482,6 +482,11 @@
     return [replaceChildren('page', drafts)]
   }
 
+  function onNewCryptoKeys (keys, state) {
+    state.myKeys = keys
+    return [[], state]
+  }
+
   function makeSubjectBox (subject) {
     const id = 'writerSubjectBox'
     const container = document.createElement('div')
@@ -1582,6 +1587,7 @@
         box: nacl.box.keyPair()
       }
       await localforage.setItem('cryptoKeys', keys)
+      tick(onNewCryptoKeys, keys)
     }
     return keys
   }
