@@ -1225,7 +1225,6 @@
   }
 
   function onUpdatedToBox (to, state) {
-    delete state.addContactError
     if (state.openDraft === undefined) {
       state.openDraft = {}
     }
@@ -1275,6 +1274,7 @@
   }
 
   function onUpdatedAddContactBox (contact, state) {
+    delete state.addContactError
     if (!validRecipient(contact)) {
       return [[() => updateTextBox('addContactBox', '')], state]
     }
