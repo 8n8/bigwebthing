@@ -1295,11 +1295,12 @@
   }
 
   function onDeleteContact (contact, state) {
-    state.contacts.delete(contact)
-    return [
-      drawContacts(state).push(setItem('contacts', state.contacts)),
-      state
-    ]
+    delete state.contacts[contact]
+
+    const ioJobs = [setItem('contacts', state.contacts)]
+
+    if (state.page === 'contacts') ioJobs.push(drawContacts(state))
+    return [ioJobs, state]
   }
 
   function clearMessageViews (state) {
