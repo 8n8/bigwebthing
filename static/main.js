@@ -1516,16 +1516,18 @@
   }
 
   function onReceivingContactKeys (keys, state) {
-    state.contacts[keys.id] = {
+    const theirKeys = {
       signing: keys.raw.slice(0, 32),
       encryption: keys.raw.slice(32, 64)
     }
+    state.contacts[keys.id] = theirKeys
     const whitelist = {
       io: sendWhitelistRequest,
       value: {
         id: keys.id,
         myKeys: state.myKeys,
-        myName: state.myName
+        myName: state.myName,
+        theirKeys: theirKeys
       }
     }
     return [[whitelist], state]
@@ -1671,22 +1673,24 @@
       return
     }
 
+    const encodedTheirId = encodeInt64(arg.id)
+
     const idToken = makeIdToken(
       10,
-      combine([pow, encodeInt64(arg.id)]),
+      combine([pow, encodedTheirId]),
       authCode,
       arg.myKeys.signing.secretKey,
       arg.myName
     )
 
-    const request = combine([oneByte(10), idToken, pow, encodeInt64(arg.id)])
+    const request = combine([oneByte(10), idToken, pow, encodedTheirId])
     const [_, responseErr] = await apiRequest(request)
     if (responseErr !== '') {
       tick(onError, responseErr)
       return
     }
 
-    tick(onNewContact, { id: arg.id, keys: arg.keys })
+    tick(onNewContact, { id: arg.id, keys: arg.theirKeys })
   }
 
   async function downloadContactKeys (id) {
