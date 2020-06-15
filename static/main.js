@@ -796,7 +796,7 @@
   }
 
   function validIdToken (idToken, msgHash, theirSigningKey) {
-    const signed = nacl.sign.open(idToken, theirSigningKey)
+    const signed = nacl.sign.open(idToken.signature, theirSigningKey)
     return (signed !== null) && equalBytes(signed, msgHash)
   }
 
@@ -1893,7 +1893,7 @@
     const idToken = decodeIdToken(receipt.idToken)
     const msg = combine([oneByte(8), receipt.hash, idToken.authCode])
     const msgHash = nacl.hash(msg).slice(0, 32)
-    const theirKeys = state.contacts[idToken.senderId]
+    const theirKeys = state.contacts[decodeInt64(idToken.senderId)]
     if (theirKeys === undefined) {
       return [[], state]
     }
