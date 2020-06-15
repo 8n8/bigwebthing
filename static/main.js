@@ -1022,8 +1022,7 @@
       return drawSentingItemView(state.sendingItem)
     }
     const sending = []
-    for (const messageHash in state.sendingSummary) {
-      const message = state.sendingSummary[messageHash]
+    for (const message of Object.values(state.sendingSummary)) {
       sending.push(drawSentingMenuItem(message, onSendingMenuClick))
     }
     return [replaceChildren('page', sending)]
@@ -1037,7 +1036,7 @@
       return drawSentingItemView(state.sentItem)
     }
     const sent = []
-    for (const message of state.sentSummary) {
+    for (const message of Object.values(state.sentSummary)) {
       sent.push(drawSentingMenuItem(message, onSentMenuClick))
     }
     return [replaceChildren('page', sent)]
