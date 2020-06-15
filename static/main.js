@@ -980,11 +980,15 @@
   }
 
   function onSendingMenuClick (messageId, state) {
-    return [[() => lookupSendingMessage(messageId)], state]
+    return [
+      [() => lookupMessage(messageId, onLookedUpSendingMessage)],
+      state]
   }
 
   function onSentMenuClick (messageId, state) {
-    return [[() => lookupSentMessage(messageId)], state]
+    return [
+      [() => lookupMessage(messageId, onLookedUpSentMessage)],
+      state]
   }
 
   function onLookedUpSendingMessage (message, state) {
@@ -1001,22 +1005,6 @@
     }
     state.openSentItem = message
     return [drawSent(state), state]
-  }
-
-  async function lookupSendingMessage (id) {
-    const message = await localforage.getItem(id)
-    const compiled = new Wasm()
-    await compiled.init(message.code.contents)
-    message.output = compiled.bigWebThing(message.userInput)
-    tick(onLookedUpSendingMessage, message)
-  }
-
-  async function lookupSentMessage (id) {
-    const message = await localforage.getItem(id)
-    const compiled = new Wasm()
-    await compiled.init(message.code.contents)
-    message.output = compiled.bigWebThing(message.userInput)
-    tick(onLookedUpSentMessage, message)
   }
 
   function drawSending (state) {
@@ -1372,11 +1360,15 @@
   }
 
   function onDraftsMenuClick (messageId, state) {
-    return [[() => lookupDraft(messageId)], state]
+    return [
+      [() => lookupMessage(messageId, onLookedUpDraft)],
+      state]
   }
 
   function onInboxMenuClick (messageId, state) {
-    return [[() => lookupInboxMessage(messageId)], state]
+    return [
+      [() => lookupMessage(messageId, onLookedUpInboxMessage)],
+      state]
   }
 
   function onInit (_, state) {
@@ -1857,16 +1849,21 @@
     }
   }
 
-  async function lookupDraft (id) {
-    tick(onLookedUpDraft, await localforage.getItem(id))
-  }
-
-  async function lookupInboxMessage (id) {
+  async function lookupMessage (id, onDone) {
     const message = await localforage.getItem(id)
+
+    if (message.code.contents === undefined) {
+      tick(onDone, message)
+      return
+    }
+
+    const userInput =
+      message.userInput === undefined ? '' : message.userInput
+
     const compiled = new Wasm()
     await compiled.init(message.code.contents)
-    message.output = compiled.bigWebThing(message.userInput)
-    tick(onLookedUpInboxMessage, message)
+    message.output = compiled.bigWebThing(userInput)
+    tick(onDone, message)
   }
 
   async function downloadBlob (blobInfo) {
