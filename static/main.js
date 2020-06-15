@@ -1474,20 +1474,12 @@
     return [ioJobs, state]
   }
 
-  function arrToNums (arr) {
-    const numbers = []
-    for (const a of arr) {
-      numbers.push(a)
-    }
-    return numbers
-  }
-
   function formatHttpError (body, statusCode) {
     return (
       'bad response: ' +
         statusCode +
         ': ' +
-        String.fromCharChode.apply(null, arrToNums(body))
+        new TextDecoder().decode(body)
     )
   }
 
@@ -1499,7 +1491,7 @@
   }
 
   // A chunk is like this:
-  // + 4 bytes: 32-bit counter, starting at 0
+  // + 4 bytes: counter, starting at 0
   // + 4 bytes: total number of chunks in message
   // + 32 bytes: hash of complete message
   // + <= 15kB: chunk
