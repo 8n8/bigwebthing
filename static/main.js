@@ -1666,7 +1666,7 @@
     }
 
     const pow = proofOfWork(powInfo)
-    const [authCode, authErr] = await apiRequest(oneByte(1))
+    const [authCode, authErr] = await apiRequest(oneByte(7))
     if (authErr !== '') {
       tick(onError, authErr)
       return
@@ -1872,7 +1872,7 @@
   }
 
   async function sendChunk (chunk, toKeys, myKeys, myName, to) {
-    const [authCode, authErr] = await apiRequest(oneByte(1))
+    const [authCode, authErr] = await apiRequest(oneByte(7))
     if (authErr !== '') {
       return authErr
     }
@@ -2042,7 +2042,7 @@
   }
 
   async function deleteRemote (hash, mySecretSign, myName) {
-    const [authCode, authErr] = await apiRequest(oneByte(1))
+    const [authCode, authErr] = await apiRequest(oneByte(7))
     if (authErr !== '') return
     const idToken = makeIdToken(
       9, hash, authCode, mySecretSign, myName)
