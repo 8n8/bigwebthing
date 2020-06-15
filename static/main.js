@@ -1195,13 +1195,10 @@
     state.draftsSummary = newSubject(
       state.openDraft.id,
       state.draftsSummary,
-      subject
-    )
+      subject)
     const ioJobs = [
-      {
-        key: updateTextBox,
-        value: { id: 'writerSubjectBox', value: subject }
-      },
+      drawWrite(state),
+      () => updateTextBox('writerSubjectBox', subject),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft)
     ]
@@ -1245,6 +1242,7 @@
       to)
     const ioJobs = [
       drawWrite(state),
+      () => updateTextBox('writerToBox', to),
       setItem('iota', state.iota),
       setItem(state.openDraft.id, state.openDraft)
     ]
