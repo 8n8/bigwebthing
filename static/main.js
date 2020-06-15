@@ -541,7 +541,7 @@
     button.onclick = () => tick(onAddContactButtonClick, '')
     container.appendChild(button)
 
-    if (error === undefined) {
+    if (error !== undefined) {
       container.appendChild(addContactErrorDom(error))
     }
 
@@ -898,7 +898,8 @@
   function drawContacts (state) {
     const children = []
 
-    const myName = state.myName === undefined ? 'Requesting...' : state.myName
+    const myName =
+      state.myName === undefined ? 'Requesting...' : state.myName
     children.push(myNameDom(myName))
 
     children.push(
