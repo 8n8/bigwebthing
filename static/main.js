@@ -1541,16 +1541,23 @@
     return newSummary
   }
 
-  function onDraftSent (draft, state) {
-    state.draftsSummary = removeDraft(draft.id, state.draftsSummary)
-    state.outboxSummary.push(draft)
-    return [
-      [
-        setItem('draftsSummary', state.draftsSummary),
-        setItem('outboxSummary', state.outboxSummary)
-      ],
-      state
+  function onDraftSent (d, state) {
+    state.draftsSummary = removeDraft(d.draft.id, state.draftsSummary)
+    state.sendingSummary[d.sentHash] = {
+      id: d.draft.id,
+      to: d.draft.to,
+      subject: d.draft.subject,
+      time: d.sentTime
+    }
+    const ioJobs = [
+      setItem('draftsSummary', state.draftsSummary),
+      setItem('sendingSummary', state.sendingSummary)
     ]
+
+    if (state.page === 'drafts') ioJobs.push(drawDrafts(state))
+    if (state.page === 'sending') ioJobs.push(drawSending(state))
+
+    return [ioJobs, state]
   }
 
   async function getKeys () {
@@ -1999,7 +2006,11 @@
       tick(onError, draftErr)
     }
 
-    tick(onDraftSent(draft))
+    const sentHash = nacl.hash(encodedDraft).slice(0, 32)
+
+    const sentTime = new Date().valueOf()
+
+    tick(onDraftSent, { sentTime: sentTime, draft: draft, sentHash: sentHash })
   }
 
   function makeWebsocket () {
