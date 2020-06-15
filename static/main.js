@@ -1069,6 +1069,7 @@
   function myNameDom (myName) {
     const p = document.createElement('p')
     p.textContent = 'My username is: ' + myName
+    p.id = 'myNameDom'
     return p
   }
 
@@ -1078,10 +1079,16 @@
     }
     state.myName = maybeMyName
     if (state.page === 'contacts') {
-      const outputs = [replaceChildren('myName', [maybeMyName])]
-      return [outputs, state]
+      return [
+        [() => replaceTextContent('myNameDom', maybeMyName)],
+        state]
     }
     return [[], state]
+  }
+
+  function replaceTextContent (id, text) {
+    const element = document.getElementById(id)
+    element.textContent = text
   }
 
   function sentSummaryFromCache (summary, state) {
