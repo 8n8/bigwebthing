@@ -1148,6 +1148,7 @@
   }
 
   function onError (error, state) {
+    if (state.errors === undefined) state.errors = []
     state.errors.push(error)
     return [[], state]
   }
@@ -1166,10 +1167,20 @@
     for (const draft of draftsSummary) {
       if (draft.id === draftId) {
         draft.subject = subject
-        break
+        return draftsSummary
       }
     }
-    return draftsSummary
+    return draftsSummary.push({ subject: subject, id: draftId })
+  }
+
+  function newTo (draftId, draftsSummary, to) {
+    for (const draft of draftsSummary) {
+      if (draft.id === draftId) {
+        draft.to = to
+        return draftsSummary
+      }
+    }
+    return draftsSummary.push({ to: to, id: draftId })
   }
 
   function onUpdatedSubjectBox (subject, state) {
@@ -1228,6 +1239,10 @@
       state.iota += 1
     }
     state.openDraft.to = to
+    state.draftsSummary = newTo(
+      state.openDraft.id,
+      state.draftsSummary,
+      to)
     const ioJobs = [
       drawWrite(state),
       setItem('iota', state.iota),
