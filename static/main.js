@@ -1499,10 +1499,10 @@
     const chunkLength = 15000
     const hash = nacl.hash(message).slice(0, 32)
     const numChunks = Math.ceil(message.length / chunkLength)
-    const numChunksBytes = encodeInt64(numChunks)
+    const numChunksBytes = encodeInt32(numChunks)
     const chunks = []
     for (let i = 0; i < numChunks; i++) {
-      const chunkNum = encodeInt64(i)
+      const chunkNum = encodeInt32(i)
       const chunkStart = i * chunkLength
       const chunkEnd = (i + 1) * chunkLength
       const chunkBase = message.slice(chunkStart, chunkEnd)
