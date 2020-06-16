@@ -94,8 +94,9 @@
     return combine([
       oneByte(0),
       encodeInt64(draft.to),
-      encodeString(draft.subject),
-      encodeString(draft.userInput),
+      encodeString(draft.subject === undefined ? '' : draft.subject),
+      encodeString(
+        draft.userInput === undefined ? '' : draft.userInput),
       encodeCode(draft.code),
       encodeBlobs(fullBlobs)]
     )
@@ -740,7 +741,7 @@
   }
 
   function readyToSend (draft) {
-    return (draft !== undefined && draft.to !== undefined)
+    return (draft !== undefined && draft.to !== undefined && draft.code !== undefined)
   }
 
   function drawWrite (state) {
@@ -2034,7 +2035,8 @@
   }
 
   async function sendDraft (draft, myKeys, myName, toKeys) {
-    const fullBlobs = await loadBlobs(draft.blobs)
+    const fullBlobs =
+      draft.blobs === undefined ? [] : await loadBlobs(draft.blobs)
     const encodedDraft = encodeDraft(draft, fullBlobs)
     const draftErr = await sendBytes(
       encodedDraft, myKeys, myName, draft.to, toKeys)
