@@ -1144,8 +1144,7 @@
 
   function onNewName (newName, state) {
     state.myName = newName
-    if (state.page !== 'contacts') return [[], state]
-    return [drawContacts(state), state]
+    if (state.page === 'contacts') return [drawContacts(state), state]
   }
 
   function setItem (key, value) {
