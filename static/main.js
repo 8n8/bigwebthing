@@ -2223,7 +2223,8 @@
   }
 
   async function sendReceipt (theirKeys, hash, myKeys, myName, to) {
-    await sendBytes(hash, myKeys, myName, to, theirKeys)
+    await sendBytes(
+      combine([oneByte(1), hash]), myKeys, myName, to, theirKeys)
   }
 
   async function stitchUpMessages (v) {
