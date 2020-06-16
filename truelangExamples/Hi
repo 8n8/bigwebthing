@@ -1,8 +1,0 @@
-0i32 1i32 i32store8
-1i32 2i32 i32store8
-2i32 0i32 i32store8
-3i32 0i32 i32store8
-4i32 0i32 i32store8
-5i32 72i32 i32store8
-6i32 105i32 i32store8
-7i32

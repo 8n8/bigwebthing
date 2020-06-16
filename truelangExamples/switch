@@ -1,8 +1,0 @@
-true typeof. {"true" print.} 2 maketuple. = path1
-false typeof. {"false" print.} 2 maketuple. = path2
-
-emptylist path1 cons. path2 cons. = paths
-
-runloop paths switch..
-
-// should print out "true" (without the quotes)
