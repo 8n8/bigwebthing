@@ -1679,8 +1679,7 @@
   }
 
   function addOnclick (key) {
-    const el = document.getElementById(key.id)
-    el.onclick = key.onclick
+    document.getElementById(key.id).onclick = key.onclick
   }
 
   function updateTextBox (id, value) {
