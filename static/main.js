@@ -2011,9 +2011,8 @@
 
   async function sendBytes (bytes, myKeys, myName, to, toKeys) {
     const chunks = chopMessageIntoChunks(bytes)
-    const chunksLength = chunks.length
-    for (let i = 0; i < chunksLength; i++) {
-      const err = await sendChunk(chunks[i], toKeys, myKeys, myName, to)
+    for (const chunk of chunks) {
+      const err = await sendChunk(chunk, toKeys, myKeys, myName, to)
       if (err !== '') {
         tick(onError, err)
         return
