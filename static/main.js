@@ -1668,11 +1668,13 @@
 
   function ioReplaceChildren (parentId, newChildren) {
     const parentElement = document.getElementById(parentId)
-    while (parentElement.firstChild) {
-      parentElement.removeChild(parentElement.lastChild)
+    while (true) {
+      const oldChild = parentElement.lastChild
+      if (oldChild === null) break
+      parentElement.removeChild(oldChild)
     }
-    for (const child of newChildren) {
-      parentElement.appendChild(child)
+    for (const newChild of newChildren) {
+      parentElement.appendChild(newChild)
     }
   }
 
