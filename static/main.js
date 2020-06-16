@@ -2247,8 +2247,9 @@
 
     if (decoded.time > new Date().valueOf()) return
 
+    const idToken = decodeInt64(v.message.slice(1, 113))
     if (decoded.subject === undefined) {
-      tick(onNewReceipt, decoded)
+      tick(onNewReceipt, { hash: decoded, idToken: idToken })
       return
     }
 
