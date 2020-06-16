@@ -1955,7 +1955,7 @@
     delete sendingSummary[msgHash]
     state.sendingSummary = sendingSummary
     sending.receipt = receipt
-    state.sentSummary = sending
+    state.sentSummary.push(sending)
 
     const ioJobs = [
       setItem('sendingSummary', state.sendingSummary),
