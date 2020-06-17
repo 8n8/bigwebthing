@@ -16,3 +16,7 @@ rust-hello-world/.cargo-ok
 rust-hello-world/.travis.yml
 rust-hello-world/pkg/
 rust-hello-world/target/
+purescript/index.js
+purescript/output/
+purescript/.purs-repl
+purescript/.spago/
