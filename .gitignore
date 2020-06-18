@@ -20,3 +20,4 @@ purescript/index.js
 purescript/output/
 purescript/.purs-repl
 purescript/.spago/
+elm/main.js
