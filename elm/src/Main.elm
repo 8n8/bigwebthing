@@ -721,47 +721,37 @@ update msg model =
             updateSimple simple model
 
 
+clickCmd : Maybe a -> ElmToJs -> Cmd Msg
+clickCmd summary msg =
+    case summary of
+        Nothing ->
+            elmToJs <| encodeToJs msg
+
+        Just _ ->
+            Cmd.none
+
+
 updateSimple : Simple -> Model -> ( Model, Cmd Msg )
 updateSimple msg model =
     case msg of
         PageClickS (MessagingP InboxE) ->
             ( { model | page = MessagingP InboxE }
-            , case model.inboxSummary of
-                Nothing ->
-                    elmToJs <| encodeToJs GetInboxSummaryE
-
-                Just _ ->
-                    Cmd.none
+            , clickCmd model.inboxSummary GetInboxSummaryE
             )
 
         PageClickS (MessagingP DraftsE) ->
             ( { model | page = MessagingP DraftsE }
-            , case model.draftsSummary of
-                Nothing ->
-                    elmToJs <| encodeToJs GetDraftsSummaryE
-
-                Just _ ->
-                    Cmd.none
+            , clickCmd model.draftsSummary GetDraftsSummaryE
             )
 
         PageClickS (MessagingP SentE) ->
             ( { model | page = MessagingP SentE }
-            , case model.sentSummary of
-                Nothing ->
-                    elmToJs <| encodeToJs GetSentSummaryE
-
-                Just _ ->
-                    Cmd.none
+            , clickCmd model.sentSummary GetSentSummaryE
             )
 
         PageClickS (MessagingP SendingE) ->
             ( { model | page = MessagingP SendingE }
-            , case model.sendingSummary of
-                Nothing ->
-                    elmToJs <| encodeToJs GetSendingSummaryE
-
-                Just _ ->
-                    Cmd.none
+            , clickCmd model.sendingSummary GetSendingSummaryE
             )
 
         PageClickS (MessagingP (WriteE draft)) ->
