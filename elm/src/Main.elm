@@ -6,6 +6,7 @@ import Browser
 import Browser.Events
 import Bytes
 import Bytes.Encode as Be
+import Dict
 import Element as E
 import Element.Background as Background
 import Element.Font as Font
@@ -38,6 +39,14 @@ type Page
     | MessagingP MessagingPage
 
 
+type alias Blob =
+    { id : Int
+    , mime : String
+    , filename : String
+    , size : Int
+    }
+
+
 type AdminPage
     = PricingA
     | AccountA
@@ -46,12 +55,29 @@ type AdminPage
 
 
 type MessagingPage
-    = WriteE
+    = WriteE Draft
     | ContactsE
     | InboxE
     | DraftsE
     | SentE
     | SendingE
+
+
+type alias Draft =
+    { id : Maybe Int
+    , subject : String
+    , to : Maybe Int
+    , userInput : String
+    , code : Maybe Code
+    , blobs : List Blob
+    }
+
+
+type alias Code =
+    { contents : Bytes.Bytes
+    , mime : String
+    , filename : String
+    }
 
 
 type AuthCode
@@ -64,6 +90,56 @@ type alias Model =
     , fatal : Maybe String
     , page : Page
     , windowWidth : Int
+    , inboxSummary : Maybe (List InboxMessageSummary)
+    , draftsSummary : Maybe (List DraftSummary)
+    , sentSummary : Maybe (List SentSummary)
+    , sendingSummary : Maybe (List SendingSummary)
+    , contacts : Maybe (Dict.Dict Int Contact)
+    }
+
+
+type alias Contact =
+    { name : String
+    , keys : TheirKeys
+    }
+
+
+type alias TheirKeys =
+    { signing : Bytes.Bytes
+    , encryption : Bytes.Bytes
+    }
+
+
+type alias SendingSummary =
+    { subject : String
+    , to : Int
+    , time : Int
+    , id : Int
+    }
+
+
+type alias SentSummary =
+    { subject : String
+    , to : Int
+    , sentTime : Int
+    , receivedTime : Int
+    , id : Int
+    }
+
+
+type alias DraftSummary =
+    { subject : String
+    , to : Int
+    , time : Int
+    , id : Int
+    }
+
+
+type alias InboxMessageSummary =
+    { subject : String
+    , from : String
+    , time : Int
+    , id : Int
     }
 
 
@@ -94,6 +170,11 @@ initModel windowWidth =
     , fatal = Nothing
     , page = MessagingP InboxE
     , windowWidth = windowWidth
+    , inboxSummary = Nothing
+    , draftsSummary = Nothing
+    , sentSummary = Nothing
+    , sendingSummary = Nothing
+    , contacts = Nothing
     }
 
 
@@ -135,7 +216,7 @@ messagingPage model =
         AdminP HelpA ->
             E.text "Contact details for support go here"
 
-        MessagingP WriteE ->
+        MessagingP (WriteE _) ->
             E.text "Write page goes here"
 
         MessagingP ContactsE ->
@@ -270,6 +351,17 @@ adminPageOn page adminPage =
             False
 
 
+emptyDraft : Draft
+emptyDraft =
+    { id = Nothing
+    , subject = ""
+    , to = Nothing
+    , userInput = ""
+    , code = Nothing
+    , blobs = []
+    }
+
+
 messagingButtons : Int -> Page -> E.Element Msg
 messagingButtons windowWidth page =
     E.wrappedRow
@@ -279,23 +371,30 @@ messagingButtons windowWidth page =
     <|
         List.map
             (messagingButton windowWidth page)
-            [ InboxE, DraftsE, SentE, SendingE, WriteE, ContactsE ]
+            [ InboxE
+            , DraftsE
+            , SentE
+            , SendingE
+            , WriteE emptyDraft
+            , ContactsE
+            ]
 
 
 messagingButton : Int -> Page -> MessagingPage -> E.Element Msg
 messagingButton windowWidth page subPage =
-        Ei.button
-            [ E.width <| E.minimum 150 E.fill
-            , Background.color <|
-                if messagingPageOn page subPage then
-                    blue
-                else
-                    E.rgb 1 1 1
-            ]
-            { onPress =
-                Just <| SimpleM <| PageClickS <| MessagingP subPage
-            , label = messagingButtonLabel windowWidth page subPage
-            }
+    Ei.button
+        [ E.width <| E.minimum 150 E.fill
+        , Background.color <|
+            if messagingPageOn page subPage then
+                blue
+
+            else
+                E.rgb 1 1 1
+        ]
+        { onPress =
+            Just <| SimpleM <| PageClickS <| MessagingP subPage
+        , label = messagingButtonLabel windowWidth page subPage
+        }
 
 
 messagingButtonLabel : Int -> Page -> MessagingPage -> E.Element Msg
@@ -310,7 +409,7 @@ messagingButtonLabel windowWidth page subPage =
 messagingLabelText : MessagingPage -> String
 messagingLabelText page =
     case page of
-        WriteE ->
+        WriteE _ ->
             "Write"
 
         ContactsE ->
@@ -329,7 +428,11 @@ messagingLabelText page =
             "Sending"
 
 
-messagingLabelStyle : Int -> Page -> MessagingPage -> List (E.Attribute Msg)
+messagingLabelStyle :
+    Int
+    -> Page
+    -> MessagingPage
+    -> List (E.Attribute Msg)
 messagingLabelStyle windowWidth page subPage =
     [ E.centerX
     , Font.family [ Font.typeface "Ubuntu" ]
@@ -427,6 +530,11 @@ jsKeyVal key value =
     Je.object [ ( "key", Je.string key ), ( "value", value ) ]
 
 
+cacheGet : String -> Je.Value
+cacheGet key =
+    jsKeyVal "cacheGet" <| Je.string key
+
+
 encodeToJs : ElmToJs -> Je.Value
 encodeToJs value =
     case value of
@@ -437,6 +545,21 @@ encodeToJs value =
 
         GetPowE powInfo ->
             jsKeyVal "getPow" (encodePowInfo powInfo)
+
+        GetInboxSummaryE ->
+            cacheGet "inboxSummary"
+
+        GetContactsE ->
+            cacheGet "contacts"
+
+        GetSendingSummaryE ->
+            cacheGet "sendingSummary"
+
+        GetDraftsSummaryE ->
+            cacheGet "draftsSummary"
+
+        GetSentSummaryE ->
+            cacheGet "sentSummary"
 
 
 encodePowInfo : PowInfo -> Je.Value
@@ -450,6 +573,11 @@ encodePowInfo { unique, difficulty } =
 type ElmToJs
     = WebsocketE Bytes.Bytes
     | GetPowE PowInfo
+    | GetInboxSummaryE
+    | GetContactsE
+    | GetSendingSummaryE
+    | GetDraftsSummaryE
+    | GetSentSummaryE
 
 
 type JsToElm
@@ -596,8 +724,80 @@ update msg model =
 updateSimple : Simple -> Model -> ( Model, Cmd Msg )
 updateSimple msg model =
     case msg of
-        PageClickS page ->
-            ( { model | page = page }, Cmd.none )
+        PageClickS (MessagingP InboxE) ->
+            ( { model | page = MessagingP InboxE }
+            , case model.inboxSummary of
+                Nothing ->
+                    elmToJs <| encodeToJs GetInboxSummaryE
+
+                Just _ ->
+                    Cmd.none
+            )
+
+        PageClickS (MessagingP DraftsE) ->
+            ( { model | page = MessagingP DraftsE }
+            , case model.draftsSummary of
+                Nothing ->
+                    elmToJs <| encodeToJs GetDraftsSummaryE
+
+                Just _ ->
+                    Cmd.none
+            )
+
+        PageClickS (MessagingP SentE) ->
+            ( { model | page = MessagingP SentE }
+            , case model.sentSummary of
+                Nothing ->
+                    elmToJs <| encodeToJs GetSentSummaryE
+
+                Just _ ->
+                    Cmd.none
+            )
+
+        PageClickS (MessagingP SendingE) ->
+            ( { model | page = MessagingP SendingE }
+            , case model.sendingSummary of
+                Nothing ->
+                    elmToJs <| encodeToJs GetSendingSummaryE
+
+                Just _ ->
+                    Cmd.none
+            )
+
+        PageClickS (MessagingP (WriteE draft)) ->
+            ( { model | page = MessagingP <| WriteE draft }
+            , Cmd.none
+            )
+
+        PageClickS (MessagingP ContactsE) ->
+            ( { model | page = MessagingP ContactsE }
+            , case model.contacts of
+                Nothing ->
+                    elmToJs <| encodeToJs GetContactsE
+
+                Just _ ->
+                    Cmd.none
+            )
+
+        PageClickS (AdminP PricingA) ->
+            ( { model | page = AdminP PricingA }
+            , Cmd.none
+            )
+
+        PageClickS (AdminP AccountA) ->
+            ( { model | page = AdminP AccountA }
+            , Cmd.none
+            )
+
+        PageClickS (AdminP AboutA) ->
+            ( { model | page = AdminP AboutA }
+            , Cmd.none
+            )
+
+        PageClickS (AdminP HelpA) ->
+            ( { model | page = AdminP HelpA }
+            , Cmd.none
+            )
 
         NewWindowWidthS width ->
             ( { model | windowWidth = width }, Cmd.none )
