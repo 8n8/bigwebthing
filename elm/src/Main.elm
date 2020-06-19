@@ -5,6 +5,9 @@ import Base64.Encode as B64e
 import Browser
 import Bytes
 import Bytes.Encode as Be
+import Element as E
+import Element.Font as Font
+import Element.Input as Ei
 import Html
 import Json.Decode as Jd
 import Json.Encode as Je
@@ -28,6 +31,26 @@ type GetMe
     | NameFromServerG MyKeys
 
 
+type Page
+    = AdminP AdminPage
+    | MessagingP MessagingPage
+
+
+type AdminPage
+    = PricingA
+    | AccountA
+    | HelpA
+
+
+type MessagingPage
+    = WriteE
+    | ContactsE
+    | InboxE
+    | DraftsE
+    | SentE
+    | SendingE
+
+
 type AuthCode
     = AuthCode Bytes.Bytes
 
@@ -36,6 +59,7 @@ type alias Model =
     { myId : Maybe ( MyName, MyKeys )
     , processes : List Process
     , fatal : Maybe String
+    , page : Page
     }
 
 
@@ -64,6 +88,7 @@ initModel =
     { myId = Nothing
     , processes = [ GetMeP KeysFromCacheG ]
     , fatal = Nothing
+    , page = MessagingP InboxE
     }
 
 
@@ -73,12 +98,186 @@ init _ =
 
 
 view : Model -> Html.Html Msg
-view _ =
-    Html.text "Not done yet"
+view model =
+    E.layout [] <| viewE model
+
+
+viewE : Model -> E.Element Msg
+viewE model =
+    E.column []
+        [ title
+        , adminButtons model.page
+        , messagingButtons model.page
+        , messagingPage model
+        ]
+
+
+messagingPage : Model -> E.Element Msg
+messagingPage model =
+    case model.page of
+        AdminP PricingA ->
+            E.text "Pricing goes here"
+
+        AdminP AccountA ->
+            E.text "Account info goes here"
+
+        AdminP HelpA ->
+            E.text "Contact details for support go here"
+
+        MessagingP WriteE ->
+            E.text "Write page goes here"
+
+        MessagingP ContactsE ->
+            E.text "Contacts page goes here"
+
+        MessagingP InboxE ->
+            E.text "Inbox page goes here"
+
+        MessagingP DraftsE ->
+            E.text "Drafts page goes here"
+
+        MessagingP SentE ->
+            E.text "Sent page goes here"
+
+        MessagingP SendingE ->
+            E.text "Sending page goes here"
+
+
+title : E.Element Msg
+title =
+    E.el [ E.centerX ] <|
+        E.text "BigWebThing"
+
+
+adminButtons : Page -> E.Element Msg
+adminButtons page =
+    E.row [] <|
+        List.map (adminButton page) [ PricingA, AccountA, HelpA ]
+
+
+messagingButtons : Page -> E.Element Msg
+messagingButtons page =
+    E.row [] <|
+        List.map
+            (messagingButton page)
+            [ WriteE, ContactsE, InboxE, DraftsE, SentE, SendingE ]
+
+
+messagingButton : Page -> MessagingPage -> E.Element Msg
+messagingButton page subPage =
+    Ei.button []
+        { onPress = Just <| SimpleM <| PageClickS <| MessagingP subPage
+        , label = messagingButtonLabel page subPage
+        }
+
+
+messagingButtonLabel : Page -> MessagingPage -> E.Element Msg
+messagingButtonLabel page subPage =
+    E.el
+        (messagingLabelStyle page subPage)
+    <|
+        E.text <|
+            messagingLabelText subPage
+
+
+messagingLabelText : MessagingPage -> String
+messagingLabelText page =
+    case page of
+        WriteE ->
+            "Write"
+
+        ContactsE ->
+            "Contacts"
+
+        InboxE ->
+            "Inbox"
+
+        DraftsE ->
+            "Drafts"
+
+        SentE ->
+            "Sent"
+
+        SendingE ->
+            "Sending"
+
+
+messagingLabelStyle : Page -> MessagingPage -> List (E.Attribute Msg)
+messagingLabelStyle page subPage =
+    [ Font.family [ Font.typeface "Ubuntu" ]
+    , Font.size <|
+        if messagingPageOn page subPage then
+            35
+
+        else
+            30
+    ]
+
+
+adminButton : Page -> AdminPage -> E.Element Msg
+adminButton page adminPage =
+    Ei.button []
+        { onPress = Just <| SimpleM <| PageClickS <| AdminP adminPage
+        , label = adminButtonLabel page adminPage
+        }
+
+
+adminButtonLabel : Page -> AdminPage -> E.Element Msg
+adminButtonLabel page adminPage =
+    E.el
+        (adminLabelStyle page adminPage)
+    <|
+        E.text <|
+            adminLabelText adminPage
+
+
+adminLabelStyle : Page -> AdminPage -> List (E.Attribute Msg)
+adminLabelStyle page adminPage =
+    [ Font.family [ Font.typeface "Ubuntu" ]
+    , Font.size <|
+        if adminPageOn page adminPage then
+            25
+
+        else
+            20
+    ]
+
+
+adminPageOn : Page -> AdminPage -> Bool
+adminPageOn page adminPage =
+    case ( page, adminPage ) of
+        ( AdminP p1, p2 ) ->
+            p1 == p2
+
+        _ ->
+            False
+
+
+messagingPageOn : Page -> MessagingPage -> Bool
+messagingPageOn page subPage =
+    case ( page, subPage ) of
+        ( MessagingP m1, m2 ) ->
+            m1 == m2
+
+        _ ->
+            False
+
+
+adminLabelText : AdminPage -> String
+adminLabelText adminPage =
+    case adminPage of
+        PricingA ->
+            "Pricing"
+
+        AccountA ->
+            "Account"
+
+        HelpA ->
+            "Help"
 
 
 type Simple
-    = Simple
+    = PageClickS Page
 
 
 type ForProcess
