@@ -274,7 +274,7 @@ messagingButtons : Int -> Page -> E.Element Msg
 messagingButtons windowWidth page =
     E.wrappedRow
         [ E.width E.fill
-        , E.spacingXY 0 10
+        , E.spacingXY 5 10
         ]
     <|
         List.map
@@ -284,12 +284,13 @@ messagingButtons windowWidth page =
 
 messagingButton : Int -> Page -> MessagingPage -> E.Element Msg
 messagingButton windowWidth page subPage =
-    E.el
-        [ E.width <| E.minimum 150 E.fill
-        ]
-    <|
         Ei.button
-            [ E.centerX
+            [ E.width <| E.minimum 150 E.fill
+            , Background.color <|
+                if messagingPageOn page subPage then
+                    blue
+                else
+                    E.rgb 1 1 1
             ]
             { onPress =
                 Just <| SimpleM <| PageClickS <| MessagingP subPage
@@ -332,7 +333,7 @@ messagingLabelStyle : Int -> Page -> MessagingPage -> List (E.Attribute Msg)
 messagingLabelStyle windowWidth page subPage =
     [ E.centerX
     , Font.family [ Font.typeface "Ubuntu" ]
-    , E.paddingXY 10 20
+    , E.paddingXY 0 20
     , Font.size <| messagingButtonFontSize windowWidth
     , Background.color <|
         if messagingPageOn page subPage then
