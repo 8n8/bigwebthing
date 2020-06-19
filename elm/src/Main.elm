@@ -3,9 +3,11 @@ port module Main exposing (main)
 import Base64.Decode as B64d
 import Base64.Encode as B64e
 import Browser
+import Browser.Events
 import Bytes
 import Bytes.Encode as Be
 import Element as E
+import Element.Background as Background
 import Element.Font as Font
 import Element.Input as Ei
 import Html
@@ -13,7 +15,7 @@ import Json.Decode as Jd
 import Json.Encode as Je
 
 
-main : Program () Model Msg
+main : Program Int Model Msg
 main =
     Browser.element
         { init = init
@@ -39,6 +41,7 @@ type Page
 type AdminPage
     = PricingA
     | AccountA
+    | AboutA
     | HelpA
 
 
@@ -60,6 +63,7 @@ type alias Model =
     , processes : List Process
     , fatal : Maybe String
     , page : Page
+    , windowWidth : Int
     }
 
 
@@ -83,31 +87,35 @@ type Process
     = GetMeP GetMe
 
 
-initModel : Model
-initModel =
+initModel : Int -> Model
+initModel windowWidth =
     { myId = Nothing
     , processes = [ GetMeP KeysFromCacheG ]
     , fatal = Nothing
     , page = MessagingP InboxE
+    , windowWidth = windowWidth
     }
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
-    ( initModel, Cmd.none )
+init : Int -> ( Model, Cmd Msg )
+init windowWidth =
+    ( initModel windowWidth, Cmd.none )
 
 
 view : Model -> Html.Html Msg
 view model =
-    E.layout [] <| viewE model
+    E.layout [ E.padding 5 ] <| viewE model
 
 
 viewE : Model -> E.Element Msg
 viewE model =
-    E.column []
-        [ title
-        , adminButtons model.page
-        , messagingButtons model.page
+    E.column
+        [ E.width E.fill
+        , E.spacingXY 0 20
+        ]
+        [ title model.windowWidth
+        , adminButtons model.windowWidth model.page
+        , messagingButtons model.windowWidth model.page
         , messagingPage model
         ]
 
@@ -120,6 +128,9 @@ messagingPage model =
 
         AdminP AccountA ->
             E.text "Account info goes here"
+
+        AdminP AboutA ->
+            E.text "About info goes here"
 
         AdminP HelpA ->
             E.text "Contact details for support go here"
@@ -143,38 +154,153 @@ messagingPage model =
             E.text "Sending page goes here"
 
 
-title : E.Element Msg
-title =
-    E.el [ E.centerX ] <|
+title : Int -> E.Element Msg
+title windowWidth =
+    E.el
+        [ E.centerX
+        , Font.size <| titleSize windowWidth
+        , Font.color blue
+        , Font.family [ Font.typeface "Ubuntu" ]
+        ]
+    <|
         E.text "BigWebThing"
 
 
-adminButtons : Page -> E.Element Msg
-adminButtons page =
-    E.row [] <|
-        List.map (adminButton page) [ PricingA, AccountA, HelpA ]
+blue : E.Color
+blue =
+    E.rgb255 69 143 255
 
 
-messagingButtons : Page -> E.Element Msg
-messagingButtons page =
-    E.row [] <|
+titleSize : Int -> Int
+titleSize w =
+    let
+        min =
+            39
+
+        max =
+            120
+
+        div =
+            w // 7
+    in
+    if div > max then
+        max
+
+    else if div < min then
+        min
+
+    else
+        div
+
+
+adminButtons : Int -> Page -> E.Element Msg
+adminButtons windowWidth page =
+    E.wrappedRow
+        [ E.centerX
+        , E.spacingXY 5 0
+        ]
+    <|
         List.map
-            (messagingButton page)
-            [ WriteE, ContactsE, InboxE, DraftsE, SentE, SendingE ]
+            (adminButton windowWidth page)
+            [ PricingA, AccountA, AboutA, HelpA ]
 
 
-messagingButton : Page -> MessagingPage -> E.Element Msg
-messagingButton page subPage =
-    Ei.button []
-        { onPress = Just <| SimpleM <| PageClickS <| MessagingP subPage
-        , label = messagingButtonLabel page subPage
+adminButton : Int -> Page -> AdminPage -> E.Element Msg
+adminButton windowWidth page adminPage =
+    Ei.button
+        []
+        { onPress = Just <| SimpleM <| PageClickS <| AdminP adminPage
+        , label = adminButtonLabel windowWidth page adminPage
         }
 
 
-messagingButtonLabel : Page -> MessagingPage -> E.Element Msg
-messagingButtonLabel page subPage =
+adminButtonLabel : Int -> Page -> AdminPage -> E.Element Msg
+adminButtonLabel windowWidth page adminPage =
     E.el
-        (messagingLabelStyle page subPage)
+        (adminLabelStyle windowWidth page adminPage)
+    <|
+        E.text <|
+            adminLabelText adminPage
+
+
+adminLabelStyle : Int -> Page -> AdminPage -> List (E.Attribute Msg)
+adminLabelStyle windowWidth page adminPage =
+    [ E.centerX
+    , Font.family [ Font.typeface "Ubuntu" ]
+    , Font.size <| adminButtonFontSize windowWidth
+    , E.paddingXY 8 16
+    , Background.color <|
+        if adminPageOn page adminPage then
+            blue
+
+        else
+            E.rgb255 255 255 255
+    ]
+
+
+adminButtonFontSize : Int -> Int
+adminButtonFontSize w =
+    let
+        min =
+            18
+
+        max =
+            28
+
+        div =
+            w // 20
+    in
+    if div > max then
+        max
+
+    else if div < min then
+        min
+
+    else
+        div
+
+
+adminPageOn : Page -> AdminPage -> Bool
+adminPageOn page adminPage =
+    case ( page, adminPage ) of
+        ( AdminP p1, p2 ) ->
+            p1 == p2
+
+        _ ->
+            False
+
+
+messagingButtons : Int -> Page -> E.Element Msg
+messagingButtons windowWidth page =
+    E.wrappedRow
+        [ E.width E.fill
+        , E.spacingXY 0 10
+        ]
+    <|
+        List.map
+            (messagingButton windowWidth page)
+            [ InboxE, DraftsE, SentE, SendingE, WriteE, ContactsE ]
+
+
+messagingButton : Int -> Page -> MessagingPage -> E.Element Msg
+messagingButton windowWidth page subPage =
+    E.el
+        [ E.width <| E.minimum 150 E.fill
+        ]
+    <|
+        Ei.button
+            [ E.centerX
+            ]
+            { onPress =
+                Just <| SimpleM <| PageClickS <| MessagingP subPage
+            , label = messagingButtonLabel windowWidth page subPage
+            }
+
+
+messagingButtonLabel : Int -> Page -> MessagingPage -> E.Element Msg
+messagingButtonLabel windowWidth page subPage =
+    E.el
+        (messagingLabelStyle windowWidth page subPage)
     <|
         E.text <|
             messagingLabelText subPage
@@ -202,55 +328,41 @@ messagingLabelText page =
             "Sending"
 
 
-messagingLabelStyle : Page -> MessagingPage -> List (E.Attribute Msg)
-messagingLabelStyle page subPage =
-    [ Font.family [ Font.typeface "Ubuntu" ]
-    , Font.size <|
+messagingLabelStyle : Int -> Page -> MessagingPage -> List (E.Attribute Msg)
+messagingLabelStyle windowWidth page subPage =
+    [ E.centerX
+    , Font.family [ Font.typeface "Ubuntu" ]
+    , E.paddingXY 10 20
+    , Font.size <| messagingButtonFontSize windowWidth
+    , Background.color <|
         if messagingPageOn page subPage then
-            35
+            blue
 
         else
+            E.rgb255 255 255 255
+    ]
+
+
+messagingButtonFontSize : Int -> Int
+messagingButtonFontSize w =
+    let
+        min =
             30
-    ]
 
+        max =
+            45
 
-adminButton : Page -> AdminPage -> E.Element Msg
-adminButton page adminPage =
-    Ei.button []
-        { onPress = Just <| SimpleM <| PageClickS <| AdminP adminPage
-        , label = adminButtonLabel page adminPage
-        }
+        div =
+            w // 13
+    in
+    if div > max then
+        max
 
+    else if div < min then
+        min
 
-adminButtonLabel : Page -> AdminPage -> E.Element Msg
-adminButtonLabel page adminPage =
-    E.el
-        (adminLabelStyle page adminPage)
-    <|
-        E.text <|
-            adminLabelText adminPage
-
-
-adminLabelStyle : Page -> AdminPage -> List (E.Attribute Msg)
-adminLabelStyle page adminPage =
-    [ Font.family [ Font.typeface "Ubuntu" ]
-    , Font.size <|
-        if adminPageOn page adminPage then
-            25
-
-        else
-            20
-    ]
-
-
-adminPageOn : Page -> AdminPage -> Bool
-adminPageOn page adminPage =
-    case ( page, adminPage ) of
-        ( AdminP p1, p2 ) ->
-            p1 == p2
-
-        _ ->
-            False
+    else
+        div
 
 
 messagingPageOn : Page -> MessagingPage -> Bool
@@ -275,9 +387,13 @@ adminLabelText adminPage =
         HelpA ->
             "Help"
 
+        AboutA ->
+            "About"
+
 
 type Simple
     = PageClickS Page
+    | NewWindowWidthS Int
 
 
 type ForProcess
@@ -337,15 +453,6 @@ type ElmToJs
 
 type JsToElm
     = MyKeysFromCacheJ MyKeys
-
-
-getAuthCode : Cmd Msg
-getAuthCode =
-    elmToJs <|
-        encodeToJs <|
-            WebsocketE <|
-                Be.encode <|
-                    Be.unsignedInt8 7
 
 
 type Msg
@@ -486,8 +593,13 @@ update msg model =
 
 
 updateSimple : Simple -> Model -> ( Model, Cmd Msg )
-updateSimple _ model =
-    ( model, Cmd.none )
+updateSimple msg model =
+    case msg of
+        PageClickS page ->
+            ( { model | page = page }, Cmd.none )
+
+        NewWindowWidthS width ->
+            ( { model | windowWidth = width }, Cmd.none )
 
 
 type ProcessTick
@@ -606,4 +718,8 @@ router notRelevant msg model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    jsToElm JsonFromJsM
+    Sub.batch
+        [ jsToElm JsonFromJsM
+        , Browser.Events.onResize <|
+            \w _ -> SimpleM <| NewWindowWidthS w
+        ]
