@@ -2,15 +2,18 @@ port module Main exposing (main)
 
 import Base64.Decode as B64d
 import Base64.Encode as B64e
+import Bitwise
 import Browser
 import Browser.Events
 import Bytes
+import Bytes.Decode as Bd
 import Bytes.Encode as Be
 import Dict
 import Element as E
 import Element.Background as Background
 import Element.Font as Font
 import Element.Input as Ei
+import File.Download as Download
 import Html
 import Json.Decode as Jd
 import Json.Encode as Je
@@ -40,7 +43,7 @@ type Page
 
 
 type alias Blob =
-    { id : Int
+    { id : String
     , mime : String
     , filename : String
     , size : Int
@@ -54,13 +57,39 @@ type AdminPage
     | HelpA
 
 
+type Wasm
+    = SmallString String
+    | Ordering (List Wasm)
+
+
 type MessagingPage
     = WriteE Draft
     | ContactsE
-    | InboxE
-    | DraftsE
-    | SentE
-    | SendingE
+    | InboxE (Maybe ( InboxMessage, Wasm ))
+    | DraftsE (Maybe ( Draft, Wasm ))
+    | SentE (Maybe ( Sent, Wasm ))
+
+
+type alias Sent =
+    { id : Int
+    , subject : String
+    , to : Int
+    , userInput : String
+    , code : Code
+    , blobs : List Blob
+    }
+
+
+type alias InboxMessage =
+    { subject : String
+    , fromId : String
+    , userInput : String
+    , blobs : List Blob
+    , timeSent : Int
+    , timeReceived : Int
+    , id : String
+    , code : Code
+    }
 
 
 type alias Draft =
@@ -120,32 +149,32 @@ type alias SendingSummary =
 
 type alias SentSummary =
     { subject : String
-    , to : Int
+    , toId : String
     , sentTime : Int
     , receivedTime : Int
-    , id : Int
+    , id : String
     }
 
 
 type alias DraftSummary =
     { subject : String
-    , to : Int
+    , toId : String
     , time : Int
-    , id : Int
+    , id : String
     }
 
 
 type alias InboxMessageSummary =
     { subject : String
-    , from : String
+    , fromId : String
     , time : Int
-    , id : Int
+    , id : String
     }
 
 
 type alias MyKeys =
-    { encryption : KeyPair
-    , signing : KeyPair
+    { encrypt : KeyPair
+    , sign : KeyPair
     }
 
 
@@ -161,6 +190,13 @@ type MyName
 
 type Process
     = GetMeP GetMe
+    | GetInboxMessageP GetInboxMessage
+    | BlobForDownloadP Blob
+
+
+type GetInboxMessage
+    = FromCacheG String
+    | WasmOutputG InboxMessage
 
 
 initModel : Int -> Model
@@ -168,7 +204,7 @@ initModel windowWidth =
     { myId = Nothing
     , processes = [ GetMeP KeysFromCacheG ]
     , fatal = Nothing
-    , page = MessagingP InboxE
+    , page = MessagingP (InboxE Nothing)
     , windowWidth = windowWidth
     , inboxSummary = Nothing
     , draftsSummary = Nothing
@@ -197,12 +233,12 @@ viewE model =
         [ title model.windowWidth
         , adminButtons model.windowWidth model.page
         , messagingButtons model.windowWidth model.page
-        , messagingPage model
+        , mainPage model
         ]
 
 
-messagingPage : Model -> E.Element Msg
-messagingPage model =
+mainPage : Model -> E.Element Msg
+mainPage model =
     case model.page of
         AdminP PricingA ->
             E.text "Pricing goes here"
@@ -222,17 +258,138 @@ messagingPage model =
         MessagingP ContactsE ->
             E.text "Contacts page goes here"
 
-        MessagingP InboxE ->
-            E.text "Inbox page goes here"
+        MessagingP (InboxE Nothing) ->
+            case model.inboxSummary of
+                Nothing ->
+                    noMessages
 
-        MessagingP DraftsE ->
+                Just inboxSummary ->
+                    inboxPage inboxSummary
+
+        MessagingP (InboxE (Just message)) ->
+            inboxMessageView message model.contacts
+
+        MessagingP (DraftsE _) ->
             E.text "Drafts page goes here"
 
-        MessagingP SentE ->
+        MessagingP (SentE _) ->
             E.text "Sent page goes here"
 
-        MessagingP SendingE ->
-            E.text "Sending page goes here"
+
+inboxMessageView :
+    ( InboxMessage, Wasm )
+    -> Maybe (Dict.Dict Int Contact)
+    -> E.Element Msg
+inboxMessageView ( msg, wasm ) contacts =
+    E.column []
+        [ prettyTime msg.timeReceived
+        , E.text msg.fromId
+        , wasmView wasm
+        , userInputView msg.userInput
+        , blobsView msg.blobs
+        , codeView msg.code
+        ]
+
+
+userInputView : String -> E.Element Msg
+userInputView userInput =
+    E.el [ Font.family [ Font.typeface "Ubuntu Mono" ] ] <|
+        E.text userInput
+
+
+blobsView : List Blob -> E.Element Msg
+blobsView blobs =
+    E.column [ E.spacing 10 ] <| List.map blobView blobs
+
+
+blobView : Blob -> E.Element Msg
+blobView blob =
+    E.row [ E.spacing 10 ]
+        [ E.text blob.filename
+        , E.text blob.mime
+        , E.text <| prettySize blob.size
+        , Ei.button []
+            { onPress = Just <| SimpleM <| DownloadBlobS blob
+            , label = E.text "Download"
+            }
+        ]
+
+
+wasmView : Wasm -> E.Element Msg
+wasmView wasm =
+    case wasm of
+        SmallString s ->
+            showSmallString s
+
+        Ordering os ->
+            E.column []
+                (List.map wasmView os)
+
+
+showSmallString : String -> E.Element Msg
+showSmallString s =
+    E.el [ Font.family [ Font.typeface "Ubuntu Mono" ] ] <|
+        E.text s
+
+
+codeView : Code -> E.Element Msg
+codeView code =
+    E.row [ E.spacing 10 ]
+        [ E.text code.filename
+        , E.text <| prettySize <| Bytes.width code.contents
+        , Ei.button []
+            { onPress = Just <| SimpleM <| DownloadCodeS code
+            , label = E.text "Download"
+            }
+        ]
+
+
+prettySize : Int -> String
+prettySize s =
+    if s < 1000 then
+        String.fromInt s ++ " B"
+
+    else if s < 1000000 then
+        String.fromInt (s // 1000) ++ " KB"
+
+    else if s < 1000000000 then
+        String.fromInt (s // 1000000) ++ " MB"
+
+    else
+        "Bad size"
+
+
+noMessages : E.Element Msg
+noMessages =
+    E.text "No messages"
+
+
+inboxPage : List InboxMessageSummary -> E.Element Msg
+inboxPage summary =
+    E.column
+        []
+        (List.map inboxMenuItem summary)
+
+
+inboxMenuItem : InboxMessageSummary -> E.Element Msg
+inboxMenuItem { subject, fromId, time, id } =
+    Ei.button
+        []
+        { onPress = Just <| SimpleM <| InboxMenuClickS id
+        , label =
+            E.row
+                [ E.spacing 10
+                ]
+                [ prettyTime time
+                , E.text fromId
+                , E.text subject
+                ]
+        }
+
+
+prettyTime : Int -> E.Element Msg
+prettyTime =
+    E.text << String.fromInt
 
 
 title : Int -> E.Element Msg
@@ -371,10 +528,9 @@ messagingButtons windowWidth page =
     <|
         List.map
             (messagingButton windowWidth page)
-            [ InboxE
-            , DraftsE
-            , SentE
-            , SendingE
+            [ InboxE Nothing
+            , DraftsE Nothing
+            , SentE Nothing
             , WriteE emptyDraft
             , ContactsE
             ]
@@ -415,17 +571,14 @@ messagingLabelText page =
         ContactsE ->
             "Contacts"
 
-        InboxE ->
+        InboxE _ ->
             "Inbox"
 
-        DraftsE ->
+        DraftsE _ ->
             "Drafts"
 
-        SentE ->
+        SentE _ ->
             "Sent"
-
-        SendingE ->
-            "Sending"
 
 
 messagingLabelStyle :
@@ -498,15 +651,19 @@ adminLabelText adminPage =
 type Simple
     = PageClickS Page
     | NewWindowWidthS Int
+    | InboxMenuClickS String
+    | DownloadCodeS Code
+    | DownloadBlobS Blob
 
 
 type ForProcess
-    = KeysFromCacheF MyKeys
+    = FromCacheF String Bytes.Bytes
     | GeneratedKeysF MyKeys
     | AuthCodeF AuthCode
     | PowInfoF PowInfo
     | PowF Pow
     | NameFromServerF MyName
+    | WasmOutputF String Wasm
 
 
 port elmToJs : Je.Value -> Cmd msg
@@ -530,11 +687,6 @@ jsKeyVal key value =
     Je.object [ ( "key", Je.string key ), ( "value", value ) ]
 
 
-cacheGet : String -> Je.Value
-cacheGet key =
-    jsKeyVal "cacheGet" <| Je.string key
-
-
 encodeToJs : ElmToJs -> Je.Value
 encodeToJs value =
     case value of
@@ -543,23 +695,25 @@ encodeToJs value =
                 "toWebsocket"
                 (Je.string <| B64e.encode <| B64e.bytes bytes)
 
+        CacheGetE key ->
+            jsKeyVal "cacheGet" <| Je.string key
+
         GetPowE powInfo ->
-            jsKeyVal "getPow" (encodePowInfo powInfo)
+            jsKeyVal "getPow" <| encodePowInfo powInfo
 
-        GetInboxSummaryE ->
-            cacheGet "inboxSummary"
-
-        GetContactsE ->
-            cacheGet "contacts"
-
-        GetSendingSummaryE ->
-            cacheGet "sendingSummary"
-
-        GetDraftsSummaryE ->
-            cacheGet "draftsSummary"
-
-        GetSentSummaryE ->
-            cacheGet "sentSummary"
+        RunWasmE { userInput, wasmCode, msgId } ->
+            jsKeyVal "runWasm" <|
+                Je.object
+                    [ ( "userInput"
+                      , Je.string userInput
+                      )
+                    , ( "wasmCode"
+                      , Je.string <|
+                            B64e.encode <|
+                                B64e.bytes wasmCode
+                      )
+                    , ( "msgId", Je.string msgId )
+                    ]
 
 
 encodePowInfo : PowInfo -> Je.Value
@@ -573,15 +727,16 @@ encodePowInfo { unique, difficulty } =
 type ElmToJs
     = WebsocketE Bytes.Bytes
     | GetPowE PowInfo
-    | GetInboxSummaryE
-    | GetContactsE
-    | GetSendingSummaryE
-    | GetDraftsSummaryE
-    | GetSentSummaryE
+    | CacheGetE String
+    | RunWasmE
+        { userInput : String
+        , wasmCode : Bytes.Bytes
+        , msgId : String
+        }
 
 
 type JsToElm
-    = MyKeysFromCacheJ MyKeys
+    = FromCacheJ String Bytes.Bytes
 
 
 type Msg
@@ -620,48 +775,35 @@ fromJsDecoderHelp key =
 
 fromCacheDecoder : Jd.Decoder JsToElm
 fromCacheDecoder =
-    Jd.andThen fromCacheDecoderHelp <| Jd.field "key" Jd.string
+    Jd.map2 (\key value -> ( key, value ))
+        (Jd.field "key" Jd.string)
+        (Jd.field "value" Jd.string)
+        |> Jd.andThen
+            (\( key, value ) ->
+                case B64d.decode B64d.bytes value of
+                    Err err ->
+                        Jd.fail <| showB64Error err
+
+                    Ok bytes ->
+                        Jd.succeed <| FromCacheJ key bytes
+            )
 
 
-fromCacheDecoderHelp : String -> Jd.Decoder JsToElm
-fromCacheDecoderHelp key =
-    case key of
-        "myKeys" ->
-            myKeysFromCacheDecoder
-
-        badKey ->
-            Jd.fail <| "bad cache response key \"" ++ badKey ++ "\""
+myKeysDecoder : Bd.Decoder MyKeys
+myKeysDecoder =
+    Bd.map2 MyKeys
+        encryptKeysDecoder
+        signKeysDecoder
 
 
-myKeysFromCacheDecoder : Jd.Decoder JsToElm
-myKeysFromCacheDecoder =
-    Jd.map2 (\e s -> MyKeysFromCacheJ <| MyKeys e s)
-        (Jd.field "encryption" encryptionKeysDecoder)
-        (Jd.field "signing" signingKeysDecoder)
+encryptKeysDecoder : Bd.Decoder KeyPair
+encryptKeysDecoder =
+    Bd.map2 KeyPair (Bd.bytes 32) (Bd.bytes 32)
 
 
-signingKeysDecoder : Jd.Decoder KeyPair
-signingKeysDecoder =
-    Jd.map2 KeyPair
-        (Jd.field "secretKey" key64)
-        (Jd.field "publicKey" key32)
-
-
-key64 : Jd.Decoder Bytes.Bytes
-key64 =
-    Jd.andThen (bytesDecoder 64) Jd.string
-
-
-key32 : Jd.Decoder Bytes.Bytes
-key32 =
-    Jd.andThen (bytesDecoder 32) Jd.string
-
-
-encryptionKeysDecoder : Jd.Decoder KeyPair
-encryptionKeysDecoder =
-    Jd.map2 KeyPair
-        (Jd.field "secretKey" key32)
-        (Jd.field "publicKey" key32)
+signKeysDecoder : Bd.Decoder KeyPair
+signKeysDecoder =
+    Bd.map2 KeyPair (Bd.bytes 32) (Bd.bytes 64)
 
 
 showB64Error : B64d.Error -> String
@@ -674,33 +816,11 @@ showB64Error error =
             "Invalid byte sequence"
 
 
-bytesDecoder : Int -> String -> Jd.Decoder Bytes.Bytes
-bytesDecoder length raw =
-    case B64d.decode B64d.bytes raw of
-        Err err ->
-            Jd.fail <| showB64Error err
-
-        Ok bytes ->
-            let
-                bytesLen =
-                    Bytes.width bytes
-            in
-            if bytesLen == length then
-                Jd.succeed bytes
-
-            else
-                Jd.fail <|
-                    "expecting "
-                        ++ String.fromInt length
-                        ++ " bytes, but got "
-                        ++ String.fromInt bytesLen
-
-
 toMsg : JsToElm -> Msg
 toMsg j =
     case j of
-        MyKeysFromCacheJ myKeys ->
-            ForProcessM <| KeysFromCacheF myKeys
+        FromCacheJ key value ->
+            ForProcessM <| FromCacheF key value
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -721,11 +841,11 @@ update msg model =
             updateSimple simple model
 
 
-clickCmd : Maybe a -> ElmToJs -> Cmd Msg
-clickCmd summary msg =
+clickCmd : Maybe a -> Cmd Msg -> Cmd Msg
+clickCmd summary cmd =
     case summary of
         Nothing ->
-            elmToJs <| encodeToJs msg
+            cmd
 
         Just _ ->
             Cmd.none
@@ -734,24 +854,20 @@ clickCmd summary msg =
 updateSimple : Simple -> Model -> ( Model, Cmd Msg )
 updateSimple msg model =
     case msg of
-        PageClickS (MessagingP InboxE) ->
-            ( { model | page = MessagingP InboxE }
-            , clickCmd model.inboxSummary GetInboxSummaryE
+        PageClickS (MessagingP (InboxE _)) ->
+            ( { model | page = MessagingP <| InboxE Nothing }
+            , clickCmd model.inboxSummary <| cacheGet "inboxSummary"
             )
 
-        PageClickS (MessagingP DraftsE) ->
-            ( { model | page = MessagingP DraftsE }
-            , clickCmd model.draftsSummary GetDraftsSummaryE
+        PageClickS (MessagingP (DraftsE _)) ->
+            ( { model | page = MessagingP <| DraftsE Nothing }
+            , clickCmd model.draftsSummary <|
+                cacheGet "draftsSummary"
             )
 
-        PageClickS (MessagingP SentE) ->
-            ( { model | page = MessagingP SentE }
-            , clickCmd model.sentSummary GetSentSummaryE
-            )
-
-        PageClickS (MessagingP SendingE) ->
-            ( { model | page = MessagingP SendingE }
-            , clickCmd model.sendingSummary GetSendingSummaryE
+        PageClickS (MessagingP (SentE _)) ->
+            ( { model | page = MessagingP <| SentE Nothing }
+            , clickCmd model.sentSummary <| cacheGet "sentSummary"
             )
 
         PageClickS (MessagingP (WriteE draft)) ->
@@ -763,7 +879,7 @@ updateSimple msg model =
             ( { model | page = MessagingP ContactsE }
             , case model.contacts of
                 Nothing ->
-                    elmToJs <| encodeToJs GetContactsE
+                    cacheGet "contacts"
 
                 Just _ ->
                     Cmd.none
@@ -792,6 +908,31 @@ updateSimple msg model =
         NewWindowWidthS width ->
             ( { model | windowWidth = width }, Cmd.none )
 
+        InboxMenuClickS id ->
+            ( { model
+                | processes =
+                    GetInboxMessageP (FromCacheG id)
+                        :: model.processes
+              }
+            , cacheGet id
+            )
+
+        DownloadCodeS { contents, mime, filename } ->
+            ( model, Download.bytes filename mime contents )
+
+        DownloadBlobS blob ->
+            ( { model
+                | processes =
+                    BlobForDownloadP blob :: model.processes
+              }
+            , cacheGet blob.id
+            )
+
+
+cacheGet : String -> Cmd Msg
+cacheGet =
+    elmToJs << encodeToJs << CacheGetE
+
 
 type ProcessTick
     = FinishedT Model (Cmd Msg)
@@ -802,11 +943,20 @@ type ProcessTick
 updateGetMe : GetMe -> ForProcess -> Model -> ProcessTick
 updateGetMe getMe msg model =
     case ( getMe, msg ) of
-        ( KeysFromCacheG, KeysFromCacheF myKeys ) ->
-            ContinuingT
-                model
-                getPowInfo
-                (GetMeP <| PowInfoG myKeys)
+        ( KeysFromCacheG, FromCacheF "myKeys" myKeysBytes ) ->
+            case Bd.decode myKeysDecoder myKeysBytes of
+                Nothing ->
+                    FinishedT
+                        { model
+                            | fatal = Just "bad bytes in \"myKeys\""
+                        }
+                        Cmd.none
+
+                Just myKeys ->
+                    ContinuingT
+                        model
+                        getPowInfo
+                        (GetMeP <| PowInfoG myKeys)
 
         ( KeysFromCacheG, _ ) ->
             NotUsedMessageT
@@ -862,15 +1012,15 @@ getPow powInfo =
 
 
 makeNameRequest : Pow -> MyKeys -> Je.Value
-makeNameRequest (Pow pow) { encryption, signing } =
+makeNameRequest (Pow pow) { encrypt, sign } =
     encodeToJs <|
         WebsocketE <|
             Be.encode <|
                 Be.sequence
                     [ Be.unsignedInt8 1
                     , Be.bytes pow
-                    , Be.bytes signing.public
-                    , Be.bytes encryption.public
+                    , Be.bytes sign.public
+                    , Be.bytes encrypt.public
                     ]
 
 
@@ -879,6 +1029,176 @@ processTick p msg model =
     case p of
         GetMeP getMe ->
             updateGetMe getMe msg model
+
+        GetInboxMessageP getInbox ->
+            updateGetInboxMsg getInbox msg model
+
+        BlobForDownloadP blob ->
+            case msg of
+                FromCacheF id blobBytes ->
+                    if blob.id == id then
+                        FinishedT
+                            model
+                            (Download.bytes
+                                blob.filename
+                                blob.mime
+                                blobBytes
+                            )
+
+                    else
+                        NotUsedMessageT
+
+                _ ->
+                    NotUsedMessageT
+
+
+runWasm : InboxMessage -> Cmd Msg
+runWasm msg =
+    elmToJs <|
+        encodeToJs <|
+            RunWasmE
+                { userInput = msg.userInput
+                , wasmCode = msg.code.contents
+                , msgId = msg.id
+                }
+
+
+inboxMsgDecoder : Bd.Decoder InboxMessage
+inboxMsgDecoder =
+    map8 InboxMessage
+        stringDecoder
+        stringDecoder
+        stringDecoder
+        (list blobDecoder)
+        int64Decoder
+        int64Decoder
+        stringDecoder
+        codeDecoder
+
+
+int64Decoder : Bd.Decoder Int
+int64Decoder =
+    Bd.map2 (\a b -> Bitwise.shiftLeftBy 32 a + b)
+        (Bd.unsignedInt32 Bytes.LE)
+        (Bd.unsignedInt32 Bytes.LE)
+
+
+codeDecoder : Bd.Decoder Code
+codeDecoder =
+    Bd.map3 Code
+        bytesDecoder
+        stringDecoder
+        stringDecoder
+
+
+blobDecoder : Bd.Decoder Blob
+blobDecoder =
+    Bd.map4 Blob
+        stringDecoder
+        stringDecoder
+        stringDecoder
+        (Bd.unsignedInt32 Bytes.LE)
+
+
+list : Bd.Decoder a -> Bd.Decoder (List a)
+list decoder =
+    Bd.unsignedInt32 Bytes.LE
+        |> Bd.andThen
+            (\len -> Bd.loop ( len, [] ) (listStep decoder))
+
+
+listStep :
+    Bd.Decoder a
+    -> ( Int, List a )
+    -> Bd.Decoder (Bd.Step ( Int, List a ) (List a))
+listStep decoder ( n, xs ) =
+    if n <= 0 then
+        Bd.succeed <| Bd.Done xs
+
+    else
+        Bd.map (\x -> Bd.Loop ( n - 1, x :: xs )) decoder
+
+
+stringDecoder : Bd.Decoder String
+stringDecoder =
+    Bd.unsignedInt32 Bytes.LE |> Bd.andThen Bd.string
+
+
+bytesDecoder : Bd.Decoder Bytes.Bytes
+bytesDecoder =
+    Bd.unsignedInt32 Bytes.LE |> Bd.andThen Bd.bytes
+
+
+map8 :
+    (a -> b -> c -> d -> e -> f -> g -> h -> result)
+    -> Bd.Decoder a
+    -> Bd.Decoder b
+    -> Bd.Decoder c
+    -> Bd.Decoder d
+    -> Bd.Decoder e
+    -> Bd.Decoder f
+    -> Bd.Decoder g
+    -> Bd.Decoder h
+    -> Bd.Decoder result
+map8 func decA decB decC decD decE decF decG decH =
+    Bd.map func decA
+        |> Bd.andThen (dmap decB)
+        |> Bd.andThen (dmap decC)
+        |> Bd.andThen (dmap decD)
+        |> Bd.andThen (dmap decE)
+        |> Bd.andThen (dmap decF)
+        |> Bd.andThen (dmap decG)
+        |> Bd.andThen (dmap decH)
+
+
+dmap : Bd.Decoder a -> (a -> b) -> Bd.Decoder b
+dmap a b =
+    Bd.map b a
+
+
+updateGetInboxMsg :
+    GetInboxMessage
+    -> ForProcess
+    -> Model
+    -> ProcessTick
+updateGetInboxMsg getting msg model =
+    case ( getting, msg ) of
+        ( FromCacheG idWant, FromCacheF idGot inboxMsgBytes ) ->
+            if idWant == idGot then
+                case Bd.decode inboxMsgDecoder inboxMsgBytes of
+                    Nothing ->
+                        FinishedT
+                            { model | fatal = Just "bad bytes in inbox message from cache" }
+                            Cmd.none
+
+                    Just inboxMsg ->
+                        ContinuingT
+                            model
+                            (runWasm inboxMsg)
+                            (GetInboxMessageP <| WasmOutputG inboxMsg)
+
+            else
+                NotUsedMessageT
+
+        ( FromCacheG _, _ ) ->
+            NotUsedMessageT
+
+        ( WasmOutputG msg1, WasmOutputF msgId wasm ) ->
+            if msg1.id == msgId then
+                FinishedT
+                    { model
+                        | page =
+                            MessagingP <|
+                                InboxE <|
+                                    Just ( msg1, wasm )
+                    }
+                    Cmd.none
+
+            else
+                NotUsedMessageT
+
+        ( WasmOutputG _, _ ) ->
+            NotUsedMessageT
 
 
 router : List Process -> ForProcess -> Model -> ( Model, Cmd Msg )
