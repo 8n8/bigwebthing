@@ -161,6 +161,25 @@ type alias Contact =
     }
 
 
+contactsDecoder : Bd.Decoder (Dict.Dict String Contact)
+contactsDecoder =
+    Bd.map Dict.fromList <| list contactDecoderHelp
+
+
+contactDecoderHelp : Bd.Decoder ( String, Contact )
+contactDecoderHelp =
+    Bd.map2 (\a b -> ( a, b ))
+        stringDecoder
+        contactDecoder
+
+
+contactDecoder : Bd.Decoder Contact
+contactDecoder =
+    Bd.map2 Contact
+        stringDecoder
+        theirKeysDecoder
+
+
 type alias TheirKeys =
     { signing : Bytes.Bytes
     , encryption : Bytes.Bytes
@@ -184,6 +203,16 @@ type alias SentSummary =
     }
 
 
+sentSummaryDecoder : Bd.Decoder SentSummary
+sentSummaryDecoder =
+    Bd.map5 SentSummary
+        stringDecoder
+        stringDecoder
+        int64Decoder
+        int64Decoder
+        stringDecoder
+
+
 type alias DraftSummary =
     { subject : String
     , toId : String
@@ -192,12 +221,30 @@ type alias DraftSummary =
     }
 
 
+draftSummaryDecoder : Bd.Decoder DraftSummary
+draftSummaryDecoder =
+    Bd.map4 DraftSummary
+        stringDecoder
+        stringDecoder
+        int64Decoder
+        stringDecoder
+
+
 type alias InboxMessageSummary =
     { subject : String
     , fromId : String
     , time : Int
     , id : String
     }
+
+
+inboxMessageSummaryDecoder : Bd.Decoder InboxMessageSummary
+inboxMessageSummaryDecoder =
+    Bd.map4 InboxMessageSummary
+        stringDecoder
+        stringDecoder
+        int64Decoder
+        stringDecoder
 
 
 type alias MyKeys =
@@ -308,7 +355,7 @@ inboxMessageView :
     ( InboxMessage, Wasm )
     -> Maybe (Dict.Dict String Contact)
     -> E.Element Msg
-inboxMessageView ( msg, wasm ) contacts =
+inboxMessageView ( msg, wasm ) _ =
     E.column []
         [ prettyTime msg.timeReceived
         , E.text msg.fromId
@@ -1079,8 +1126,66 @@ updateSimple msg model =
             , cacheGet blob.id
             )
 
+        FromCacheM "inboxSummary" bytes ->
+            case Bd.decode (list inboxMessageSummaryDecoder) bytes of
+                Nothing ->
+                    ( { model | fatal = Just "could not decode inbox summary bytes" }
+                    , Cmd.none
+                    )
+
+                Just inboxSummary ->
+                    ( { model | inboxSummary = Just inboxSummary }
+                    , Cmd.none
+                    )
+
+        BadCacheM "inboxSummary" _ ->
+            ( { model | inboxSummary = Just [] }, Cmd.none )
+
+        FromCacheM "draftsSummary" bytes ->
+            case Bd.decode (list draftSummaryDecoder) bytes of
+                Nothing ->
+                    ( { model | fatal = Just "could not decode drafts summary bytes" }
+                    , Cmd.none
+                    )
+
+                Just draftsSummary ->
+                    ( { model | draftsSummary = Just draftsSummary }
+                    , Cmd.none
+                    )
+
+        BadCacheM "draftsSummary" _ ->
+            ( { model | draftsSummary = Just [] }, Cmd.none )
+
+        FromCacheM "sentSummary" bytes ->
+            case Bd.decode (list sentSummaryDecoder) bytes of
+                Nothing ->
+                    ( { model | fatal = Just "could not decode sent summary bytes" }
+                    , Cmd.none
+                    )
+
+                Just sentSummary ->
+                    ( { model | sentSummary = Just sentSummary }
+                    , Cmd.none
+                    )
+
+        BadCacheM "sentSummary" _ ->
+            ( { model | sentSummary = Just [] }, Cmd.none )
+
+        FromCacheM "contacts" bytes ->
+            case Bd.decode contactsDecoder bytes of
+                Nothing ->
+                    ( { model | fatal = Just "could not decode contacts bytes" }
+                    , Cmd.none
+                    )
+
+                Just contacts ->
+                    ( { model | contacts = Just contacts }, Cmd.none )
+
         FromCacheM _ _ ->
             ( model, Cmd.none )
+
+        BadCacheM "contacts" _ ->
+            ( { model | contacts = Just Dict.empty }, Cmd.none )
 
         GeneratedKeysM _ ->
             ( model, Cmd.none )
