@@ -769,8 +769,8 @@ type Pow
 
 
 type alias PowInfo =
-    { unique : Bytes.Bytes
-    , difficulty : Int
+    { difficulty : Int
+    , unique : Bytes.Bytes
     }
 
 
@@ -789,6 +789,14 @@ encodeToJs value =
 
         CacheGetE key ->
             jsKeyVal "cacheGet" <| Je.string key
+
+        CacheSetE key bytes ->
+            jsKeyVal
+                "cacheSet"
+            <|
+                Je.string <|
+                    B64e.encode <|
+                        B64e.bytes bytes
 
         GetPowE powInfo ->
             jsKeyVal "getPow" <| encodePowInfo powInfo
@@ -820,6 +828,7 @@ type ElmToJs
     = WebsocketE Bytes.Bytes
     | GetPowE PowInfo
     | CacheGetE String
+    | CacheSetE String Bytes.Bytes
     | RunWasmE
         { userInput : String
         , wasmCode : Bytes.Bytes
@@ -830,10 +839,8 @@ type ElmToJs
 type Msg
     = FromCacheM String Bytes.Bytes
     | GeneratedKeysM MyKeys
-    | AuthCodeM AuthCode
-    | PowInfoM PowInfo
     | PowM Pow
-    | NameFromServerM MyName
+    | FromServerM String
     | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
     | PricingM
@@ -849,6 +856,7 @@ type Msg
     | InboxMenuClickM String
     | DownloadCodeM Code
     | DownloadBlobM Blob
+    | WebsocketM FromWebsocket
 
 
 fromJsDecoder : Jd.Decoder Msg
@@ -1031,15 +1039,6 @@ updateSimple msg model =
         GeneratedKeysM _ ->
             ( model, Cmd.none )
 
-        AuthCodeM _ ->
-            ( model, Cmd.none )
-
-        PowInfoM _ ->
-            ( model, Cmd.none )
-
-        NameFromServerM _ ->
-            ( model, Cmd.none )
-
         WasmOutputM _ _ ->
             ( model, Cmd.none )
 
@@ -1055,6 +1054,95 @@ updateSimple msg model =
 
         PowM _ ->
             ( model, Cmd.none )
+
+        FromServerM b64 ->
+            case B64d.decode B64d.bytes b64 of
+                Err err ->
+                    ( { model | fatal = Just <| showB64Error err }
+                    , Cmd.none
+                    )
+
+                Ok bytes ->
+                    case Bd.decode fromWebsocketDecoder bytes of
+                        Nothing ->
+                            ( { model
+                                | fatal = Just "bad bytes from server"
+                              }
+                            , Cmd.none
+                            )
+
+                        Just fromWebsocket ->
+                            update (WebsocketM fromWebsocket) model
+
+        WebsocketM (MyNameW myName) ->
+            ( model, Cmd.none )
+
+        WebsocketM (KeysForNameW _ _) ->
+            ( model, Cmd.none )
+
+        WebsocketM (PowInfoW _) ->
+            ( model, Cmd.none )
+
+        WebsocketM (AuthCodeW _) ->
+            ( model, Cmd.none )
+
+
+cacheMyName : Int -> Cmd Msg
+cacheMyName =
+    elmToJs
+        << encodeToJs
+        << CacheSetE "myName"
+        << Be.encode
+        << Be.signedInt32 Bytes.LE
+
+
+type FromWebsocket
+    = MyNameW Int
+    | KeysForNameW Int TheirKeys
+    | PowInfoW PowInfo
+    | AuthCodeW Bytes.Bytes
+
+
+fromWebsocketDecoder : Bd.Decoder FromWebsocket
+fromWebsocketDecoder =
+    Bd.unsignedInt8
+        |> Bd.andThen
+            (\indicator ->
+                case indicator of
+                    1 ->
+                        Bd.map MyNameW int64Decoder
+
+                    2 ->
+                        keysForNameDecoder
+
+                    3 ->
+                        Bd.map PowInfoW powInfoDecoder
+
+                    4 ->
+                        Bd.map AuthCodeW <| Bd.bytes 8
+
+                    _ ->
+                        Bd.fail
+            )
+
+
+keysForNameDecoder : Bd.Decoder FromWebsocket
+keysForNameDecoder =
+    Bd.map2 KeysForNameW
+        int64Decoder
+        theirKeysDecoder
+
+
+theirKeysDecoder : Bd.Decoder TheirKeys
+theirKeysDecoder =
+    Bd.map2 TheirKeys
+        (Bd.bytes 32)
+        (Bd.bytes 32)
+
+
+powInfoDecoder : Bd.Decoder PowInfo
+powInfoDecoder =
+    Bd.map2 PowInfo Bd.unsignedInt8 (Bd.bytes 8)
 
 
 cacheGet : String -> Cmd Msg
@@ -1098,7 +1186,7 @@ updateGetMe getMe msg model =
         ( GeneratedKeysG, _ ) ->
             NotUsedMessageT
 
-        ( PowInfoG myKeys, PowInfoM powInfo ) ->
+        ( PowInfoG myKeys, WebsocketM (PowInfoW powInfo) ) ->
             ContinuingT
                 model
                 (getPow powInfo)
@@ -1116,9 +1204,9 @@ updateGetMe getMe msg model =
         ( PowG _, _ ) ->
             NotUsedMessageT
 
-        ( NameFromServerG myKeys, NameFromServerM myName ) ->
+        ( NameFromServerG myKeys, WebsocketM (MyNameW myName) ) ->
             FinishedT
-                { model | myId = Just ( myName, myKeys ) }
+                { model | myId = Just ( MyName myName, myKeys ) }
                 Cmd.none
 
         ( NameFromServerG _, _ ) ->
@@ -1206,7 +1294,7 @@ inboxMsgDecoder =
 
 int64Decoder : Bd.Decoder Int
 int64Decoder =
-    Bd.map2 (\a b -> Bitwise.shiftLeftBy 32 a + b)
+    Bd.map2 (\a b -> Bitwise.shiftLeftBy 32 b + a)
         (Bd.unsignedInt32 Bytes.LE)
         (Bd.unsignedInt32 Bytes.LE)
 

@@ -52,7 +52,10 @@ Response is an 8 byte name.
 2. (Free) Retrieve keys for name
 + 0x02
 + 8 bytes: name - the name to look up
-The response is the public signing key + public encryption key, 32 bytes each, 64 total.
+The response is:
++ 8 bytes: the name of the owner of the keys
++ 32 bytes: their public signing key
++ 32 bytes: their public encryption key
 
 3. (Free) Get proof of work difficulty and key
 + 0x03
@@ -60,51 +63,31 @@ The response is:
 + 1 byte: how many of the bytes at the start of the proof of work must be zeros (the difficulty)
 + 8 bytes: unique, i.e. the server must never respond in the same way to this request
 
-4. (Admin) Add a member
-+ 0x04
-+ 112 bytes: identity token for user 'admin'
-+ 8 bytes: name of member to add
-
-5. (Admin) Remove a member
-+ 0x05
-+ 112 bytes: identity token for admin user
-+ 8 bytes: name of member to remove
-
-6. (Free) Change the key attached to a friendly name
-+ 0x06
-+ 112 bytes: identity token (using the old key)
-+ 32 bytes: new key
-
-7. (Free) Get code for authentication
+4. (Free) Get code for authentication
 + 0x07
 The response is a unique 8 bytes, that is, the server must never respond in the same way to this request.
 
-8. (Paid) Send message
+5. (Paid) Send message
 + 0x08
 + 112 bytes: identity token
 + 8 bytes: recipient id
 + message
 
-9. (Free) Delete message from server
+6. (Free) Delete message from server
 + 0x09
 + 112 bytes: identity token
 + 32 bytes: sha512[:32] hash of the message
 
-10. (Free) Whitelist someone
+7. (Free) Whitelist someone
 + 0x0A
 + 112 bytes: identity token
 + 16 bytes: proof of work
 + 8 bytes: name of person to whitelist
 
-11. (Free) Remove someone from whitelist
+8. (Free) Remove someone from whitelist
 + 0x0B
 + 112 bytes: identity token
 + 8 bytes: name of person to remove from whitelist
-
-12. (Free) Upload encryption key
-+ 0x0C
-+ 8 bytes: uploader name
-+ 96 bytes: signed public encryption key
 
 #### Downloading messages
 
