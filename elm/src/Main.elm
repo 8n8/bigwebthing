@@ -794,9 +794,12 @@ encodeToJs value =
             jsKeyVal
                 "cacheSet"
             <|
-                Je.string <|
-                    B64e.encode <|
-                        B64e.bytes bytes
+                Je.object
+                    [ ( "key", Je.string key )
+                    , ( "value"
+                      , Je.string <| B64e.encode <| B64e.bytes bytes
+                      )
+                    ]
 
         GetPowE powInfo ->
             jsKeyVal "getPow" <| encodePowInfo powInfo
@@ -877,14 +880,31 @@ fromJsDecoderHelp key =
             Jd.map WebsocketB64M Jd.string
 
         "pow" ->
-            powDecoder
+            Jd.map (PowM << Pow) b64Json
+
+        "generatedKeys" ->
+            Jd.map GeneratedKeysM myKeysDecoderJson
 
         badKey ->
             Jd.fail <| "bad key: \"" ++ badKey ++ "\""
 
 
-powDecoder : Jd.Decoder Msg
-powDecoder =
+myKeysDecoderJson : Jd.Decoder MyKeys
+myKeysDecoderJson =
+    Jd.map2 MyKeys
+        (Jd.field "encrypt" keyPairDecoder)
+        (Jd.field "sign" keyPairDecoder)
+
+
+keyPairDecoder : Jd.Decoder KeyPair
+keyPairDecoder =
+    Jd.map2 KeyPair
+        (Jd.field "publicKey" b64Json)
+        (Jd.field "secretKey" b64Json)
+
+
+b64Json : Jd.Decoder Bytes.Bytes
+b64Json =
     Jd.string
         |> Jd.andThen
             (\b64 ->
@@ -893,7 +913,7 @@ powDecoder =
                         Jd.fail <| showB64Error err
 
                     Ok bytes ->
-                        Jd.succeed <| PowM <| Pow bytes
+                        Jd.succeed bytes
             )
 
 
