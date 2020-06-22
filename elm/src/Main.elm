@@ -62,11 +62,43 @@ type Wasm
     | Ordering (List Wasm)
 
 
+wasmOutputBytesDecoder : Bd.Decoder Wasm
+wasmOutputBytesDecoder =
+    Bd.unsignedInt8
+        |> Bd.andThen
+            (\indicator ->
+                case indicator of
+                    0 ->
+                        Bd.map Ordering <| list wasmOutputBytesDecoder
+
+                    1 ->
+                        Bd.map SmallString stringDecoder
+
+                    _ ->
+                        Bd.fail
+            )
+
+
+type MessagingButton
+    = ContactsB
+    | InboxB
+    | DraftsB
+    | SentB
+    | WriteB
+
+
+type AdminButton
+    = PricingB
+    | AccountB
+    | AboutB
+    | HelpB
+
+
 type MessagingPage
-    = WriteE Draft
-    | ContactsE
+    = ContactsE
+    | WriteE ( Draft, Maybe Wasm )
     | InboxE (Maybe ( InboxMessage, Wasm ))
-    | DraftsE (Maybe ( Draft, Wasm ))
+    | DraftsE
     | SentE (Maybe ( Sent, Wasm ))
 
 
@@ -252,9 +284,6 @@ mainPage model =
         AdminP HelpA ->
             E.text "Contact details for support go here"
 
-        MessagingP (WriteE _) ->
-            E.text "Write page goes here"
-
         MessagingP ContactsE ->
             E.text "Contacts page goes here"
 
@@ -269,7 +298,10 @@ mainPage model =
         MessagingP (InboxE (Just message)) ->
             inboxMessageView message model.contacts
 
-        MessagingP (DraftsE _) ->
+        MessagingP (WriteE _) ->
+            E.text "Writer page goes here"
+
+        MessagingP DraftsE ->
             E.text "Drafts page goes here"
 
         MessagingP (SentE _) ->
@@ -440,35 +472,51 @@ adminButtons windowWidth page =
     <|
         List.map
             (adminButton windowWidth page)
-            [ PricingA, AccountA, AboutA, HelpA ]
+            [ PricingB, AccountB, AboutB, HelpB ]
 
 
-adminButton : Int -> Page -> AdminPage -> E.Element Msg
-adminButton windowWidth page adminPage =
+adminButton : Int -> Page -> AdminButton -> E.Element Msg
+adminButton windowWidth page button =
     Ei.button
         []
-        { onPress = Just <| PageClickM <| AdminP adminPage
-        , label = adminButtonLabel windowWidth page adminPage
+        { onPress = Just <| adminButtonMsg button
+        , label = adminButtonLabel windowWidth page button
         }
 
 
-adminButtonLabel : Int -> Page -> AdminPage -> E.Element Msg
-adminButtonLabel windowWidth page adminPage =
+adminButtonMsg : AdminButton -> Msg
+adminButtonMsg button =
+    case button of
+        PricingB ->
+            PricingM
+
+        AccountB ->
+            AccountM
+
+        AboutB ->
+            AboutM
+
+        HelpB ->
+            HelpM
+
+
+adminButtonLabel : Int -> Page -> AdminButton -> E.Element Msg
+adminButtonLabel windowWidth page button =
     E.el
-        (adminLabelStyle windowWidth page adminPage)
+        (adminLabelStyle windowWidth page button)
     <|
         E.text <|
-            adminLabelText adminPage
+            adminLabelText button
 
 
-adminLabelStyle : Int -> Page -> AdminPage -> List (E.Attribute Msg)
-adminLabelStyle windowWidth page adminPage =
+adminLabelStyle : Int -> Page -> AdminButton -> List (E.Attribute Msg)
+adminLabelStyle windowWidth page button =
     [ E.centerX
     , Font.family [ Font.typeface "Ubuntu" ]
     , Font.size <| adminButtonFontSize windowWidth
     , E.paddingXY 8 16
     , Background.color <|
-        if adminPageOn page adminPage then
+        if adminPageOn page button then
             blue
 
         else
@@ -498,13 +546,34 @@ adminButtonFontSize w =
         div
 
 
-adminPageOn : Page -> AdminPage -> Bool
-adminPageOn page adminPage =
-    case ( page, adminPage ) of
-        ( AdminP p1, p2 ) ->
-            p1 == p2
+adminPageOn : Page -> AdminButton -> Bool
+adminPageOn page button =
+    case ( page, button ) of
+        ( AdminP PricingA, PricingB ) ->
+            True
 
-        _ ->
+        ( AdminP PricingA, _ ) ->
+            False
+
+        ( AdminP AccountA, AccountB ) ->
+            True
+
+        ( AdminP AccountA, _ ) ->
+            False
+
+        ( AdminP AboutA, AboutB ) ->
+            True
+
+        ( AdminP AboutA, _ ) ->
+            False
+
+        ( AdminP HelpA, HelpB ) ->
+            True
+
+        ( AdminP HelpA, _ ) ->
+            False
+
+        ( MessagingP _, _ ) ->
             False
 
 
@@ -528,71 +597,85 @@ messagingButtons windowWidth page =
     <|
         List.map
             (messagingButton windowWidth page)
-            [ InboxE Nothing
-            , DraftsE Nothing
-            , SentE Nothing
-            , WriteE emptyDraft
-            , ContactsE
-            ]
+            [ InboxB, WriteB, DraftsB, SentB, ContactsB ]
 
 
-messagingButton : Int -> Page -> MessagingPage -> E.Element Msg
-messagingButton windowWidth page subPage =
+messagingButton : Int -> Page -> MessagingButton -> E.Element Msg
+messagingButton windowWidth page button =
     Ei.button
         [ E.width <| E.minimum 150 E.fill
         , Background.color <|
-            if messagingPageOn page subPage then
+            if messagingPageOn page button then
                 blue
 
             else
                 E.rgb 1 1 1
         ]
         { onPress =
-            Just <| PageClickM <| MessagingP subPage
-        , label = messagingButtonLabel windowWidth page subPage
+            Just <| messagingButtonMsg button
+        , label = messagingButtonLabel windowWidth page button
         }
 
 
-messagingButtonLabel : Int -> Page -> MessagingPage -> E.Element Msg
-messagingButtonLabel windowWidth page subPage =
+messagingButtonMsg : MessagingButton -> Msg
+messagingButtonMsg button =
+    case button of
+        ContactsB ->
+            ContactsM
+
+        InboxB ->
+            InboxM
+
+        DraftsB ->
+            DraftsM
+
+        SentB ->
+            SentM
+
+        WriteB ->
+            WriteM
+
+
+messagingButtonLabel : Int -> Page -> MessagingButton -> E.Element Msg
+messagingButtonLabel windowWidth page button =
     E.el
-        (messagingLabelStyle windowWidth page subPage)
+        (messagingLabelStyle windowWidth page button)
     <|
         E.text <|
-            messagingLabelText subPage
+            messagingLabelText button
 
 
-messagingLabelText : MessagingPage -> String
-messagingLabelText page =
-    case page of
-        WriteE _ ->
+messagingLabelText : MessagingButton -> String
+messagingLabelText button =
+    case button of
+        WriteB ->
             "Write"
 
-        ContactsE ->
+        ContactsB ->
             "Contacts"
 
-        InboxE _ ->
+        InboxB ->
             "Inbox"
 
-        DraftsE _ ->
+        DraftsB ->
             "Drafts"
 
-        SentE _ ->
+        SentB ->
             "Sent"
 
 
 messagingLabelStyle :
     Int
     -> Page
-    -> MessagingPage
+    -> MessagingButton
     -> List (E.Attribute Msg)
-messagingLabelStyle windowWidth page subPage =
+messagingLabelStyle windowWidth page button =
     [ E.centerX
     , Font.family [ Font.typeface "Ubuntu" ]
     , E.paddingXY 0 20
     , Font.size <| messagingButtonFontSize windowWidth
     , Background.color <|
-        if messagingPageOn page subPage then
+        if messagingPageOn page button then
             blue
 
         else
@@ -622,29 +705,56 @@ messagingButtonFontSize w =
         div
 
 
-messagingPageOn : Page -> MessagingPage -> Bool
-messagingPageOn page subPage =
-    case ( page, subPage ) of
-        ( MessagingP m1, m2 ) ->
-            m1 == m2
+messagingPageOn : Page -> MessagingButton -> Bool
+messagingPageOn page msg =
+    case ( page, msg ) of
+        ( MessagingP ContactsE, ContactsB ) ->
+            True
 
-        _ ->
+        ( MessagingP ContactsE, _ ) ->
+            False
+
+        ( MessagingP (InboxE _), InboxB ) ->
+            True
+
+        ( MessagingP (InboxE _), _ ) ->
+            False
+
+        ( MessagingP DraftsE, DraftsB ) ->
+            True
+
+        ( MessagingP DraftsE, _ ) ->
+            False
+
+        ( MessagingP (SentE _), SentB ) ->
+            True
+
+        ( MessagingP (SentE _), _ ) ->
+            False
+
+        ( MessagingP (WriteE _), WriteB ) ->
+            True
+
+        ( MessagingP (WriteE _), _ ) ->
+            False
+
+        ( AdminP _, _ ) ->
             False
 
 
-adminLabelText : AdminPage -> String
-adminLabelText adminPage =
-    case adminPage of
-        PricingA ->
+adminLabelText : AdminButton -> String
+adminLabelText button =
+    case button of
+        PricingB ->
             "Pricing"
 
-        AccountA ->
+        AccountB ->
             "Account"
 
-        HelpA ->
+        HelpB ->
             "Help"
 
-        AboutA ->
+        AboutB ->
             "About"
 
 
@@ -717,10 +827,6 @@ type ElmToJs
         }
 
 
-type JsToElm
-    = FromCacheJ String Bytes.Bytes
-
-
 type Msg
     = FromCacheM String Bytes.Bytes
     | GeneratedKeysM MyKeys
@@ -730,42 +836,61 @@ type Msg
     | NameFromServerM MyName
     | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
-    | PageClickM Page
+    | PricingM
+    | AccountM
+    | AboutM
+    | HelpM
+    | InboxM
+    | DraftsM
+    | SentM
+    | ContactsM
+    | WriteM
     | NewWindowWidthM Int
     | InboxMenuClickM String
     | DownloadCodeM Code
     | DownloadBlobM Blob
 
 
-{-| Each piece of data from Javascript is a piece of JSON with fields
-'key' and 'value'.
--}
-decodeFromJs : Je.Value -> Result String JsToElm
-decodeFromJs json =
-    case Jd.decodeValue fromJsDecoder json of
-        Err err ->
-            Err <| Jd.errorToString err
-
-        Ok ok ->
-            Ok ok
-
-
-fromJsDecoder : Jd.Decoder JsToElm
+fromJsDecoder : Jd.Decoder Msg
 fromJsDecoder =
     Jd.andThen fromJsDecoderHelp <| Jd.field "key" Jd.string
 
 
-fromJsDecoderHelp : String -> Jd.Decoder JsToElm
+fromJsDecoderHelp : String -> Jd.Decoder Msg
 fromJsDecoderHelp key =
     case key of
         "fromCache" ->
             fromCacheDecoder
 
+        "wasmOutput" ->
+            wasmOutputDecoder
+
         badKey ->
             Jd.fail <| "bad key: \"" ++ badKey ++ "\""
 
 
-fromCacheDecoder : Jd.Decoder JsToElm
+wasmOutputDecoder : Jd.Decoder Msg
+wasmOutputDecoder =
+    Jd.map2 (\id wasmB64 -> ( id, wasmB64 ))
+        (Jd.field "id" Jd.string)
+        (Jd.field "wasm" Jd.string)
+        |> Jd.andThen
+            (\( id, wasmB64 ) ->
+                case B64d.decode B64d.bytes wasmB64 of
+                    Err err ->
+                        Jd.fail <| showB64Error err
+
+                    Ok bytes ->
+                        case Bd.decode wasmOutputBytesDecoder bytes of
+                            Just wasm ->
+                                Jd.succeed <| WasmOutputM id wasm
+
+                            Nothing ->
+                                Jd.fail "could not decode WASM output bytes"
+            )
+
+
+fromCacheDecoder : Jd.Decoder Msg
 fromCacheDecoder =
     Jd.map2 (\key value -> ( key, value ))
         (Jd.field "key" Jd.string)
@@ -777,7 +902,7 @@ fromCacheDecoder =
                         Jd.fail <| showB64Error err
 
                     Ok bytes ->
-                        Jd.succeed <| FromCacheJ key bytes
+                        Jd.succeed <| FromCacheM key bytes
             )
 
 
@@ -808,13 +933,6 @@ showB64Error error =
             "Invalid byte sequence"
 
 
-toMsg : JsToElm -> Msg
-toMsg j =
-    case j of
-        FromCacheJ key value ->
-            FromCacheM key value
-
-
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     updateHelp [] msg model
@@ -833,28 +951,28 @@ clickCmd summary cmd =
 updateSimple : Msg -> Model -> ( Model, Cmd Msg )
 updateSimple msg model =
     case msg of
-        PageClickM (MessagingP (InboxE _)) ->
+        InboxM ->
             ( { model | page = MessagingP <| InboxE Nothing }
             , clickCmd model.inboxSummary <| cacheGet "inboxSummary"
             )
 
-        PageClickM (MessagingP (DraftsE _)) ->
-            ( { model | page = MessagingP <| DraftsE Nothing }
+        DraftsM ->
+            ( { model | page = MessagingP DraftsE }
             , clickCmd model.draftsSummary <|
                 cacheGet "draftsSummary"
             )
 
-        PageClickM (MessagingP (SentE _)) ->
+        SentM ->
             ( { model | page = MessagingP <| SentE Nothing }
             , clickCmd model.sentSummary <| cacheGet "sentSummary"
             )
 
-        PageClickM (MessagingP (WriteE draft)) ->
-            ( { model | page = MessagingP <| WriteE draft }
+        WriteM ->
+            ( { model | page = MessagingP <| WriteE ( emptyDraft, Nothing ) }
             , Cmd.none
             )
 
-        PageClickM (MessagingP ContactsE) ->
+        ContactsM ->
             ( { model | page = MessagingP ContactsE }
             , case model.contacts of
                 Nothing ->
@@ -864,22 +982,22 @@ updateSimple msg model =
                     Cmd.none
             )
 
-        PageClickM (AdminP PricingA) ->
+        PricingM ->
             ( { model | page = AdminP PricingA }
             , Cmd.none
             )
 
-        PageClickM (AdminP AccountA) ->
+        AccountM ->
             ( { model | page = AdminP AccountA }
             , Cmd.none
             )
 
-        PageClickM (AdminP AboutA) ->
+        AboutM ->
             ( { model | page = AdminP AboutA }
             , Cmd.none
             )
 
-        PageClickM (AdminP HelpA) ->
+        HelpM ->
             ( { model | page = AdminP HelpA }
             , Cmd.none
             )
@@ -925,8 +1043,15 @@ updateSimple msg model =
         WasmOutputM _ _ ->
             ( model, Cmd.none )
 
-        JsonFromJsM _ ->
-            ( model, Cmd.none )
+        JsonFromJsM json ->
+            case Jd.decodeValue fromJsDecoder json of
+                Err err ->
+                    ( { model | fatal = Just <| Jd.errorToString err }
+                    , Cmd.none
+                    )
+
+                Ok fromJsMsg ->
+                    update fromJsMsg model
 
         PowM _ ->
             ( model, Cmd.none )
