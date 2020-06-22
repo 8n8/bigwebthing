@@ -1074,7 +1074,7 @@ updateSimple msg model =
                         Just fromWebsocket ->
                             update (WebsocketM fromWebsocket) model
 
-        WebsocketM (MyNameW myName) ->
+        WebsocketM (MyNameW _) ->
             ( model, Cmd.none )
 
         WebsocketM (KeysForNameW _ _) ->
@@ -1094,6 +1094,26 @@ cacheMyName =
         << CacheSetE "myName"
         << Be.encode
         << Be.signedInt32 Bytes.LE
+
+
+cacheMyKeys : MyKeys -> Cmd Msg
+cacheMyKeys =
+    elmToJs
+        << encodeToJs
+        << CacheSetE "myKeys"
+        << Be.encode
+        << myKeysEncoder
+
+
+myKeysEncoder : MyKeys -> Be.Encoder
+myKeysEncoder { encrypt, sign } =
+    Be.sequence <|
+        List.map Be.bytes
+            [ encrypt.public
+            , encrypt.secret
+            , sign.public
+            , sign.secret
+            ]
 
 
 type FromWebsocket
@@ -1180,7 +1200,7 @@ updateGetMe getMe msg model =
         ( GeneratedKeysG, GeneratedKeysM myKeys ) ->
             ContinuingT
                 model
-                getPowInfo
+                (Cmd.batch [ getPowInfo, cacheMyKeys myKeys ])
                 (GetMeP <| PowInfoG myKeys)
 
         ( GeneratedKeysG, _ ) ->
@@ -1207,7 +1227,7 @@ updateGetMe getMe msg model =
         ( NameFromServerG myKeys, WebsocketM (MyNameW myName) ) ->
             FinishedT
                 { model | myId = Just ( MyName myName, myKeys ) }
-                Cmd.none
+                (cacheMyName myName)
 
         ( NameFromServerG _, _ ) ->
             NotUsedMessageT
