@@ -876,8 +876,25 @@ fromJsDecoderHelp key =
         "websocket" ->
             Jd.map WebsocketB64M Jd.string
 
+        "pow" ->
+            powDecoder
+
         badKey ->
             Jd.fail <| "bad key: \"" ++ badKey ++ "\""
+
+
+powDecoder : Jd.Decoder Msg
+powDecoder =
+    Jd.string
+        |> Jd.andThen
+            (\b64 ->
+                case B64d.decode B64d.bytes b64 of
+                    Err err ->
+                        Jd.fail <| showB64Error err
+
+                    Ok bytes ->
+                        Jd.succeed <| PowM <| Pow bytes
+            )
 
 
 wasmOutputDecoder : Jd.Decoder Msg
