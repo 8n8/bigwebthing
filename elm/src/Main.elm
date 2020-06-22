@@ -840,7 +840,7 @@ type Msg
     = FromCacheM String Bytes.Bytes
     | GeneratedKeysM MyKeys
     | PowM Pow
-    | FromServerM String
+    | WebsocketB64M String
     | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
     | PricingM
@@ -872,6 +872,9 @@ fromJsDecoderHelp key =
 
         "wasmOutput" ->
             wasmOutputDecoder
+
+        "websocket" ->
+            Jd.map WebsocketB64M Jd.string
 
         badKey ->
             Jd.fail <| "bad key: \"" ++ badKey ++ "\""
@@ -1055,7 +1058,7 @@ updateSimple msg model =
         PowM _ ->
             ( model, Cmd.none )
 
-        FromServerM b64 ->
+        WebsocketB64M b64 ->
             case B64d.decode B64d.bytes b64 of
                 Err err ->
                     ( { model | fatal = Just <| showB64Error err }
