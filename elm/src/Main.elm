@@ -141,10 +141,6 @@ type alias Code =
     }
 
 
-type AuthCode
-    = AuthCode Bytes.Bytes
-
-
 type alias Model =
     { myId : Maybe ( MyName, MyKeys )
     , processes : List Process
@@ -818,6 +814,9 @@ encodeToJs value =
                     , ( "msgId", Je.string msgId )
                     ]
 
+        GenerateMyKeysE ->
+            jsKeyVal "generateMyKeys" <| Je.string ""
+
 
 encodePowInfo : PowInfo -> Je.Value
 encodePowInfo { unique, difficulty } =
@@ -832,6 +831,7 @@ type ElmToJs
     | GetPowE PowInfo
     | CacheGetE String
     | CacheSetE String Bytes.Bytes
+    | GenerateMyKeysE
     | RunWasmE
         { userInput : String
         , wasmCode : Bytes.Bytes
@@ -841,6 +841,7 @@ type ElmToJs
 
 type Msg
     = FromCacheM String Bytes.Bytes
+    | BadCacheM String String
     | GeneratedKeysM MyKeys
     | PowM Pow
     | WebsocketB64M String
@@ -884,6 +885,11 @@ fromJsDecoderHelp key =
 
         "generatedKeys" ->
             Jd.map GeneratedKeysM myKeysDecoderJson
+
+        "badCache" ->
+            Jd.map2 BadCacheM
+                (Jd.field "key" Jd.string)
+                (Jd.field "error" Jd.string)
 
         badKey ->
             Jd.fail <| "bad key: \"" ++ badKey ++ "\""
@@ -1126,6 +1132,9 @@ updateSimple msg model =
         WebsocketM (AuthCodeW _) ->
             ( model, Cmd.none )
 
+        BadCacheM _ _ ->
+            ( model, Cmd.none )
+
 
 cacheMyName : String -> Cmd Msg
 cacheMyName =
@@ -1241,6 +1250,12 @@ updateGetMe getMe msg model =
                         model
                         getPowInfo
                         (GetMeP <| PowInfoG myKeys)
+
+        ( KeysFromCacheG, BadCacheM "myKeys" _ ) ->
+            ContinuingT
+                model
+                (elmToJs <| encodeToJs GenerateMyKeysE)
+                (GetMeP GeneratedKeysG)
 
         ( KeysFromCacheG, _ ) ->
             NotUsedMessageT
