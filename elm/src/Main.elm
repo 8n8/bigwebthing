@@ -105,7 +105,7 @@ type MessagingPage
 type alias Sent =
     { id : Int
     , subject : String
-    , to : Int
+    , to : String
     , userInput : String
     , code : Code
     , blobs : List Blob
@@ -127,7 +127,7 @@ type alias InboxMessage =
 type alias Draft =
     { id : Maybe Int
     , subject : String
-    , to : Maybe Int
+    , to : Maybe String
     , userInput : String
     , code : Maybe Code
     , blobs : List Blob
@@ -155,7 +155,7 @@ type alias Model =
     , draftsSummary : Maybe (List DraftSummary)
     , sentSummary : Maybe (List SentSummary)
     , sendingSummary : Maybe (List SendingSummary)
-    , contacts : Maybe (Dict.Dict Int Contact)
+    , contacts : Maybe (Dict.Dict String Contact)
     }
 
 
@@ -173,7 +173,7 @@ type alias TheirKeys =
 
 type alias SendingSummary =
     { subject : String
-    , to : Int
+    , to : String
     , time : Int
     , id : Int
     }
@@ -217,7 +217,7 @@ type alias KeyPair =
 
 
 type MyName
-    = MyName Int
+    = MyName String
 
 
 type Process
@@ -310,7 +310,7 @@ mainPage model =
 
 inboxMessageView :
     ( InboxMessage, Wasm )
-    -> Maybe (Dict.Dict Int Contact)
+    -> Maybe (Dict.Dict String Contact)
     -> E.Element Msg
 inboxMessageView ( msg, wasm ) contacts =
     E.column []
@@ -1087,13 +1087,21 @@ updateSimple msg model =
             ( model, Cmd.none )
 
 
-cacheMyName : Int -> Cmd Msg
+cacheMyName : String -> Cmd Msg
 cacheMyName =
     elmToJs
         << encodeToJs
         << CacheSetE "myName"
         << Be.encode
-        << Be.signedInt32 Bytes.LE
+        << stringEncoder
+
+
+stringEncoder : String -> Be.Encoder
+stringEncoder s =
+    Be.sequence
+        [ Be.unsignedInt32 Bytes.LE <| Be.getStringWidth s
+        , Be.string s
+        ]
 
 
 cacheMyKeys : MyKeys -> Cmd Msg
@@ -1117,8 +1125,8 @@ myKeysEncoder { encrypt, sign } =
 
 
 type FromWebsocket
-    = MyNameW Int
-    | KeysForNameW Int TheirKeys
+    = MyNameW String
+    | KeysForNameW String TheirKeys
     | PowInfoW PowInfo
     | AuthCodeW Bytes.Bytes
 
@@ -1130,7 +1138,7 @@ fromWebsocketDecoder =
             (\indicator ->
                 case indicator of
                     1 ->
-                        Bd.map MyNameW int64Decoder
+                        Bd.map MyNameW stringDecoder
 
                     2 ->
                         keysForNameDecoder
@@ -1149,7 +1157,7 @@ fromWebsocketDecoder =
 keysForNameDecoder : Bd.Decoder FromWebsocket
 keysForNameDecoder =
     Bd.map2 KeysForNameW
-        int64Decoder
+        stringDecoder
         theirKeysDecoder
 
 
