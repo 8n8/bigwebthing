@@ -309,7 +309,7 @@ blobView blob =
         , E.text blob.mime
         , E.text <| prettySize blob.size
         , Ei.button []
-            { onPress = Just <| SimpleM <| DownloadBlobS blob
+            { onPress = Just <| DownloadBlobM blob
             , label = E.text "Download"
             }
         ]
@@ -338,7 +338,7 @@ codeView code =
         [ E.text code.filename
         , E.text <| prettySize <| Bytes.width code.contents
         , Ei.button []
-            { onPress = Just <| SimpleM <| DownloadCodeS code
+            { onPress = Just <| DownloadCodeM code
             , label = E.text "Download"
             }
         ]
@@ -375,7 +375,7 @@ inboxMenuItem : InboxMessageSummary -> E.Element Msg
 inboxMenuItem { subject, fromId, time, id } =
     Ei.button
         []
-        { onPress = Just <| SimpleM <| InboxMenuClickS id
+        { onPress = Just <| InboxMenuClickM id
         , label =
             E.row
                 [ E.spacing 10
@@ -447,7 +447,7 @@ adminButton : Int -> Page -> AdminPage -> E.Element Msg
 adminButton windowWidth page adminPage =
     Ei.button
         []
-        { onPress = Just <| SimpleM <| PageClickS <| AdminP adminPage
+        { onPress = Just <| PageClickM <| AdminP adminPage
         , label = adminButtonLabel windowWidth page adminPage
         }
 
@@ -548,7 +548,7 @@ messagingButton windowWidth page subPage =
                 E.rgb 1 1 1
         ]
         { onPress =
-            Just <| SimpleM <| PageClickS <| MessagingP subPage
+            Just <| PageClickM <| MessagingP subPage
         , label = messagingButtonLabel windowWidth page subPage
         }
 
@@ -648,24 +648,6 @@ adminLabelText adminPage =
             "About"
 
 
-type Simple
-    = PageClickS Page
-    | NewWindowWidthS Int
-    | InboxMenuClickS String
-    | DownloadCodeS Code
-    | DownloadBlobS Blob
-
-
-type ForProcess
-    = FromCacheF String Bytes.Bytes
-    | GeneratedKeysF MyKeys
-    | AuthCodeF AuthCode
-    | PowInfoF PowInfo
-    | PowF Pow
-    | NameFromServerF MyName
-    | WasmOutputF String Wasm
-
-
 port elmToJs : Je.Value -> Cmd msg
 
 
@@ -740,9 +722,19 @@ type JsToElm
 
 
 type Msg
-    = ForProcessM ForProcess
-    | SimpleM Simple
+    = FromCacheM String Bytes.Bytes
+    | GeneratedKeysM MyKeys
+    | AuthCodeM AuthCode
+    | PowInfoM PowInfo
+    | PowM Pow
+    | NameFromServerM MyName
+    | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
+    | PageClickM Page
+    | NewWindowWidthM Int
+    | InboxMenuClickM String
+    | DownloadCodeM Code
+    | DownloadBlobM Blob
 
 
 {-| Each piece of data from Javascript is a piece of JSON with fields
@@ -820,25 +812,12 @@ toMsg : JsToElm -> Msg
 toMsg j =
     case j of
         FromCacheJ key value ->
-            ForProcessM <| FromCacheF key value
+            FromCacheM key value
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    case msg of
-        JsonFromJsM json ->
-            case decodeFromJs json of
-                Err err ->
-                    ( { model | fatal = Just err }, Cmd.none )
-
-                Ok fromJs ->
-                    update (toMsg fromJs) model
-
-        ForProcessM forProcess ->
-            router [] forProcess model
-
-        SimpleM simple ->
-            updateSimple simple model
+    updateHelp [] msg model
 
 
 clickCmd : Maybe a -> Cmd Msg -> Cmd Msg
@@ -851,31 +830,31 @@ clickCmd summary cmd =
             Cmd.none
 
 
-updateSimple : Simple -> Model -> ( Model, Cmd Msg )
+updateSimple : Msg -> Model -> ( Model, Cmd Msg )
 updateSimple msg model =
     case msg of
-        PageClickS (MessagingP (InboxE _)) ->
+        PageClickM (MessagingP (InboxE _)) ->
             ( { model | page = MessagingP <| InboxE Nothing }
             , clickCmd model.inboxSummary <| cacheGet "inboxSummary"
             )
 
-        PageClickS (MessagingP (DraftsE _)) ->
+        PageClickM (MessagingP (DraftsE _)) ->
             ( { model | page = MessagingP <| DraftsE Nothing }
             , clickCmd model.draftsSummary <|
                 cacheGet "draftsSummary"
             )
 
-        PageClickS (MessagingP (SentE _)) ->
+        PageClickM (MessagingP (SentE _)) ->
             ( { model | page = MessagingP <| SentE Nothing }
             , clickCmd model.sentSummary <| cacheGet "sentSummary"
             )
 
-        PageClickS (MessagingP (WriteE draft)) ->
+        PageClickM (MessagingP (WriteE draft)) ->
             ( { model | page = MessagingP <| WriteE draft }
             , Cmd.none
             )
 
-        PageClickS (MessagingP ContactsE) ->
+        PageClickM (MessagingP ContactsE) ->
             ( { model | page = MessagingP ContactsE }
             , case model.contacts of
                 Nothing ->
@@ -885,30 +864,30 @@ updateSimple msg model =
                     Cmd.none
             )
 
-        PageClickS (AdminP PricingA) ->
+        PageClickM (AdminP PricingA) ->
             ( { model | page = AdminP PricingA }
             , Cmd.none
             )
 
-        PageClickS (AdminP AccountA) ->
+        PageClickM (AdminP AccountA) ->
             ( { model | page = AdminP AccountA }
             , Cmd.none
             )
 
-        PageClickS (AdminP AboutA) ->
+        PageClickM (AdminP AboutA) ->
             ( { model | page = AdminP AboutA }
             , Cmd.none
             )
 
-        PageClickS (AdminP HelpA) ->
+        PageClickM (AdminP HelpA) ->
             ( { model | page = AdminP HelpA }
             , Cmd.none
             )
 
-        NewWindowWidthS width ->
+        NewWindowWidthM width ->
             ( { model | windowWidth = width }, Cmd.none )
 
-        InboxMenuClickS id ->
+        InboxMenuClickM id ->
             ( { model
                 | processes =
                     GetInboxMessageP (FromCacheG id)
@@ -917,16 +896,40 @@ updateSimple msg model =
             , cacheGet id
             )
 
-        DownloadCodeS { contents, mime, filename } ->
+        DownloadCodeM { contents, mime, filename } ->
             ( model, Download.bytes filename mime contents )
 
-        DownloadBlobS blob ->
+        DownloadBlobM blob ->
             ( { model
                 | processes =
                     BlobForDownloadP blob :: model.processes
               }
             , cacheGet blob.id
             )
+
+        FromCacheM _ _ ->
+            ( model, Cmd.none )
+
+        GeneratedKeysM _ ->
+            ( model, Cmd.none )
+
+        AuthCodeM _ ->
+            ( model, Cmd.none )
+
+        PowInfoM _ ->
+            ( model, Cmd.none )
+
+        NameFromServerM _ ->
+            ( model, Cmd.none )
+
+        WasmOutputM _ _ ->
+            ( model, Cmd.none )
+
+        JsonFromJsM _ ->
+            ( model, Cmd.none )
+
+        PowM _ ->
+            ( model, Cmd.none )
 
 
 cacheGet : String -> Cmd Msg
@@ -940,10 +943,10 @@ type ProcessTick
     | NotUsedMessageT
 
 
-updateGetMe : GetMe -> ForProcess -> Model -> ProcessTick
+updateGetMe : GetMe -> Msg -> Model -> ProcessTick
 updateGetMe getMe msg model =
     case ( getMe, msg ) of
-        ( KeysFromCacheG, FromCacheF "myKeys" myKeysBytes ) ->
+        ( KeysFromCacheG, FromCacheM "myKeys" myKeysBytes ) ->
             case Bd.decode myKeysDecoder myKeysBytes of
                 Nothing ->
                     FinishedT
@@ -961,7 +964,7 @@ updateGetMe getMe msg model =
         ( KeysFromCacheG, _ ) ->
             NotUsedMessageT
 
-        ( GeneratedKeysG, GeneratedKeysF myKeys ) ->
+        ( GeneratedKeysG, GeneratedKeysM myKeys ) ->
             ContinuingT
                 model
                 getPowInfo
@@ -970,7 +973,7 @@ updateGetMe getMe msg model =
         ( GeneratedKeysG, _ ) ->
             NotUsedMessageT
 
-        ( PowInfoG myKeys, PowInfoF powInfo ) ->
+        ( PowInfoG myKeys, PowInfoM powInfo ) ->
             ContinuingT
                 model
                 (getPow powInfo)
@@ -979,7 +982,7 @@ updateGetMe getMe msg model =
         ( PowInfoG _, _ ) ->
             NotUsedMessageT
 
-        ( PowG myKeys, PowF pow ) ->
+        ( PowG myKeys, PowM pow ) ->
             ContinuingT
                 model
                 (elmToJs <| makeNameRequest pow myKeys)
@@ -988,7 +991,7 @@ updateGetMe getMe msg model =
         ( PowG _, _ ) ->
             NotUsedMessageT
 
-        ( NameFromServerG myKeys, NameFromServerF myName ) ->
+        ( NameFromServerG myKeys, NameFromServerM myName ) ->
             FinishedT
                 { model | myId = Just ( myName, myKeys ) }
                 Cmd.none
@@ -1024,7 +1027,7 @@ makeNameRequest (Pow pow) { encrypt, sign } =
                     ]
 
 
-processTick : Process -> ForProcess -> Model -> ProcessTick
+processTick : Process -> Msg -> Model -> ProcessTick
 processTick p msg model =
     case p of
         GetMeP getMe ->
@@ -1035,7 +1038,7 @@ processTick p msg model =
 
         BlobForDownloadP blob ->
             case msg of
-                FromCacheF id blobBytes ->
+                FromCacheM id blobBytes ->
                     if blob.id == id then
                         FinishedT
                             model
@@ -1158,12 +1161,12 @@ dmap a b =
 
 updateGetInboxMsg :
     GetInboxMessage
-    -> ForProcess
+    -> Msg
     -> Model
     -> ProcessTick
 updateGetInboxMsg getting msg model =
     case ( getting, msg ) of
-        ( FromCacheG idWant, FromCacheF idGot inboxMsgBytes ) ->
+        ( FromCacheG idWant, FromCacheM idGot inboxMsgBytes ) ->
             if idWant == idGot then
                 case Bd.decode inboxMsgDecoder inboxMsgBytes of
                     Nothing ->
@@ -1183,7 +1186,7 @@ updateGetInboxMsg getting msg model =
         ( FromCacheG _, _ ) ->
             NotUsedMessageT
 
-        ( WasmOutputG msg1, WasmOutputF msgId wasm ) ->
+        ( WasmOutputG msg1, WasmOutputM msgId wasm ) ->
             if msg1.id == msgId then
                 FinishedT
                     { model
@@ -1201,11 +1204,15 @@ updateGetInboxMsg getting msg model =
             NotUsedMessageT
 
 
-router : List Process -> ForProcess -> Model -> ( Model, Cmd Msg )
-router notRelevant msg model =
+updateHelp :
+    List Process
+    -> Msg
+    -> Model
+    -> ( Model, Cmd Msg )
+updateHelp notRelevant msg model =
     case model.processes of
         [] ->
-            ( model, Cmd.none )
+            updateSimple msg model
 
         p :: rocesses ->
             case processTick p msg model of
@@ -1224,7 +1231,7 @@ router notRelevant msg model =
                     )
 
                 NotUsedMessageT ->
-                    router (p :: notRelevant) msg model
+                    updateHelp (p :: notRelevant) msg model
 
 
 subscriptions : Model -> Sub Msg
@@ -1232,5 +1239,5 @@ subscriptions _ =
     Sub.batch
         [ jsToElm JsonFromJsM
         , Browser.Events.onResize <|
-            \w _ -> SimpleM <| NewWindowWidthS w
+            \w _ -> NewWindowWidthM w
         ]
