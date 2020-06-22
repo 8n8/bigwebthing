@@ -1231,7 +1231,10 @@ updateHelp notRelevant msg model =
                     )
 
                 NotUsedMessageT ->
-                    updateHelp (p :: notRelevant) msg model
+                    updateHelp
+                        (p :: notRelevant)
+                        msg
+                        { model | processes = rocesses }
 
 
 subscriptions : Model -> Sub Msg
