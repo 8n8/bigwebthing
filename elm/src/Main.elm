@@ -13,10 +13,14 @@ import Element as E
 import Element.Background as Background
 import Element.Font as Font
 import Element.Input as Ei
+import File
 import File.Download as Download
+import File.Select as Select
 import Html
 import Json.Decode as Jd
 import Json.Encode as Je
+import Task
+import Time
 
 
 main : Program Int Model Msg
@@ -125,9 +129,10 @@ type alias InboxMessage =
 
 
 type alias Draft =
-    { id : Maybe Int
+    { id : String
     , subject : String
-    , to : Maybe String
+    , to : String
+    , time : Int
     , userInput : String
     , code : Maybe Code
     , blobs : List Blob
@@ -152,6 +157,7 @@ type alias Model =
     , sentSummary : Maybe (List SentSummary)
     , sendingSummary : Maybe (List SendingSummary)
     , contacts : Maybe (Dict.Dict String Contact)
+    , iota : Maybe Int
     }
 
 
@@ -215,7 +221,7 @@ sentSummaryDecoder =
 
 type alias DraftSummary =
     { subject : String
-    , toId : String
+    , to : String
     , time : Int
     , id : String
     }
@@ -286,12 +292,18 @@ initModel windowWidth =
     , sentSummary = Nothing
     , sendingSummary = Nothing
     , contacts = Nothing
+    , iota = Nothing
     }
 
 
 init : Int -> ( Model, Cmd Msg )
 init windowWidth =
-    ( initModel windowWidth, Cmd.none )
+    ( initModel windowWidth, initCmd )
+
+
+initCmd : Cmd Msg
+initCmd =
+    cacheGet "iota"
 
 
 view : Model -> Html.Html Msg
@@ -341,14 +353,165 @@ mainPage model =
         MessagingP (InboxE (Just message)) ->
             inboxMessageView message model.contacts
 
-        MessagingP (WriteE _) ->
-            E.text "Writer page goes here"
+        MessagingP (WriteE w) ->
+            writerView w
 
         MessagingP DraftsE ->
             E.text "Drafts page goes here"
 
         MessagingP (SentE _) ->
             E.text "Sent page goes here"
+
+
+writerView : ( Draft, Maybe Wasm ) -> E.Element Msg
+writerView ( draft, maybeWasm ) =
+    E.column []
+        [ toBox draft.to draft.id
+        , subjectBox draft.subject draft.id
+        , userInputBox draft.userInput draft.id
+        , case maybeWasm of
+            Nothing ->
+                E.none
+
+            Just wasm ->
+                wasmView wasm
+        , editCode draft.code draft.id
+        , editBlobs draft.blobs draft.id
+        ]
+
+
+toBox : String -> String -> E.Element Msg
+toBox to draftId =
+    E.row []
+        [ Ei.text []
+            { onChange =
+                \newTo ->
+                    NewToM { draftId = draftId, to = newTo }
+            , text = to
+            , placeholder = Nothing
+            , label = Ei.labelAbove [] <| E.text "To:"
+            }
+        , case validTo to of
+            Nothing ->
+                E.none
+
+            Just err ->
+                E.text err
+        ]
+
+
+validTo : String -> Maybe String
+validTo candidate =
+    case String.toInt candidate of
+        Nothing ->
+            Just "Must be a number"
+
+        Just i ->
+            if i < 0 then
+                Just "No negative numbers"
+
+            else
+                Nothing
+
+
+updateDraft : Draft -> Maybe Wasm -> Model -> ( Model, Cmd Msg )
+updateDraft newDraft maybeWasm model =
+    let
+        newDraftsSummary =
+            updateDraftsSummary newDraft model.draftsSummary
+    in
+    ( { model
+        | page = MessagingP (WriteE ( newDraft, maybeWasm ))
+        , draftsSummary = newDraftsSummary
+      }
+    , Cmd.batch
+        [ cacheDraft newDraft
+        , case newDraftsSummary of
+            Nothing ->
+                Cmd.none
+
+            Just summary ->
+                cacheDraftsSummary summary
+        ]
+    )
+
+
+subjectBox : String -> String -> E.Element Msg
+subjectBox subject draftId =
+    Ei.text []
+        { onChange =
+            \s -> NewSubjectM { draftId = draftId, subject = s }
+        , text = subject
+        , placeholder = Nothing
+        , label = Ei.labelAbove [] <| E.text "Type the subject here:"
+        }
+
+
+userInputBox : String -> String -> E.Element Msg
+userInputBox userInput draftId =
+    Ei.multiline []
+        { onChange =
+            \u -> NewUserInputM { draftId = draftId, userInput = u }
+        , text = userInput
+        , placeholder = Nothing
+        , label = Ei.labelAbove [] <| E.text "Type the message here:"
+        , spellcheck = True
+        }
+
+
+editCode : Maybe Code -> String -> E.Element Msg
+editCode maybeCode draftId =
+    case maybeCode of
+        Nothing ->
+            Ei.button []
+                { onPress = Just <| UploadCodeM draftId
+                , label = E.text "Upload code"
+                }
+
+        Just code ->
+            E.row []
+                [ E.text code.filename
+                , E.text <| prettySize <| Bytes.width code.contents
+                , Ei.button []
+                    { onPress = Just <| DownloadCodeM code
+                    , label = E.text "Download"
+                    }
+                ]
+
+
+editBlobs : List Blob -> String -> E.Element Msg
+editBlobs blobs draftId =
+    E.column [] <|
+        List.map (editBlob draftId) blobs
+            ++ [ uploadBlob draftId ]
+
+
+uploadBlob : String -> E.Element Msg
+uploadBlob draftId =
+    Ei.button []
+        { onPress = Just <| UploadBlobM draftId
+        , label = E.text "Upload a file"
+        }
+
+
+editBlob : String -> Blob -> E.Element Msg
+editBlob draftId blob =
+    E.row []
+        [ E.text blob.filename
+        , E.text blob.mime
+        , E.text <| prettySize blob.size
+        , Ei.button []
+            { onPress =
+                Just <|
+                    DeleteBlobM
+                        { draftId = draftId, blobId = blob.id }
+            , label = E.text "Delete"
+            }
+        , Ei.button []
+            { onPress = Just <| DownloadBlobM blob
+            , label = E.text "Download"
+            }
+        ]
 
 
 inboxMessageView :
@@ -620,11 +783,12 @@ adminPageOn page button =
             False
 
 
-emptyDraft : Draft
-emptyDraft =
-    { id = Nothing
+emptyDraft : String -> Int -> Draft
+emptyDraft id time =
+    { id = id
     , subject = ""
-    , to = Nothing
+    , time = time
+    , to = ""
     , userInput = ""
     , code = Nothing
     , blobs = []
@@ -679,7 +843,11 @@ messagingButtonMsg button =
             WriteM
 
 
-messagingButtonLabel : Int -> Page -> MessagingButton -> E.Element Msg
+messagingButtonLabel :
+    Int
+    -> Page
+    -> MessagingButton
+    -> E.Element Msg
 messagingButtonLabel windowWidth page button =
     E.el
         (messagingLabelStyle windowWidth page button)
@@ -844,6 +1012,9 @@ encodeToJs value =
                       )
                     ]
 
+        CacheDeleteE key ->
+            jsKeyVal "cacheDelete" <| Je.string key
+
         GetPowE powInfo ->
             jsKeyVal "getPow" <| encodePowInfo powInfo
 
@@ -873,22 +1044,31 @@ encodePowInfo { unique, difficulty } =
         ]
 
 
+type alias RunWasm =
+    { userInput : String
+    , wasmCode : Bytes.Bytes
+    , msgId : String
+    }
+
+
 type ElmToJs
     = WebsocketE Bytes.Bytes
     | GetPowE PowInfo
     | CacheGetE String
     | CacheSetE String Bytes.Bytes
+    | CacheDeleteE String
     | GenerateMyKeysE
-    | RunWasmE
-        { userInput : String
-        , wasmCode : Bytes.Bytes
-        , msgId : String
-        }
+    | RunWasmE RunWasm
 
 
 type Msg
     = FromCacheM String Bytes.Bytes
     | BadCacheM String String
+    | TimeForWriteM Time.Posix
+    | BlobSelectedM String File.File
+    | BlobUploadedM String File.File Bytes.Bytes
+    | CodeSelectedM String File.File
+    | CodeUploadedM String File.File Bytes.Bytes
     | GeneratedKeysM MyKeys
     | PowM Pow
     | WebsocketB64M String
@@ -908,6 +1088,13 @@ type Msg
     | DownloadCodeM Code
     | DownloadBlobM Blob
     | WebsocketM FromWebsocket
+    | NewToM { draftId : String, to : String }
+    | NewSubjectM { draftId : String, subject : String }
+    | NewUserInputM { draftId : String, userInput : String }
+    | UploadCodeM String
+    | UploadBlobM String
+    | DeleteBlobM { draftId : String, blobId : String }
+    | NullCacheM String
 
 
 fromJsDecoder : Jd.Decoder Msg
@@ -937,6 +1124,9 @@ fromJsDecoderHelp key =
             Jd.map2 BadCacheM
                 (Jd.field "key" Jd.string)
                 (Jd.field "error" Jd.string)
+
+        "nullCache" ->
+            Jd.map NullCacheM Jd.string
 
         badKey ->
             Jd.fail <| "bad key: \"" ++ badKey ++ "\""
@@ -970,6 +1160,11 @@ b64Json =
             )
 
 
+badWasmBytes : String
+badWasmBytes =
+    "could not decode WASM output bytes"
+
+
 wasmOutputDecoder : Jd.Decoder Msg
 wasmOutputDecoder =
     Jd.map2 (\id wasmB64 -> ( id, wasmB64 ))
@@ -987,8 +1182,82 @@ wasmOutputDecoder =
                                 Jd.succeed <| WasmOutputM id wasm
 
                             Nothing ->
-                                Jd.fail "could not decode WASM output bytes"
+                                Jd.fail badWasmBytes
             )
+
+
+badSummary : String -> Maybe String
+badSummary box =
+    Just <| "could not decode " ++ box ++ " summary bytes"
+
+
+blobUploaded :
+    Model
+    -> String
+    -> File.File
+    -> Bytes.Bytes
+    -> ( Model, Cmd Msg )
+blobUploaded model draftId file bytes =
+    case ( model.page, model.iota ) of
+        ( MessagingP (WriteE ( draft, maybeWasm )), Just iota ) ->
+            if draft.id /= draftId then
+                ( model, Cmd.none )
+
+            else
+                let
+                    blobId =
+                        String.fromInt iota
+
+                    newBlob =
+                        { id = blobId
+                        , mime = File.mime file
+                        , filename = File.name file
+                        , size = Bytes.width bytes
+                        }
+
+                    newDraft =
+                        { draft | blobs = newBlob :: draft.blobs }
+                in
+                ( { model
+                    | page =
+                        MessagingP (WriteE ( newDraft, maybeWasm ))
+                    , iota = Just <| iota + 1
+                  }
+                , Cmd.batch
+                    [ cacheDraft newDraft
+                    , cacheBlob blobId bytes
+                    , cacheIota iota
+                    ]
+                )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+updateDeleteBlob : Model -> String -> String -> ( Model, Cmd Msg )
+updateDeleteBlob model draftId blobId =
+    case model.page of
+        MessagingP (WriteE ( draft, maybeWasm )) ->
+            if draft.id /= draftId then
+                ( model, Cmd.none )
+
+            else
+                let
+                    newDraft =
+                        { draft
+                            | blobs =
+                                deleteBlob blobId draft.blobs
+                        }
+                in
+                ( { model
+                    | page =
+                        MessagingP (WriteE ( newDraft, maybeWasm ))
+                  }
+                , deleteBlobFromCache blobId
+                )
+
+        _ ->
+            ( model, Cmd.none )
 
 
 fromCacheDecoder : Jd.Decoder Msg
@@ -1069,9 +1338,27 @@ updateSimple msg model =
             )
 
         WriteM ->
-            ( { model | page = MessagingP <| WriteE ( emptyDraft, Nothing ) }
-            , Cmd.none
-            )
+            ( model, Task.perform TimeForWriteM Time.now )
+
+        TimeForWriteM posix ->
+            case model.iota of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just iota ->
+                    ( { model
+                        | page =
+                            MessagingP <|
+                                WriteE
+                                    ( emptyDraft
+                                        (String.fromInt iota)
+                                        (Time.posixToMillis posix)
+                                    , Nothing
+                                    )
+                        , iota = Just <| iota + 1
+                      }
+                    , cacheIota iota
+                    )
 
         ContactsM ->
             ( { model | page = MessagingP ContactsE }
@@ -1129,7 +1416,7 @@ updateSimple msg model =
         FromCacheM "inboxSummary" bytes ->
             case Bd.decode (list inboxMessageSummaryDecoder) bytes of
                 Nothing ->
-                    ( { model | fatal = Just "could not decode inbox summary bytes" }
+                    ( { model | fatal = badSummary "inbox" }
                     , Cmd.none
                     )
 
@@ -1138,13 +1425,13 @@ updateSimple msg model =
                     , Cmd.none
                     )
 
-        BadCacheM "inboxSummary" _ ->
+        NullCacheM "inboxSummary" ->
             ( { model | inboxSummary = Just [] }, Cmd.none )
 
         FromCacheM "draftsSummary" bytes ->
             case Bd.decode (list draftSummaryDecoder) bytes of
                 Nothing ->
-                    ( { model | fatal = Just "could not decode drafts summary bytes" }
+                    ( { model | fatal = badSummary "drafts" }
                     , Cmd.none
                     )
 
@@ -1153,13 +1440,13 @@ updateSimple msg model =
                     , Cmd.none
                     )
 
-        BadCacheM "draftsSummary" _ ->
+        NullCacheM "draftsSummary" ->
             ( { model | draftsSummary = Just [] }, Cmd.none )
 
         FromCacheM "sentSummary" bytes ->
             case Bd.decode (list sentSummaryDecoder) bytes of
                 Nothing ->
-                    ( { model | fatal = Just "could not decode sent summary bytes" }
+                    ( { model | fatal = badSummary "sent" }
                     , Cmd.none
                     )
 
@@ -1168,24 +1455,45 @@ updateSimple msg model =
                     , Cmd.none
                     )
 
-        BadCacheM "sentSummary" _ ->
+        NullCacheM "sentSummary" ->
             ( { model | sentSummary = Just [] }, Cmd.none )
 
         FromCacheM "contacts" bytes ->
             case Bd.decode contactsDecoder bytes of
                 Nothing ->
-                    ( { model | fatal = Just "could not decode contacts bytes" }
+                    ( { model
+                        | fatal =
+                            Just
+                                "could not decode contacts bytes"
+                      }
                     , Cmd.none
                     )
 
                 Just contacts ->
                     ( { model | contacts = Just contacts }, Cmd.none )
 
+        NullCacheM "contacts" ->
+            ( { model | contacts = Just Dict.empty }, Cmd.none )
+
+        FromCacheM "iota" iotaBs ->
+            case Bd.decode (Bd.unsignedInt32 Bytes.LE) iotaBs of
+                Nothing ->
+                    ( { model
+                        | fatal =
+                            Just
+                                "could not decode iota bytes"
+                      }
+                    , Cmd.none
+                    )
+
+                Just iota ->
+                    ( { model | iota = Just iota }, Cmd.none )
+
+        NullCacheM "iota" ->
+            ( { model | iota = Just 0 }, Cmd.none )
+
         FromCacheM _ _ ->
             ( model, Cmd.none )
-
-        BadCacheM "contacts" _ ->
-            ( { model | contacts = Just Dict.empty }, Cmd.none )
 
         GeneratedKeysM _ ->
             ( model, Cmd.none )
@@ -1237,8 +1545,296 @@ updateSimple msg model =
         WebsocketM (AuthCodeW _) ->
             ( model, Cmd.none )
 
-        BadCacheM _ _ ->
-            ( model, Cmd.none )
+        BadCacheM key err ->
+            ( { model
+                | fatal =
+                    Just <|
+                        "bad cache: "
+                            ++ key
+                            ++ ": "
+                            ++ err
+              }
+            , Cmd.none
+            )
+
+        NewToM { draftId, to } ->
+            case model.page of
+                MessagingP (WriteE ( draft, maybeWasm )) ->
+                    if draft.id /= draftId then
+                        ( model, Cmd.none )
+
+                    else
+                        updateDraft
+                            { draft | to = to }
+                            maybeWasm
+                            model
+
+                _ ->
+                    ( model, Cmd.none )
+
+        NewSubjectM { draftId, subject } ->
+            case model.page of
+                MessagingP (WriteE ( draft, maybeWasm )) ->
+                    if draft.id /= draftId then
+                        ( model, Cmd.none )
+
+                    else
+                        updateDraft
+                            { draft | subject = subject }
+                            maybeWasm
+                            model
+
+                _ ->
+                    ( model, Cmd.none )
+
+        NewUserInputM { draftId, userInput } ->
+            case model.page of
+                MessagingP (WriteE ( draft, maybeWasm )) ->
+                    if draft.id /= draftId then
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            newDraft =
+                                { draft | userInput = userInput }
+                        in
+                        ( { model
+                            | page =
+                                MessagingP
+                                    (WriteE ( newDraft, maybeWasm ))
+                          }
+                        , Cmd.batch
+                            [ cacheDraft newDraft
+                            , case draft.code of
+                                Nothing ->
+                                    Cmd.none
+
+                                Just { contents } ->
+                                    runDraftWasm
+                                        { userInput = userInput
+                                        , wasmCode = contents
+                                        , msgId = draftId
+                                        }
+                            ]
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        UploadCodeM draftId ->
+            ( model
+            , Select.file
+                [ "application/wasm" ]
+                (CodeSelectedM draftId)
+            )
+
+        CodeSelectedM draftId file ->
+            ( model
+            , Task.perform
+                (CodeUploadedM draftId file)
+              <|
+                File.toBytes file
+            )
+
+        CodeUploadedM draftId file bytes ->
+            case model.page of
+                MessagingP (WriteE ( draft, maybeWasm )) ->
+                    if draft.id /= draftId then
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            newCode =
+                                { contents = bytes
+                                , mime = File.mime file
+                                , filename = File.name file
+                                }
+
+                            newDraft =
+                                { draft | code = Just newCode }
+                        in
+                        ( { model
+                            | page =
+                                MessagingP
+                                    (WriteE ( newDraft, maybeWasm ))
+                          }
+                        , Cmd.batch
+                            [ cacheDraft newDraft
+                            , runDraftWasm
+                                { userInput = draft.userInput
+                                , wasmCode = newCode.contents
+                                , msgId = draft.id
+                                }
+                            ]
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        UploadBlobM draftId ->
+            ( model
+            , Select.file
+                [ "application/octet-stream" ]
+                (BlobSelectedM draftId)
+            )
+
+        BlobSelectedM draftId file ->
+            ( model
+            , Task.perform
+                (BlobUploadedM draftId file)
+              <|
+                File.toBytes file
+            )
+
+        BlobUploadedM draftId file bytes ->
+            blobUploaded model draftId file bytes
+
+        DeleteBlobM { draftId, blobId } ->
+            updateDeleteBlob model draftId blobId
+
+        NullCacheM unknown ->
+            ( { model
+                | fatal =
+                    Just <| "unknown null cache: " ++ unknown
+              }
+            , Cmd.none
+            )
+
+
+deleteBlob : String -> List Blob -> List Blob
+deleteBlob id blobs =
+    List.filter (\blob -> blob.id /= id) blobs
+
+
+deleteBlobFromCache : String -> Cmd Msg
+deleteBlobFromCache =
+    elmToJs << encodeToJs << CacheDeleteE
+
+
+cacheBlob : String -> Bytes.Bytes -> Cmd Msg
+cacheBlob id bytes =
+    CacheSetE id bytes |> encodeToJs |> elmToJs
+
+
+runDraftWasm : RunWasm -> Cmd Msg
+runDraftWasm =
+    elmToJs << encodeToJs << RunWasmE
+
+
+cacheDraftsSummary : List DraftSummary -> Cmd Msg
+cacheDraftsSummary =
+    elmToJs
+        << encodeToJs
+        << CacheSetE "draftsSummary"
+        << Be.encode
+        << listEncoder draftSummaryEncoder
+
+
+draftSummaryEncoder : DraftSummary -> Be.Encoder
+draftSummaryEncoder { subject, to, time, id } =
+    Be.sequence
+        [ stringEncoder subject
+        , stringEncoder to
+        , Be.unsignedInt32 Bytes.LE time
+        , stringEncoder id
+        ]
+
+
+listEncoder : (a -> Be.Encoder) -> List a -> Be.Encoder
+listEncoder encoder items =
+    Be.sequence <|
+        (Be.unsignedInt32 Bytes.LE <| List.length items)
+            :: List.map encoder items
+
+
+updateDraftsSummary :
+    Draft
+    -> Maybe (List DraftSummary)
+    -> Maybe (List DraftSummary)
+updateDraftsSummary draft maybeOldSummary =
+    case maybeOldSummary of
+        Nothing ->
+            maybeOldSummary
+
+        Just oldSummary ->
+            Just <| List.map (updateDraftSummary draft) oldSummary
+
+
+updateDraftSummary : Draft -> DraftSummary -> DraftSummary
+updateDraftSummary draft summary =
+    if draft.id == summary.id then
+        { subject = draft.subject
+        , to = draft.to
+        , time = draft.time
+        , id = draft.id
+        }
+
+    else
+        summary
+
+
+cacheDraft : Draft -> Cmd Msg
+cacheDraft draft =
+    draft
+        |> elmToJs
+        << encodeToJs
+        << CacheSetE draft.id
+        << Be.encode
+        << draftEncoder
+
+
+draftEncoder : Draft -> Be.Encoder
+draftEncoder { id, subject, to, userInput, code, blobs } =
+    Be.sequence
+        [ stringEncoder id
+        , stringEncoder subject
+        , stringEncoder to
+        , stringEncoder userInput
+        , maybeCodeEncoder code
+        , listEncoder blobEncoder blobs
+        ]
+
+
+maybeCodeEncoder : Maybe Code -> Be.Encoder
+maybeCodeEncoder maybeCode =
+    case maybeCode of
+        Nothing ->
+            Be.unsignedInt8 0
+
+        Just { contents, mime, filename } ->
+            Be.sequence
+                [ Be.unsignedInt8 1
+                , bytesEncoder contents
+                , stringEncoder mime
+                , stringEncoder filename
+                ]
+
+
+bytesEncoder : Bytes.Bytes -> Be.Encoder
+bytesEncoder bytes =
+    Be.sequence
+        [ Be.unsignedInt32 Bytes.LE <| Bytes.width bytes
+        , Be.bytes bytes
+        ]
+
+
+blobEncoder : Blob -> Be.Encoder
+blobEncoder { id, mime, filename, size } =
+    Be.sequence
+        [ stringEncoder id
+        , stringEncoder mime
+        , stringEncoder filename
+        , Be.unsignedInt32 Bytes.LE size
+        ]
+
+
+cacheIota : Int -> Cmd Msg
+cacheIota =
+    elmToJs
+        << encodeToJs
+        << CacheSetE "iota"
+        << Be.encode
+        << Be.unsignedInt32 Bytes.LE
 
 
 cacheMyName : String -> Cmd Msg
@@ -1560,6 +2156,11 @@ dmap a b =
     Bd.map b a
 
 
+badInboxMsg : Maybe String
+badInboxMsg =
+    Just "bad bytes in inbox message from cache"
+
+
 updateGetInboxMsg :
     GetInboxMessage
     -> Msg
@@ -1572,7 +2173,7 @@ updateGetInboxMsg getting msg model =
                 case Bd.decode inboxMsgDecoder inboxMsgBytes of
                     Nothing ->
                         FinishedT
-                            { model | fatal = Just "bad bytes in inbox message from cache" }
+                            { model | fatal = badInboxMsg }
                             Cmd.none
 
                     Just inboxMsg ->
