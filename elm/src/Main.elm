@@ -34,8 +34,7 @@ main =
 
 
 type GetMe
-    = KeysFromCacheG
-    | GeneratedKeysG
+    = KeysFromJsG
     | PowInfoG MyKeys
     | PowG MyKeys
     | NameFromServerG MyKeys
@@ -107,7 +106,7 @@ type MessagingPage
 
 
 type alias Sent =
-    { id : Int
+    { id : String
     , subject : String
     , to : String
     , userInput : String
@@ -148,6 +147,7 @@ type alias Code =
 
 type alias Model =
     { myId : Maybe ( MyName, MyKeys )
+    , nonFatal : Maybe String
     , processes : List Process
     , fatal : Maybe String
     , page : Page
@@ -158,6 +158,7 @@ type alias Model =
     , sendingSummary : Maybe (List SendingSummary)
     , contacts : Maybe (Dict.Dict String Contact)
     , iota : Maybe Int
+    , lastWasmRun : Maybe String
     }
 
 
@@ -254,14 +255,8 @@ inboxMessageSummaryDecoder =
 
 
 type alias MyKeys =
-    { encrypt : KeyPair
-    , sign : KeyPair
-    }
-
-
-type alias KeyPair =
-    { public : Bytes.Bytes
-    , secret : Bytes.Bytes
+    { encrypt : Bytes.Bytes
+    , sign : EcdsaKey
     }
 
 
@@ -283,16 +278,18 @@ type GetInboxMessage
 initModel : Int -> Model
 initModel windowWidth =
     { myId = Nothing
-    , processes = [ GetMeP KeysFromCacheG ]
+    , processes = [ GetMeP KeysFromJsG ]
     , fatal = Nothing
     , page = MessagingP (InboxE Nothing)
     , windowWidth = windowWidth
+    , nonFatal = Nothing
     , inboxSummary = Nothing
     , draftsSummary = Nothing
     , sentSummary = Nothing
     , sendingSummary = Nothing
     , contacts = Nothing
     , iota = Nothing
+    , lastWasmRun = Nothing
     }
 
 
@@ -313,15 +310,20 @@ view model =
 
 viewE : Model -> E.Element Msg
 viewE model =
-    E.column
-        [ E.width E.fill
-        , E.spacingXY 0 20
-        ]
-        [ title model.windowWidth
-        , adminButtons model.windowWidth model.page
-        , messagingButtons model.windowWidth model.page
-        , mainPage model
-        ]
+    case model.fatal of
+        Just err ->
+            E.text err
+
+        Nothing ->
+            E.column
+                [ E.width E.fill
+                , E.spacingXY 0 20
+                ]
+                [ title model.windowWidth
+                , adminButtons model.windowWidth model.page
+                , messagingButtons model.windowWidth model.page
+                , mainPage model
+                ]
 
 
 mainPage : Model -> E.Element Msg
@@ -402,16 +404,20 @@ toBox to draftId =
 
 validTo : String -> Maybe String
 validTo candidate =
-    case String.toInt candidate of
-        Nothing ->
-            Just "Must be a number"
+    if candidate == "" then
+        Nothing
 
-        Just i ->
-            if i < 0 then
-                Just "No negative numbers"
+    else
+        case String.toInt candidate of
+            Nothing ->
+                Just "Must be a number"
 
-            else
-                Nothing
+            Just i ->
+                if i < 0 then
+                    Just "No negative numbers"
+
+                else
+                    Nothing
 
 
 updateDraft : Draft -> Maybe Wasm -> Model -> ( Model, Cmd Msg )
@@ -1018,6 +1024,13 @@ encodeToJs value =
         GetPowE powInfo ->
             jsKeyVal "getPow" <| encodePowInfo powInfo
 
+        RerunWasmE { userInput, msgId } ->
+            jsKeyVal "rerunWasm" <|
+                Je.object
+                    [ ( "userInput", Je.string userInput )
+                    , ( "msgId", Je.string msgId )
+                    ]
+
         RunWasmE { userInput, wasmCode, msgId } ->
             jsKeyVal "runWasm" <|
                 Je.object
@@ -1031,9 +1044,6 @@ encodeToJs value =
                       )
                     , ( "msgId", Je.string msgId )
                     ]
-
-        GenerateMyKeysE ->
-            jsKeyVal "generateMyKeys" <| Je.string ""
 
 
 encodePowInfo : PowInfo -> Je.Value
@@ -1057,8 +1067,8 @@ type ElmToJs
     | CacheGetE String
     | CacheSetE String Bytes.Bytes
     | CacheDeleteE String
-    | GenerateMyKeysE
     | RunWasmE RunWasm
+    | RerunWasmE { userInput : String, msgId : String }
 
 
 type Msg
@@ -1069,7 +1079,7 @@ type Msg
     | BlobUploadedM String File.File Bytes.Bytes
     | CodeSelectedM String File.File
     | CodeUploadedM String File.File Bytes.Bytes
-    | GeneratedKeysM MyKeys
+    | MyPublicKeysM MyKeys
     | PowM Pow
     | WebsocketB64M String
     | WasmOutputM String Wasm
@@ -1095,55 +1105,67 @@ type Msg
     | UploadBlobM String
     | DeleteBlobM { draftId : String, blobId : String }
     | NullCacheM String
+    | BadWebsocketM
 
 
 fromJsDecoder : Jd.Decoder Msg
 fromJsDecoder =
-    Jd.andThen fromJsDecoderHelp <| Jd.field "key" Jd.string
+    Jd.andThen fromJsDecoderHelp <|
+        Jd.field "key" Jd.string
 
 
 fromJsDecoderHelp : String -> Jd.Decoder Msg
 fromJsDecoderHelp key =
-    case key of
-        "fromCache" ->
-            fromCacheDecoder
+    Jd.field "value" <|
+        case key of
+            "badWebsocket" ->
+                Jd.succeed BadWebsocketM
 
-        "wasmOutput" ->
-            wasmOutputDecoder
+            "fromCache" ->
+                fromCacheDecoder
 
-        "websocket" ->
-            Jd.map WebsocketB64M Jd.string
+            "wasmOutput" ->
+                wasmOutputDecoder
 
-        "pow" ->
-            Jd.map (PowM << Pow) b64Json
+            "websocket" ->
+                Jd.map WebsocketB64M Jd.string
 
-        "generatedKeys" ->
-            Jd.map GeneratedKeysM myKeysDecoderJson
+            "pow" ->
+                Jd.map (PowM << Pow) b64Json
 
-        "badCache" ->
-            Jd.map2 BadCacheM
-                (Jd.field "key" Jd.string)
-                (Jd.field "error" Jd.string)
+            "publicKeys" ->
+                Jd.map MyPublicKeysM myKeysDecoderJson
 
-        "nullCache" ->
-            Jd.map NullCacheM Jd.string
+            "badCache" ->
+                Jd.map2 BadCacheM
+                    (Jd.field "key" Jd.string)
+                    (Jd.field "error" Jd.string)
 
-        badKey ->
-            Jd.fail <| "bad key: \"" ++ badKey ++ "\""
+            "nullCache" ->
+                Jd.map NullCacheM Jd.string
+
+            badKey ->
+                Jd.fail <| "bad key: \"" ++ badKey ++ "\""
 
 
 myKeysDecoderJson : Jd.Decoder MyKeys
 myKeysDecoderJson =
     Jd.map2 MyKeys
-        (Jd.field "encrypt" keyPairDecoder)
-        (Jd.field "sign" keyPairDecoder)
+        (Jd.field "encrypt" b64Json)
+        (Jd.field "sign" ecdsaDecoder)
 
 
-keyPairDecoder : Jd.Decoder KeyPair
-keyPairDecoder =
-    Jd.map2 KeyPair
-        (Jd.field "publicKey" b64Json)
-        (Jd.field "secretKey" b64Json)
+type alias EcdsaKey =
+    { x : Bytes.Bytes
+    , y : Bytes.Bytes
+    }
+
+
+ecdsaDecoder : Jd.Decoder EcdsaKey
+ecdsaDecoder =
+    Jd.map2 EcdsaKey
+        (Jd.field "x" b64Json)
+        (Jd.field "y" b64Json)
 
 
 b64Json : Jd.Decoder Bytes.Bytes
@@ -1274,23 +1296,6 @@ fromCacheDecoder =
                     Ok bytes ->
                         Jd.succeed <| FromCacheM key bytes
             )
-
-
-myKeysDecoder : Bd.Decoder MyKeys
-myKeysDecoder =
-    Bd.map2 MyKeys
-        encryptKeysDecoder
-        signKeysDecoder
-
-
-encryptKeysDecoder : Bd.Decoder KeyPair
-encryptKeysDecoder =
-    Bd.map2 KeyPair (Bd.bytes 32) (Bd.bytes 32)
-
-
-signKeysDecoder : Bd.Decoder KeyPair
-signKeysDecoder =
-    Bd.map2 KeyPair (Bd.bytes 32) (Bd.bytes 64)
 
 
 showB64Error : B64d.Error -> String
@@ -1495,11 +1500,24 @@ updateSimple msg model =
         FromCacheM _ _ ->
             ( model, Cmd.none )
 
-        GeneratedKeysM _ ->
-            ( model, Cmd.none )
+        WasmOutputM msgId wasm ->
+            case model.page of
+                MessagingP (WriteE ( draft, _ )) ->
+                    if draft.id /= msgId then
+                        ( model, Cmd.none )
 
-        WasmOutputM _ _ ->
-            ( model, Cmd.none )
+                    else
+                        ( { model
+                            | page =
+                                MessagingP <|
+                                    WriteE ( draft, Just wasm )
+                            , lastWasmRun = Just msgId
+                          }
+                        , Cmd.none
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
 
         JsonFromJsM json ->
             case Jd.decodeValue fromJsDecoder json of
@@ -1587,39 +1605,8 @@ updateSimple msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        NewUserInputM { draftId, userInput } ->
-            case model.page of
-                MessagingP (WriteE ( draft, maybeWasm )) ->
-                    if draft.id /= draftId then
-                        ( model, Cmd.none )
-
-                    else
-                        let
-                            newDraft =
-                                { draft | userInput = userInput }
-                        in
-                        ( { model
-                            | page =
-                                MessagingP
-                                    (WriteE ( newDraft, maybeWasm ))
-                          }
-                        , Cmd.batch
-                            [ cacheDraft newDraft
-                            , case draft.code of
-                                Nothing ->
-                                    Cmd.none
-
-                                Just { contents } ->
-                                    runDraftWasm
-                                        { userInput = userInput
-                                        , wasmCode = contents
-                                        , msgId = draftId
-                                        }
-                            ]
-                        )
-
-                _ ->
-                    ( model, Cmd.none )
+        NewUserInputM i ->
+            updateOnUserInput i model
 
         UploadCodeM draftId ->
             ( model
@@ -1660,7 +1647,10 @@ updateSimple msg model =
                           }
                         , Cmd.batch
                             [ cacheDraft newDraft
-                            , runDraftWasm
+                            , elmToJs
+                                << encodeToJs
+                                << RunWasmE
+                              <|
                                 { userInput = draft.userInput
                                 , wasmCode = newCode.contents
                                 , msgId = draft.id
@@ -1700,6 +1690,12 @@ updateSimple msg model =
             , Cmd.none
             )
 
+        BadWebsocketM ->
+            ( { model | nonFatal = Just "No network connection" }, Cmd.none )
+
+        MyPublicKeysM _ ->
+            ( model, Cmd.none )
+
 
 deleteBlob : String -> List Blob -> List Blob
 deleteBlob id blobs =
@@ -1714,6 +1710,91 @@ deleteBlobFromCache =
 cacheBlob : String -> Bytes.Bytes -> Cmd Msg
 cacheBlob id bytes =
     CacheSetE id bytes |> encodeToJs |> elmToJs
+
+
+updateOnUserInput :
+    { draftId : String, userInput : String }
+    -> Model
+    -> ( Model, Cmd Msg )
+updateOnUserInput { draftId, userInput } model =
+    case model.page of
+        MessagingP (WriteE ( draft, maybeWasm )) ->
+            if draft.id /= draftId then
+                ( model, Cmd.none )
+
+            else
+                case model.lastWasmRun of
+                    Nothing ->
+                        onUserInputHelp
+                            model
+                            draft
+                            userInput
+                            maybeWasm
+
+                    Just lastRunId ->
+                        if lastRunId /= draft.id then
+                            onUserInputHelp
+                                model
+                                draft
+                                userInput
+                                maybeWasm
+
+                        else
+                            let
+                                newDraft =
+                                    { draft | userInput = userInput }
+                            in
+                            ( { model
+                                | page =
+                                    MessagingP <|
+                                        WriteE ( newDraft, maybeWasm )
+                              }
+                            , Cmd.batch
+                                [ cacheDraft newDraft
+                                , case draft.code of
+                                    Nothing ->
+                                        Cmd.none
+
+                                    Just _ ->
+                                        { userInput = userInput
+                                        , msgId = draft.id
+                                        }
+                                            |> elmToJs
+                                            << encodeToJs
+                                            << RerunWasmE
+                                ]
+                            )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+onUserInputHelp :
+    Model
+    -> Draft
+    -> String
+    -> Maybe Wasm
+    -> ( Model, Cmd Msg )
+onUserInputHelp model draft userInput maybeWasm =
+    let
+        newDraft =
+            { draft | userInput = userInput }
+    in
+    ( { model | page = MessagingP (WriteE ( newDraft, maybeWasm )) }
+    , Cmd.batch
+        [ cacheDraft newDraft
+        , case draft.code of
+            Nothing ->
+                Cmd.none
+
+            Just { contents } ->
+                runDraftWasm
+                    { userInput = userInput
+                    , wasmCode = contents
+                    , msgId = draft.id
+                    }
+        ]
+    )
 
 
 runDraftWasm : RunWasm -> Cmd Msg
@@ -1854,26 +1935,6 @@ stringEncoder s =
         ]
 
 
-cacheMyKeys : MyKeys -> Cmd Msg
-cacheMyKeys =
-    elmToJs
-        << encodeToJs
-        << CacheSetE "myKeys"
-        << Be.encode
-        << myKeysEncoder
-
-
-myKeysEncoder : MyKeys -> Be.Encoder
-myKeysEncoder { encrypt, sign } =
-    Be.sequence <|
-        List.map Be.bytes
-            [ encrypt.public
-            , encrypt.secret
-            , sign.public
-            , sign.secret
-            ]
-
-
 type FromWebsocket
     = MyNameW String
     | KeysForNameW String TheirKeys
@@ -1937,37 +1998,13 @@ type ProcessTick
 updateGetMe : GetMe -> Msg -> Model -> ProcessTick
 updateGetMe getMe msg model =
     case ( getMe, msg ) of
-        ( KeysFromCacheG, FromCacheM "myKeys" myKeysBytes ) ->
-            case Bd.decode myKeysDecoder myKeysBytes of
-                Nothing ->
-                    FinishedT
-                        { model
-                            | fatal = Just "bad bytes in \"myKeys\""
-                        }
-                        Cmd.none
-
-                Just myKeys ->
-                    ContinuingT
-                        model
-                        getPowInfo
-                        (GetMeP <| PowInfoG myKeys)
-
-        ( KeysFromCacheG, BadCacheM "myKeys" _ ) ->
+        ( KeysFromJsG, MyPublicKeysM myKeys ) ->
             ContinuingT
                 model
-                (elmToJs <| encodeToJs GenerateMyKeysE)
-                (GetMeP GeneratedKeysG)
-
-        ( KeysFromCacheG, _ ) ->
-            NotUsedMessageT
-
-        ( GeneratedKeysG, GeneratedKeysM myKeys ) ->
-            ContinuingT
-                model
-                (Cmd.batch [ getPowInfo, cacheMyKeys myKeys ])
+                getPowInfo
                 (GetMeP <| PowInfoG myKeys)
 
-        ( GeneratedKeysG, _ ) ->
+        ( KeysFromJsG, _ ) ->
             NotUsedMessageT
 
         ( PowInfoG myKeys, WebsocketM (PowInfoW powInfo) ) ->
@@ -2019,8 +2056,9 @@ makeNameRequest (Pow pow) { encrypt, sign } =
                 Be.sequence
                     [ Be.unsignedInt8 1
                     , Be.bytes pow
-                    , Be.bytes sign.public
-                    , Be.bytes encrypt.public
+                    , Be.bytes sign.x
+                    , Be.bytes sign.y
+                    , Be.bytes encrypt
                     ]
 
 
