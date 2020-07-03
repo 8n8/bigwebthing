@@ -367,7 +367,7 @@ mainPage model =
 
 writerView : ( Draft, Maybe Wasm ) -> E.Element Msg
 writerView ( draft, maybeWasm ) =
-    E.column []
+    E.column [ E.spacing 15, E.width E.fill ]
         [ toBox draft.to draft.id
         , subjectBox draft.subject draft.id
         , userInputBox draft.userInput draft.id
@@ -382,42 +382,30 @@ writerView ( draft, maybeWasm ) =
         ]
 
 
+normalTextSize : Int
+normalTextSize =
+    25
+
+
 toBox : String -> String -> E.Element Msg
 toBox to draftId =
-    E.row []
-        [ Ei.text []
-            { onChange =
-                \newTo ->
-                    NewToM { draftId = draftId, to = newTo }
-            , text = to
-            , placeholder = Nothing
-            , label = Ei.labelAbove [] <| E.text "To:"
-            }
-        , case validTo to of
-            Nothing ->
-                E.none
-
-            Just err ->
-                E.text err
+    Ei.text
+        [ Font.size normalTextSize
+        , ubuntuMono
         ]
-
-
-validTo : String -> Maybe String
-validTo candidate =
-    if candidate == "" then
-        Nothing
-
-    else
-        case String.toInt candidate of
-            Nothing ->
-                Just "Must be a number"
-
-            Just i ->
-                if i < 0 then
-                    Just "No negative numbers"
-
-                else
-                    Nothing
+        { onChange =
+            \newTo ->
+                NewToM { draftId = draftId, to = newTo }
+        , text = to
+        , placeholder = Nothing
+        , label =
+            Ei.labelAbove
+                [ Font.size normalTextSize
+                , ubuntu
+                ]
+            <|
+                E.text "To:"
+        }
 
 
 updateDraft : Draft -> Maybe Wasm -> Model -> ( Model, Cmd Msg )
@@ -444,23 +432,41 @@ updateDraft newDraft maybeWasm model =
 
 subjectBox : String -> String -> E.Element Msg
 subjectBox subject draftId =
-    Ei.text []
+    Ei.text
+        [ Font.size normalTextSize
+        , ubuntuMono
+        ]
         { onChange =
             \s -> NewSubjectM { draftId = draftId, subject = s }
         , text = subject
         , placeholder = Nothing
-        , label = Ei.labelAbove [] <| E.text "Type the subject here:"
+        , label =
+            Ei.labelAbove
+                [ ubuntu
+                , Font.size normalTextSize
+                ]
+            <|
+                E.text "Subject:"
         }
 
 
 userInputBox : String -> String -> E.Element Msg
 userInputBox userInput draftId =
-    Ei.multiline []
+    Ei.multiline
+        [ Font.size normalTextSize
+        , ubuntuMono
+        ]
         { onChange =
             \u -> NewUserInputM { draftId = draftId, userInput = u }
         , text = userInput
         , placeholder = Nothing
-        , label = Ei.labelAbove [] <| E.text "Type the message here:"
+        , label =
+            Ei.labelAbove
+                [ ubuntu
+                , Font.size normalTextSize
+                ]
+            <|
+                E.text "Message:"
         , spellcheck = True
         }
 
@@ -471,7 +477,11 @@ editCode maybeCode draftId =
         Nothing ->
             Ei.button []
                 { onPress = Just <| UploadCodeM draftId
-                , label = E.text "Upload code"
+                , label =
+                    E.el
+                        [ ubuntu, Font.size normalTextSize ]
+                    <|
+                        E.text "Upload code"
                 }
 
         Just code ->
@@ -496,7 +506,11 @@ uploadBlob : String -> E.Element Msg
 uploadBlob draftId =
     Ei.button []
         { onPress = Just <| UploadBlobM draftId
-        , label = E.text "Upload a file"
+        , label =
+            E.el
+                [ ubuntu, Font.size normalTextSize ]
+            <|
+                E.text "Upload a file"
         }
 
 
@@ -535,9 +549,19 @@ inboxMessageView ( msg, wasm ) _ =
         ]
 
 
+ubuntu : E.Attribute Msg
+ubuntu =
+    Font.family [ Font.typeface "Ubuntu" ]
+
+
+ubuntuMono : E.Attribute Msg
+ubuntuMono =
+    Font.family [ Font.typeface "Ubuntu Mono" ]
+
+
 userInputView : String -> E.Element Msg
 userInputView userInput =
-    E.el [ Font.family [ Font.typeface "Ubuntu Mono" ] ] <|
+    E.el [ ubuntuMono ] <|
         E.text userInput
 
 
@@ -572,7 +596,7 @@ wasmView wasm =
 
 showSmallString : String -> E.Element Msg
 showSmallString s =
-    E.el [ Font.family [ Font.typeface "Ubuntu Mono" ] ] <|
+    E.el [ ubuntuMono ] <|
         E.text s
 
 
@@ -642,7 +666,7 @@ title windowWidth =
         [ E.centerX
         , Font.size <| titleSize windowWidth
         , Font.color blue
-        , Font.family [ Font.typeface "Ubuntu" ]
+        , ubuntu
         ]
     <|
         E.text "BigWebThing"
@@ -724,7 +748,7 @@ adminButtonLabel windowWidth page button =
 adminLabelStyle : Int -> Page -> AdminButton -> List (E.Attribute Msg)
 adminLabelStyle windowWidth page button =
     [ E.centerX
-    , Font.family [ Font.typeface "Ubuntu" ]
+    , ubuntu
     , Font.size <| adminButtonFontSize windowWidth
     , E.paddingXY 8 16
     , Background.color <|
@@ -888,7 +912,7 @@ messagingLabelStyle :
     -> List (E.Attribute Msg)
 messagingLabelStyle windowWidth page button =
     [ E.centerX
-    , Font.family [ Font.typeface "Ubuntu" ]
+    , ubuntu
     , E.paddingXY 0 20
     , Font.size <| messagingButtonFontSize windowWidth
     , Background.color <|
