@@ -11,6 +11,7 @@ import Bytes.Encode as Be
 import Dict
 import Element as E
 import Element.Background as Background
+import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Ei
 import File
@@ -722,7 +723,7 @@ adminButtons windowWidth page =
 adminButton : Int -> Page -> AdminButton -> E.Element Msg
 adminButton windowWidth page button =
     Ei.button
-        []
+        [ Border.rounded buttonCorner ]
         { onPress = Just <| adminButtonMsg button
         , label = adminButtonLabel windowWidth page button
         }
@@ -759,6 +760,7 @@ adminLabelStyle windowWidth page button =
     , ubuntu
     , Font.size <| adminButtonFontSize windowWidth
     , E.paddingXY 8 16
+    , Border.rounded buttonCorner
     , Background.color <|
         if adminPageOn page button then
             blue
@@ -849,6 +851,7 @@ messagingButton : Int -> Page -> MessagingButton -> E.Element Msg
 messagingButton windowWidth page button =
     Ei.button
         [ E.width <| E.minimum 150 E.fill
+        , Border.rounded buttonCorner
         , Background.color <|
             if messagingPageOn page button then
                 blue
@@ -913,6 +916,11 @@ messagingLabelText button =
             "Sent"
 
 
+buttonCorner : Int
+buttonCorner =
+    3
+
+
 messagingLabelStyle :
     Int
     -> Page
@@ -921,6 +929,7 @@ messagingLabelStyle :
 messagingLabelStyle windowWidth page button =
     [ E.centerX
     , ubuntu
+    , Border.rounded buttonCorner
     , E.paddingXY 0 20
     , Font.size <| messagingButtonFontSize windowWidth
     , Background.color <|
