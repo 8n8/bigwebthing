@@ -686,6 +686,16 @@ blue =
     E.rgb255 69 143 255
 
 
+lightBlue : E.Color
+lightBlue =
+    E.rgb255 179 209 255
+
+
+veryLightBlue : E.Color
+veryLightBlue =
+    E.rgb255 230 240 255
+
+
 titleSize : Int -> Int
 titleSize w =
     let
@@ -763,7 +773,7 @@ adminLabelStyle windowWidth page button =
     , Border.rounded buttonCorner
     , Background.color <|
         if adminPageOn page button then
-            blue
+            lightBlue
 
         else
             E.rgb255 255 255 255
@@ -854,7 +864,7 @@ messagingButton windowWidth page button =
         , Border.rounded buttonCorner
         , Background.color <|
             if messagingPageOn page button then
-                blue
+                lightBlue
 
             else
                 E.rgb 1 1 1
@@ -934,7 +944,7 @@ messagingLabelStyle windowWidth page button =
     , Font.size <| messagingButtonFontSize windowWidth
     , Background.color <|
         if messagingPageOn page button then
-            blue
+            lightBlue
 
         else
             E.rgb255 255 255 255
