@@ -305,7 +305,7 @@ initCmd =
 
 view : Model -> Html.Html Msg
 view model =
-    E.layout [ E.padding 5 ] <| viewE model
+    E.layout [ E.padding 20 ] <| viewE model
 
 
 viewE : Model -> E.Element Msg
@@ -367,7 +367,7 @@ mainPage model =
 
 writerView : ( Draft, Maybe Wasm ) -> E.Element Msg
 writerView ( draft, maybeWasm ) =
-    E.column [ E.spacing 15, E.width E.fill ]
+    E.column [ E.spacing 30, E.paddingXY 0 20, E.width E.fill ]
         [ toBox draft.to draft.id
         , subjectBox draft.subject draft.id
         , userInputBox draft.userInput draft.id
@@ -392,6 +392,7 @@ toBox to draftId =
     Ei.text
         [ Font.size normalTextSize
         , ubuntuMono
+        , E.width <| E.maximum 400 <| E.fill
         ]
         { onChange =
             \newTo ->
@@ -399,12 +400,14 @@ toBox to draftId =
         , text = to
         , placeholder = Nothing
         , label =
-            Ei.labelAbove
+            Ei.labelLeft
                 [ Font.size normalTextSize
                 , ubuntu
+                , E.centerY
+                , E.paddingEach { left = 0, right = 7, bottom = 0, top = 0 }
                 ]
             <|
-                E.text "To:"
+                E.text "To"
         }
 
 
@@ -435,18 +438,21 @@ subjectBox subject draftId =
     Ei.text
         [ Font.size normalTextSize
         , ubuntuMono
+        , E.width <| E.maximum 900 <| E.fill
         ]
         { onChange =
             \s -> NewSubjectM { draftId = draftId, subject = s }
         , text = subject
         , placeholder = Nothing
         , label =
-            Ei.labelAbove
+            Ei.labelLeft
                 [ ubuntu
+                , E.centerY
                 , Font.size normalTextSize
+                , E.paddingEach { left = 0, right = 7, bottom = 0, top = 0 }
                 ]
             <|
-                E.text "Subject:"
+                E.text "Subject"
         }
 
 
@@ -455,6 +461,7 @@ userInputBox userInput draftId =
     Ei.multiline
         [ Font.size normalTextSize
         , ubuntuMono
+        , E.height <| E.minimum 100 <| E.shrink
         ]
         { onChange =
             \u -> NewUserInputM { draftId = draftId, userInput = u }
@@ -464,9 +471,10 @@ userInputBox userInput draftId =
             Ei.labelAbove
                 [ ubuntu
                 , Font.size normalTextSize
+                , E.paddingEach { left = 0, right = 0, top = 0, bottom = 5 }
                 ]
             <|
-                E.text "Message:"
+                E.text "Message"
         , spellcheck = True
         }
 
@@ -703,7 +711,7 @@ adminButtons : Int -> Page -> E.Element Msg
 adminButtons windowWidth page =
     E.row
         [ E.centerX
-        , E.spacingXY 5 0
+        , E.spacingXY 13 5
         ]
     <|
         List.map
@@ -829,7 +837,7 @@ messagingButtons : Int -> Page -> E.Element Msg
 messagingButtons windowWidth page =
     E.wrappedRow
         [ E.width E.fill
-        , E.spacingXY 5 10
+        , E.spacingXY 15 10
         ]
     <|
         List.map
