@@ -12,6 +12,7 @@ import Dict
 import Element as E
 import Element.Background as Background
 import Element.Border as Border
+import Element.Events as Events
 import Element.Font as Font
 import Element.Input as Ei
 import File
@@ -73,7 +74,8 @@ wasmOutputBytesDecoder =
             (\indicator ->
                 case indicator of
                     0 ->
-                        Bd.map Ordering <| list wasmOutputBytesDecoder
+                        Bd.map Ordering <|
+                            list wasmOutputBytesDecoder
 
                     1 ->
                         Bd.map SmallString stringDecoder
@@ -149,6 +151,8 @@ type alias Code =
 type alias Model =
     { myId : Maybe ( MyName, MyKeys )
     , nonFatal : Maybe String
+    , adminHover : Maybe AdminButton
+    , messagingHover : Maybe MessagingButton
     , processes : List Process
     , fatal : Maybe String
     , page : Page
@@ -291,6 +295,8 @@ initModel windowWidth =
     , contacts = Nothing
     , iota = Nothing
     , lastWasmRun = Nothing
+    , adminHover = Nothing
+    , messagingHover = Nothing
     }
 
 
@@ -321,8 +327,14 @@ viewE model =
                 , E.spacingXY 0 20
                 ]
                 [ title model.windowWidth
-                , adminButtons model.windowWidth model.page
-                , messagingButtons model.windowWidth model.page
+                , adminButtons
+                    model.windowWidth
+                    model.page
+                    model.adminHover
+                , messagingButtons
+                    model.windowWidth
+                    model.page
+                    model.messagingHover
                 , mainPage model
                 ]
 
@@ -405,7 +417,8 @@ toBox to draftId =
                 [ Font.size normalTextSize
                 , ubuntu
                 , E.centerY
-                , E.paddingEach { left = 0, right = 7, bottom = 0, top = 0 }
+                , E.paddingEach
+                    { left = 0, right = 7, bottom = 0, top = 0 }
                 ]
             <|
                 E.text "To"
@@ -450,7 +463,8 @@ subjectBox subject draftId =
                 [ ubuntu
                 , E.centerY
                 , Font.size normalTextSize
-                , E.paddingEach { left = 0, right = 7, bottom = 0, top = 0 }
+                , E.paddingEach
+                    { left = 0, right = 7, bottom = 0, top = 0 }
                 ]
             <|
                 E.text "Subject"
@@ -472,7 +486,8 @@ userInputBox userInput draftId =
             Ei.labelAbove
                 [ ubuntu
                 , Font.size normalTextSize
-                , E.paddingEach { left = 0, right = 0, top = 0, bottom = 5 }
+                , E.paddingEach
+                    { left = 0, right = 0, top = 0, bottom = 5 }
                 ]
             <|
                 E.text "Message"
@@ -688,7 +703,7 @@ blue =
 
 lightBlue : E.Color
 lightBlue =
-    E.rgb255 179 209 255
+    E.rgb255 153 194 255
 
 
 veryLightBlue : E.Color
@@ -718,24 +733,47 @@ titleSize w =
         div
 
 
-adminButtons : Int -> Page -> E.Element Msg
-adminButtons windowWidth page =
+adminButtons : Int -> Page -> Maybe AdminButton -> E.Element Msg
+adminButtons windowWidth page hover =
     E.row
         [ E.centerX
         , E.spacingXY 13 5
         ]
     <|
         List.map
-            (adminButton windowWidth page)
+            (adminButton hover windowWidth page)
             [ PricingB, AccountB, AboutB, HelpB ]
 
 
-adminButton : Int -> Page -> AdminButton -> E.Element Msg
-adminButton windowWidth page button =
+adminButton :
+    Maybe AdminButton
+    -> Int
+    -> Page
+    -> AdminButton
+    -> E.Element Msg
+adminButton hover windowWidth page button =
     Ei.button
-        [ Border.rounded buttonCorner ]
+        [ Border.rounded buttonCorner
+        , Events.onMouseEnter <| MouseAdminM <| Just button
+        , Events.onMouseLeave <| MouseAdminM Nothing
+        , Background.color <|
+            if adminPageOn page button then
+                lightBlue
+
+            else
+                case hover of
+                    Nothing ->
+                        white
+
+                    Just hovered ->
+                        if hovered == button then
+                            veryLightBlue
+
+                        else
+                            white
+        ]
         { onPress = Just <| adminButtonMsg button
-        , label = adminButtonLabel windowWidth page button
+        , label = adminButtonLabel windowWidth button
         }
 
 
@@ -755,29 +793,28 @@ adminButtonMsg button =
             HelpM
 
 
-adminButtonLabel : Int -> Page -> AdminButton -> E.Element Msg
-adminButtonLabel windowWidth page button =
+adminButtonLabel : Int -> AdminButton -> E.Element Msg
+adminButtonLabel windowWidth button =
     E.el
-        (adminLabelStyle windowWidth page button)
+        (adminLabelStyle windowWidth)
     <|
         E.text <|
             adminLabelText button
 
 
-adminLabelStyle : Int -> Page -> AdminButton -> List (E.Attribute Msg)
-adminLabelStyle windowWidth page button =
+adminLabelStyle : Int -> List (E.Attribute Msg)
+adminLabelStyle windowWidth =
     [ E.centerX
     , ubuntu
     , Font.size <| adminButtonFontSize windowWidth
     , E.paddingXY 8 16
     , Border.rounded buttonCorner
-    , Background.color <|
-        if adminPageOn page button then
-            lightBlue
-
-        else
-            E.rgb255 255 255 255
     ]
+
+
+white : E.Color
+white =
+    E.rgb255 255 255 255
 
 
 adminButtonFontSize : Int -> Int
@@ -845,33 +882,53 @@ emptyDraft id time =
     }
 
 
-messagingButtons : Int -> Page -> E.Element Msg
-messagingButtons windowWidth page =
+messagingButtons :
+    Int
+    -> Page
+    -> Maybe MessagingButton
+    -> E.Element Msg
+messagingButtons windowWidth page hover =
     E.wrappedRow
         [ E.width E.fill
         , E.spacingXY 15 10
         ]
     <|
         List.map
-            (messagingButton windowWidth page)
+            (messagingButton hover windowWidth page)
             [ InboxB, WriteB, DraftsB, SentB, ContactsB ]
 
 
-messagingButton : Int -> Page -> MessagingButton -> E.Element Msg
-messagingButton windowWidth page button =
+messagingButton :
+    Maybe MessagingButton
+    -> Int
+    -> Page
+    -> MessagingButton
+    -> E.Element Msg
+messagingButton hover windowWidth page button =
     Ei.button
         [ E.width <| E.minimum 150 E.fill
+        , Events.onMouseEnter <| MouseMessagingM <| Just button
+        , Events.onMouseLeave <| MouseMessagingM Nothing
         , Border.rounded buttonCorner
         , Background.color <|
             if messagingPageOn page button then
                 lightBlue
 
             else
-                E.rgb 1 1 1
+                case hover of
+                    Nothing ->
+                        white
+
+                    Just hovered ->
+                        if hovered == button then
+                            veryLightBlue
+
+                        else
+                            white
         ]
         { onPress =
             Just <| messagingButtonMsg button
-        , label = messagingButtonLabel windowWidth page button
+        , label = messagingButtonLabel windowWidth button
         }
 
 
@@ -896,12 +953,11 @@ messagingButtonMsg button =
 
 messagingButtonLabel :
     Int
-    -> Page
     -> MessagingButton
     -> E.Element Msg
-messagingButtonLabel windowWidth page button =
+messagingButtonLabel windowWidth button =
     E.el
-        (messagingLabelStyle windowWidth page button)
+        (messagingLabelStyle windowWidth)
     <|
         E.text <|
             messagingLabelText button
@@ -933,21 +989,13 @@ buttonCorner =
 
 messagingLabelStyle :
     Int
-    -> Page
-    -> MessagingButton
     -> List (E.Attribute Msg)
-messagingLabelStyle windowWidth page button =
+messagingLabelStyle windowWidth =
     [ E.centerX
     , ubuntu
     , Border.rounded buttonCorner
     , E.paddingXY 0 20
     , Font.size <| messagingButtonFontSize windowWidth
-    , Background.color <|
-        if messagingPageOn page button then
-            lightBlue
-
-        else
-            E.rgb255 255 255 255
     ]
 
 
@@ -1125,6 +1173,8 @@ type ElmToJs
 type Msg
     = FromCacheM String Bytes.Bytes
     | BadCacheM String String
+    | MouseAdminM (Maybe AdminButton)
+    | MouseMessagingM (Maybe MessagingButton)
     | TimeForWriteM Time.Posix
     | BlobSelectedM String File.File
     | BlobUploadedM String File.File Bytes.Bytes
@@ -1742,10 +1792,18 @@ updateSimple msg model =
             )
 
         BadWebsocketM ->
-            ( { model | nonFatal = Just "No network connection" }, Cmd.none )
+            ( { model | nonFatal = Just "No network connection" }
+            , Cmd.none
+            )
 
         MyPublicKeysM _ ->
             ( model, Cmd.none )
+
+        MouseAdminM button ->
+            ( { model | adminHover = button }, Cmd.none )
+
+        MouseMessagingM button ->
+            ( { model | messagingHover = button }, Cmd.none )
 
 
 deleteBlob : String -> List Blob -> List Blob
