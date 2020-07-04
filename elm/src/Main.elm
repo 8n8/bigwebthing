@@ -19,7 +19,6 @@ import File
 import File.Download as Download
 import File.Select as Select
 import Html
-import Html.Attributes as Hat
 import Json.Decode as Jd
 import Json.Encode as Je
 import Task
@@ -313,11 +312,7 @@ initCmd =
 
 view : Model -> Html.Html Msg
 view model =
-    E.layout [] <| viewE model
-
-
-blue2 =
-    E.rgb255 17 144 212
+    E.layout [ E.padding 20 ] <| viewE model
 
 
 viewE : Model -> E.Element Msg
@@ -331,23 +326,16 @@ viewE model =
                 [ E.width E.fill
                 , E.spacingXY 0 20
                 ]
-                [ E.column
-                    [ E.width E.fill
-                    , Background.color blue2
-                    ]
-                    [ E.row [ E.width E.fill, E.padding 5 ]
-                        [ title model.windowWidth
-                        , adminButtons
-                            model.windowWidth
-                            model.page
-                            model.adminHover
-                        ]
-                    , messagingButtons
-                        model.windowWidth
-                        model.page
-                        model.messagingHover
-                    ]
-                , E.el [ E.paddingXY 20 0, E.width E.fill ] <| mainPage model
+                [ title model.windowWidth
+                , adminButtons
+                    model.windowWidth
+                    model.page
+                    model.adminHover
+                , messagingButtons
+                    model.windowWidth
+                    model.page
+                    model.messagingHover
+                , mainPage model
                 ]
 
 
@@ -699,9 +687,9 @@ prettyTime =
 title : Int -> E.Element Msg
 title windowWidth =
     E.el
-        [ Font.size 30
-        , Font.color white
-        , E.padding 10
+        [ E.centerX
+        , Font.size <| titleSize windowWidth
+        , Font.color blue
         , ubuntu
         ]
     <|
@@ -748,45 +736,13 @@ titleSize w =
 adminButtons : Int -> Page -> Maybe AdminButton -> E.Element Msg
 adminButtons windowWidth page hover =
     E.row
-        [ E.alignRight
-        , E.spacingXY 10 5
+        [ E.centerX
+        , E.spacingXY 13 5
         ]
     <|
         List.map
             (adminButton hover windowWidth page)
             [ PricingB, AccountB, AboutB, HelpB ]
-
-
-black =
-    E.rgb255 0 0 0
-
-
-hoverStyle =
-    [ Background.color lightBlue
-    ]
-
-
-borderWidth =
-    Border.width 3
-
-
-clickedStyle =
-    [ Background.color white
-    , Border.color white
-    , borderWidth
-    ]
-
-
-notClickedStyle =
-    [ Background.color blue2
-    , Border.color blue2
-    , borderWidth
-    , E.mouseOver [ Background.color darkblue ]
-    ]
-
-
-darkblue =
-    E.rgb255 13 112 165
 
 
 adminButton :
@@ -797,27 +753,25 @@ adminButton :
     -> E.Element Msg
 adminButton hover windowWidth page button =
     Ei.button
-        ([ Border.rounded buttonCorner
+        [ Border.rounded buttonCorner
+        , Events.onMouseEnter <| MouseAdminM <| Just button
+        , Events.onMouseLeave <| MouseAdminM Nothing
+        , Background.color <|
+            if adminPageOn page button then
+                lightBlue
 
-         -- , Events.onMouseEnter <| MouseAdminM <| Just button
-         -- , Events.onMouseLeave <| MouseAdminM Nothing
-         ]
-            ++ (if adminPageOn page button then
-                    clickedStyle
+            else
+                case hover of
+                    Nothing ->
+                        white
 
-                else
-                    notClickedStyle
-               )
-        )
-        --         case hover of
-        --             Nothing ->
-        --                 notClickedStyle
-        --             Just hovered ->
-        --                 if hovered == button then
-        --                     hoverStyle
-        --                 else
-        --                     notClickedStyle
-        -- ))
+                    Just hovered ->
+                        if hovered == button then
+                            veryLightBlue
+
+                        else
+                            white
+        ]
         { onPress = Just <| adminButtonMsg button
         , label = adminButtonLabel windowWidth button
         }
@@ -852,7 +806,7 @@ adminLabelStyle : Int -> List (E.Attribute Msg)
 adminLabelStyle windowWidth =
     [ E.centerX
     , ubuntu
-    , Font.size 20
+    , Font.size <| adminButtonFontSize windowWidth
     , E.paddingXY 8 16
     , Border.rounded buttonCorner
     ]
@@ -952,35 +906,26 @@ messagingButton :
     -> E.Element Msg
 messagingButton hover windowWidth page button =
     Ei.button
-        ([ E.width <| E.minimum 150 E.fill
+        [ E.width <| E.minimum 150 E.fill
+        , Events.onMouseEnter <| MouseMessagingM <| Just button
+        , Events.onMouseLeave <| MouseMessagingM Nothing
+        , Border.rounded buttonCorner
+        , Background.color <|
+            if messagingPageOn page button then
+                lightBlue
 
-         -- , Events.onMouseEnter <| MouseMessagingM <| Just button
-         , Border.roundEach
-            { topLeft = buttonCorner
-            , topRight = buttonCorner
-            , bottomLeft = 0
-            , bottomRight = 0
-            }
-         , E.htmlAttribute <| Hat.style "box-shadow" "none"
+            else
+                case hover of
+                    Nothing ->
+                        white
 
-         -- , Events.onMouseLeave <| MouseMessagingM Nothing
-         ]
-            ++ (if messagingPageOn page button then
-                    clickedStyle
+                    Just hovered ->
+                        if hovered == button then
+                            veryLightBlue
 
-                else
-                    notClickedStyle
-               )
-        )
-        --         case hover of
-        --             Nothing ->
-        --                 notClickedStyle
-        --             Just hovered ->
-        --                 if hovered == button then
-        --                     hoverStyle
-        --                 else
-        --                     notClickedStyle
-        -- ))
+                        else
+                            white
+        ]
         { onPress =
             Just <| messagingButtonMsg button
         , label = messagingButtonLabel windowWidth button
@@ -1039,7 +984,7 @@ messagingLabelText button =
 
 buttonCorner : Int
 buttonCorner =
-    5
+    3
 
 
 messagingLabelStyle :
@@ -1050,7 +995,7 @@ messagingLabelStyle windowWidth =
     , ubuntu
     , Border.rounded buttonCorner
     , E.paddingXY 0 20
-    , Font.size 30
+    , Font.size <| messagingButtonFontSize windowWidth
     ]
 
 
