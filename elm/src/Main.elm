@@ -701,7 +701,7 @@ titleSize w =
 
 adminButtons : Int -> Page -> E.Element Msg
 adminButtons windowWidth page =
-    E.wrappedRow
+    E.row
         [ E.centerX
         , E.spacingXY 5 0
         ]
