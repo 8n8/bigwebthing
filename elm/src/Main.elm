@@ -12,7 +12,6 @@ import Dict
 import Element as E
 import Element.Background as Background
 import Element.Border as Border
-import Element.Events as Events
 import Element.Font as Font
 import Element.Input as Ei
 import File
@@ -330,11 +329,9 @@ viewE model =
                 , adminButtons
                     model.windowWidth
                     model.page
-                    model.adminHover
                 , messagingButtons
                     model.windowWidth
                     model.page
-                    model.messagingHover
                 , mainPage model
                 ]
 
@@ -733,45 +730,35 @@ titleSize w =
         div
 
 
-adminButtons : Int -> Page -> Maybe AdminButton -> E.Element Msg
-adminButtons windowWidth page hover =
+adminButtons : Int -> Page -> E.Element Msg
+adminButtons windowWidth page =
     E.row
         [ E.centerX
         , E.spacingXY 13 5
         ]
     <|
         List.map
-            (adminButton hover windowWidth page)
+            (adminButton windowWidth page)
             [ PricingB, AccountB, AboutB, HelpB ]
 
 
 adminButton :
-    Maybe AdminButton
-    -> Int
+    Int
     -> Page
     -> AdminButton
     -> E.Element Msg
-adminButton hover windowWidth page button =
+adminButton windowWidth page button =
     Ei.button
-        [ Border.rounded buttonCorner
-        , Events.onMouseEnter <| MouseAdminM <| Just button
-        , Events.onMouseLeave <| MouseAdminM Nothing
-        , Background.color <|
-            if adminPageOn page button then
-                lightBlue
+        (Border.rounded buttonCorner
+            :: (if adminPageOn page button then
+                    [ Background.color lightBlue ]
 
-            else
-                case hover of
-                    Nothing ->
-                        white
-
-                    Just hovered ->
-                        if hovered == button then
-                            veryLightBlue
-
-                        else
-                            white
-        ]
+                else
+                    [ Background.color white
+                    , E.mouseOver [ Background.color veryLightBlue ]
+                    ]
+               )
+        )
         { onPress = Just <| adminButtonMsg button
         , label = adminButtonLabel windowWidth button
         }
@@ -885,47 +872,37 @@ emptyDraft id time =
 messagingButtons :
     Int
     -> Page
-    -> Maybe MessagingButton
     -> E.Element Msg
-messagingButtons windowWidth page hover =
+messagingButtons windowWidth page =
     E.wrappedRow
         [ E.width E.fill
         , E.spacingXY 15 10
         ]
     <|
         List.map
-            (messagingButton hover windowWidth page)
+            (messagingButton windowWidth page)
             [ InboxB, WriteB, DraftsB, SentB, ContactsB ]
 
 
 messagingButton :
-    Maybe MessagingButton
-    -> Int
+    Int
     -> Page
     -> MessagingButton
     -> E.Element Msg
-messagingButton hover windowWidth page button =
+messagingButton windowWidth page button =
     Ei.button
-        [ E.width <| E.minimum 150 E.fill
-        , Events.onMouseEnter <| MouseMessagingM <| Just button
-        , Events.onMouseLeave <| MouseMessagingM Nothing
-        , Border.rounded buttonCorner
-        , Background.color <|
-            if messagingPageOn page button then
-                lightBlue
+        ([ E.width <| E.minimum 150 E.fill
+         , Border.rounded buttonCorner
+         ]
+            ++ (if messagingPageOn page button then
+                    [ Background.color lightBlue ]
 
-            else
-                case hover of
-                    Nothing ->
-                        white
-
-                    Just hovered ->
-                        if hovered == button then
-                            veryLightBlue
-
-                        else
-                            white
-        ]
+                else
+                    [ Background.color white
+                    , E.mouseOver [ Background.color veryLightBlue ]
+                    ]
+               )
+        )
         { onPress =
             Just <| messagingButtonMsg button
         , label = messagingButtonLabel windowWidth button
@@ -1173,8 +1150,6 @@ type ElmToJs
 type Msg
     = FromCacheM String Bytes.Bytes
     | BadCacheM String String
-    | MouseAdminM (Maybe AdminButton)
-    | MouseMessagingM (Maybe MessagingButton)
     | TimeForWriteM Time.Posix
     | BlobSelectedM String File.File
     | BlobUploadedM String File.File Bytes.Bytes
@@ -1798,12 +1773,6 @@ updateSimple msg model =
 
         MyPublicKeysM _ ->
             ( model, Cmd.none )
-
-        MouseAdminM button ->
-            ( { model | adminHover = button }, Cmd.none )
-
-        MouseMessagingM button ->
-            ( { model | messagingHover = button }, Cmd.none )
 
 
 deleteBlob : String -> List Blob -> List Blob
