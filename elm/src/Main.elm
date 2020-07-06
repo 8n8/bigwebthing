@@ -271,7 +271,13 @@ type MyName
 type Process
     = GetMeP GetMe
     | GetInboxMessageP GetInboxMessage
+    | GetDraftP GetDraft
     | BlobForDownloadP Blob
+
+
+type GetDraft
+    = FromCacheD String
+    | WasmOutputD Draft
 
 
 type GetInboxMessage
@@ -326,12 +332,8 @@ viewE model =
                 , E.spacingXY 0 20
                 ]
                 [ title model.windowWidth
-                , adminButtons
-                    model.windowWidth
-                    model.page
-                , messagingButtons
-                    model.windowWidth
-                    model.page
+                , adminButtons model.windowWidth model.page
+                , messagingButtons model.windowWidth model.page
                 , mainPage model
                 ]
 
@@ -369,10 +371,35 @@ mainPage model =
             writerView w
 
         MessagingP DraftsE ->
-            E.text "Drafts page goes here"
+            case model.draftsSummary of
+                Nothing ->
+                    noMessages
+
+                Just draftsSummary ->
+                    draftsPage draftsSummary
 
         MessagingP (SentE _) ->
             E.text "Sent page goes here"
+
+
+draftsPage : List DraftSummary -> E.Element Msg
+draftsPage summary =
+    E.column
+        []
+        (List.map draftsMenuItem summary)
+
+
+draftsMenuItem : DraftSummary -> E.Element Msg
+draftsMenuItem { subject, time, id } =
+    Ei.button
+        []
+        { onPress = Just <| DraftsMenuClickM id
+        , label =
+            E.row [ E.spacing 10 ]
+                [ prettyTime time
+                , E.text subject
+                ]
+        }
 
 
 writerView : ( Draft, Maybe Wasm ) -> E.Element Msg
@@ -1171,6 +1198,7 @@ type Msg
     | WriteM
     | NewWindowWidthM Int
     | InboxMenuClickM String
+    | DraftsMenuClickM String
     | DownloadCodeM Code
     | DownloadBlobM Blob
     | WebsocketM FromWebsocket
@@ -1275,7 +1303,9 @@ wasmOutputDecoder =
                         Jd.fail <| showB64Error err
 
                     Ok bytes ->
-                        case Bd.decode wasmOutputBytesDecoder bytes of
+                        case
+                            Bd.decode wasmOutputBytesDecoder bytes
+                        of
                             Just wasm ->
                                 Jd.succeed <| WasmOutputM id wasm
 
@@ -1479,6 +1509,14 @@ updateSimple msg model =
                 | processes =
                     GetInboxMessageP (FromCacheG id)
                         :: model.processes
+              }
+            , cacheGet id
+            )
+
+        DraftsMenuClickM id ->
+            ( { model
+                | processes =
+                    GetDraftP (FromCacheD id) :: model.processes
               }
             , cacheGet id
             )
@@ -1942,16 +1980,66 @@ cacheDraft draft =
         << draftEncoder
 
 
+draftDecoder : Bd.Decoder Draft
+draftDecoder =
+    map7 Draft
+        stringDecoder
+        stringDecoder
+        stringDecoder
+        timeDecoder
+        stringDecoder
+        (maybeDecoder codeDecoder)
+        (list blobDecoder)
+
+
+maybeDecoder : Bd.Decoder a -> Bd.Decoder (Maybe a)
+maybeDecoder dec =
+    Bd.andThen
+        (\indicator ->
+            case indicator of
+                0 ->
+                    Bd.succeed Nothing
+
+                1 ->
+                    Bd.map Just dec
+
+                _ ->
+                    Bd.fail
+        )
+        Bd.unsignedInt8
+
+
 draftEncoder : Draft -> Be.Encoder
-draftEncoder { id, subject, to, userInput, code, blobs } =
+draftEncoder { id, subject, to, time, userInput, code, blobs } =
     Be.sequence
         [ stringEncoder id
         , stringEncoder subject
         , stringEncoder to
+        , timeEncoder time
         , stringEncoder userInput
         , maybeCodeEncoder code
         , listEncoder blobEncoder blobs
         ]
+
+
+timeEncoder : Int -> Be.Encoder
+timeEncoder t =
+    stringEncoder <| String.fromInt t
+
+
+timeDecoder : Bd.Decoder Int
+timeDecoder =
+    Bd.andThen timeDecoderHelp stringDecoder
+
+
+timeDecoderHelp : String -> Bd.Decoder Int
+timeDecoderHelp s =
+    case String.toInt s of
+        Nothing ->
+            Bd.fail
+
+        Just i ->
+            Bd.succeed i
 
 
 maybeCodeEncoder : Maybe Code -> Be.Encoder
@@ -2149,6 +2237,9 @@ processTick p msg model =
         GetInboxMessageP getInbox ->
             updateGetInboxMsg getInbox msg model
 
+        GetDraftP getDraft ->
+            updateGetDraft getDraft msg model
+
         BlobForDownloadP blob ->
             case msg of
                 FromCacheM id blobBytes ->
@@ -2245,6 +2336,26 @@ bytesDecoder =
     Bd.unsignedInt32 Bytes.LE |> Bd.andThen Bd.bytes
 
 
+map7 :
+    (a -> b -> c -> d -> e -> f -> g -> result)
+    -> Bd.Decoder a
+    -> Bd.Decoder b
+    -> Bd.Decoder c
+    -> Bd.Decoder d
+    -> Bd.Decoder e
+    -> Bd.Decoder f
+    -> Bd.Decoder g
+    -> Bd.Decoder result
+map7 func decA decB decC decD decE decF decG =
+    Bd.map func decA
+        |> Bd.andThen (dmap decB)
+        |> Bd.andThen (dmap decC)
+        |> Bd.andThen (dmap decD)
+        |> Bd.andThen (dmap decE)
+        |> Bd.andThen (dmap decF)
+        |> Bd.andThen (dmap decG)
+
+
 map8 :
     (a -> b -> c -> d -> e -> f -> g -> h -> result)
     -> Bd.Decoder a
@@ -2275,6 +2386,72 @@ dmap a b =
 badInboxMsg : Maybe String
 badInboxMsg =
     Just "bad bytes in inbox message from cache"
+
+
+badDraft : Maybe String
+badDraft =
+    Just "bad bytes in draft from cache"
+
+
+updateGetDraftHelp : Draft -> Model -> ProcessTick
+updateGetDraftHelp draft model =
+    case draft.code of
+        Nothing ->
+            FinishedT
+                { model
+                    | page =
+                        MessagingP <|
+                            WriteE
+                                ( draft, Nothing )
+                }
+                Cmd.none
+
+        Just code ->
+            ContinuingT
+                model
+                (runDraftWasm
+                    { userInput = draft.userInput
+                    , wasmCode = code.contents
+                    , msgId = draft.id
+                    }
+                )
+                (GetDraftP <| WasmOutputD draft)
+
+
+updateGetDraft : GetDraft -> Msg -> Model -> ProcessTick
+updateGetDraft getting msg model =
+    case ( getting, msg ) of
+        ( FromCacheD idWant, FromCacheM idGot draftBytes ) ->
+            if idWant == idGot then
+                case Bd.decode draftDecoder draftBytes of
+                    Nothing ->
+                        FinishedT
+                            { model | fatal = badDraft }
+                            Cmd.none
+
+                    Just draft ->
+                        updateGetDraftHelp draft model
+
+            else
+                NotUsedMessageT
+
+        ( FromCacheD _, _ ) ->
+            NotUsedMessageT
+
+        ( WasmOutputD draft, WasmOutputM id wasm ) ->
+            if draft.id == id then
+                FinishedT
+                    { model
+                        | page =
+                            MessagingP (WriteE ( draft, Just wasm ))
+                    }
+                    Cmd.none
+
+            else
+                NotUsedMessageT
+
+        ( WasmOutputD _, _ ) ->
+            NotUsedMessageT
 
 
 updateGetInboxMsg :
