@@ -10,7 +10,7 @@ const app = Elm.Main.init({
 const toElm = app.ports.jsToElm.send;
 
 websocket.addEventListener("message", (event) => {
-  toElm(event.data);
+  toElm({key: "fromBackend", value: event.data});
 });
 
 const handlers = {
@@ -25,7 +25,7 @@ app.ports.elmToJs.subscribe(function ({ key, value }) {
 
 function toBackend(str) {
   if (!websocketOpen) {
-    toElm({ key: "badBackend", value: "" });
+    toElm({ key: "noBackend", value: "" });
     return;
   }
 
@@ -122,8 +122,12 @@ let WASM;
 function runWasm({ userInput, wasmCode, msgId }) {
   WASM = new Wasm();
   WASM.init(base64js.toByteArray(wasmCode));
-  const output = base64js.fromByteArray(WASM.run(userInput));
-  toElm({ key: "wasmOutput", value: { id: msgId, wasm: output } });
+  try {
+    const output = base64js.fromByteArray(WASM.run(userInput));
+    toElm({ key: "wasmOutput", value: { id: msgId, wasm: output } });
+  } catch (err) {
+    toElm({key: "badWasm", value: err})
+  }
 }
 
 function rerunWasm({ userInput, msgId }) {
