@@ -309,7 +309,13 @@ func cacheGet(raw []byte, state stateT) (stateT, []outputT) {
 			ch:  state.websocketOutChan}}
 	}
 
-	encoded := append([]byte{0}, append(encodeString(key), blob...)...)
+	blobLen := encodeInt32(len(blob))
+
+	encoded := append(
+		[]byte{0},
+		append(
+			encodeString(key),
+			append(blobLen, blob...)...)...)
 	return state, []outputT{ToFrontendT{
 		msg: base64.StdEncoding.EncodeToString(encoded),
 		ch:  state.websocketOutChan}}
