@@ -18,6 +18,7 @@ type stateT struct {
 	fatalErr         error
 	websocketOutChan chan string
 	toServerChan     chan []byte
+	cacherChan       chan cacheCmdT
 }
 
 func initState() stateT {
@@ -32,8 +33,6 @@ const port = "17448"
 const baseUrl = "http://localhost:" + port
 
 func (startWebViewT) io(ch chan inputT) {
-	go startTcpConn(ch)
-	go runWebserver(ch)
 	w := webview.New(true)
 	defer w.Destroy()
 	w.SetTitle("BigWebThing")
@@ -44,8 +43,40 @@ func (startWebViewT) io(ch chan inputT) {
 
 func initOutputs() []outputT {
 	return []outputT{
+		startCacherT{},
+		startTcpConnT{},
+		startWebserverT{},
 		startWebViewT{},
 	}
+}
+
+type startCacherT struct{}
+
+type startTcpConnT struct{}
+
+type startWebserverT struct{}
+
+type cacherChanT struct {
+	ch chan cacheCmdT
+}
+
+type cacheCmdT interface {
+	run(ch chan inputT)
+}
+
+func (startCacherT) io(ch chan inputT) {
+	cmdCh := make(chan cacheCmdT)
+	ch <- cacherChanT{cmdCh}
+
+	for {
+		cmd := <-cmdCh
+		cmd.run(ch)
+	}
+}
+
+func (c cacherChanT) update(state stateT) (stateT, []outputT) {
+	state.cacherChan = c.ch
+	return state, []outputT{}
 }
 
 const serverUrl = "http://localhost:3001"
@@ -69,7 +100,7 @@ type restartTcpT struct{}
 
 func (restartTcpT) io(ch chan inputT) {
 	time.Sleep(time.Second * 30)
-	startTcpConn(ch)
+	startTcpConnT{}.io(ch)
 }
 
 func (b BadTcpT) update(state stateT) (stateT, []outputT) {
@@ -94,7 +125,7 @@ func (t toServerChanT) update(state stateT) (stateT, []outputT) {
 	return state, []outputT{}
 }
 
-func startTcpConn(ch chan inputT) {
+func (startTcpConnT) io(ch chan inputT) {
 	conn, err := net.Dial("tcp", serverUrl)
 	if err != nil {
 		ch <- BadTcpT{err}
@@ -260,11 +291,43 @@ func (f fromWebsocketT) update(state stateT) (stateT, []outputT) {
 const clientDataDir = "clientData"
 
 func cacheDelete(raw []byte, state stateT) (stateT, []outputT) {
-	err := os.Remove(clientDataDir + "/" + string(raw))
+	return state, []outputT{
+		cacheJobT{
+			ch:  state.cacherChan,
+			job: cacheDeleteT(string(raw))}}
+}
+
+type cacheDeleteT string
+
+func (c cacheDeleteT) run(ch chan inputT) {
+	err := os.Remove(clientDataDir + "/" + string(c))
 	if err != nil {
-		state.fatalErr = err
+		ch <- fatalErrT{err}
 	}
-	return state, []outputT{}
+}
+
+type cacheJobT struct {
+	ch  chan cacheCmdT
+	job cacheCmdT
+}
+
+func (c cacheJobT) io(ch chan inputT) {
+	c.ch <- c.job
+}
+
+type cacheSetT struct {
+	key   string
+	value []byte
+}
+
+func (c cacheSetT) run(ch chan inputT) {
+	err := ioutil.WriteFile(
+		clientDataDir+"/"+c.key,
+		c.value,
+		0600)
+	if err != nil {
+		ch <- fatalErrT{err}
+	}
 }
 
 func cacheSet(raw []byte, state stateT) (stateT, []outputT) {
@@ -272,53 +335,68 @@ func cacheSet(raw []byte, state stateT) (stateT, []outputT) {
 	keyBytes := raw[4 : 4+keyLen]
 	key := string(keyBytes)
 	blob := raw[4+keyLen:]
-	err := ioutil.WriteFile(clientDataDir+"/"+key, blob, 0600)
-	if err != nil {
-		return state, []outputT{ToFrontendT{
-			msg: badCache(keyBytes, err),
-			ch:  state.websocketOutChan}}
-	}
-	return state, []outputT{}
-}
-
-func badCache(rawKey []byte, err error) string {
-	errBytes := []byte(err.Error())
-	rawLen := len(rawKey)
-	errLen := len(errBytes)
-	encoded := make([]byte, rawLen+errLen+1)
-	copy(encoded[1:rawLen+1], rawKey)
-	copy(encoded[rawLen+1:], errBytes)
-	return base64.StdEncoding.EncodeToString(encoded)
+	return state, []outputT{
+		cacheJobT{
+			ch:  state.cacherChan,
+			job: cacheSetT{key: key, value: blob}}}
 }
 
 func cacheGet(raw []byte, state stateT) (stateT, []outputT) {
 	key := string(raw)
-	filepath := clientDataDir + "/" + key
+	return state, []outputT{
+		cacheJobT{
+			ch:  state.cacherChan,
+			job: cacheGetT(key)}}
+}
+
+type cacheGetT string
+
+func (c cacheGetT) run(ch chan inputT) {
+	filepath := clientDataDir + "/" + string(c)
 
 	blob, err := ioutil.ReadFile(filepath)
 	if os.IsNotExist(err) {
-		encoded := append([]byte{5}, encodeString(key)...)
-		return state, []outputT{ToFrontendT{
-			msg: base64.StdEncoding.EncodeToString(encoded),
-			ch:  state.websocketOutChan}}
+		ch <- nullCacheT(c)
+		return
 	}
 
 	if err != nil {
-		return state, []outputT{ToFrontendT{
-			msg: badCache(raw, err),
-			ch:  state.websocketOutChan}}
+		ch <- fatalErrT{err}
+		return
 	}
 
-	blobLen := encodeInt32(len(blob))
+	ch <- cacheGotT{
+		key:   string(c),
+		value: blob}
+}
 
+type cacheGotT struct {
+	key   string
+	value []byte
+}
+
+func (c cacheGotT) update(state stateT) (stateT, []outputT) {
+	blobLen := encodeInt32(len(c.value))
 	encoded := append(
 		[]byte{0},
 		append(
-			encodeString(key),
-			append(blobLen, blob...)...)...)
-	return state, []outputT{ToFrontendT{
-		msg: base64.StdEncoding.EncodeToString(encoded),
-		ch:  state.websocketOutChan}}
+			encodeString(c.key),
+			append(blobLen, c.value...)...)...)
+	return state, []outputT{
+		ToFrontendT{
+			msg: base64.StdEncoding.EncodeToString(encoded),
+			ch:  state.websocketOutChan}}
+}
+
+type nullCacheT string
+
+func (n nullCacheT) update(state stateT) (stateT, []outputT) {
+	encoded := append([]byte{5}, encodeString(string(n))...)
+	return state, []outputT{
+		ToFrontendT{
+			msg: base64.StdEncoding.EncodeToString(encoded),
+			ch:  state.websocketOutChan},
+	}
 }
 
 type PowInfo struct {
@@ -399,7 +477,7 @@ func sendToServer(raw []byte, state stateT) (stateT, []outputT) {
 	return state, []outputT{}
 }
 
-func runWebserver(ch chan inputT) {
+func (startWebserverT) io(ch chan inputT) {
 	http.Handle("/static/", http.FileServer(http.Dir("")))
 	http.HandleFunc(
 		"/websocket",

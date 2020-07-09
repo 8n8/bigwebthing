@@ -1190,7 +1190,6 @@ type Msg
     = FromCacheM String Bytes.Bytes
     | RawFromServerM Bytes.Bytes
     | BadServerM String
-    | BadCacheM String String
     | NonsenseFromBackendM Bytes.Bytes
     | NonsenseFromServerM Bytes.Bytes
     | FromBackendM Bytes.Bytes
@@ -1629,18 +1628,6 @@ updateSimple msg model =
         FromServerM (NoInternetW err) ->
             ( { model | fatal = Just err }, Cmd.none )
 
-        BadCacheM key err ->
-            ( { model
-                | fatal =
-                    Just <|
-                        "bad cache: "
-                            ++ key
-                            ++ ": "
-                            ++ err
-              }
-            , Cmd.none
-            )
-
         NewToM { draftId, to } ->
             case model.page of
                 MessagingP (WriteE ( draft, maybeWasm )) ->
@@ -1836,9 +1823,6 @@ fromBackendDecoderHelp indicator =
             Bd.map2 (\a b -> MyKeysM <| MyKeys a b)
                 (Bd.bytes 32)
                 (Bd.bytes 32)
-
-        4 ->
-            Bd.map2 BadCacheM stringDecoder stringDecoder
 
         5 ->
             Bd.map NullCacheM stringDecoder
