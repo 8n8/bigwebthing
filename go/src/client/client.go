@@ -292,13 +292,15 @@ func badCache(rawKey []byte, err error) string {
 }
 
 func cacheGet(raw []byte, state stateT) (stateT, []outputT) {
-	filepath := clientDataDir + "/" + string(raw)
+	key := string(raw)
+	filepath := clientDataDir + "/" + key
 
 	blob, err := ioutil.ReadFile(filepath)
 	if os.IsNotExist(err) {
 		encoded := make([]byte, len(raw)+1)
 		encoded[0] = 5
 		copy(encoded[1:], raw)
+		encoded = append([]byte{5}, encodeString(key)...)
 		return state, []outputT{ToFrontendT{
 			msg: base64.StdEncoding.EncodeToString(encoded),
 			ch:  state.websocketOutChan}}
