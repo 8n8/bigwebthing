@@ -1,10 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/zserge/webview"
 	"golang.org/x/crypto/argon2"
 	"io/ioutil"
@@ -31,7 +33,26 @@ type startWebViewT struct{}
 const port = "17448"
 const baseUrl = "http://localhost:" + port
 
+const createTables = `CREATE TABLE IF NOT EXISTS blobs (key TEXT UNIQUE NOT NULL, value BLOB NOT NULL);`
+
+const clientDB = "clientDB"
+
+func startDatabase(ch chan inputT) {
+	database, err := sql.Open("sqlite3", clientDB)
+	if err != nil {
+		ch <- fatalErrT{err}
+		return
+	}
+	defer database.Close()
+
+	_, err = database.Exec(createTables)
+	if err != nil {
+		ch <- fatalErrT{err}
+	}
+}
+
 func (startWebViewT) io(ch chan inputT) {
+	startDatabase(ch)
 	go startTcpConn(ch)
 	go runWebserver(ch)
 	w := webview.New(true)
@@ -293,32 +314,58 @@ func badCache(rawKey []byte, err error) string {
 
 func cacheGet(raw []byte, state stateT) (stateT, []outputT) {
 	key := string(raw)
-	filepath := clientDataDir + "/" + key
+	return state, []outputT{cacheGetT{
+		key: key,
+		ch:  state.websocketOutChan}}
+}
 
-	blob, err := ioutil.ReadFile(filepath)
-	if os.IsNotExist(err) {
-		encoded := append([]byte{5}, encodeString(key)...)
-		return state, []outputT{ToFrontendT{
-			msg: base64.StdEncoding.EncodeToString(encoded),
-			ch:  state.websocketOutChan}}
+type cacheGetT struct {
+	key string
+	ch  chan string
+}
+
+type DbResultT struct {
+	Key   string
+	Value []byte
+}
+
+func (c cacheGetT) io(ch chan inputT) {
+	db, err := sql.Open("sqlite3", clientDB)
+	if err != nil {
+		ch <- fatalErrT{err}
+		return
 	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT blobs.value FROM blobs WHERE key = ?;`, c.key)
+	defer rows.Close()
 
 	if err != nil {
-		return state, []outputT{ToFrontendT{
-			msg: badCache(raw, err),
-			ch:  state.websocketOutChan}}
+		ch <- fatalErrT{err}
+		return
 	}
 
-	blobLen := encodeInt32(len(blob))
+	if !rows.Next() {
+		c.ch <- base64.StdEncoding.EncodeToString(
+			append([]byte{5}, encodeString(c.key)...))
+		return
+	}
 
-	encoded := append(
-		[]byte{0},
+	var result DbResultT
+	err = rows.Scan(&result)
+	if err != nil {
+		ch <- fatalErrT{err}
+		return
+	}
+
+	blobLen := encodeInt32(len(result.Value))
+
+	c.ch <- base64.StdEncoding.EncodeToString(
 		append(
-			encodeString(key),
-			append(blobLen, blob...)...)...)
-	return state, []outputT{ToFrontendT{
-		msg: base64.StdEncoding.EncodeToString(encoded),
-		ch:  state.websocketOutChan}}
+			[]byte{0},
+			append(
+				encodeString(result.Key),
+				append(blobLen, result.Value...)...)...))
 }
 
 type PowInfo struct {
