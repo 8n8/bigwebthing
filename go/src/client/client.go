@@ -60,8 +60,14 @@ type ToFrontendT struct {
 	ch  chan string
 }
 
+func encodeString(s string) []byte {
+	asBytes := []byte(s)
+	length := encodeInt32(len(asBytes))
+	return append(length, asBytes...)
+}
+
 func (b BadTcpT) update(state stateT) (stateT, []outputT) {
-	errAsBytes := []byte(b.err.Error())
+	errAsBytes := encodeString(b.err.Error())
 	encoded := make([]byte, len(errAsBytes)+1)
 	encoded[0] = 6
 	copy(encoded[1:], errAsBytes)
@@ -323,7 +329,15 @@ func decodeGetPow(raw []byte) (PowInfo, error) {
 	return powInfo, nil
 }
 
-func encodeInt(theInt int) []byte {
+func encodeInt32(theInt int) []byte {
+	result := make([]byte, 4)
+	for i, _ := range result {
+		result[i] = byte((theInt >> (i * 8)) & 0xFF)
+	}
+	return result
+}
+
+func encodeInt64(theInt int) []byte {
 	// Most significant byte is the last one. It only works
 	// for up to about 10^14, but this is enough for id numbers,
 	// since I'm not too bothered about having more than that
@@ -354,7 +368,7 @@ func getPow(raw []byte, state stateT) (stateT, []outputT) {
 	counter := 0
 
 	for {
-		candidate := encodeInt(counter)
+		candidate := encodeInt64(counter)
 		hash := argon2.IDKey(
 			candidate, powInfo.unique, 1, 64*1024, 4, 32)
 		if isDifficult(hash, powInfo.difficulty) {
