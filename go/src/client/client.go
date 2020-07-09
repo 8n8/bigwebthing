@@ -297,10 +297,7 @@ func cacheGet(raw []byte, state stateT) (stateT, []outputT) {
 
 	blob, err := ioutil.ReadFile(filepath)
 	if os.IsNotExist(err) {
-		encoded := make([]byte, len(raw)+1)
-		encoded[0] = 5
-		copy(encoded[1:], raw)
-		encoded = append([]byte{5}, encodeString(key)...)
+		encoded := append([]byte{5}, encodeString(key)...)
 		return state, []outputT{ToFrontendT{
 			msg: base64.StdEncoding.EncodeToString(encoded),
 			ch:  state.websocketOutChan}}
@@ -312,9 +309,7 @@ func cacheGet(raw []byte, state stateT) (stateT, []outputT) {
 			ch:  state.websocketOutChan}}
 	}
 
-	encoded := make([]byte, len(blob)+1)
-	encoded[0] = 0
-	copy(encoded[1:], blob)
+	encoded := append([]byte{0}, append(encodeString(key), blob...)...)
 	return state, []outputT{ToFrontendT{
 		msg: base64.StdEncoding.EncodeToString(encoded),
 		ch:  state.websocketOutChan}}

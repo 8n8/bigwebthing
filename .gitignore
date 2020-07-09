@@ -7,6 +7,7 @@ go/pkg/
 server.go
 README.pdf
 #*
+clientData/
 elm-stuff/
 data/
 node_modules/
