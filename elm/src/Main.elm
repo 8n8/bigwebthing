@@ -151,6 +151,7 @@ type alias Code =
 type alias Model =
     { myId : Maybe ( MyName, MyKeys )
     , nonFatal : Maybe String
+    , connectionErr : Maybe String
     , adminHover : Maybe AdminButton
     , messagingHover : Maybe MessagingButton
     , processes : List Process
@@ -305,6 +306,7 @@ initModel windowWidth =
     , adminHover = Nothing
     , messagingHover = Nothing
     , badWasm = Nothing
+    , connectionErr = Nothing
     }
 
 
@@ -1187,6 +1189,7 @@ type ToBackend
 type Msg
     = FromCacheM String Bytes.Bytes
     | RawFromServerM Bytes.Bytes
+    | BadServerM String
     | BadCacheM String String
     | NonsenseFromBackendM Bytes.Bytes
     | NonsenseFromServerM Bytes.Bytes
@@ -1763,16 +1766,33 @@ updateSimple msg model =
             update (decodeFromServer bytes) model
 
         NonsenseFromBackendM bytes ->
-            ( { model | fatal = Just <| "nonsense from backend: " ++ Hex.Convert.toString bytes }, Cmd.none )
+            ( { model | fatal = nonsenseFromBackend bytes }
+            , Cmd.none
+            )
 
         NonsenseFromServerM bytes ->
-            ( { model | fatal = Just <| "nonsense from server: " ++ Hex.Convert.toString bytes }, Cmd.none )
+            ( { model | fatal = nonsenseFromServer bytes }
+            , Cmd.none
+            )
 
         BadWasmM err ->
             ( { model | badWasm = Just err }, Cmd.none )
 
         NoBackendM ->
             ( { model | fatal = Just "No backend" }, Cmd.none )
+
+        BadServerM err ->
+            ( { model | connectionErr = Just err }, Cmd.none )
+
+
+nonsenseFromServer : Bytes.Bytes -> Maybe String
+nonsenseFromServer bytes =
+    Just <| "nonsense from server: " ++ Hex.Convert.toString bytes
+
+
+nonsenseFromBackend : Bytes.Bytes -> Maybe String
+nonsenseFromBackend bytes =
+    Just <| "nonsense from backend: " ++ Hex.Convert.toString bytes
 
 
 decodeFromServer : Bytes.Bytes -> Msg
@@ -1822,6 +1842,9 @@ fromBackendDecoderHelp indicator =
 
         5 ->
             Bd.map NullCacheM stringDecoder
+
+        6 ->
+            Bd.map BadServerM stringDecoder
 
         _ ->
             Bd.fail
