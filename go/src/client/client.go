@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 )
 
 type stateT struct {
@@ -31,6 +32,7 @@ const port = "17448"
 const baseUrl = "http://localhost:" + port
 
 func (startWebViewT) io(ch chan inputT) {
+	go startTcpConn(ch)
 	go runWebserver(ch)
 	w := webview.New(true)
 	defer w.Destroy()
@@ -40,12 +42,9 @@ func (startWebViewT) io(ch chan inputT) {
 	w.Run()
 }
 
-type startTcpConnT struct{}
-
 func initOutputs() []outputT {
 	return []outputT{
 		startWebViewT{},
-		startTcpConnT{},
 	}
 }
 
@@ -66,6 +65,13 @@ func encodeString(s string) []byte {
 	return append(length, asBytes...)
 }
 
+type restartTcpT struct{}
+
+func (restartTcpT) io(ch chan inputT) {
+	time.Sleep(time.Second * 30)
+	startTcpConn(ch)
+}
+
 func (b BadTcpT) update(state stateT) (stateT, []outputT) {
 	errAsBytes := encodeString(b.err.Error())
 	encoded := make([]byte, len(errAsBytes)+1)
@@ -74,7 +80,7 @@ func (b BadTcpT) update(state stateT) (stateT, []outputT) {
 	asString := base64.StdEncoding.EncodeToString(encoded)
 	return state, []outputT{
 		ToFrontendT{msg: asString, ch: state.websocketOutChan},
-		startTcpConnT{}}
+		restartTcpT{}}
 }
 
 func (t ToFrontendT) io(ch chan inputT) {
@@ -88,7 +94,7 @@ func (t toServerChanT) update(state stateT) (stateT, []outputT) {
 	return state, []outputT{}
 }
 
-func (startTcpConnT) io(ch chan inputT) {
+func startTcpConn(ch chan inputT) {
 	conn, err := net.Dial("tcp", serverUrl)
 	if err != nil {
 		ch <- BadTcpT{err}
