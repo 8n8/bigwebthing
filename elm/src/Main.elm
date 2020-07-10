@@ -407,17 +407,31 @@ mainPage model =
 draftsPage : List DraftSummary -> Time.Zone -> E.Element Msg
 draftsPage summary zone =
     E.column
-        []
-        (List.map (draftsMenuItem zone) summary)
+        [ E.width E.fill
+        ]
+        (List.indexedMap (draftsMenuItem zone) summary)
 
 
-draftsMenuItem : Time.Zone -> DraftSummary -> E.Element Msg
-draftsMenuItem zone { subject, time, id } =
+draftsMenuItem : Time.Zone -> Int -> DraftSummary -> E.Element Msg
+draftsMenuItem zone pos { subject, time, id } =
     Ei.button
-        []
+        [ E.width E.fill
+        , Background.color <|
+            if modBy 2 pos == 0 then
+                veryLightBlue
+
+            else
+                white
+        , E.mouseOver [ Background.color lightBlue ]
+        ]
         { onPress = Just <| DraftsMenuClickM id
         , label =
-            E.row [ E.spacing 10 ]
+            E.row
+                [ E.spacing 13
+                , ubuntuMono
+                , E.width E.fill
+                , Font.size 25
+                ]
                 [ prettyTime time zone
                 , E.text subject
                 ]
@@ -729,65 +743,65 @@ prettyWeekday : Time.Weekday -> String
 prettyWeekday weekday =
     case weekday of
         Time.Mon ->
-            "Monday"
+            "Mon"
 
         Time.Tue ->
-            "Tuesday"
+            "Tue"
 
         Time.Wed ->
-            "Wednesday"
+            "Wed"
 
         Time.Thu ->
-            "Thursday"
+            "Thu"
 
         Time.Fri ->
-            "Friday"
+            "Fri"
 
         Time.Sat ->
-            "Saturday"
+            "Sat"
 
         Time.Sun ->
-            "Sunday"
+            "Sun"
 
 
 prettyMonth : Time.Month -> String
 prettyMonth month =
     case month of
         Time.Jan ->
-            "January"
+            "Jan"
 
         Time.Feb ->
-            "February"
+            "Feb"
 
         Time.Mar ->
-            "March"
+            "Mar"
 
         Time.Apr ->
-            "April"
+            "Apr"
 
         Time.May ->
             "May"
 
         Time.Jun ->
-            "June"
+            "Jun"
 
         Time.Jul ->
-            "July"
+            "Jul"
 
         Time.Aug ->
-            "August"
+            "Aug"
 
         Time.Sep ->
-            "September"
+            "Sep"
 
         Time.Oct ->
-            "October"
+            "Oct"
 
         Time.Nov ->
-            "November"
+            "Nov"
 
         Time.Dec ->
-            "December"
+            "Dec"
 
 
 prettyTime : Int -> Time.Zone -> E.Element Msg
@@ -803,26 +817,32 @@ prettyTime millis zone =
             prettyMonth <| Time.toMonth zone posix
 
         day =
-            String.fromInt <| Time.toDay zone posix
+            String.padLeft 2 ' ' <|
+                String.fromInt <|
+                    Time.toDay zone posix
 
         weekday =
             prettyWeekday <| Time.toWeekday zone posix
 
         hour =
-            String.fromInt <| Time.toHour zone posix
+            String.padLeft 2 ' ' <|
+                String.fromInt <|
+                    Time.toHour zone posix
 
         minute =
-            String.fromInt <| Time.toMinute zone posix
+            String.padLeft 2 '0' <|
+                String.fromInt <|
+                    Time.toMinute zone posix
     in
     E.text <|
         String.concat
             [ year
             , " "
+            , weekday
+            , " "
             , month
             , " "
             , day
-            , " "
-            , weekday
             , " "
             , hour
             , ":"
