@@ -2,7 +2,6 @@ port module Main exposing (main)
 
 import Base64.Decode as B64d
 import Base64.Encode as B64e
-import Bitwise
 import Browser
 import Browser.Events
 import Bytes
@@ -466,7 +465,11 @@ updateDraft newDraft maybeWasm model =
       }
     , Cmd.batch
         [ cacheDraft newDraft
-        , cacheDraftsSummary newDraftsSummary
+        , if List.isEmpty newDraftsSummary then
+            Cmd.none
+
+          else
+            cacheDraftsSummary newDraftsSummary
         ]
     )
 
@@ -1511,7 +1514,7 @@ updateSimple msg model =
         FromCacheM "draftsSummary" bytes ->
             case Bd.decode (list draftSummaryDecoder) bytes of
                 Nothing ->
-                    ( { model | fatal = badSummary "drafts" }
+                    ( { model | fatal = Just <| "could not decode drafts summary bytes: " ++ Hex.Convert.toString bytes }
                     , Cmd.none
                     )
 
@@ -1949,7 +1952,7 @@ draftSummaryEncoder { subject, to, time, id } =
     Be.sequence
         [ stringEncoder subject
         , stringEncoder to
-        , Be.unsignedInt32 Bytes.LE time
+        , int64Encoder time
         , stringEncoder id
         ]
 
@@ -2313,11 +2316,28 @@ inboxMsgDecoder =
         codeDecoder
 
 
+int64Encoder : Int -> Be.Encoder
+int64Encoder i =
+    stringEncoder <| String.fromInt i
+
+
 int64Decoder : Bd.Decoder Int
 int64Decoder =
-    Bd.map2 (\a b -> Bitwise.shiftLeftBy 32 b + a)
-        (Bd.unsignedInt32 Bytes.LE)
-        (Bd.unsignedInt32 Bytes.LE)
+    Bd.andThen int64DecoderHelp stringDecoder
+
+
+int64DecoderHelp : String -> Bd.Decoder Int
+int64DecoderHelp s =
+    case String.toInt s of
+        Nothing ->
+            Bd.fail
+
+        Just i ->
+            if i < 0 then
+                Bd.fail
+
+            else
+                Bd.succeed i
 
 
 codeDecoder : Bd.Decoder Code
