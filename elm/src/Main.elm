@@ -2114,28 +2114,24 @@ updateDraftsSummary :
 updateDraftsSummary draft maybeOldSummary =
     case maybeOldSummary of
         Nothing ->
-            [ { subject = draft.subject
-              , to = draft.to
-              , time = draft.time
-              , id = draft.id
-              }
-            ]
+            [ summarizeDraft draft ]
 
         Just oldSummary ->
-            List.map (updateDraftSummary draft) oldSummary
+            case List.partition (\d -> d.id == draft.id) oldSummary of
+                ( [], _ ) ->
+                    summarizeDraft draft :: oldSummary
+
+                ( _ :: _, remainder ) ->
+                    summarizeDraft draft :: remainder
 
 
-updateDraftSummary : Draft -> DraftSummary -> DraftSummary
-updateDraftSummary draft summary =
-    if draft.id == summary.id then
-        { subject = draft.subject
-        , to = draft.to
-        , time = draft.time
-        , id = draft.id
-        }
-
-    else
-        summary
+summarizeDraft : Draft -> DraftSummary
+summarizeDraft { subject, to, time, id } =
+    { subject = subject
+    , to = to
+    , time = time
+    , id = id
+    }
 
 
 cacheDraft : Draft -> Cmd Msg
