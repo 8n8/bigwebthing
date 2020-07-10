@@ -462,16 +462,11 @@ updateDraft newDraft maybeWasm model =
     in
     ( { model
         | page = MessagingP (WriteE ( newDraft, maybeWasm ))
-        , draftsSummary = newDraftsSummary
+        , draftsSummary = Just newDraftsSummary
       }
     , Cmd.batch
         [ cacheDraft newDraft
-        , case newDraftsSummary of
-            Nothing ->
-                Cmd.none
-
-            Just summary ->
-                cacheDraftsSummary summary
+        , cacheDraftsSummary newDraftsSummary
         ]
     )
 
@@ -1969,14 +1964,19 @@ listEncoder encoder items =
 updateDraftsSummary :
     Draft
     -> Maybe (List DraftSummary)
-    -> Maybe (List DraftSummary)
+    -> List DraftSummary
 updateDraftsSummary draft maybeOldSummary =
     case maybeOldSummary of
         Nothing ->
-            maybeOldSummary
+            [ { subject = draft.subject
+              , to = draft.to
+              , time = draft.time
+              , id = draft.id
+              }
+            ]
 
         Just oldSummary ->
-            Just <| List.map (updateDraftSummary draft) oldSummary
+            List.map (updateDraftSummary draft) oldSummary
 
 
 updateDraftSummary : Draft -> DraftSummary -> DraftSummary
