@@ -2559,7 +2559,7 @@ updateHelp :
 updateHelp notRelevant msg model =
     case model.processes of
         [] ->
-            updateSimple msg model
+            updateSimple msg { model | processes = notRelevant }
 
         p :: rocesses ->
             case processTick p msg model of
