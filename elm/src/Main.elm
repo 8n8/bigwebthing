@@ -165,6 +165,7 @@ type alias Model =
     , iota : Maybe Int
     , lastWasmRun : Maybe String
     , badWasm : Maybe String
+    , timeZone : Maybe Time.Zone
     }
 
 
@@ -306,6 +307,7 @@ initModel windowWidth =
     , messagingHover = Nothing
     , badWasm = Nothing
     , connectionErr = Nothing
+    , timeZone = Nothing
     }
 
 
@@ -316,7 +318,10 @@ init windowWidth =
 
 initCmd : Cmd Msg
 initCmd =
-    cacheGet "iota"
+    Cmd.batch
+        [ cacheGet "iota"
+        , Task.perform TimeZoneM Time.here
+        ]
 
 
 view : Model -> Html.Html Msg
@@ -361,15 +366,23 @@ mainPage model =
             E.text "Contacts page goes here"
 
         MessagingP (InboxE Nothing) ->
-            case model.inboxSummary of
-                Nothing ->
+            case ( model.inboxSummary, model.timeZone ) of
+                ( Nothing, _ ) ->
                     noMessages
 
-                Just inboxSummary ->
-                    inboxPage inboxSummary
+                ( _, Nothing ) ->
+                    E.text "Internal error: no time zone"
+
+                ( Just inboxSummary, Just timeZone ) ->
+                    inboxPage timeZone inboxSummary
 
         MessagingP (InboxE (Just message)) ->
-            inboxMessageView message model.contacts
+            case model.timeZone of
+                Nothing ->
+                    E.text "Internal error: no time zone"
+
+                Just zone ->
+                    inboxMessageView zone message model.contacts
 
         MessagingP (WriteE w) ->
             writerView w
@@ -380,27 +393,32 @@ mainPage model =
                     noMessages
 
                 Just draftsSummary ->
-                    draftsPage draftsSummary
+                    case model.timeZone of
+                        Nothing ->
+                            E.text "Internal error: no time zone"
+
+                        Just zone ->
+                            draftsPage draftsSummary zone
 
         MessagingP (SentE _) ->
             E.text "Sent page goes here"
 
 
-draftsPage : List DraftSummary -> E.Element Msg
-draftsPage summary =
+draftsPage : List DraftSummary -> Time.Zone -> E.Element Msg
+draftsPage summary zone =
     E.column
         []
-        (List.map draftsMenuItem summary)
+        (List.map (draftsMenuItem zone) summary)
 
 
-draftsMenuItem : DraftSummary -> E.Element Msg
-draftsMenuItem { subject, time, id } =
+draftsMenuItem : Time.Zone -> DraftSummary -> E.Element Msg
+draftsMenuItem zone { subject, time, id } =
     Ei.button
         []
         { onPress = Just <| DraftsMenuClickM id
         , label =
             E.row [ E.spacing 10 ]
-                [ prettyTime time
+                [ prettyTime time zone
                 , E.text subject
                 ]
         }
@@ -586,12 +604,13 @@ editBlob draftId blob =
 
 
 inboxMessageView :
-    ( InboxMessage, Wasm )
+    Time.Zone
+    -> ( InboxMessage, Wasm )
     -> Maybe (Dict.Dict String Contact)
     -> E.Element Msg
-inboxMessageView ( msg, wasm ) _ =
+inboxMessageView zone ( msg, wasm ) _ =
     E.column []
-        [ prettyTime msg.timeReceived
+        [ prettyTime msg.timeReceived zone
         , E.text msg.fromId
         , wasmView wasm
         , userInputView msg.userInput
@@ -683,15 +702,15 @@ noMessages =
     E.text "No messages"
 
 
-inboxPage : List InboxMessageSummary -> E.Element Msg
-inboxPage summary =
+inboxPage : Time.Zone -> List InboxMessageSummary -> E.Element Msg
+inboxPage zone summary =
     E.column
         []
-        (List.map inboxMenuItem summary)
+        (List.map (inboxMenuItem zone) summary)
 
 
-inboxMenuItem : InboxMessageSummary -> E.Element Msg
-inboxMenuItem { subject, fromId, time, id } =
+inboxMenuItem : Time.Zone -> InboxMessageSummary -> E.Element Msg
+inboxMenuItem zone { subject, fromId, time, id } =
     Ei.button
         []
         { onPress = Just <| InboxMenuClickM id
@@ -699,16 +718,116 @@ inboxMenuItem { subject, fromId, time, id } =
             E.row
                 [ E.spacing 10
                 ]
-                [ prettyTime time
+                [ prettyTime time zone
                 , E.text fromId
                 , E.text subject
                 ]
         }
 
 
-prettyTime : Int -> E.Element Msg
-prettyTime =
-    E.text << String.fromInt
+prettyWeekday : Time.Weekday -> String
+prettyWeekday weekday =
+    case weekday of
+        Time.Mon ->
+            "Monday"
+
+        Time.Tue ->
+            "Tuesday"
+
+        Time.Wed ->
+            "Wednesday"
+
+        Time.Thu ->
+            "Thursday"
+
+        Time.Fri ->
+            "Friday"
+
+        Time.Sat ->
+            "Saturday"
+
+        Time.Sun ->
+            "Sunday"
+
+
+prettyMonth : Time.Month -> String
+prettyMonth month =
+    case month of
+        Time.Jan ->
+            "January"
+
+        Time.Feb ->
+            "February"
+
+        Time.Mar ->
+            "March"
+
+        Time.Apr ->
+            "April"
+
+        Time.May ->
+            "May"
+
+        Time.Jun ->
+            "June"
+
+        Time.Jul ->
+            "July"
+
+        Time.Aug ->
+            "August"
+
+        Time.Sep ->
+            "September"
+
+        Time.Oct ->
+            "October"
+
+        Time.Nov ->
+            "November"
+
+        Time.Dec ->
+            "December"
+
+
+prettyTime : Int -> Time.Zone -> E.Element Msg
+prettyTime millis zone =
+    let
+        posix =
+            Time.millisToPosix millis
+
+        year =
+            String.fromInt <| Time.toYear zone posix
+
+        month =
+            prettyMonth <| Time.toMonth zone posix
+
+        day =
+            String.fromInt <| Time.toDay zone posix
+
+        weekday =
+            prettyWeekday <| Time.toWeekday zone posix
+
+        hour =
+            String.fromInt <| Time.toHour zone posix
+
+        minute =
+            String.fromInt <| Time.toMinute zone posix
+    in
+    E.text <|
+        String.concat
+            [ year
+            , " "
+            , month
+            , " "
+            , day
+            , " "
+            , weekday
+            , " "
+            , hour
+            , ":"
+            , minute
+            ]
 
 
 title : Int -> E.Element Msg
@@ -1186,6 +1305,7 @@ type ToBackend
 
 type Msg
     = FromCacheM String Bytes.Bytes
+    | TimeZoneM Time.Zone
     | RawFromServerM Bytes.Bytes
     | BadServerM String
     | NonsenseFromBackendM Bytes.Bytes
@@ -1788,6 +1908,9 @@ updateSimple msg model =
 
         BadServerM err ->
             ( { model | connectionErr = Just err }, Cmd.none )
+
+        TimeZoneM zone ->
+            ( { model | timeZone = Just zone }, Cmd.none )
 
 
 nonsenseFromServer : Bytes.Bytes -> Maybe String
