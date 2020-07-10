@@ -226,7 +226,7 @@ func websocketHandler(
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		ch <- fatalErrT{err}
+		fmt.Println(err)
 		return
 	}
 
@@ -240,7 +240,7 @@ func websocketHandler(
 			err := conn.WriteMessage(
 				websocket.TextMessage, []byte(msg))
 			if err != nil {
-				ch <- fatalErrT{err}
+				fmt.Println(err)
 				return
 			}
 		}
@@ -249,7 +249,7 @@ func websocketHandler(
 	for {
 		_, p, err := conn.ReadMessage()
 		if err != nil {
-			ch <- fatalErrT{err}
+			fmt.Println(err)
 			return
 		}
 		ch <- fromWebsocketT(string(p))
