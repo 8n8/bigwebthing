@@ -1325,6 +1325,11 @@ blobUploaded model draftId file bytes =
 
                     newDraft =
                         { draft | blobs = newBlob :: draft.blobs }
+
+                    newDraftsSummary =
+                        updateDraftsSummary
+                            newDraft
+                            model.draftsSummary
                 in
                 ( { model
                     | page =
@@ -1335,6 +1340,11 @@ blobUploaded model draftId file bytes =
                     [ cacheDraft newDraft
                     , cacheBlob blobId bytes
                     , cacheIota iota
+                    , if List.isEmpty newDraftsSummary then
+                        Cmd.none
+
+                      else
+                        cacheDraftsSummary newDraftsSummary
                     ]
                 )
 
@@ -1690,6 +1700,11 @@ updateSimple msg model =
 
                             newDraft =
                                 { draft | code = Just newCode }
+
+                            newDraftsSummary =
+                                updateDraftsSummary
+                                    newDraft
+                                    model.draftsSummary
                         in
                         ( { model
                             | page =
@@ -1706,6 +1721,11 @@ updateSimple msg model =
                                 , wasmCode = newCode.contents
                                 , msgId = draft.id
                                 }
+                            , if List.isEmpty newDraftsSummary then
+                                Cmd.none
+
+                              else
+                                cacheDraftsSummary newDraftsSummary
                             ]
                         )
 
