@@ -430,7 +430,7 @@ draftsMenuItem zone pos { subject, time, id } =
                 [ E.spacing 13
                 , ubuntuMono
                 , E.width E.fill
-                , Font.size 25
+                , Font.size 30
                 ]
                 [ prettyTime time zone
                 , E.text subject
@@ -452,7 +452,32 @@ writerView ( draft, maybeWasm ) =
                 wasmView wasm
         , editCode draft.code draft.id
         , editBlobs draft.blobs draft.id
+        , sendButton draft.to draft.id
         ]
+
+
+sendButtonLabel : E.Element Msg
+sendButtonLabel =
+    E.el
+        [ ubuntu, Font.size normalTextSize ]
+    <|
+        E.text "Send"
+
+
+sendButton : String -> String -> E.Element Msg
+sendButton maybeTo id =
+    case maybeTo of
+        "" ->
+            Ei.button []
+                { onPress = Nothing
+                , label = sendButtonLabel
+                }
+
+        to ->
+            Ei.button []
+                { onPress = Just <| SendMessageM id
+                , label = sendButtonLabel
+                }
 
 
 normalTextSize : Int
@@ -874,7 +899,7 @@ lightBlue =
 
 veryLightBlue : E.Color
 veryLightBlue =
-    E.rgb255 230 240 255
+    E.rgb255 204 224 255
 
 
 titleSize : Int -> Int
@@ -1326,6 +1351,7 @@ type ToBackend
 type Msg
     = FromCacheM String Bytes.Bytes
     | TimeZoneM Time.Zone
+    | SendMessageM String
     | RawFromServerM Bytes.Bytes
     | BadServerM String
     | NonsenseFromBackendM Bytes.Bytes
@@ -1931,6 +1957,9 @@ updateSimple msg model =
 
         TimeZoneM zone ->
             ( { model | timeZone = Just zone }, Cmd.none )
+
+        SendMessageM id ->
+            ( model, Cmd.none )
 
 
 nonsenseFromServer : Bytes.Bytes -> Maybe String
