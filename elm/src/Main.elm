@@ -458,9 +458,7 @@ writerView ( draft, maybeWasm ) =
 
 sendButtonLabel : E.Element Msg
 sendButtonLabel =
-    E.el
-        [ ubuntu, Font.size normalTextSize ]
-    <|
+    E.el writerButtons <|
         E.text "Send"
 
 
@@ -473,7 +471,7 @@ sendButton maybeTo id =
                 , label = sendButtonLabel
                 }
 
-        to ->
+        _ ->
             Ei.button []
                 { onPress = Just <| SendMessageM id
                 , label = sendButtonLabel
@@ -586,9 +584,7 @@ editCode maybeCode draftId =
             Ei.button []
                 { onPress = Just <| UploadCodeM draftId
                 , label =
-                    E.el
-                        [ ubuntu, Font.size normalTextSize ]
-                    <|
+                    E.el writerButtons <|
                         E.text "Upload code"
                 }
 
@@ -610,14 +606,22 @@ editBlobs blobs draftId =
             ++ [ uploadBlob draftId ]
 
 
+writerButtons : List (E.Attribute Msg)
+writerButtons =
+    [ ubuntu
+    , Font.size normalTextSize
+    , E.paddingXY 8 16
+    , Border.rounded buttonCorner
+    , E.mouseOver [ Background.color veryLightBlue ]
+    ]
+
+
 uploadBlob : String -> E.Element Msg
 uploadBlob draftId =
     Ei.button []
         { onPress = Just <| UploadBlobM draftId
         , label =
-            E.el
-                [ ubuntu, Font.size normalTextSize ]
-            <|
+            E.el writerButtons <|
                 E.text "Upload a file"
         }
 
@@ -1958,7 +1962,7 @@ updateSimple msg model =
         TimeZoneM zone ->
             ( { model | timeZone = Just zone }, Cmd.none )
 
-        SendMessageM id ->
+        SendMessageM _ ->
             ( model, Cmd.none )
 
 
