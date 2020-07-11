@@ -18,6 +18,7 @@ import File.Download as Download
 import File.Select as Select
 import Hex.Convert
 import Html
+import Http
 import Json.Decode as Jd
 import Json.Encode as Je
 import Task
@@ -430,7 +431,7 @@ draftsMenuItem zone pos { subject, time, id } =
                 [ E.spacing 13
                 , ubuntuMono
                 , E.width E.fill
-                , Font.size 30
+                , Font.size 35
                 ]
                 [ prettyTime time zone
                 , E.text subject
@@ -1355,6 +1356,7 @@ type ToBackend
 type Msg
     = FromCacheM String Bytes.Bytes
     | TimeZoneM Time.Zone
+    | UploadedM (Result Http.Error ())
     | SendMessageM String
     | RawFromServerM Bytes.Bytes
     | BadServerM String
@@ -1365,7 +1367,6 @@ type Msg
     | NoBackendM
     | TimeForWriteM Time.Posix
     | BlobSelectedM String File.File
-    | BlobUploadedM String File.File Bytes.Bytes
     | CodeSelectedM String File.File
     | CodeUploadedM String File.File Bytes.Bytes
     | MyKeysM MyKeys
@@ -1473,9 +1474,8 @@ blobUploaded :
     Model
     -> String
     -> File.File
-    -> Bytes.Bytes
     -> ( Model, Cmd Msg )
-blobUploaded model draftId file bytes =
+blobUploaded model draftId file =
     case ( model.page, model.iota ) of
         ( MessagingP (WriteE ( draft, maybeWasm )), Just iota ) ->
             if draft.id /= draftId then
@@ -1490,7 +1490,7 @@ blobUploaded model draftId file bytes =
                         { id = blobId
                         , mime = File.mime file
                         , filename = File.name file
-                        , size = Bytes.width bytes
+                        , size = File.size file
                         }
 
                     newDraft =
@@ -1508,7 +1508,7 @@ blobUploaded model draftId file bytes =
                   }
                 , Cmd.batch
                     [ cacheDraft newDraft
-                    , cacheBlob blobId bytes
+                    , cacheBlob blobId file
                     , cacheIota iota
                     , if List.isEmpty newDraftsSummary then
                         Cmd.none
@@ -1571,6 +1571,11 @@ clickCmd summary cmd =
 
         Just _ ->
             Cmd.none
+
+
+localUrl : String
+localUrl =
+    "http://localhost:17448"
 
 
 updateSimple : Msg -> Model -> ( Model, Cmd Msg )
@@ -1910,15 +1915,11 @@ updateSimple msg model =
             )
 
         BlobSelectedM draftId file ->
-            ( model
-            , Task.perform
-                (BlobUploadedM draftId file)
-              <|
-                File.toBytes file
-            )
+            if File.size file > 1000000000 then
+                ( model, Cmd.none )
 
-        BlobUploadedM draftId file bytes ->
-            blobUploaded model draftId file bytes
+            else
+                blobUploaded model draftId file
 
         DeleteBlobM { draftId, blobId } ->
             updateDeleteBlob model draftId blobId
@@ -1964,6 +1965,31 @@ updateSimple msg model =
 
         SendMessageM _ ->
             ( model, Cmd.none )
+
+        UploadedM (Ok ()) ->
+            ( model, Cmd.none )
+
+        UploadedM (Err err) ->
+            ( { model | fatal = Just <| httpErrToString err }, Cmd.none )
+
+
+httpErrToString : Http.Error -> String
+httpErrToString err =
+    case err of
+        Http.BadUrl u ->
+            "bad url: " ++ u
+
+        Http.Timeout ->
+            "timeout"
+
+        Http.NetworkError ->
+            "network error"
+
+        Http.BadStatus code ->
+            "bad status: " ++ String.fromInt code
+
+        Http.BadBody e ->
+            "bad body: " ++ e
 
 
 nonsenseFromServer : Bytes.Bytes -> Maybe String
@@ -2038,9 +2064,13 @@ deleteBlobFromCache =
     elmToJs << encodeToJs << ToBackendE << CacheDeleteB
 
 
-cacheBlob : String -> Bytes.Bytes -> Cmd Msg
-cacheBlob id bytes =
-    ToBackendE (CacheSetB id bytes) |> encodeToJs |> elmToJs
+cacheBlob : String -> File.File -> Cmd Msg
+cacheBlob id file =
+    Http.post
+        { url = localUrl ++ "/uploadFile/" ++ id
+        , body = Http.fileBody file
+        , expect = Http.expectWhatever UploadedM
+        }
 
 
 updateOnUserInput :
@@ -2074,14 +2104,26 @@ updateOnUserInput { draftId, userInput } model =
                             let
                                 newDraft =
                                     { draft | userInput = userInput }
+
+                                newDraftsSummary =
+                                    updateDraftsSummary
+                                        newDraft
+                                        model.draftsSummary
                             in
                             ( { model
                                 | page =
                                     MessagingP <|
                                         WriteE ( newDraft, maybeWasm )
+                                , draftsSummary =
+                                    Just newDraftsSummary
                               }
                             , Cmd.batch
                                 [ cacheDraft newDraft
+                                , if List.isEmpty newDraftsSummary then
+                                    Cmd.none
+
+                                  else
+                                    cacheDraftsSummary newDraftsSummary
                                 , case draft.code of
                                     Nothing ->
                                         Cmd.none
@@ -2110,10 +2152,23 @@ onUserInputHelp model draft userInput maybeWasm =
     let
         newDraft =
             { draft | userInput = userInput }
+
+        newDraftsSummary =
+            updateDraftsSummary
+                newDraft
+                model.draftsSummary
     in
-    ( { model | page = MessagingP (WriteE ( newDraft, maybeWasm )) }
+    ( { model
+        | page = MessagingP (WriteE ( newDraft, maybeWasm ))
+        , draftsSummary = Just newDraftsSummary
+      }
     , Cmd.batch
         [ cacheDraft newDraft
+        , if List.isEmpty newDraftsSummary then
+            Cmd.none
+
+          else
+            cacheDraftsSummary newDraftsSummary
         , case draft.code of
             Nothing ->
                 Cmd.none

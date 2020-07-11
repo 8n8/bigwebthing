@@ -7,10 +7,12 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/zserge/webview"
 	"golang.org/x/crypto/argon2"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -477,8 +479,20 @@ func sendToServer(raw []byte, state stateT) (stateT, []outputT) {
 	return state, []outputT{}
 }
 
+func fileUpload(w http.ResponseWriter, r *http.Request) {
+	blobId := strings.Split(r.URL.Path, "/")[2]
+	file, err := os.Create(clientDataDir + "/" + blobId)
+	if err != nil {
+		fmt.Println("couldn't write file upload: " + err.Error())
+		return
+	}
+
+	io.Copy(file, r.Body)
+}
+
 func (startWebserverT) io(ch chan inputT) {
 	http.Handle("/static/", http.FileServer(http.Dir("")))
+	http.HandleFunc("/uploadFile/", fileUpload)
 	http.HandleFunc(
 		"/websocket",
 		func(w http.ResponseWriter, r *http.Request) {
