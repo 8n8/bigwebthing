@@ -1325,6 +1325,10 @@ encodeToBackend toBackend =
         CacheDeleteB key ->
             Be.sequence [ Be.unsignedInt8 4, Be.string key ]
 
+        SelectFileB draftId ->
+            Debug.log "selectFileB" <|
+                Be.sequence [ Be.unsignedInt8 5, Be.string draftId ]
+
 
 powInfoEncoder : PowInfo -> Be.Encoder
 powInfoEncoder { difficulty, unique } =
@@ -1350,6 +1354,7 @@ type ToBackend
     | CacheGetB String
     | CacheSetB String Bytes.Bytes
     | CacheDeleteB String
+    | SelectFileB String
 
 
 type Msg
@@ -1556,6 +1561,14 @@ showB64Error error =
 
         B64d.InvalidByteSequence ->
             "Invalid byte sequence"
+
+
+uploadFile : String -> Cmd Msg
+uploadFile =
+    elmToJs
+        << encodeToJs
+        << ToBackendE
+        << SelectFileB
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -1904,9 +1917,7 @@ updateSimple msg model =
 
         UploadBlobM draftId ->
             ( model
-            , Select.file
-                [ "application/octet-stream" ]
-                (BlobSelectedM draftId)
+            , uploadFile draftId
             )
 
         BlobSelectedM draftId file ->

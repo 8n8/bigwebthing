@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
+	"github.com/sqweek/dialog"
 	"github.com/zserge/webview"
 	"golang.org/x/crypto/argon2"
 	"io/ioutil"
@@ -281,6 +282,8 @@ func (f fromWebsocketT) update(state stateT) (stateT, []outputT) {
 		return cacheSet(bytes[1:], state)
 	case 4:
 		return cacheDelete(bytes[1:], state)
+	case 5:
+		return uploadAFile(bytes[1:], state)
 	}
 
 	state.fatalErr = errors.New(
@@ -289,6 +292,22 @@ func (f fromWebsocketT) update(state stateT) (stateT, []outputT) {
 }
 
 const clientDataDir = "clientData"
+
+func uploadAFile(raw []byte, state stateT) (stateT, []outputT) {
+	return state, []outputT{uploadFileT(string(raw))}
+}
+
+type uploadFileT string
+
+func (u uploadFileT) io(ch chan inputT) {
+	fmt.Println("file selection request received")
+	filename, err := dialog.File().Filter("Choose a file", "*").Load()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(filename)
+}
 
 func cacheDelete(raw []byte, state stateT) (stateT, []outputT) {
 	return state, []outputT{
