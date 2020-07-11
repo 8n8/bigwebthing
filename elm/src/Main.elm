@@ -1326,6 +1326,13 @@ encodeToBackend toBackend =
         CacheDeleteB key ->
             Be.sequence [ Be.unsignedInt8 4, Be.string key ]
 
+        SendMessageB to draftId ->
+            Be.sequence
+                [ Be.unsignedInt8 5
+                , stringEncoder to
+                , stringEncoder draftId
+                ]
+
 
 powInfoEncoder : PowInfo -> Be.Encoder
 powInfoEncoder { difficulty, unique } =
@@ -1351,6 +1358,7 @@ type ToBackend
     | CacheGetB String
     | CacheSetB String Bytes.Bytes
     | CacheDeleteB String
+    | SendMessageB String String
 
 
 type Msg
@@ -1786,7 +1794,10 @@ updateSimple msg model =
         JsonFromJsM json ->
             case Jd.decodeValue fromJsDecoder json of
                 Err err ->
-                    ( { model | fatal = Just <| Jd.errorToString err }
+                    ( { model
+                        | fatal =
+                            Just <| Jd.errorToString err
+                      }
                     , Cmd.none
                     )
 
@@ -1963,14 +1974,57 @@ updateSimple msg model =
         TimeZoneM zone ->
             ( { model | timeZone = Just zone }, Cmd.none )
 
-        SendMessageM _ ->
-            ( model, Cmd.none )
+        SendMessageM draftId ->
+            case findDraft draftId model.draftsSummary of
+                Nothing ->
+                    ( { model
+                        | fatal =
+                            Just <|
+                                String.concat
+                                    [ "draft with id: \""
+                                    , draftId
+                                    , "\" does not exist"
+                                    ]
+                      }
+                    , Cmd.none
+                    )
+
+                Just summary ->
+                    ( model, sendMessage summary.to draftId )
 
         UploadedM (Ok ()) ->
             ( model, Cmd.none )
 
         UploadedM (Err err) ->
-            ( { model | fatal = Just <| httpErrToString err }, Cmd.none )
+            ( { model | fatal = Just <| httpErrToString err }
+            , Cmd.none
+            )
+
+
+findDraft : String -> Maybe (List DraftSummary) -> Maybe DraftSummary
+findDraft draftId maybeDraftsSummary =
+    maybeDraftsSummary
+        |> Maybe.andThen
+            (\draftsSummary ->
+                case
+                    List.filter
+                        (\d -> d.id == draftId)
+                        draftsSummary
+                of
+                    [] ->
+                        Nothing
+
+                    d :: _ ->
+                        Just d
+            )
+
+
+sendMessage : String -> String -> Cmd Msg
+sendMessage to draftId =
+    elmToJs <|
+        encodeToJs <|
+            ToBackendE <|
+                SendMessageB to draftId
 
 
 httpErrToString : Http.Error -> String

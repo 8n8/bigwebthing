@@ -283,11 +283,58 @@ func (f fromWebsocketT) update(state stateT) (stateT, []outputT) {
 		return cacheSet(bytes[1:], state)
 	case 4:
 		return cacheDelete(bytes[1:], state)
+    case 5:
+        return sendMessage(bytes[1:], state)
 	}
 
 	state.fatalErr = errors.New(
 		"bad message indicator from frontend")
 	return state, []outputT{}
+}
+
+func parseString(raw []byte, i int) (string, int) {
+    length := decodeInt(raw[i: i+4])
+    i += 4
+    str := string(raw[i: i+length])
+    i += length
+    return str, i
+}
+
+func sendMessage(raw []byte, state stateT) (stateT, []outputT) {
+    to, i := parseString(raw, 0)
+    draftId, _ := parseString(raw, i)
+    return state, []outputT{getDraftToSendT{
+        to: to,
+        draftId: draftId}}
+}
+
+type getDraftToSendT struct {
+    to string
+    draftId string
+}
+
+func (g getDraftToSendT) io(ch chan inputT) {
+    draft, err := ioutil.ReadFile(clientDataDir + "/" + g.draftId)
+    if err != nil {
+        ch <-fatalErrT{err}
+        return
+    }
+
+    ch <-draftToSendT{
+        draft: draft,
+        to: g.to}
+}
+
+type draftToSendT struct {
+    draft []byte
+    to string
+}
+
+func (d draftToSendT) update(state stateT) (stateT, []outputT) {
+    draft, err := decodeDraft([]byte(d))
+}
+
+func decodeDraft(raw []byte) (draft, error) {
 }
 
 const clientDataDir = "clientData"
