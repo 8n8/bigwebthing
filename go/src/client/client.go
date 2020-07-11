@@ -281,8 +281,6 @@ func (f fromWebsocketT) update(state stateT) (stateT, []outputT) {
 		return cacheSet(bytes[1:], state)
 	case 4:
 		return cacheDelete(bytes[1:], state)
-	case 5:
-		return uploadAFile(bytes[1:], state)
 	}
 
 	state.fatalErr = errors.New(
@@ -291,15 +289,6 @@ func (f fromWebsocketT) update(state stateT) (stateT, []outputT) {
 }
 
 const clientDataDir = "clientData"
-
-func uploadAFile(raw []byte, state stateT) (stateT, []outputT) {
-	return state, []outputT{uploadFileT(string(raw))}
-}
-
-type uploadFileT string
-
-func (u uploadFileT) io(ch chan inputT) {
-}
 
 func cacheDelete(raw []byte, state stateT) (stateT, []outputT) {
 	return state, []outputT{

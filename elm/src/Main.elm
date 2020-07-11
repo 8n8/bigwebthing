@@ -462,14 +462,6 @@ sendButtonLabel =
         E.text "Send"
 
 
-uploadAFile : String -> Cmd Msg
-uploadAFile =
-    elmToJs
-        << encodeToJs
-        << ToBackendE
-        << UploadAFileB
-
-
 sendButton : String -> String -> E.Element Msg
 sendButton maybeTo id =
     case maybeTo of
@@ -1333,9 +1325,6 @@ encodeToBackend toBackend =
         CacheDeleteB key ->
             Be.sequence [ Be.unsignedInt8 4, Be.string key ]
 
-        UploadAFileB draftId ->
-            Be.sequence [ Be.unsignedInt8 5, Be.string draftId ]
-
 
 powInfoEncoder : PowInfo -> Be.Encoder
 powInfoEncoder { difficulty, unique } =
@@ -1361,7 +1350,6 @@ type ToBackend
     | CacheGetB String
     | CacheSetB String Bytes.Bytes
     | CacheDeleteB String
-    | UploadAFileB String
 
 
 type Msg
@@ -1376,6 +1364,8 @@ type Msg
     | BadWasmM String
     | NoBackendM
     | TimeForWriteM Time.Posix
+    | BlobSelectedM String File.File
+    | BlobUploadedM String File.File Bytes.Bytes
     | CodeSelectedM String File.File
     | CodeUploadedM String File.File Bytes.Bytes
     | MyKeysM MyKeys
@@ -1914,8 +1904,21 @@ updateSimple msg model =
 
         UploadBlobM draftId ->
             ( model
-            , uploadAFile draftId
+            , Select.file
+                [ "application/octet-stream" ]
+                (BlobSelectedM draftId)
             )
+
+        BlobSelectedM draftId file ->
+            ( model
+            , Task.perform
+                (BlobUploadedM draftId file)
+              <|
+                File.toBytes file
+            )
+
+        BlobUploadedM draftId file bytes ->
+            blobUploaded model draftId file bytes
 
         DeleteBlobM { draftId, blobId } ->
             updateDeleteBlob model draftId blobId
