@@ -1329,7 +1329,6 @@ encodeToBackend toBackend =
         SendMessageB to draftId ->
             Be.sequence
                 [ Be.unsignedInt8 5
-                , stringEncoder to
                 , stringEncoder draftId
                 ]
 

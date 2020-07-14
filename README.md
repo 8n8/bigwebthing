@@ -51,11 +51,11 @@ Response is an 8 byte name.
 
 2. (Free) Retrieve keys for name
 + 0x02
-+ 8 bytes: name - the name to look up
++ UTF-8 string: the name to look up
 The response is:
-+ 8 bytes: the name of the owner of the keys
 + 32 bytes: their public signing key
 + 32 bytes: their public encryption key
++ UTF-8 string: the name of the owner of the keys
 
 3. (Free) Get proof of work difficulty and key
 + 0x03
@@ -64,28 +64,28 @@ The response is:
 + 8 bytes: unique, i.e. the server must never respond in the same way to this request
 
 4. (Free) Get code for authentication
-+ 0x07
++ 0x04
 The response is a unique 8 bytes, that is, the server must never respond in the same way to this request.
 
 5. (Paid) Send message
-+ 0x08
++ 0x05
 + 112 bytes: identity token
 + 8 bytes: recipient id
 + message
 
 6. (Free) Delete message from server
-+ 0x09
++ 0x06
 + 112 bytes: identity token
 + 32 bytes: sha512[:32] hash of the message
 
 7. (Free) Whitelist someone
-+ 0x0A
++ 0x07
 + 112 bytes: identity token
 + 16 bytes: proof of work
 + 8 bytes: name of person to whitelist
 
 8. (Free) Remove someone from whitelist
-+ 0x0B
++ 0x08
 + 112 bytes: identity token
 + 8 bytes: name of person to remove from whitelist
 
