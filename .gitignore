@@ -3,6 +3,7 @@ go/bin/
 go/src/golang.org/
 go/src/goji.io/
 go/src/github.com/
+go/src/gu/
 go/pkg/
 server.go
 README.pdf
