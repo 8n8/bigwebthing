@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/base64"
+    "math"
 	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/zserge/webview"
+    "github.com/8n8/gu"
 	"golang.org/x/crypto/argon2"
 	"io"
 	"io/ioutil"
@@ -15,13 +17,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	//     "crypto/sha256"
-	//     "math"
+	"crypto/sha256"
 )
 
 type stateT struct {
 	fatalErr         error
-	waiters          []waitableT
+	waiters          []gu.Waiter
 	cacherChan       chan cacheCmdT
 	websocketOutChan chan string
 	toServerChan     chan []byte
@@ -45,36 +46,26 @@ type outT interface {
 	fast() bool
 }
 
+type start struct{}
+
+func (start) initState() gu.State {
+    return stateT{
+        fatalErr: nil,
+        waiters: []gu.Waiter,
+    }
+}
+
+func (start) initOutputs() []gu.Out {
+    return []gu.Out{
+        startWebserverT{},
+        startTcpConnT{},
+        startCacherT{},
+        startWebViewT{},
+    }
+}
+
 func main() {
-	state := stateT{
-		fatalErr: nil,
-		waiters:  []waitableT{},
-	}
-
-	outputs := []outT{
-		startWebserverT{},
-		startTcpConnT{},
-		startCacherT{},
-		startWebViewT{},
-	}
-
-	inputChannel := make(chan inT, 1)
-
-	for state.fatalErr == nil {
-		for _, output := range outputs {
-			if output.fast() {
-				output.io(inputChannel)
-			} else {
-				go output.io(inputChannel)
-			}
-		}
-
-		in := <-inputChannel
-
-		state, outputs = update(state, in)
-	}
-
-	fmt.Println(state.fatalErr)
+    gu.Run(start{})
 }
 
 func update(state stateT, in inT) (stateT, []outT) {
@@ -92,39 +83,12 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-//
-// type waitT struct {
-//     pubKeys pubKeysWaitT
-//     authCode authCodeWaitT
-// }
-//
-// type authCodeWaitT interface {
-//     update(stateT, authCodeT) (stateT, []outputT)
-// }
-//
-// type pubKeysWaitT interface {
-//     update(stateT, pubKeysT) (stateT, outputT)
-// }
-//
-// type publicKeysT struct {
-//     sign []byte
-//     encrypt []byte
-// }
-//
-// func initState() stateT {
-// 	return stateT{
-// 		fatalErr: nil,
-// 	}
-// }
-//
 type startWebViewT struct{}
 
 func (startWebViewT) fast() bool { return false }
 
-//
 const baseUrl = "http://localhost:" + port
 
-//
 func (startWebViewT) io(ch chan inT) {
 	w := webview.New(true)
 	defer w.Destroy()
@@ -134,48 +98,36 @@ func (startWebViewT) io(ch chan inT) {
 	w.Run()
 }
 
-//
-// func initOutputs() []outputT {
-// 	return []outputT{
-// 		startCacherT{},
-// 		startTcpConnT{},
-// 		startWebserverT{},
-// 		startWebViewT{},
-// 	}
-// }
-//
 type startCacherT struct{}
 
-//
-
-func (startCacherT) fast() bool { return false }
+func (startCacherT) Fast() bool { return false }
 
 type startTcpConnT struct{}
 
-func (startTcpConnT) fast() bool { return false }
+func (startTcpConnT) Fast() bool { return false }
 
 type startWebserverT struct{}
 
-func (startWebserverT) fast() bool { return false }
+func (startWebserverT) Fast() bool { return false }
 
 type cacherChanT struct {
 	ch chan cacheCmdT
 }
 
-func (c cacherChanT) router(w waitableT) inputStateT {
-	expected, inputState := w.expected(c)
+func (c cacherChanT) Router(w gu.Waiter) gu.Ready {
+	ready, expected := w.Expected(c)
 	if !expected {
 		return notExpectedT{}
 	}
 
-	return inputState
+	return ready
 }
 
 type cacheCmdT interface {
 	run(ch chan inT)
 }
 
-func (startCacherT) io(ch chan inT) {
+func (startCacherT) Io(ch chan gu.In) {
 	cmdCh := make(chan cacheCmdT)
 	ch <- cacherChanT{cmdCh}
 
@@ -185,9 +137,9 @@ func (startCacherT) io(ch chan inT) {
 	}
 }
 
-func (c cacherChanT) update(state stateT) (stateT, []outT) {
+func (c cacherChanT) Update(state gu.State) (gu.State, []gu.Out) {
 	state.cacherChan = c.ch
-	return state, []outT{}
+	return state, []gu.Out{}
 }
 
 const serverUrl = "http://localhost:3001"
@@ -364,7 +316,7 @@ func decodeInt(bs []byte) int {
 }
 
 func websocketHandler(
-	w http.ResponseWriter, r *http.Request, ch chan inT) {
+	w http.ResponseWriter, r *http.Request, ch chan gu.In) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -398,26 +350,26 @@ func websocketHandler(
 	}
 }
 
-func (f fromWebsocketT) router(w waitableT) inputStateT {
-	expected, inputState := w.expected(f)
+func (f fromWebsocketT) Router(w gu.Waiter) gu.Ready {
+	ready, expected := w.Expected(f)
 	if !expected {
 		return notExpectedT{}
 	}
 
-	return inputState
+	return ready
 }
 
 type notExpectedT struct{}
 
-func (notExpectedT) update(state stateT) (stateT, []outT) {
-	return state, []outT{}
+func (notExpectedT) Update(state gu.State) (gu.State, []gu.Out) {
+	return state, []gu.Out{}
 }
 
 // //
 type fromWebsocketT string
 
 //
-func (f fromWebsocketT) update(state stateT) (stateT, []outT) {
+func (f fromWebsocketT) Update(state gu.State) (gu.State, []gu.Out) {
 	bytes, err := base64.StdEncoding.DecodeString(string(f))
 	if err != nil {
 		state.fatalErr = errors.New(
@@ -476,16 +428,135 @@ func (d draftToSendT) expected(in inT) (bool, inputStateT) {
 
 type gotDraftToSendT []byte
 
-func (g gotDraftToSendT) update(state stateT) (stateT, []outT) {
-    waiter := draftForAuthCodeT([]byte(g))
+func (g gotDraftToSendT) update(state gu.State) (gu.State, []gu.Out) {
+    waiter := DraftForAuthCodes{
+        auths: [][]byte{},
+        draft: []byte(d),
+    }
     state.waiters = append(state.waiters, waiter)
 
+    n := numChunks([]byte(g))
 
+	return state, getAuthCodes(n, state.toServerChan)
+}
 
-	return state, []outT{toServerT{
-        ch: state.toServerChan,
-        msg: []byte{7},
-        }}
+type DraftForAuthCodes struct {
+    auths [][]byte
+    draft []byte
+}
+
+type DraftAndAuth struct {
+    draft []byte
+    auth []byte
+}
+
+func getAuthCodes(n int, ch chan []byte) []gu.Out {
+    outs := make([]gu.Out, n)
+    for i := 0; i < n; i++ {
+        outs[i] = toServerT{
+            ch: ch,
+            msg: []byte{7},
+        }
+    }
+    return outs
+}
+
+func numChunks(bs []byte) int {
+    return int(math.Ceil(float64(len(bs)) / maxChunk))
+}
+
+const maxChunk = 15500
+
+func chunkBytes(bytes []byte) [][]byte {
+    length := len(bytes)
+    if length < maxChunk {
+        result := make([]byte, length + 1)
+        result[0] = 0
+        copy(result[1:], bytes)
+        return [][]byte{result}
+    }
+
+    numChunks := int(math.Ceil(float64(length) / maxChunk))
+
+    hash := sha256.Sum256(bytes)
+
+    chunks := make([][]byte, numChunks)
+    for i := 0; i < numChunks; i++ {
+        chunkNum := encodeInt32(i)
+        chunkStart := i * maxChunk
+        chunkEnd := (i + 1) * maxChunk
+        if chunkEnd > length {
+            chunkEnd = length
+        }
+        chunkData := bytes[chunkStart: chunkEnd]
+        chunkLen := chunkEnd - chunkStart
+        combined := make([]byte, 1 + 32 + 4 + chunkLen)
+        combined[0] = 1
+        copy(combined[1:], hash[:])
+        copy(combined[1+32:], chunkNum)
+        copy(combined[1+32+4:], chunkData)
+        chunks[i] = combined
+    }
+
+    return chunks
+}
+
+func (d DraftAndAuth) Update(state gu.State) (gu.State, []gu.Out) {
+    draft, err := parseDraft(d.draft)
+    if err != nil {
+        state.fatalErr = err
+        return state, []Out{}
+    }
+
+    theirKeys, ok := state.theirKeys[draft.to]
+    if !ok {
+        waiter := DraftNeedsTheirKeys{
+            draft: d.draft,
+            auth: d.auth,
+        }
+        state.waiters = append(state.waiters, waiter)
+        out := GetKeysFromServer(draft.to)
+        return state, []Out{out}
+    }
+
+    chunks := chunkBytes(d.draft)
+    toSends := make([][]byte, len(chunks))
+    for i, chunk := range chunks {
+        nonce := makeNonce(state.counter)
+        state.counter += 1
+
+        encrypted := box.Seal(
+            []byte{},
+            chunk,
+            &nonce,
+            &theirKeys.encrypt,
+            &state.myKeys.encrypt.secret)
+
+        idToken := make([]byte, 122)
+        copy(idToken[:10], s.myName)
+        copy(idToken[10:], d.auth)
+        lenCrypted := len(encrypted)
+        toSign := make([]byte, 1 + 24 + lenCrypted + 16)
+        toSign[0] = 4
+        copy(toSign[1:], nonce[:])
+        copy(toSign[1+24:], encrypted)
+        copy(toSign[1+24+lenCrypted:], d.auth)
+        signature := sign.Sign(
+            []byte{},
+            sha256.Sum256(toSign),
+            &state.myKeys.sign.secret)
+        copy(idToken[26:], signature)
+
+        lenWrapped := 1 + 122 + 10 + 24 + lenCrypted
+        wrapped := make([]byte, lenWrapped)
+        wrapped[0] = 4
+        copy(wrapped[1:], idToken)
+        copy(wrapped[1+122:], state.myName)
+        copy(wrapped[1+122+10:], nonce)
+        copy(wrapped[1+122+10+24:], encrypted)
+
+        toSends[i] = wrapped
+    }
 }
 
 type toServerT struct {
@@ -681,7 +752,7 @@ type Blob struct {
 type Draft struct {
 	id        string
 	subject   string
-	to        string
+	to        []byte
 	time      int
 	userInput string
 	code      Code
@@ -1017,8 +1088,8 @@ func (startWebserverT) io(ch chan inT) {
 
 type websocketOpenT chan string
 
-func (open websocketOpenT) router(w waitableT) inputStateT {
-	expected, inputState := w.expected(open)
+func (open websocketOpenT) Router(w gu.Waiter) gu.Ready {
+	expected, inputState := w.Expected(open)
 	if !expected {
 		return notExpectedT{}
 	}
@@ -1027,9 +1098,9 @@ func (open websocketOpenT) router(w waitableT) inputStateT {
 }
 
 //
-func (w websocketOpenT) update(state stateT) (stateT, []outT) {
+func (w websocketOpenT) Update(state gu.State) (gu.State, []gu.Out) {
 	state.websocketOutChan = chan string(w)
-	return state, []outT{}
+	return state, []gu.Out{}
 }
 
 //
@@ -1086,23 +1157,3 @@ type chansT struct {
 type toWebsocketT interface{}
 type toTcpT interface{}
 type toFileSystemT interface{}
-
-// func main() {
-//     websocketCh := make(chan toWebsocketT)
-//     tcpCh := make(chan toTcpT)
-//     fileSystemCh := make(chan toFileSystemT)
-//     stopCh := make(chan error)
-//
-//     chs := chansT{
-//         websocket: websocketCh,
-//         tcp: tcpCh,
-//         fileSystem: fileSystemCh,
-//         stop: stopCh,
-//     }
-//
-//     go httpServer(chs)
-//     go tcp(chs)
-//     go fileSystem(chs)
-//
-//     fmt.Println(<-stopCh)
-// }

@@ -20,14 +20,54 @@ The cost of the server is met by subscriptions. It is free to use the server to 
 
 ## Message formats
 
+## User fingerprint
+
+A user fingerprint is the first 100 bits of a slow hash of the user's signing and
+encryption public keys.
+
+The user fingerprint length is calculated as follows:
+
+It must be long enough that it takes too long for an adversary to generate keys that
+have the same user ID. It should be as short as possible so that it is convenient for
+people to read and share.
+
+Suppose there are around 10^11 keys on the system and an adversary is trying to find
+keys that have the same fingerprint as one on the system. The only thing they can
+do is keep generating keys and testing if the ID matches one on the system.
+
+Say there are 80 bits (~10^24) in a fingerprint, then it will take the adversary
+about 10^24 / 10^11 = 10^13 attempts to find a duplicate.
+
+If I use some slow hashing to generate the fingerprint so that it takes on the order
+of a second for each try, then 10^13 attempts will take on the order of 100,000 years
+of computer time.
+
+This sounds on the margins of safety. Say if there are actually 10^12 keys on the server, and the adversary can actually do 1000 tries a second. Then it will only take 10 years of computer time, which is sort of getting close to attackable.
+
+I could stick another 15 bits (~10^4) on the fingerprint, which would increase the
+optimistic attack time to 100000 years. But this is at the cost of bugging my users some more.
+
+In a Diceware-like system with a dictionary of about 10,000 words, a 80-bit user ID
+is about 6 words, but with 95 bits it is 7 words.
+
+6 words looks like:
+
+applause goatskin remark boundless everyday surprise
+
+7 words looks like:
+
+extinct womanlike generous dense quilt morality patronage
+
+I choose 6 words (80 bits).
+
 ### Proof of work
 
-Free APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes from the server, and find some more unique bytes that will create an sha512 hash with a number of the first bytes as zeros.  So a proof of work token is like this:
+Free APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes from the server, and find some more unique bytes that will create an Argon2id hash with all the bytes greater than the difficulty.  So a proof of work token is like this:
 
-+ <8 unique bytes provided by the server>
++ <16 unique bytes provided by the server>
 + <8 calculated by the client>
 
-The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty, that is, that the required initial number of bytes are zeros.
+The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
 
 ### Server API
 
@@ -36,106 +76,73 @@ Messages are sent to the server in HTTP requests. The server will not accept mes
 The client can also make a websocket connection with the server, which the server will send any new messages through.
 
 Some APIs are only accessible to certain users and must have an identity token as follows:
-+ 8 bytes: ID of sender
-+ 8 bytes: authentication code downloaded from the server earlier
-+ 96 bytes: signature. This is the signed SHA512[:32] hash of the message prepended to the authentication code above. To be clear it is signature(sha512hash[:32](route + message + authCode)).
-So an identity token is 112 bytes long.
++ 10 bytes: ID of sender
++ 16 bytes: authentication code downloaded from the server earlier
++ 96 bytes: signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(SHA256(route byte + message + authCode)).
+So an identity token is 122 bytes long.
 
 These are the types of messages that the server will accept:
 
-1. (Free) Make a friendly name for a public signing key:
+1. (Free) Retrieve keys for ID
 + 0x01
-+ 16 bytes: proof of work
-+ 64 bytes: public signing key + public encryption key
-Response is an 8 byte name.
-
-2. (Free) Retrieve keys for name
-+ 0x02
-+ UTF-8 string: the name to look up
++ 10 bytes: the ID to look up
 The response is:
 + 32 bytes: their public signing key
 + 32 bytes: their public encryption key
-+ UTF-8 string: the name of the owner of the keys
++ 10 bytes: the ID of the owner of the keys
 
-3. (Free) Get proof of work difficulty and key
-+ 0x03
+2. (Free) Get proof of work difficulty and key
++ 0x02
 The response is:
 + 1 byte: how many of the bytes at the start of the proof of work must be zeros (the difficulty)
-+ 8 bytes: unique, i.e. the server must never respond in the same way to this request
++ 24 bytes: unique, i.e. the server must never respond in the same way to this request
 
-4. (Free) Get code for authentication
+3. (Free) Get code for authentication
++ 0x03
+The response is a unique 16 bytes, that is, the server must never respond in the same way to this request.
+
+4. (Paid) Send message
 + 0x04
-The response is a unique 8 bytes, that is, the server must never respond in the same way to this request.
-
-5. (Paid) Send message
-+ 0x05
-+ 112 bytes: identity token
-+ 8 bytes: recipient id
++ 122 bytes: identity token
++ 10 bytes: recipient id
 + message
 
-6. (Free) Delete message from server
+5. (Free) Delete message from server
++ 0x05
++ 122 bytes: identity token
++ 32 bytes: SHA256 hash of the message
+
+6. (Free) Whitelist someone
 + 0x06
-+ 112 bytes: identity token
-+ 32 bytes: sha512[:32] hash of the message
++ 122 bytes: identity token
++ 24 bytes: proof of work
++ 10 bytes: name of person to whitelist
 
-7. (Free) Whitelist someone
+7. (Free) Remove someone from whitelist
 + 0x07
-+ 112 bytes: identity token
-+ 16 bytes: proof of work
-+ 8 bytes: name of person to whitelist
-
-8. (Free) Remove someone from whitelist
-+ 0x08
-+ 112 bytes: identity token
-+ 8 bytes: name of person to remove from whitelist
-
-#### Downloading messages
-
-Connect to "/downloadmessages" with websockets. The client should upload an identity token initially, and thereafter the server will send all the client's messages down it.
++ 122 bytes: identity token
++ 10 bytes: name of person to remove from whitelist
 
 ### Client API
 
-This is what happens to a message as it is sent and received:
+Since the server only accepts messages of 16KB or less, messages are chunked up into chunks 15.5KB or less, allowing space for crypto overhead.
 
-1. It starts as an object in Javascript with these fields:
+Each chunk is like this:
++ 1 byte: 0 if it is not chunked (i.e. is small enough to fit in one chunk) or
+          1 if it is
++ either
+    the whole of a small message
 
-    + to: the recipient's ID number
-    + time: POSIX time
-    + subject: string
-    + userInput: string
-    + code: mainly the id of a blob of bytes in the DB
-    + blobs: an array of mainly the id of a blob of bytes in the DB
+  or
+    + 32 bytes: SHA-256 hash of the whole message
+    + 4 bytes: counter (first chunk is numbered 0) (Little-Endian)
+    + the chunk
 
-2. The message is encoded to bytes as shown in the 'encodeMessage' function in Utils.elm.
+Then the chunk gets encrypted as follows:
++ 24-bytes: nonce
++ encrypted bytes calculated with nacl box.Seal
 
-3. On the JS side, the message from (2) is parsed as follows:
-    + the recipient is extracted from bytes 0 to 4
-    + the document is extracted from bytes 4 to end
-
-4. The document is chopped up into chunks. A chunk is like this:
-    + 0x01 (or 0x00 for a receipt)
-    + 4 bytes: chunk counter integer
-    + 4 bytes: total chunks in message
-    + 32 bytes: sha512[:32] of the encoded message except for the 'from' - first four bytes
-    + <=15kB: the rest of the chunk
-
-5. Each chunk is encrypted and prefixed with a 24-byte nonce.
-
-6. The encrypted chunk is bundled up as follows:
-    + 0x08
-    + 112 bytes: ID token
-    + 8 bytes: the recipient ID
-    + the encrypted nonce and chunk
-
-7. The bundle is uploaded to the server, and downloaded by the other user. The server prepends it with a 1 or 0 byte depending on whether  there are any messages or not.
-
-8. The first two bytes are sliced off, because they are indicators and not needed any more.
-
-9. The chunk is decrypted
-
-10. The decrypted chunk is parsed.
-
-11. Assembled chunks are put in the inbox.
+Then it gets sent using the Send message route in the server API.
 
 # Programs
 
