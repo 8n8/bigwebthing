@@ -93,7 +93,10 @@ type FromServer interface {
 	routerS(fromServerChansT)
 }
 
-func parseMsg(raw []byte) (FromServer, error) {
+func parseTcpMsg(raw chan []byte) (chan FromServer, chan error) {
+}
+
+func tcpParser(raw []byte) (FromServer, error) {
 	length := len(raw)
 	if length == 0 {
 		return nil, errors.New("empty message")
@@ -520,34 +523,34 @@ func sendMessage(draftId string, ch chansT, crash chan error) {
 }
 
 func main() {
-	ch := initChans()
+
+	// Generators and consumers
 	crash := make(chan error)
 
-	go tcpConn(ch.server, crash)
-	go cacher(ch.cache, crash)
-	go ui(ch.ui, crash)
+	rawTcpMsg := make(chan []byte, 1)
+	tcpConsumer := make(chan []byte, 1)
+	go tcpConn(tcpMsg, crash, toTcp)
+
+	uiConsumer := make(chan []byte, 1)
+	rawUiMsg := make(chan []byte, 1)
+	go ui(uiMsg, crash, toUi)
 
 	go window()
 
-	for {
-		select {
-		case toServer := <-ch.ui.from.toServer:
-			ch.server.to <- toServer
+	// Processors
+	uiMsg := parseUiMsg(rawUiMsg, crash)
+	tcpMsg, errTcp := parseTcpMsg(rawTcpMsg)
 
-		case proofOfWorkInfo := <-ch.ui.from.getProofOfWork:
-			ch.ui.to <- makeProofOfWork(proofOfWorkInfo)
+	// Consumers
+	go func() {
+		for {
+			tcpConsumer <-toTcp
+		}
+	}()
 
-		case cacheGet := <-ch.ui.from.cache.get:
-			ch.cache.to <- CacheGet(cacheGet)
-
-		case cacheSet := <-ch.ui.from.cache.set:
-			ch.cache.to <- CacheSet(cacheSet)
-
-		case cacheRemove := <-ch.ui.from.cache.remove:
-			ch.cache.to <- CacheDelete(cacheRemove)
-
-        case draftId := <-ch.ui.from.sendMessage:
-            go sendMessage(draftId, ch)
+	go func() {
+		for {
+			uiConsumer <-toUi
 		}
 	}
 
