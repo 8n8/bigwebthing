@@ -514,6 +514,11 @@ func makeProofOfWork(info ProofOfWorkInfo) []byte {
 	}
 }
 
+func sendMessage(draftId string, ch chansT, crash chan error) {
+    ch.cache.to <-CacheGet(draftId)
+    rawDraft := <-ch.cache.from.got
+}
+
 func main() {
 	ch := initChans()
 	crash := make(chan error)
