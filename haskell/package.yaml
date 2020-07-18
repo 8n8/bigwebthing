@@ -24,6 +24,14 @@ dependencies:
 - streamly
 - bytestring
 - text
+- network-simple
+- stm
+- attoparsec
+- wai-websockets
+- wai
+- warp
+- websockets
+- scotty
 
 library:
   source-dirs: src

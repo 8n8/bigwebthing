@@ -412,6 +412,8 @@ func initKeys() (Keys, error) {
 	return keys, nil
 }
 
+const port = "59285"
+
 func main() {
 	endChan := make(chan error)
 
@@ -423,7 +425,7 @@ func main() {
 
 	outCh := make(chan []byte)
 
-	listener, err := net.Listen("tcp", ":59285")
+	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		endChan <- err
 	}

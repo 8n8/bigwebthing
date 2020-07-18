@@ -62,7 +62,7 @@ I choose 6 words (80 bits).
 
 ### Crypto API
 
-There is a TCP server that does all the crypto. The API is like this:
+There is a TCP server on port 59285 that does all the crypto. The API is like this:
 
 1. Encrypt message
 + 0x01
