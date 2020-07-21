@@ -20,45 +20,33 @@ The cost of the server is met by subscriptions. It is free to use the server to 
 
 ## Message formats
 
-## User fingerprint
+## User ID
 
-A user fingerprint is the first 100 bits of a slow hash of the user's signing and
-encryption public keys.
+A user ID is a public key fingerprint.
+
+The fingerprint is the first few bits of a slow hash of a concatentation of a user's public signing and encryption keys.
 
 The user fingerprint length is calculated as follows:
 
 It must be long enough that it takes too long for an adversary to generate keys that
-have the same user ID. It should be as short as possible so that it is convenient for
-people to read and share.
+have the same user ID as someone else. It should be as short as possible so that it
+is convenient for people to read and share.
 
-Suppose there are around 10^11 keys on the system and an adversary is trying to find
-keys that have the same fingerprint as one on the system. The only thing they can
-do is keep generating keys and testing if the ID matches one on the system.
+The only thing the adversary can do is keep generating keys for a particular user and testing if the ID matches one on the system.
 
-Say there are 80 bits (~10^24) in a fingerprint, then it will take the adversary
-about 10^24 / 10^11 = 10^13 attempts to find a duplicate.
+Lets say that 2^70 'fast' operations is too much for the attacker. Then if I make them use a slow hash in each operation, that is around 2^12 'fast' operations. So 2^58 'slow' operations is too much for the attacker.
 
-If I use some slow hashing to generate the fingerprint so that it takes on the order
-of a second for each try, then 10^13 attempts will take on the order of 100,000 years
-of computer time.
+Say there are 2^40 different users, then that means the fingerprint should be 2^(58 + 40) = 2^98.
 
-This sounds on the margins of safety. Say if there are actually 10^12 keys on the server, and the adversary can actually do 1000 tries a second. Then it will only take 10 years of computer time, which is sort of getting close to attackable.
+The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 2^98 bit fingerprint will need 8 words, like:
 
-I could stick another 15 bits (~10^4) on the fingerprint, which would increase the
-optimistic attack time to 100000 years. But this is at the cost of bugging my users some more.
+fried veal frightful untoasted uplifting carnation breezy hazy
 
-In a Diceware-like system with a dictionary of about 10,000 words, a 80-bit user ID
-is about 6 words, but with 95 bits it is 7 words.
+or
 
-6 words looks like:
+rethink doornail refining handiness lend strainer appealing deputy
 
-applause goatskin remark boundless everyday surprise
-
-7 words looks like:
-
-extinct womanlike generous dense quilt morality patronage
-
-I choose 6 words (80 bits).
+Which is pretty long, but I suppose I'll have to live with it.
 
 ### Crypto API
 
@@ -162,7 +150,7 @@ The response is:
 + 0x03
 The response is a unique 16 bytes, that is, the server must never respond in the same way to this request.
 
-4. (Paid) Send message
+4. (Paid, Signed) Send message
 + 0x04
 + 122 bytes: identity token
 + 10 bytes: recipient id
