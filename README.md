@@ -1,26 +1,32 @@
-It provides a sufficient but minimal solution to each of these data problems:
+# Overview
+ 
+It is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
 
-1. storing
-2. sharing
-3. creating
-4. viewing
-5. searching
-6. automatic manipulation
-7. spam messages
+User data is kept on their own machine. Users' private crypto keys are never shared with other people.
 
-# Storing
-
-A user's data is stored in a local cache, in IndexedDB in their browser.
-
-# Sharing
+Users can write programs and send them to each other safely and run them safely.
 
 There is a message-passing server for sharing data between people. It stores messages till they are collected.
 
-The cost of the server is met by subscriptions. It is free to use the server to communicate with a subscriber, but only subscribers can communicate with non-subscribers.
+The cost of running the server is met by users paying for the resources they use.
 
-## Message formats
+# Program structure
 
-## User ID
+There are six different parts to the program:
+
+1. (Haskell) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
+
+2. (Elm) The GUI. This runs in a stripped-down web browser via webview.
+
+3. (Javascript) The GUI plumbing. This handles the connection between the client backend and the Elm GUI, passing data through ports to Elm and websockets to the client backend.
+
+4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produces a DOM-like structure from a user input text box and user-uploaded binary blobs.
+
+5. (Go) The client / server crypto. Haskell doesn't have a simple, trustworthy high-level crypto library, so the crypto is done in Go using the nacl library. This runs on the client and server localhost as an HTTP server, and is used by the client backend and by the server.
+
+6. (Haskell) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
+
+# User ID
 
 A user ID is a public key fingerprint.
 
@@ -36,7 +42,7 @@ The only thing the adversary can do is keep generating keys for a particular use
 
 Lets say that 2^70 'fast' operations is too much for the attacker. Then if I make them use a slow hash in each operation, that is around 2^12 'fast' operations. So 2^58 'slow' operations is too much for the attacker.
 
-Say there are 2^40 different users, then that means the fingerprint should be 2^(58 + 40) = 2^98.
+Say there are 2^40 different users, then that means the fingerprint should be 2^(58 + 40) = 2^98, say 13 bytes.
 
 The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 2^98 bit fingerprint will need 8 words, like:
 
@@ -48,66 +54,60 @@ rethink doornail refining handiness lend strainer appealing deputy
 
 Which is pretty long, but I suppose I'll have to live with it.
 
-### Crypto API
+### Client backend API
 
-There is a TCP server on port 59285 that does all the crypto. The API is like this:
 
-1. Encrypt message
-+ 0x01
-+ 32 bytes: public key of recipient
-+ the message to encrypt
-Response:
-+ 0x01
-+ 32 bytes: public key of recipient
-+ sized unencrypted message
-+ encrypted message
 
-2. Decrypt message
-+ 0x02
-+ 32 bytes: public key of sender
-+ the message to decrypt
-Response
-+ 0x02
-+ either
-    + 0x00: decryption failed
+
+### Crypto server API
+
+There is an HTTP server on port 59285 that does all the crypto. The API is like this:
+
+1. /encrypt
+
+    Request:
+    + 32 bytes: public key of recipient
+    + the message to encrypt
+    
+    Response:
+    + encrypted message
+
+2. /decrypt
+
+    Request:
     + 32 bytes: public key of sender
     + the message to decrypt
-  or
-    + 0x01: decryption succeeded
-    + 32 bytes: public key of sender
-    + sized encrypted message
+
+    Response:
     + decrypted message
 
-3 Sign message
-+ 0x03
-+ message to sign
-Response:
-+ 0x03
-+ sized original message
-+ signed message
+    (Status 400 if decryption fails.)
 
-4. Check signature
-+ 0x04
-+ 32 bytes: public key of sender
-+ signature
-Response:
-+ 0x04
-+ either
-    + 0x00: bad signature
-    + 32 bytes: public key of sender
-    + signature
-  or
-    + 0x01: good signature
-    + 32 bytes: public key of sender
-    + sized signature
-    + unsigned message
+3. /sign
 
-5. Get public keys
-+ 0x05
-Response:
-+ 0x05
-+ 32 bytes: public signing key
-+ 32 bytes: public encryption key
+    Request:
+    + message to sign
+
+    Response:
+    + signed message
+
+4. /checksignature
+
+    Request:
+    + public key of sender
+    + signed message
+
+    Response:
+    + status 200 if good signature or status 400 if bad signature
+
+5. /getmykeys
+
+    Request:
+    + empty
+
+    Response:
+    + 32 bytes: public signing key
+    + 32 bytes: public encryption key
 
 ### Proof of work
 
