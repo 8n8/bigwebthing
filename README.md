@@ -2,13 +2,15 @@
  
 It is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
 
-User data is kept on their own machine. Users' private crypto keys are never shared with other people.
+User data is kept on their own machine, and never sent out unencrypted. Users' private crypto keys are never shared with other people.
 
 Users can write programs and send them to each other safely and run them safely.
 
 There is a message-passing server for sharing data between people. It stores messages till they are collected.
 
-The cost of running the server is met by users paying for the resources they use.
+The cost of running the server is met by users paying for the resources they use, as they use them.
+
+It operates on a strict whitelist-only policy, so you only receive messages from peopleon your whitelist.
 
 # Program structure
 
@@ -38,11 +40,11 @@ It must be long enough that it takes too long for an adversary to generate keys 
 have the same user ID as someone else. It should be as short as possible so that it
 is convenient for people to read and share.
 
-The only thing the adversary can do is keep generating keys for a particular user and testing if the ID matches one on the system.
+The only thing the adversary can do is keep generating keys and testing if the ID matches one on the system.
 
 Lets say that 2^70 'fast' operations is too much for the attacker. Then if I make them use a slow hash in each operation, that is around 2^12 'fast' operations. So 2^58 'slow' operations is too much for the attacker.
 
-Say there are 2^40 different users, then that means the fingerprint should be 2^(58 + 40) = 2^98, say 13 bytes.
+Say there are a maximum 2^40 different users, then that means the user ID should be 58 + 40 = 98 bits. This will fit in 13 bytes.
 
 The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 2^98 bit fingerprint will need 8 words, like:
 
@@ -52,14 +54,76 @@ or
 
 rethink doornail refining handiness lend strainer appealing deputy
 
-Which is pretty long, but I suppose I'll have to live with it.
+Which is pretty long, but it's the best I can do.
 
-### Client backend API
+# Client backend API
 
+The client backend provides three servers:
 
++ websockets
++ HTTP API
++ static file server
 
+## Websockets API
 
-### Crypto server API
+Port 11833
+
+The websockets API is for sending messages from the client backend to the frontend.
+
+Messages can take the following form:
+
+1. New inbox message summary
+
+    + 0x01
+    + subject as a sized string
+    + 8 bytes: POSIX time
+    + cache key for full message as a sized string
+
+2. New acknowledgement
+
+    + 0x02
+    + 13 bytes: recipient ID
+    + cache key for full message as a sized string
+
+3. Network status
+
+    + 0x03
+    + 1 byte: 0x00 for bad, 0x01 for good
+
+## HTTP API
+
+Port 52771
+
+1. /cache/get
+
+    Request:
+    + cache key as a UTF-8 string
+
+    Response:
+    + value associated with the key
+
+2. /cache/set
+
+    Request:
+    + cache key as a length-encoded UTF-8 string
+    + value
+
+3. /cache/delete
+
+    Request:
+    + cache key as a UTF-8 string
+
+4. /sendmessage
+
+    Request:
+    + draft ID as a UTF-8 string
+
+5. /myid
+
+    Response:
+    + 13 bytes: my user ID
+
+# Crypto server API
 
 There is an HTTP server on port 59285 that does all the crypto. The API is like this:
 
@@ -109,110 +173,135 @@ There is an HTTP server on port 59285 that does all the crypto. The API is like 
     + 32 bytes: public signing key
     + 32 bytes: public encryption key
 
-### Proof of work
+# Server API
 
-Free APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes from the server, and find some more unique bytes that will create an Argon2id hash with all the bytes greater than the difficulty.  So a proof of work token is like this:
+The server provides an HTTP API on port 80, and also a TCP connection on 8002 so that the server can send new messages to the client without them being requested first.
+
+The server will not accept requests greater than 16KB.
+
+## Proof of work
+
+Some APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create an Argon2id hash with all the bytes greater than the difficulty.  So a proof of work token is like this:
 
 + <16 unique bytes provided by the server>
 + <8 calculated by the client>
 
 The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
 
-### Server API
+## TCP API
 
-Messages are sent to the server in HTTP requests. The server will not accept messages greater than 16KB.
+Port 8080
 
-The client can also make a websocket connection with the server, which the server will send any new messages through.
+It will accept incoming TCP connections. The client's first message
+should be like this:
 
-Some APIs are only accessible to certain users and must have an identity token as follows:
-+ 10 bytes: ID of sender
-+ 16 bytes: authentication code downloaded from the server earlier
-+ 96 bytes: signature. This is the signed SHA256 hash of the message prepended to the authentication code above. To be clear it is signature(SHA256(route byte + message + authCode)).
-So an identity token is 122 bytes long.
++ 13 bytes: my ID
++ signed
+    + 16 bytes: 6b 87 4c de cc f0 28 b3 7c 4e de ee 15 ca 92 93
+    + 16 bytes: auth code
 
-These are the types of messages that the server will accept:
+Then the client should just listen on the connection. The server will
+post any messages that it receives or has received from other users
+down this connection.  They will be the same as those uploaded in
+route 5/sendmessage of the HTTP API, but prefixed with a four-byte
+Little-Endian length.
 
-1. (Free) Retrieve keys for ID
-+ 0x01
-+ 10 bytes: the ID to look up
-The response is:
-+ 32 bytes: their public signing key
-+ 32 bytes: their public encryption key
-+ 10 bytes: the ID of the owner of the keys
+## HTTP API
 
-2. (Free) Get proof of work difficulty and key
-+ 0x02
-The response is:
-+ 1 byte: how many of the bytes at the start of the proof of work must be zeros (the difficulty)
-+ 16 bytes: unique, i.e. the server must never respond in the same way to this request
+Port 80
 
-3. (Free) Get code for authentication
-+ 0x03
-The response is a unique 16 bytes, that is, the server must never respond in the same way to this request.
+1. /publishkeys
 
-4. (Paid, Signed) Send message
-+ 0x04
-+ 122 bytes: identity token
-+ 10 bytes: recipient id
-+ message
+    Request:
+    + 24 bytes: proof of work
+    + 13 bytes: user ID
+    + 32 bytes: public signing key
+    + 32 bytes: public encryption key
 
-5. (Free) Delete message from server
-+ 0x05
-+ 122 bytes: identity token
-+ 32 bytes: SHA256 hash of the message
+2. /getkeys
 
-6. (Free) Whitelist someone
-+ 0x06
-+ 122 bytes: identity token
-+ 24 bytes: proof of work
-+ 10 bytes: name of person to whitelist
+    Request:
+    + 13 bytes: the ID to look up
 
-7. (Free) Remove someone from whitelist
-+ 0x07
-+ 122 bytes: identity token
-+ 10 bytes: name of person to remove from whitelist
+    Response:
+    + 32 bytes: their public signing key
+    + 32 bytes: their public encryption key
 
-### Client API
+
+3. /proofofworkinfo
+
+    Response:
+    + 1 byte: difficulty, which is the number that each byte in the
+              proof of work must be greater than
+    + 16 bytes: random
+
+4. /authcode
+
+    Response:
+    + 16 bytes: random
+
+5. /message/send
+
+    Request:
+    + 13 bytes: my ID
+    + signed
+        + 16 bytes: 0a cb 78 89 67 cf 64 19 2a dd 32 63 61 2d 10 18
+        + 16 bytes: auth code
+        + 13 bytes: recipient ID
+        + message
+
+6. /message/delete
+
+    Request:
+    + 13 bytes: my ID
+    + signed
+        + 16 bytes: d3 ad fa b3 b4 67 41 bb 51 19 de d5 56 e5 9c 8e
+        + 16 bytes: auth code
+        + 32 bytes: SHA256 hash of the message to delete
+
+7. /whitelist/add
+
+    Request:
+    + 24 bytes: proof of work
+    + 13 bytes: my ID
+    + signed
+        + 16 bytes: df c2 fb 02 ba 19 fd 38 80 fc 93 ca d6 f6 37 33
+        + 16 bytes: auth code
+        + 13 bytes: ID of person to whitelist
+
+8. /whitelist/remove
+
+    Request:
+    + 13 bytes: my ID
+    + signed
+        + 16 bytes: 32 52 4c a3 77 a2 86 0e 8b ec df e4 23 ae f1 8f
+        + 16 bytes: auth code
+        + 13 bytes: ID of person to remove from whitelist
+
+# Client to client API
 
 Since the server only accepts messages of 16KB or less, messages are chunked up into chunks 15.5KB or less, allowing space for crypto overhead.
 
-Each chunk is like this:
-+ 1 byte: 0 if it is not chunked (i.e. is small enough to fit in one chunk) or
-          1 if it is
-+ either
-    the whole of a small message
+All messages are encrypted.
 
-  or
+Inside the encryption, the API is as follows:
+
+0. small message
+
+    + 0x00
+    + the message
+
+1. part of a large message
+
+    + 0x01
     + 32 bytes: SHA-256 hash of the whole message
-    + 4 bytes: counter (first chunk is numbered 0) (Little-Endian)
-    + the chunk
+    + 4 bytes: counter (starting from 0) (Little-Endian)
+    + the message chunk
 
-Then the chunk gets encrypted as follows:
-+ 24-bytes: nonce
-+ encrypted bytes calculated with nacl box.Seal
+2. acknowledgement
 
-Then it gets sent using the Send message route in the server API.
-
-# Programs
-
-A program can:
-
-1. Display a document.
-
-2. Read user input.
-
-# Spam
-
-Each user has a whitelist of people they will accept messages from. Messages from anyone else are rejected unless they have a valid one-time code. Connections are started by somone sending a one-time code to someone else, by some existing method of communication, such as email. This code is used to authenticate the first message.
-
-# Software components
-
-1. Message-passing server. Messages are accepted if they are to or from subscribers. It deletes messages when they have been read.
-
-2. Javascript client. It has an inbox categorized by program, and a set of programs. The main view is a list of programs and a box to search for them. Clicking on a program launches it. There is a built-in programming language interpreter for running the programs - probably an editor and tooling all built in too.
-
-# Security
-
-Each user has a pair of keys for encryption and signing which are generated from a password known only by the user. This means that data is only accessible in unencrypted form by the user, but has the dowside that if the user loses their password and their local data then they can't recover it.
-
-Key pairs are changed by sending the new keys to everyone on the whitelist, signed by the old signing key.
+    + 0x02
+    + signed
+        + 16 bytes: 77 0a 8b e7 5a 1a 9e 31 c5 97 5b 61 ec 47 16 ef
+        + 8 bytes: Unix time received
+        + 32 bytes: SHA-256 hash of message received
