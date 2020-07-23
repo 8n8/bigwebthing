@@ -33,6 +33,7 @@ import Streamly.Internal.Memory.Array.Types (toList)
 tcpClient :: IO ()
 tcpClient =
     Tcp.connect "localhost" "3001" $ \(socket, _) -> do
+        tcpAuth socket
         tcpReceive socket
 
 
@@ -56,6 +57,22 @@ onTcpReceiveErr err socket = do
     Tio.putStrLn err
     C.threadDelay tcpDelay
     tcpReceive socket
+
+
+tcpAuthMeaning :: B.ByteString
+tcpAuthMeaning =
+    B.pack
+        [ 0x6b, 0x87, 0x4c, 0xde, 0xcc, 0xf0, 0x28, 0xb3
+        , 0x7c, 0x4e, 0xde, 0xee, 0x15, 0xca, 0x92, 0x93
+        ]
+
+
+tcpAuth :: Tcp.Socket -> IO ()
+tcpAuth socket = do
+    authCode <- getAuthCode
+    signed <- signMessage $ tcpAuthMeaning <> authCode
+    myId <- getMyId
+    Tcp.send socket $ myId <> signed
 
 
 tcpReceive ::  Tcp.Socket -> IO ()
@@ -318,23 +335,11 @@ httpApi =
 
         Sc.post "/whitelist/add" $ do
             whitelistee <- fmap Bl.toStrict Sc.body
-            err <- liftIO $ whitelist whitelistee
-            case err of
-                Left err_ ->
-                    liftIO $ Tio.putStrLn err_
-
-                Right () ->
-                    return ()
+            liftIO $ whitelist whitelistee
 
         Sc.post "/whitelist/remove" $ do
             whitelistee <- fmap Bl.toStrict Sc.body
-            err <- liftIO $ unwhitelist whitelistee
-            case err of
-                Left err_ ->
-                    liftIO $ Tio.putStrLn err_
-
-                Right () ->
-                    return ()
+            liftIO $ unwhitelist whitelistee
 
 
 getProofOfWork :: IO B.ByteString
@@ -374,51 +379,41 @@ unwhitelistMeaning =
         ]
 
 
-whitelist :: B.ByteString -> IO (Either T.Text ())
+whitelist :: B.ByteString -> IO ()
 whitelist whitelistee = do
     proofOfWork <- getProofOfWork
-    eitherMyId <- getMyId
-    case eitherMyId of
-        Left err ->
-            return $ Left err
-
-        Right myId -> do
-            authCode <- getAuthCode
-            signed <- signMessage $ mconcat
-                [ whitelistMeaning
-                , authCode
-                , whitelistee
-                ]
-            _ <- R.runReq R.defaultHttpConfig $ R.req
-                R.POST
-                (R.http serverUrl R./: "whitelist" R./: "add")
-                (R.ReqBodyBs $ proofOfWork <> myId <> signed)
-                R.ignoreResponse
-                mempty
-            return $ Right ()
+    myId <- getMyId
+    authCode <- getAuthCode
+    signed <- signMessage $ mconcat
+        [ whitelistMeaning
+        , authCode
+        , whitelistee
+        ]
+    _ <- R.runReq R.defaultHttpConfig $ R.req
+        R.POST
+        (R.http serverUrl R./: "whitelist" R./: "add")
+        (R.ReqBodyBs $ proofOfWork <> myId <> signed)
+        R.ignoreResponse
+        mempty
+    return ()
 
 
-unwhitelist :: B.ByteString -> IO (Either T.Text ())
+unwhitelist :: B.ByteString -> IO ()
 unwhitelist unwhitelistee = do
-    eitherMyId <- getMyId
-    case eitherMyId of
-        Left err ->
-            return $ Left err
-
-        Right myId -> do
-            authCode <- getAuthCode
-            signed <- signMessage $ mconcat
-                [ unwhitelistMeaning
-                , authCode
-                , unwhitelistee
-                ]
-            _ <- R.runReq R.defaultHttpConfig $ R.req
-                R.POST
-                (R.http serverUrl R./: "whitelist" R./: "remove")
-                (R.ReqBodyBs $ myId <> signed)
-                R.ignoreResponse
-                mempty
-            return $ Right ()
+    myId <- getMyId
+    authCode <- getAuthCode
+    signed <- signMessage $ mconcat
+        [ unwhitelistMeaning
+        , authCode
+        , unwhitelistee
+        ]
+    _ <- R.runReq R.defaultHttpConfig $ R.req
+        R.POST
+        (R.http serverUrl R./: "whitelist" R./: "remove")
+        (R.ReqBodyBs $ myId <> signed)
+        R.ignoreResponse
+        mempty
+    return ()
 
 
 fileLocks :: Stm.STM (TVar.TVar (Set.Set T.Text))
@@ -487,14 +482,14 @@ myIdTVar =
     TVar.newTVar Nothing
 
 
-getMyId :: IO (Either T.Text B.ByteString)
+getMyId :: IO B.ByteString
 getMyId = do
     maybeId <- Stm.atomically $ do
         tvar <- myIdTVar
         TVar.readTVar tvar
     case maybeId of
         Just myId ->
-            return $ Right myId
+            return myId
 
         Nothing -> do
             rawKeys <- R.runReq R.defaultHttpConfig $ do
@@ -507,18 +502,18 @@ getMyId = do
                         return $ R.responseBody bs
 
             case P.eitherResult $ P.parse keysP rawKeys of
-                Left err ->
-                    return $ Left $ T.pack err
+                Left err -> do
+                    fail $ show err
 
                 Right keys -> do
                     Stm.atomically $ do
                         tvar <- myKeysTVar
                         TVar.writeTVar tvar $ Just keys
-                    userId <- makeUserId
+                    myId <- makeUserId keys
                     Stm.atomically $ do
                         tvar <- myIdTVar
-                        TVar.writeTVar tvar $ Just userId
-                    return $ Right userId
+                        TVar.writeTVar tvar $ Just myId
+                    return myId
 
 
 myKeysTVar :: Stm.STM (TVar.TVar (Maybe Keys))
@@ -526,16 +521,21 @@ myKeysTVar =
     TVar.newTVar Nothing
 
 
-makeUserId :: IO B.ByteString
-makeUserId =
+makeUserId :: Keys -> IO B.ByteString
+makeUserId keys =
     R.runReq R.defaultHttpConfig $ do
         bs <- R.req
-            R.GET
+            R.POST
             (R.http cryptoUrl R./: "userid")
-            R.NoReqBody
+            (R.ReqBodyBs $ encodeKeys keys)
             R.bsResponse
             mempty
         return $ R.responseBody bs
+
+
+encodeKeys :: Keys -> B.ByteString
+encodeKeys keys =
+    signK keys <> encryptK keys
 
 
 serverUrl :: T.Text
@@ -575,42 +575,33 @@ getAuthCode =
         return $ R.responseBody bs
 
 
-sendChunk :: B.ByteString -> B.ByteString -> IO (Either T.Text ())
+sendChunk :: B.ByteString -> B.ByteString -> IO ()
 sendChunk recipient chunk = do
-    eitherMyId <- getMyId
-    case eitherMyId of
-        Left err ->
-            return $ Left err
+    myId <- getMyId
+    authCode <- getAuthCode
+    encrypted <- encryptMessage recipient chunk
+    signed <- signMessage $ mconcat
+        [ sendMessageMeaning
+        , authCode
+        , recipient
+        , encrypted
+        ]
 
-        Right myId -> do
-            authCode <- getAuthCode
-            encrypted <- encryptMessage recipient chunk
-            signed <- signMessage $ mconcat
-                [ sendMessageMeaning
-                , authCode
-                , recipient
-                , encrypted
-                ]
+    _ <- R.runReq R.defaultHttpConfig $
+        R.req
+            R.POST
+            (R.http serverUrl R./: "message" R./: "send")
+            (R.ReqBodyBs $ myId <> signed)
+            R.ignoreResponse
+            mempty
 
-            _ <- R.runReq R.defaultHttpConfig $
-                R.req
-                    R.POST
-                    (R.http serverUrl R./: "message" R./: "send")
-                    (R.ReqBodyBs $ myId <> signed)
-                    R.ignoreResponse
-                    mempty
-
-            return $ Right ()
+    return ()
 
 
-sendChunks
-    :: Serial B.ByteString
-    -> B.ByteString
-    -> Serial (Either T.Text ())
+sendChunks :: Serial B.ByteString -> B.ByteString -> Serial ()
 sendChunks chunks recipient = do
     chunk <- chunks
-    sent <- liftIO $ sendChunk recipient chunk
-    return sent
+    liftIO $ sendChunk recipient chunk
 
 
 clientDataDir :: T.Text
@@ -786,7 +777,7 @@ hashFileHelp chunk ctx =
     Sha256.update ctx chunk
 
 
-sendBigBlob :: B.ByteString -> Blob -> Serial (Either T.Text ())
+sendBigBlob :: B.ByteString -> Blob -> Serial ()
 sendBigBlob recipient blob = do
     hash <- liftIO $ hashFile $ filePath $ filenameB blob
 
@@ -803,7 +794,7 @@ sendBigBlob recipient blob = do
     liftIO $ sendChunk recipient encrypted
 
 
-sendSmallBlob :: B.ByteString -> Blob -> IO (Either T.Text ())
+sendSmallBlob :: B.ByteString -> Blob -> IO ()
 sendSmallBlob recipient blob = do
     let path = filePath $ filenameB blob
     _ <- lockFile path
@@ -814,25 +805,24 @@ sendSmallBlob recipient blob = do
     sendChunk recipient encrypted
 
 
-sendBlob :: B.ByteString -> Blob -> Serial (Either T.Text ())
+sendBlob :: B.ByteString -> Blob -> Serial ()
 sendBlob recipient blob =
     if sizeB blob > maxChunkSize then do
         _ <- liftIO $ lockFile $ filenameB blob
-        result <- sendBigBlob recipient blob
-        _ <- liftIO $ unlockFile $ filenameB blob
-        return result
+        _ <- sendBigBlob recipient blob
+        liftIO $ unlockFile $ filenameB blob
 
     else
         S.yieldM $ sendSmallBlob recipient blob
 
 
-sendMessage :: T.Text -> B.ByteString -> Serial (Either T.Text ())
+sendMessage :: T.Text -> B.ByteString -> Serial ()
 sendMessage draftId recipient = do
     raw <- liftIO $ B.readFile $ T.unpack $
         clientDataDir <> "/" <> draftId
     case parseDraft raw of
-        Left err ->
-            return $ Left $ "could not parse draft on disk: " <> err
+        Left err -> 
+            liftIO $ Tio.putStrLn err
 
         Right draft ->
              sendChunks (chunkDraft raw) recipient <>
