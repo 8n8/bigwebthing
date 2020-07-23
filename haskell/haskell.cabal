@@ -4,10 +4,10 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e5475f695ee99f4e783c5ef593738a39b2d85ffd3857e8c5edd4b329e31b2532
+-- hash: aa7947137aaf2a5ee6a2e97f51636860b04782da879d2e04f78acadf0d04556b
 
 name:           haskell
-version:        0.1.0.0
+version:        0.0.0
 description:    Please see the README on GitHub at <https://github.com/githubuser/haskell#readme>
 homepage:       https://github.com/githubuser/haskell#readme
 bug-reports:    https://github.com/githubuser/haskell/issues
@@ -26,8 +26,6 @@ source-repository head
   location: https://github.com/githubuser/haskell
 
 library
-  exposed-modules:
-      Lib
   other-modules:
       Paths_haskell
   hs-source-dirs:
@@ -36,7 +34,12 @@ library
       attoparsec
     , base >=4.7 && <5
     , bytestring
+    , containers
+    , cryptohash-sha256
+    , directory
+    , http-types
     , network-simple
+    , req
     , scotty
     , stm
     , streamly
@@ -58,8 +61,13 @@ executable haskell-exe
       attoparsec
     , base >=4.7 && <5
     , bytestring
+    , containers
+    , cryptohash-sha256
+    , directory
     , haskell
+    , http-types
     , network-simple
+    , req
     , scotty
     , stm
     , streamly
@@ -82,8 +90,13 @@ test-suite haskell-test
       attoparsec
     , base >=4.7 && <5
     , bytestring
+    , containers
+    , cryptohash-sha256
+    , directory
     , haskell
+    , http-types
     , network-simple
+    , req
     , scotty
     , stm
     , streamly

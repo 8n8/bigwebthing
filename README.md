@@ -58,15 +58,9 @@ Which is pretty long, but it's the best I can do.
 
 # Client backend API
 
-The client backend provides three servers:
-
-+ websockets
-+ HTTP API
-+ static file server
+The client backend provides a server on port 11833. It provides a websockets server, an HTTP API, and a static file server on /static.
 
 ## Websockets API
-
-Port 11833
 
 The websockets API is for sending messages from the client backend to the frontend.
 
@@ -90,38 +84,40 @@ Messages can take the following form:
     + 0x03
     + 1 byte: 0x00 for bad, 0x01 for good
 
+4. My ID
+
+    + 0x04
+    + 13 bytes: my ID
+
 ## HTTP API
 
-Port 52771
-
-1. /cache/get
-
-    Request:
-    + cache key as a UTF-8 string
+1. /cache/get/:cacheKey
 
     Response:
     + value associated with the key
 
-2. /cache/set
+2. /cache/set/:cacheKey
 
     Request:
-    + cache key as a length-encoded UTF-8 string
     + value
 
-3. /cache/delete
+3. /cache/delete/:cacheKey
+
+4. /sendmessage/:draftId
 
     Request:
-    + cache key as a UTF-8 string
+    + 13 bytes: recipient ID
 
-4. /sendmessage
+5. /whitelist/add
 
     Request:
-    + draft ID as a UTF-8 string
+    + 13 bytes: ID of whitelistee
 
-5. /myid
+6. /whitelist/remove
 
-    Response:
-    + 13 bytes: my user ID
+    Request:
+    + 13 bytes: ID of whitelistee
+
 
 # Crypto server API
 
@@ -166,12 +162,28 @@ There is an HTTP server on port 59285 that does all the crypto. The API is like 
 
 5. /getmykeys
 
-    Request:
-    + empty
-
     Response:
     + 32 bytes: public signing key
     + 32 bytes: public encryption key
+
+6. /userid
+
+    Request:
+    + 32 bytes: public signing key
+    + 32 bytes: public encryption key
+
+    Response:
+    + 13 bytes: user ID
+
+7. /proofofwork
+
+    Request:
+    + 1 byte: difficulty
+    + 16 bytes: random
+
+    Response:
+    + 24 bytes: proof of work
+
 
 # Server API
 
@@ -202,8 +214,7 @@ should be like this:
 
 Then the client should just listen on the connection. The server will
 post any messages that it receives or has received from other users
-down this connection.  They will be the same as those uploaded in
-route 5/sendmessage of the HTTP API, but prefixed with a four-byte
+down this connection. They will be prefixed with a four-byte
 Little-Endian length.
 
 ## HTTP API
@@ -298,7 +309,19 @@ Inside the encryption, the API is as follows:
     + 4 bytes: counter (starting from 0) (Little-Endian)
     + the message chunk
 
-2. acknowledgement
+2. small blob
+
+    + 0x02
+    + the blob
+
+3. part of a large blob
+
+    + 0x03
+    + 32 bytes: SHA-256 hash of the whole blob
+    + 4 bytes: counter (starting from 0) (Little-Endian)
+    + the blob chunk
+
+4. acknowledgement
 
     + 0x02
     + signed

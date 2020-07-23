@@ -821,7 +821,7 @@ sendMessage draftId recipient = do
     raw <- liftIO $ B.readFile $ T.unpack $
         clientDataDir <> "/" <> draftId
     case parseDraft raw of
-        Left err -> 
+        Left err ->
             liftIO $ Tio.putStrLn err
 
         Right draft ->

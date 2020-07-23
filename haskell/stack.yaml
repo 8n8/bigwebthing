@@ -41,6 +41,9 @@ packages:
 #
 # extra-deps: []
 
+extra-deps:
+- dhall-1.30.0@sha256:38d6c37fda7fc5d32bd90cd6172efe25a4eb7c9949c0ce015a4be500c7825fdd,32875
+
 # Override default flag values for local packages and extra-deps
 # flags: {}
 
@@ -64,3 +67,6 @@ packages:
 #
 # Allow a newer minor version of GHC than the snapshot specifies
 # compiler-check: newer-minor
+
+ghc-options:
+  "$locals": -fwrite-ide-info

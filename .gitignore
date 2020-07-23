@@ -23,3 +23,5 @@ purescript/output/
 purescript/.purs-repl
 purescript/.spago/
 static/main.js
+haskell/haskell.cabal
+main.pdf

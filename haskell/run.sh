@@ -1,3 +1,3 @@
 if stack build --fast; then
-    hlint app src
+    weeder
 fi
