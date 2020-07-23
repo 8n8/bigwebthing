@@ -9,7 +9,8 @@ import qualified Data.ByteString.Lazy as Bl
 import qualified Data.Text as T
 import qualified Data.Text.IO as Tio
 import qualified Network.Simple.TCP as Tcp
-import qualified Control.Monad.STM as Stm
+import qualified Control.Concurrent.STM as Stm
+import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Control.Concurrent.STM.TQueue as Q
 import qualified Data.Attoparsec.ByteString as P
 import Network.Wai.Handler.WebSockets (websocketsOr)
@@ -20,41 +21,27 @@ import qualified Web.Scotty as Sc
 import Data.Text.Encoding (decodeUtf8')
 import Control.Monad.IO.Class (liftIO)
 import Data.Word (Word8)
-
-
-newtype TcpMsg
-    = AuthCodeT B.ByteString
-    deriving Eq
-
-
-newtype UiMsg
-    = SendMsg T.Text
-
-
-cryptoClient :: IO ()
-cryptoClient =
-    Tcp.connect "localhost" "59285" $ \(socket, _) -> do
-    _ <- C.forkIO $ cryptoSend socket
-    cryptoReceive socket
+import qualified Crypto.Hash.SHA256 as Sha256
+import qualified Data.Set as Set
+import qualified System.Directory as Fs
+import Data.Bits ((.&.), shiftR)
+import Streamly.Internal.FileSystem.File (toChunksWithBufferOf)
+import qualified Network.HTTP.Req as R
+import Streamly.Internal.Memory.Array.Types (toList)
 
 
 tcpClient :: IO ()
 tcpClient =
     Tcp.connect "localhost" "3001" $ \(socket, _) -> do
-        _ <- C.forkIO $ tcpSend socket
         tcpReceive socket
-
-
-maxServerMsg :: Int
-maxServerMsg =
-    16000
 
 
 encodeUint32 :: Int -> B.ByteString
 encodeUint32 theInt =
     let
-        f accum i =
-            (fromIntegral $ theInt >> (i * 8) & 0xFF) : accum
+        f :: Int -> [Word8] -> [Word8]
+        f i accum =
+            (fromIntegral $ theInt `shiftR` (i * 8) .&. 0xFF) : accum
     in
         B.pack $ reverse $ foldr f [] [0..3]
 
@@ -91,148 +78,19 @@ tcpReceive socket = do
                     tcpReceive socket
 
 
-onCryptoReceiveErr :: T.Text -> Tcp.Socket -> IO ()
-onCryptoReceiveErr err socket = do
-    Tio.putStrLn err
-    C.threadDelay tcpDelay
-    cryptoReceive socket
-
-
-data FromCrypto
-    = EncryptedF Encrypted
-    | DecryptedF Decrypted 
-    | SignedF Signed
-    | SigCheckF SigCheck
-    | PubKeysF CryptoKeys
-
-
-
-encryptedP :: P.Parser Encrypted
-encryptedP = do
-    _ <- P.word8 1
-    recipient <- P.take 32
-    len <- uint32P
-    unencrypted <- P.take len
-    encrypted <- P.takeByteString
-    return $ Encrypted recipient unencrypted encrypted
-    
-
-
-sigCheckP :: P.Parser SigCheck
-sigCheckP = do
-    _ <- P.word8 4
-    P.choice [fmap BadS badSigCheckP, fmap GoodS goodSigCheckP]
-
-
-badSigCheckP :: P.Parser BadSig
-badSigCheckP = do
-    _ <- P.word8 0
-    sender <- P.take 32
-    signature <- P.takeByteString
-    return $ BadSig sender signature
-
-
-goodSigCheckP :: P.Parser GoodSig
-goodSigCheckP = do
-    _ <- P.word8 1
-    sender <- P.take 32
-    signature <- sizedBytesP
-    unsigned <- P.takeByteString
-    return $ GoodSig sender signature unsigned
-
-
-signedP :: P.Parser Signed
-signedP = do
-    _ <- P.word8 3
-    unsigned <- sizedBytesP
-    signed <- P.takeByteString
-    return $ Signed unsigned signed
-
-
-decryptedP :: P.Parser Decrypted
-decryptedP = do
-    _ <- P.word8 2
-    P.choice [fmap BadD badDecryptedP, fmap GoodD goodDecryptedP]
-
-
-badDecryptedP :: P.Parser BadDecrypted
-badDecryptedP = do
-    _ <- P.word8 0
-    sender <- P.take 32
-    msg <- P.takeByteString
-    return $ BadDecrypted sender msg
-
-
 sizedBytesP :: P.Parser B.ByteString
 sizedBytesP = do
     len <- uint32P
     P.take len
 
 
-goodDecryptedP :: P.Parser GoodDecrypted
-goodDecryptedP = do
-    _ <- P.word8 1
-    sender <- P.take 32
-    encrypted <- sizedBytesP
-    decrypted <- P.takeByteString
-    return $ GoodDecrypted sender encrypted decrypted
-
-
-fromCryptoP :: P.Parser FromCrypto
-fromCryptoP =
-    P.choice
-        [ fmap EncryptedF encryptedP
-        , fmap DecryptedF decryptedP
-        , fmap SignedF signedP
-        , fmap SigCheckF sigCheckP
-        , fmap PubKeysF pubKeysP
-        ]
-
-
-decodeCryptoMsg :: Maybe B.ByteString -> Either T.Text FromCrypto
-decodeCryptoMsg maybeRaw =
-    case maybeRaw of
-        Nothing ->
-            Left "maybeRaw in decodeCryptoMsg was Nothing"
-
-        Just bytes ->
-            case P.eitherResult $ P.parse fromCryptoP bytes of
-                Left err ->
-                    Left $ T.pack err
-
-                Right ok ->
-                    Right ok
-
-
-cryptoReceive :: Tcp.Socket -> IO ()
-cryptoReceive socket = do
-    rawLen <- Tcp.recv socket 4
-    case decodeRawLen rawLen of
-        Left err ->
-            onCryptoReceiveErr err socket
-
-        Right len -> do
-            rawMsg <- Tcp.recv socket len
-            case decodeCryptoMsg rawMsg of
-                Left err ->
-                    onCryptoReceiveErr err socket
-
-                Right msg -> do
-                    Stm.atomically $ do
-                        q <- inQ
-                        Q.writeTQueue q $ FromCryptoI msg
-                    cryptoReceive socket
-
-
 inQ :: Stm.STM (Q.TQueue In)
 inQ =
     Q.newTQueue
-        
+
 
 data In
     = FromServerI FromServer
-    | FromWebsocketI FromWebsocket
-    | FromCryptoI FromCrypto
 
 
 data Signed = Signed
@@ -290,52 +148,13 @@ data FromWebsocket
     | CacheSetF T.Text B.ByteString
     | CacheDeleteF T.Text
     | SendMessageF SendMessage
-    
-    
+
+
 data SendMessage
     = SendMessage
         { recipientS :: B.ByteString
         , draftIdS :: T.Text
         }
-
-
-fromWebsocketP :: P.Parser FromWebsocket
-fromWebsocketP = do
-    P.choice
-        [ toServerP
-        , GetPowF <$> powInfoP
-        , cacheGetP
-        , cacheSetP
-        , cacheDeleteP
-        , sendMessageP
-        ]
-
-
-cacheDeleteP :: P.Parser FromWebsocket
-cacheDeleteP = do
-    _ <- P.word8 4
-    key <- stringP
-    return $ CacheDeleteF key
-
-
-cacheSetP :: P.Parser FromWebsocket
-cacheSetP = do
-    _ <- P.word8 3
-    key <- stringP
-    value <- P.takeByteString
-    return $ CacheSetF key value
-
-
-cacheGetP :: P.Parser FromWebsocket
-cacheGetP = do
-    _ <- P.word8 2
-    CacheGetF <$> stringP
-
-
-toServerP :: P.Parser FromWebsocket
-toServerP = do
-    _ <- P.word8 0
-    ToServerF <$> P.takeByteString
 
 
 stringP :: P.Parser T.Text
@@ -347,14 +166,6 @@ stringP = do
             fail $ show err
         Right str ->
             return str
-
-
-sendMessageP :: P.Parser FromWebsocket
-sendMessageP = do
-    _ <- P.word8 5
-    toId <- P.take 10
-    draftId <- stringP
-    return $ SendMessageF $ SendMessage toId draftId
 
 
 uint32P :: P.Parser Int
@@ -375,7 +186,7 @@ data CryptoKeys = CryptoKeys SignKey EncryptKey
 
 
 newtype SignKey = SignKey B.ByteString
-    
+
 
 newtype EncryptKey = EncryptKey B.ByteString
 
@@ -390,9 +201,9 @@ newtype AuthCode = AuthCode B.ByteString
 pubKeysP :: P.Parser CryptoKeys
 pubKeysP = do
     sign <- P.take 32
-    encrypt <- P.take 32
+    encrypt_ <- P.take 32
     P.endOfInput
-    return $ CryptoKeys (SignKey sign) (EncryptKey encrypt)
+    return $ CryptoKeys (SignKey sign) (EncryptKey encrypt_)
 
 
 powInfoP :: P.Parser PowInfo
@@ -441,72 +252,184 @@ decodeRawLen maybeRaw =
                     Right ok
 
 
-toCryptoQ :: Stm.STM (Q.TQueue B.ByteString)
-toCryptoQ =
-    Q.newTQueue
-
-
-cryptoSend :: Tcp.Socket -> IO ()
-cryptoSend socket = do
-    out <- Stm.atomically $ do
-        q <- toCryptoQ
-        Q.readTQueue q
-    Tcp.send socket out
-    cryptoSend socket
-
-
-tcpSend :: Tcp.Socket -> IO ()
-tcpSend socket = do
-    out <- Stm.atomically $ do
-        q <- toServerQ 
-        Q.readTQueue q
-    Tcp.send socket out
-    tcpSend socket
-
-
-toServerQ :: Stm.STM (Q.TQueue B.ByteString)
-toServerQ =
-    Q.newTQueue
-
-
-websocketPort :: Int
-websocketPort =
-    17448
-
-
 uiServer :: IO ()
 uiServer = do
-    app <- scottyApp
-    run websocketPort $ websocketsOr
+    app <- httpApi
+    run 11833 $ websocketsOr
         Ws.defaultConnectionOptions websocket app
+
+
+filePath :: T.Text -> T.Text
+filePath filename =
+    clientDataDir <> "/" <> filename
+
+
+lockFile :: T.Text -> IO ()
+lockFile filename =
+    Stm.atomically $ do
+        var <- fileLocks
+        locks <- TVar.readTVar var
+        TVar.writeTVar var $ Set.insert filename locks
+
+
+unlockFile :: T.Text -> IO ()
+unlockFile filename =
+    Stm.atomically $ do
+        var <- fileLocks
+        locks <- TVar.readTVar var
+        TVar.writeTVar var $ Set.delete filename locks
+
+
+httpApi :: IO Wai.Application
+httpApi =
+    Sc.scottyApp $ do
+        Sc.get "/static/:requested" $ do
+            requested <- Sc.param "requested"
+            Sc.file $ "static/" ++ requested
+
+        Sc.get "/cache/get/:key" $ do
+            key <- Sc.param "key"
+            contents <- liftIO $ do
+                _ <- lockFile key
+                contents <- B.readFile $ T.unpack $ filePath key
+                _ <- unlockFile key
+                return contents
+            Sc.raw $ Bl.fromStrict contents
+
+        Sc.post "/cache/set/:key" $ do
+            key <- Sc.param "key"
+            body <- fmap Bl.toStrict Sc.body
+            liftIO $ do
+                _ <- lockFile key
+                B.writeFile (T.unpack $ filePath key) body
+                unlockFile key
+
+        Sc.post "/cache/delete/:key" $ do
+            key <- Sc.param "key"
+            liftIO $ do
+                _ <- lockFile key
+                Fs.removeFile $ T.unpack $ filePath key
+                unlockFile key
+
+        Sc.post "/sendmessage/:draftid" $ do
+            draftId <- Sc.param "draftid"
+            recipient <- fmap Bl.toStrict Sc.body
+            liftIO $ S.drain $ sendMessage draftId recipient
+
+        Sc.post "/whitelist/add" $ do
+            whitelistee <- fmap Bl.toStrict Sc.body
+            err <- liftIO $ whitelist whitelistee
+            case err of
+                Left err_ ->
+                    liftIO $ Tio.putStrLn err_
+
+                Right () ->
+                    return ()
+
+        Sc.post "/whitelist/remove" $ do
+            whitelistee <- fmap Bl.toStrict Sc.body
+            err <- liftIO $ unwhitelist whitelistee
+            case err of
+                Left err_ ->
+                    liftIO $ Tio.putStrLn err_
+
+                Right () ->
+                    return ()
+
+
+getProofOfWork :: IO B.ByteString
+getProofOfWork = do
+    info <- R.runReq R.defaultHttpConfig $ do
+        bs <- R.req
+            R.GET
+            (R.http serverUrl R./: "proofofworkinfo")
+            R.NoReqBody
+            R.bsResponse
+            mempty
+        return $ R.responseBody bs
+
+    R.runReq R.defaultHttpConfig $ do
+        bs <- R.req
+            R.POST
+            (R.http cryptoUrl R./: "proofofwork")
+            (R.ReqBodyBs info)
+            R.bsResponse
+            mempty
+        return $ R.responseBody bs
+
+
+whitelistMeaning :: B.ByteString
+whitelistMeaning =
+    B.pack
+        [ 0xdf, 0xc2, 0xfb, 0x02, 0xba, 0x19, 0xfd, 0x38
+        , 0x80, 0xfc, 0x93, 0xca, 0xd6, 0xf6, 0x37, 0x33
+        ]
+
+
+unwhitelistMeaning :: B.ByteString
+unwhitelistMeaning =
+    B.pack
+        [ 0x32, 0x52, 0x4c, 0xa3, 0x77, 0xa2, 0x86, 0x0e
+        , 0x8b, 0xec, 0xdf, 0xe4, 0x23, 0xae, 0xf1, 0x8f
+        ]
+
+
+whitelist :: B.ByteString -> IO (Either T.Text ())
+whitelist whitelistee = do
+    proofOfWork <- getProofOfWork
+    eitherMyId <- getMyId
+    case eitherMyId of
+        Left err ->
+            return $ Left err
+
+        Right myId -> do
+            authCode <- getAuthCode
+            signed <- signMessage $ mconcat
+                [ whitelistMeaning
+                , authCode
+                , whitelistee
+                ]
+            _ <- R.runReq R.defaultHttpConfig $ R.req
+                R.POST
+                (R.http serverUrl R./: "whitelist" R./: "add")
+                (R.ReqBodyBs $ proofOfWork <> myId <> signed)
+                R.ignoreResponse
+                mempty
+            return $ Right ()
+
+
+unwhitelist :: B.ByteString -> IO (Either T.Text ())
+unwhitelist unwhitelistee = do
+    eitherMyId <- getMyId
+    case eitherMyId of
+        Left err ->
+            return $ Left err
+
+        Right myId -> do
+            authCode <- getAuthCode
+            signed <- signMessage $ mconcat
+                [ unwhitelistMeaning
+                , authCode
+                , unwhitelistee
+                ]
+            _ <- R.runReq R.defaultHttpConfig $ R.req
+                R.POST
+                (R.http serverUrl R./: "whitelist" R./: "remove")
+                (R.ReqBodyBs $ myId <> signed)
+                R.ignoreResponse
+                mempty
+            return $ Right ()
+
+
+fileLocks :: Stm.STM (TVar.TVar (Set.Set T.Text))
+fileLocks =
+    TVar.newTVar Set.empty
 
 
 websocket :: Ws.ServerApp
 websocket pending = do
     conn <- Ws.acceptRequest pending
-    websocketReceive conn
     websocketSend conn
-
-
-scottyApp :: IO Wai.Application
-scottyApp =
-    Sc.scottyApp $
-        Sc.get "/" $ Sc.file "static/index.html"
-
-
-websocketReceive :: Ws.Connection -> IO ()
-websocketReceive conn = do
-    raw <- Ws.receiveData conn
-    case P.eitherResult $ P.parse fromWebsocketP raw of
-        Left err -> do
-            Tio.putStrLn $ "FATAL ERROR: " <> T.pack err
-            return ()
-
-        Right msg -> do
-            Stm.atomically $ do
-                q <- inQ
-                Q.writeTQueue q $ FromWebsocketI msg
-            websocketReceive conn
 
 
 toWebsocketQ :: Stm.STM (Q.TQueue B.ByteString)
@@ -527,28 +450,6 @@ data CacheMsg
     = CacheMsg
 
 
-inStream :: Serial In
-inStream =
-    S.repeatM $ Stm.atomically $ do
-        q <- inQ
-        Q.readTQueue q
-        
-
-isSendMsg :: In -> Maybe SendMessage
-isSendMsg in_ =
-    case in_ of
-        FromWebsocketI (SendMessageF msg) ->
-            Just msg
-
-        _ ->
-            Nothing
-
-
-sendMsgRequests :: Serial SendMessage
-sendMsgRequests =
-    S.mapMaybe isSendMsg inStream
-
-
 {-| Sending a message (a draft) requires these steps:
 1. Read the draft from file
 2. Chunk up the draft, and encrypt and send each chunk
@@ -564,86 +465,162 @@ data SendErr
     | None
 
 
-encrypt :: B.ByteString -> B.ByteString -> IO ()
-encrypt recipient message =
-    Stm.atomically $ do
-        q <- toCryptoQ
-        Q.writeTQueue q $ mconcat
-            [ B.singleton 1
-            , recipient
-            , message
-            ]
-    
-
-encrypted :: B.ByteString -> B.ByteString -> Serial B.ByteString
-encrypted recipient chunk =
-    S.mapMaybe (encryptedHelp recipient chunk) inStream
+cryptoUrl :: T.Text
+cryptoUrl =
+    "localhost:59285"
 
 
-encryptedHelp
-    :: B.ByteString
-    -> B.ByteString
-    -> In
-    -> Maybe B.ByteString
-encryptedHelp recipient chunk msgIn =
-    case msgIn of
-        FromCryptoI (EncryptedF (Encrypted recip unenc enc)) ->
-            if recip == recipient && chunk == unenc then
-                Just enc
-            else
-                Nothing
-
-        _ ->
-            Nothing
-                    
-
-makeIdToken :: Word8 -> B.ByteString -> IO B.ByteString
-makeIdToken indicator message =
-    undefined
+encryptMessage :: B.ByteString -> B.ByteString -> IO B.ByteString
+encryptMessage recipientID message =
+    R.runReq R.defaultHttpConfig $ do
+        bs <- R.req
+            R.POST
+            (R.http cryptoUrl R./: "encrypt")
+            (R.ReqBodyBs $ recipientID <> message)
+            R.bsResponse
+            mempty
+        return $ R.responseBody bs
 
 
-sendChunk :: B.ByteString -> B.ByteString -> IO (Maybe SendErr)
+myIdTVar :: Stm.STM (Stm.TVar (Maybe B.ByteString))
+myIdTVar =
+    TVar.newTVar Nothing
+
+
+getMyId :: IO (Either T.Text B.ByteString)
+getMyId = do
+    maybeId <- Stm.atomically $ do
+        tvar <- myIdTVar
+        TVar.readTVar tvar
+    case maybeId of
+        Just myId ->
+            return $ Right myId
+
+        Nothing -> do
+            rawKeys <- R.runReq R.defaultHttpConfig $ do
+                        bs <- R.req
+                            R.GET
+                            (R.http cryptoUrl R./: "getmykeys")
+                            R.NoReqBody
+                            R.bsResponse
+                            mempty
+                        return $ R.responseBody bs
+
+            case P.eitherResult $ P.parse keysP rawKeys of
+                Left err ->
+                    return $ Left $ T.pack err
+
+                Right keys -> do
+                    Stm.atomically $ do
+                        tvar <- myKeysTVar
+                        TVar.writeTVar tvar $ Just keys
+                    userId <- makeUserId
+                    Stm.atomically $ do
+                        tvar <- myIdTVar
+                        TVar.writeTVar tvar $ Just userId
+                    return $ Right userId
+
+
+myKeysTVar :: Stm.STM (TVar.TVar (Maybe Keys))
+myKeysTVar =
+    TVar.newTVar Nothing
+
+
+makeUserId :: IO B.ByteString
+makeUserId =
+    R.runReq R.defaultHttpConfig $ do
+        bs <- R.req
+            R.GET
+            (R.http cryptoUrl R./: "userid")
+            R.NoReqBody
+            R.bsResponse
+            mempty
+        return $ R.responseBody bs
+
+
+serverUrl :: T.Text
+serverUrl =
+    "localhost"
+
+
+sendMessageMeaning :: B.ByteString
+sendMessageMeaning =
+    B.pack
+        [ 0x0a, 0xcb, 0x78, 0x89, 0x67, 0xcf, 0x64, 0x19
+        , 0x2a, 0xdd, 0x32, 0x63, 0x61, 0x2d, 0x10, 0x18
+        ]
+
+
+signMessage :: B.ByteString -> IO B.ByteString
+signMessage message =
+    R.runReq R.defaultHttpConfig $ do
+        bs <- R.req
+            R.POST
+            (R.http cryptoUrl R./: "sign")
+            (R.ReqBodyBs message)
+            R.bsResponse
+            mempty
+        return $ R.responseBody bs
+
+
+getAuthCode :: IO B.ByteString
+getAuthCode =
+    R.runReq R.defaultHttpConfig $ do
+        bs <- R.req
+            R.GET
+            (R.http serverUrl R./: "authcode")
+            R.NoReqBody
+            R.bsResponse
+            mempty
+        return $ R.responseBody bs
+
+
+sendChunk :: B.ByteString -> B.ByteString -> IO (Either T.Text ())
 sendChunk recipient chunk = do
-    encrypt recipient chunk
-    maybeEncrypted <- S.head $ encrypted recipient chunk
-    case maybeEncrypted of
-        Nothing ->
-            return $ Just $ Fatal "couldn't encrypt"
+    eitherMyId <- getMyId
+    case eitherMyId of
+        Left err ->
+            return $ Left err
 
-        Just encrypted -> do
-            idToken <- makeIdToken 4 encrypted
-            _ <- Stm.atomically $ do
-                q <- toServerQ
-                Q.writeTQueue q $ mconcat
-                    [ B.singleton 4
-                    , idToken
-                    , recipient
-                    , encrypted
-                    ]
-            return Nothing
+        Right myId -> do
+            authCode <- getAuthCode
+            encrypted <- encryptMessage recipient chunk
+            signed <- signMessage $ mconcat
+                [ sendMessageMeaning
+                , authCode
+                , recipient
+                , encrypted
+                ]
+
+            _ <- R.runReq R.defaultHttpConfig $
+                R.req
+                    R.POST
+                    (R.http serverUrl R./: "message" R./: "send")
+                    (R.ReqBodyBs $ myId <> signed)
+                    R.ignoreResponse
+                    mempty
+
+            return $ Right ()
 
 
-sendChunks :: Serial B.ByteString -> B.ByteString -> Serial SendErr
-sendChunks chunks recipient = S.mapMaybe id $ do
+sendChunks
+    :: Serial B.ByteString
+    -> B.ByteString
+    -> Serial (Either T.Text ())
+sendChunks chunks recipient = do
     chunk <- chunks
     sent <- liftIO $ sendChunk recipient chunk
     return sent
-    -- fmap (sendChunk recipient) chunks
-    -- S.concatMapM (sendChunk recipient) chunks
 
 
-sentMsgs :: Serial SendErr
-sentMsgs =
-    S.concatMap sendMsg sendMsgRequests
-
-
+clientDataDir :: T.Text
 clientDataDir =
     "clientData"
 
 
 data Blob = Blob
-    { idB :: T.Text
-    , mimeB :: T.Text
+    { mimeB :: T.Text
+    , idB :: T.Text
     , filenameB :: T.Text
     , sizeB :: Int
     }
@@ -688,8 +665,7 @@ listHelpP p len accum =
     else do
         el <- p
         listHelpP p len (el:accum)
-    
-    
+
 
 draftP :: P.Parser Draft
 draftP = do
@@ -754,7 +730,22 @@ chunkDraft raw =
         S.fromList $ chunkDraftHelp (Sha256.hash raw) raw []
 
 
-maxChunkSize = 15500
+data Keys = Keys
+    { signK :: B.ByteString
+    , encryptK :: B.ByteString
+    }
+
+
+keysP :: P.Parser Keys
+keysP = do
+    sign <- P.take 32
+    encrypt <- P.take 32
+    return $ Keys sign encrypt
+
+
+maxChunkSize :: Int
+maxChunkSize =
+    15500
 
 
 chunkDraftHelp
@@ -764,7 +755,7 @@ chunkDraftHelp
     -> [B.ByteString]
 chunkDraftHelp hash raw accum =
     if B.length raw > maxChunkSize then
-        chunkDraftHelp hash (B.drop maxchunkSize raw) $
+        chunkDraftHelp hash (B.drop maxChunkSize raw) $
             (mconcat
                 [ B.singleton 1
                 , hash
@@ -776,17 +767,72 @@ chunkDraftHelp hash raw accum =
         accum
 
 
-sendBlob :: B.ByteString -> Blob -> Serial SendErr
-sendBlob = undefined
+blobStream :: T.Text -> Serial B.ByteString
+blobStream filepath = do
+    fmap (B.pack . toList) $ toChunksWithBufferOf maxChunkSize $
+        T.unpack filepath
 
 
-sendMsg :: SendMessage -> Serial SendErr
-sendMsg (SendMessage recipient draftId) = do
+hashFile :: T.Text -> IO B.ByteString
+hashFile filepath = do
+    _ <- lockFile filepath
+    ctx <- S.foldr hashFileHelp Sha256.init $ blobStream filepath
+    _ <- unlockFile filepath
+    return $ Sha256.finalize ctx
+
+
+hashFileHelp :: B.ByteString -> Sha256.Ctx -> Sha256.Ctx
+hashFileHelp chunk ctx =
+    Sha256.update ctx chunk
+
+
+sendBigBlob :: B.ByteString -> Blob -> Serial (Either T.Text ())
+sendBigBlob recipient blob = do
+    hash <- liftIO $ hashFile $ filePath $ filenameB blob
+
+    (chunk, counter) <- S.zipWith (\a b -> (a, b))
+        (blobStream $ filenameB blob) (S.fromList [0..])
+
+    encrypted <- liftIO $ encryptMessage recipient $ mconcat
+        [ B.singleton 3
+        , hash
+        , encodeUint32 counter
+        , chunk
+        ]
+
+    liftIO $ sendChunk recipient encrypted
+
+
+sendSmallBlob :: B.ByteString -> Blob -> IO (Either T.Text ())
+sendSmallBlob recipient blob = do
+    let path = filePath $ filenameB blob
+    _ <- lockFile path
+    raw <- B.readFile $ T.unpack $ path
+    _ <- unlockFile path
+    encrypted <- liftIO $ encryptMessage recipient $
+        B.singleton 2 <> raw
+    sendChunk recipient encrypted
+
+
+sendBlob :: B.ByteString -> Blob -> Serial (Either T.Text ())
+sendBlob recipient blob =
+    if sizeB blob > maxChunkSize then do
+        _ <- liftIO $ lockFile $ filenameB blob
+        result <- sendBigBlob recipient blob
+        _ <- liftIO $ unlockFile $ filenameB blob
+        return result
+
+    else
+        S.yieldM $ sendSmallBlob recipient blob
+
+
+sendMessage :: T.Text -> B.ByteString -> Serial (Either T.Text ())
+sendMessage draftId recipient = do
     raw <- liftIO $ B.readFile $ T.unpack $
         clientDataDir <> "/" <> draftId
     case parseDraft raw of
         Left err ->
-            return $ Fatal $ "could not parse draft on disk: " <> err
+            return $ Left $ "could not parse draft on disk: " <> err
 
         Right draft ->
              sendChunks (chunkDraft raw) recipient <>
@@ -797,5 +843,5 @@ main :: IO ()
 main = do
     _ <- C.forkIO tcpClient
     _ <- C.forkIO uiServer
-    _ <- C.forkIO cryptoClient
+
     return ()
