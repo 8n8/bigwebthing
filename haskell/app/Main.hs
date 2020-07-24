@@ -27,7 +27,9 @@ import qualified System.Directory as Fs
 import Data.Bits ((.&.), shiftR)
 import Streamly.Internal.FileSystem.File (toChunksWithBufferOf)
 import qualified Network.HTTP.Req as R
+import qualified Network.HTTP.Types.Status as HttpStatus
 import Streamly.Internal.Memory.Array.Types (toList)
+import qualified Data.Text.Lazy as Tl
 
 
 tcpClient :: IO ()
@@ -83,10 +85,15 @@ tcpReceive socket = do
             onTcpReceiveErr err socket
 
         Right len -> do
-            rawMsg <- Tcp.recv socket len
+            maybeRawMsg <- Tcp.recv socket len
+            case maybeRawMsg of
+                Nothing ->
+                    onTcpReceiveErr "socket closed by server" socket
+
+                Just rawMsg -> do
                     Stm.atomically $ do
-                        q <- inQ
-                        Q.writeTQueue q (FromServerI msg)
+                        q <- fromServerQ
+                        Q.writeTQueue q rawMsg
                     tcpReceive socket
 
 
@@ -96,8 +103,8 @@ sizedBytesP = do
     P.take len
 
 
-inQ :: Stm.STM (Q.TQueue In)
-inQ =
+fromServerQ :: Stm.STM (Q.TQueue B.ByteString)
+fromServerQ =
     Q.newTQueue
 
 
@@ -292,9 +299,58 @@ unlockFile filename =
         TVar.writeTVar var $ Set.delete filename locks
 
 
+data ToHttpServer = ToHttpServer
+    { bodyH :: Bl.ByteString
+    , headerH :: Maybe HttpHeader
+    , statusH :: HttpStatus.Status
+    }
+
+
+data HttpHeader = HttpHeader
+    { keyH :: T.Text
+    , valueH :: T.Text
+    }
+
+
+fromHttpQ :: Stm.STM (Q.TQueue FromHttp)
+fromHttpQ =
+    Q.newTQueue
+
+
+data FromHttp = FromHttp
+    { pathF :: B.ByteString
+    , bodyF :: Bl.ByteString
+    , responseQF :: Stm.STM (Q.TQueue ToHttpServer)
+    }
+
+
 httpApi :: IO Wai.Application
 httpApi =
     Sc.scottyApp $ do
+        Sc.matchAny "/" $
+            let
+                responseQ :: Stm.STM (Q.TQueue ToHttpServer)
+                responseQ = Q.newTQueue
+            in do
+                path <- fmap Wai.rawPathInfo Sc.request
+                body <- Sc.body
+                liftIO $ Stm.atomically $ do
+                    q <- fromHttpQ
+                    Q.writeTQueue q $ FromHttp path body responseQ
+                response <- liftIO $ Stm.atomically $ do
+                    q <- responseQ
+                    Q.readTQueue q
+                Sc.status $ statusH response
+                case headerH response of
+                    Nothing ->
+                        return ()
+
+                    Just (HttpHeader key value) ->
+                        Sc.setHeader
+                            (Tl.fromStrict key)
+                            (Tl.fromStrict value)
+                Sc.raw $ bodyH response
+
         Sc.get "/static/:requested" $ do
             requested <- Sc.param "requested"
             Sc.file $ "static/" ++ requested
@@ -824,24 +880,62 @@ sendMessage draftId recipient = do
              mconcat (fmap (sendBlob recipient) (blobsD draft))
 
 
-main :: IO ()
-main =
-    _ <- mainHelp InitS StartUpI
+fromServer :: Serial B.ByteString
+fromServer =
+    S.repeatM $ Stm.atomically $ do
+        q <- fromServerQ
+        Q.readTQueue q
+
+
+type Qu a = Stm.STM (Q.TQueue a)
+
+
+httpRequestQ =
+    Q.newTQueue
+
+
+data HttpRequest method url body hint scheme
+    = HttpRequest method url body hint scheme
+
+
+makeHttpRequest (HttpRequest method url body hint scheme) = do
+    resp <- R.runReq R.defaultHttpConfig $
+                R.req method url body hint scheme
+    return
+        ( HttpRequest method url body hint scheme
+        , resp
+        )
+
+
+httpRequestHelp = do
+    request <- Stm.atomically $ do
+                q <- httpRequestQ
+                Q.readTQueue q
+    response <- makeHttpRequest request
+    return (request, response)
+
+
+httpRequests =
+    S.repeatM httpRequestHelp
+
+
+inputs :: Serial Input
+inputs = undefined
+
+
+go :: IO () -> IO ()
+go process = do
+    _ <- C.forkIO process
     return ()
+    
 
 
-mainHelp :: State -> Input -> IO (Either T.Text State)
-mainHelp state input =
-    case update state input of
-        Left err ->
-            return $ Left err
+main :: IO ()
+main = do
+    go tcpClient
+    go uiServer
 
-        Right ok ->
-    let
-        eitherResult = update state input
-    in case
-        newInput <- io output
-        mainHelp newState newInput
+    S.drain $ fmap io $ S.scanl' update InitS inputs
 
 
 data State = InitS
@@ -850,11 +944,11 @@ data Input
     = StartUpI    
 
 
-io :: Output -> IO Input
+io :: State -> IO Input
 io =
     undefined
 
 
-update :: State -> Input -> (State, Output)
+update :: State -> Input -> State
 update =
     undefined
