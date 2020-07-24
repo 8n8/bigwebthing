@@ -84,6 +84,11 @@ tcpReceive socket = do
 
         Right len -> do
             rawMsg <- Tcp.recv socket len
+            case decodeTcpMsg rawMsg of
+                Left err ->
+                    onTcpReceiveErr err socket
+
+                Right msg -> do
                     Stm.atomically $ do
                         q <- inQ
                         Q.writeTQueue q (FromServerI msg)
@@ -825,36 +830,8 @@ sendMessage draftId recipient = do
 
 
 main :: IO ()
-main =
-    _ <- mainHelp InitS StartUpI
+main = do
+    _ <- C.forkIO tcpClient
+    _ <- C.forkIO uiServer
+
     return ()
-
-
-mainHelp :: State -> Input -> IO (Either T.Text State)
-mainHelp state input =
-    case update state input of
-        Left err ->
-            return $ Left err
-
-        Right ok ->
-    let
-        eitherResult = update state input
-    in case
-        newInput <- io output
-        mainHelp newState newInput
-
-
-data State = InitS
-
-data Input
-    = StartUpI    
-
-
-io :: Output -> IO Input
-io =
-    undefined
-
-
-update :: State -> Input -> (State, Output)
-update =
-    undefined
