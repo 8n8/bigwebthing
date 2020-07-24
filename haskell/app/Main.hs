@@ -898,15 +898,33 @@ data HttpRequest method url body hint scheme
     = HttpRequest method url body hint scheme
 
 
-makeHttpRequest (HttpRequest method url body hint scheme) = do
+data HttpRequest = HttpRequest
+    { methodH :: HttpMethod
+    , urlH :: R.Url
+    }
+
+
+data HttpMethod
+    = GetM
+    | PostM B.ByteString
+
+
+makeHttpRequest :: HttpRequest -> IO HttpResponse
+makeHttpRequest (HttpRequest method url) = do
     resp <- R.runReq R.defaultHttpConfig $
-                R.req method url body hint scheme
+                R.req
+                    (case method of
+                        GetM -> R.GET
+                        PostM _ -> R.POST)
+                     
+                
+                method url body hint scheme
     return
         ( HttpRequest method url body hint scheme
         , resp
         )
 
-
+httpRequestHelp :: IO (HttpRequest, HttpResponse)
 httpRequestHelp = do
     request <- Stm.atomically $ do
                 q <- httpRequestQ
@@ -915,6 +933,7 @@ httpRequestHelp = do
     return (request, response)
 
 
+httpRequests :: Serial (HttpRequest, HttpResponse)
 httpRequests =
     S.repeatM httpRequestHelp
 
