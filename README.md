@@ -79,14 +79,17 @@ Messages can take the following form:
     + 13 bytes: recipient ID
     + cache key for full message as a sized string
 
-3. Network status
+3. Bad network connection
 
     + 0x03
-    + 1 byte: 0x00 for bad, 0x01 for good
 
-4. My ID
+4. Good network connection
 
     + 0x04
+
+5. My ID
+
+    + 0x05
     + 13 bytes: my ID
 
 ## HTTP API
@@ -187,7 +190,7 @@ There is an HTTP server on port 59285 that does all the crypto. The API is like 
 
 # Server API
 
-The server provides an HTTP API on port 80, and also a TCP connection on 8002 so that the server can send new messages to the client without them being requested first.
+The server provides an HTTP API on port 8001, and also a TCP connection on 8002 so that the server can send new messages to the client without them being requested first.
 
 The server will not accept requests greater than 16KB.
 
