@@ -1,15 +1,19 @@
 package main
 
 import (
+	"constants"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/sign"
+	"io/ioutil"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 )
 
@@ -19,145 +23,309 @@ type UiInput struct {
 	done chan struct{}
 }
 
-const serverUrl = "http://localhost:8002"
+const serverDomain = "http://localhost"
+
+const serverHttpUrl = serverDomain + ":" + constants.ServerHttpPort
+
+const serverTcpUrl = serverDomain + ":" + constants.ServerTcpPort
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 }
 
-var stop = make(chan error)
-var rawInputS = make(chan RawInput)
-var toWebsocketS = make(chan []byte)
-var authCodeS = make(chan []byte)
-
-var publicSign *[32]byte
-var secretSign *[64]byte
-var publicEncrypt *[32]byte
-var secretEncrypt *[32]byte
-var myId []byte
-
-func initKeys() {
-	var err error
-
-	publicSign, secretSign, err = sign.GenerateKey(rand.Reader)
-	if err != nil {
-		stop <- err
+type MyKeys struct {
+	sign struct {
+		public *[32]byte
+		secret *[64]byte
 	}
-
-	publicEncrypt, secretEncrypt, err = box.GenerateKey(rand.Reader)
-	if err != nil {
-		stop <- err
+	encrypt struct {
+		public *[32]byte
+		secret *[32]byte
 	}
-
-	myId = argon2.IDKey(
-		append(publicSign[:], publicEncrypt[:]...),
-		[]byte{},
-		60,
-		256*1024,
-		4,
-		13)
-
-	fmt.Println(myId)
 }
 
-func main() {
-	initKeys()
+var STOP = make(chan error)
+var RAWINPUT = make(chan RawInput)
+var TOWEBSOCKET = make(chan []byte)
+var AUTHCODE = make(chan []byte, 1)
+var MYKEYS = make(chan MyKeys, 1)
+var MYID = make(chan []byte, 1)
 
-	return
+func makeTcpAuth(
+	myId, authCode []byte, secretSign *[64]byte) []byte {
 
-	go func() {
-		http.HandleFunc(
-			"/websocket",
-			func(w http.ResponseWriter, r *http.Request) {
-				conn, err := upgrader.Upgrade(w, r, nil)
+	auth := make([]byte, 13+sign.Overhead+16+16)
+	copy(auth, myId)
+	toSign := make([]byte, 32)
+	copy(toSign, constants.TcpAuth)
+	copy(toSign[32:], authCode)
+	copy(auth[13:], sign.Sign([]byte{}, toSign, secretSign))
+	return auth
+}
+
+func cachePath(filename string) string {
+	return filepath.Join("clientDataDir", filename)
+}
+
+const keysFileName = "keys"
+
+func readKeysFromFile() (MyKeys, error) {
+	raw, err := ioutil.ReadFile(cachePath(keysFileName))
+	if err != nil {
+		return *new(MyKeys), err
+	}
+
+	return parseKeys(raw)
+}
+
+func parseKeys(raw []byte) (MyKeys, error) {
+	var keys MyKeys
+
+	if len(raw) != 32+64+32+32 {
+		return keys, errors.New("keys file is the wrong length")
+	}
+
+	copy(keys.sign.public[:], raw)
+	copy(keys.sign.secret[:], raw[32:])
+	copy(keys.encrypt.public[:], raw[32+64:])
+	copy(keys.encrypt.secret[:], raw[32+64+32:])
+
+	return keys, nil
+}
+
+func makeNewKeys() (MyKeys, error) {
+	var keys MyKeys
+	var err error
+	keys.sign.public, keys.sign.secret, err = sign.GenerateKey(
+		rand.Reader)
+	if err != nil {
+		return keys, err
+	}
+
+	keys.encrypt.public, keys.encrypt.secret, err = box.GenerateKey(
+		rand.Reader)
+	if err != nil {
+		return keys, err
+	}
+
+	err = ioutil.WriteFile(
+		cachePath(keysFileName),
+		encodeKeys(keys),
+		0500)
+
+	return keys, err
+}
+
+func encodeKeys(keys MyKeys) []byte {
+	encoded := make([]byte, 160)
+	copy(encoded, keys.sign.public[:])
+	copy(encoded[32:], keys.sign.secret[:])
+	copy(encoded[32+64:], keys.encrypt.public[:])
+	copy(encoded[32+64+32:], keys.encrypt.secret[:])
+	return encoded
+}
+
+var STATE = make(chan State)
+
+// func main() {
+// 	initKeys()
+//
+// 	return
+//
+
+func (StartUiServer) output() {
+	http.HandleFunc(
+		"/websocket",
+		func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			for {
+				err := conn.WriteMessage(
+					websocket.TextMessage, <-TOWEBSOCKET)
 				if err != nil {
 					fmt.Println(err)
 					return
 				}
+			}
+		})
+	http.HandleFunc(
+		"/",
+		func(w http.ResponseWriter, r *http.Request) {
+			req := UiInput{
+				w:    w,
+				r:    r,
+				done: make(chan struct{}),
+			}
+			RAWINPUT <- req
+			<-req.done
+		})
+	STOP <- http.ListenAndServe(":11833", nil)
+}
 
-				for {
-					err := conn.WriteMessage(
-						websocket.TextMessage, <-toWebsocketS)
-					if err != nil {
-						fmt.Println(err)
-						return
-					}
-				}
-			})
-		http.HandleFunc(
-			"/",
-			func(w http.ResponseWriter, r *http.Request) {
-				req := UiInput{
-					w:    w,
-					r:    r,
-					done: make(chan struct{}),
-				}
-				rawInputS <- req
-				<-req.done
-			})
-		stop <- http.ListenAndServe(":11833", nil)
-	}()
+const networkSleep = 30 * time.Second
 
-	go func() {
-		bad := func() {
-			rawInputS <- BadNetwork{}
-			time.Sleep(30 * time.Second)
+func (StartTcpListener) output() {
+	bad := func() {
+		RAWINPUT <- BadNetwork{}
+		time.Sleep(networkSleep)
+	}
+	for {
+		conn, err := net.Dial("tcp", serverTcpUrl)
+		if err != nil {
+			bad()
+			continue
 		}
+
+		RAWINPUT <- GoodNetwork{}
+
+		auth := makeTcpAuth(
+			<-MYID, <-AUTHCODE, (<-MYKEYS).sign.secret)
+		n, err := conn.Write(auth)
+		if n != len(auth) {
+			bad()
+			continue
+		}
+		if err != nil {
+			bad()
+			continue
+		}
+
 		for {
-			conn, err := net.Dial("tcp", serverUrl)
+			rawLen := make([]byte, 4)
+			n, err := conn.Read(rawLen)
+			if n != 4 {
+				bad()
+				break
+			}
 			if err != nil {
 				bad()
-				continue
+				break
 			}
 
-			rawInputS <- GoodNetwork{}
-
-			for {
-				rawLen := make([]byte, 4)
-				n, err := conn.Read(rawLen)
-				if n != 4 {
-					bad()
-					break
-				}
-				if err != nil {
-					bad()
-					break
-				}
-
-				msgLen := decodeInt(rawLen)
-				msg := make([]byte, msgLen)
-				n, err = conn.Read(msg)
-				if n != msgLen {
-					bad()
-					break
-				}
-				if err != nil {
-					bad()
-					break
-				}
-
-				rawInputS <- MsgFromServer(msg)
+			msgLen := decodeInt(rawLen)
+			msg := make([]byte, msgLen)
+			n, err = conn.Read(msg)
+			if n != msgLen {
+				bad()
+				break
 			}
+			if err != nil {
+				bad()
+				break
+			}
+
+			RAWINPUT <- MsgFromServer(msg)
 		}
-	}()
+	}
+}
 
-	stateS := make(chan State)
+func main() {
+	// initKeys()
+	// go uiServer()
+	// go tcpListener()
+
+	STATE <- Start{}
 
 	go func() {
-		state := InitState{}
 		for {
-			stateS <- (<-rawInputS).update(state)
+			STATE <- ((<-RAWINPUT).update(<-STATE))
 		}
 	}()
 
 	go func() {
 		for {
-			(<-stateS).output()
+			go (<-STATE).output()
 		}
 	}()
 
-	fmt.Println(<-stop)
+	fmt.Println(<-STOP)
+}
+
+type Start struct{}
+
+func (Start) output() {
+	STATE <- StartTcpListener{}
+	STATE <- StartUiServer{}
+	STATE <- GetUserId{}
+	STATE <- GetCryptoKeys{}
+	STATE <- GetAuthCode{}
+}
+
+type GetAuthCode struct{}
+
+func (GetAuthCode) output() {
+	bad := func() {
+		RAWINPUT <- BadNetwork{}
+		time.Sleep(networkSleep)
+	}
+	for {
+		resp, err := http.Get(serverHttpUrl + "/authcode")
+		if err != nil {
+			bad()
+			continue
+		}
+
+		authCode := make([]byte, constants.AuthCodeLen)
+		n, err := resp.Body.Read(authCode)
+		if n != constants.AuthCodeLen {
+			bad()
+			continue
+		}
+		if err != nil {
+			bad()
+			continue
+		}
+		AUTHCODE <- authCode
+	}
+}
+
+type StartTcpListener struct{}
+
+type StartUiServer struct{}
+
+type GetUserId struct{}
+
+const myIdPath = "myId"
+
+func (GetUserId) output() {
+	myId, err := ioutil.ReadFile(cachePath(myIdPath))
+	if err != nil {
+		keys := <-MYKEYS
+		myId = argon2.IDKey(
+			append(keys.sign.public[:], keys.encrypt.public[:]...),
+			[]byte{},
+			60,
+			256*1024,
+			4,
+			13)
+		err = ioutil.WriteFile(cachePath(myIdPath), myId, 0500)
+		if err != nil {
+			STOP <- err
+		}
+	}
+	for {
+		MYID <- myId
+	}
+}
+
+type GetCryptoKeys struct{}
+
+func (GetCryptoKeys) output() {
+	keys, err := readKeysFromFile()
+	if err != nil {
+		keys, err = makeNewKeys()
+	}
+	if err != nil {
+		STOP <- err
+	}
+	for {
+		MYKEYS <- keys
+	}
 }
 
 func intPower(base, power int) int {
@@ -187,11 +355,6 @@ type RawInput interface {
 	update(State) State
 }
 
-type InitState struct{}
-
-func (InitState) output() {
-}
-
 func (UiInput) update(state State) State {
 	return Todo{}
 }
@@ -217,7 +380,7 @@ func (GoodNetwork) update(state State) State {
 type ToWebsocket []byte
 
 func (t ToWebsocket) output() {
-	toWebsocketS <- []byte(t)
+	TOWEBSOCKET <- []byte(t)
 }
 
 func (BadNetwork) update(state State) State {
