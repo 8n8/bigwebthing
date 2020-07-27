@@ -58,6 +58,7 @@ var AUTHCODE = make(chan []byte, 1)
 var MYKEYS = make(chan MyKeys, 1)
 var MYID = make(chan []byte, 1)
 var CACHELOCK sync.Mutex
+var POWINFO = make(chan PowInfo, 1)
 
 func makeTcpAuth(
 	myId, authCode []byte, secretSign *[64]byte) []byte {
@@ -254,6 +255,39 @@ func (Start) output() {
 	STATE <- GetUserId{}
 	STATE <- GetCryptoKeys{}
 	STATE <- GetAuthCode{}
+	STATE <- GetPowInfo{}
+}
+
+type GetPowInfo struct{}
+
+func (GetPowInfo) output() {
+	bad := func() {
+		INPUT <- BadNetwork{}
+		time.Sleep(networkSleep)
+	}
+	for {
+		resp, err := http.Get(serverHttpUrl + "/proofofworkinfo")
+		if err != nil {
+			bad()
+			continue
+		}
+
+		raw := make([]byte, 17)
+		n, err := resp.Body.Read(raw)
+		if n != 17 {
+			bad()
+			continue
+		}
+		if err != nil {
+			bad()
+			continue
+		}
+
+		POWINFO <- PowInfo{
+			difficulty: raw[0],
+			unique:     raw[1:],
+		}
+	}
 }
 
 type GetAuthCode struct{}
@@ -523,10 +557,14 @@ func (r ReadUnwhitelistee) output() {
 	unwhitelistee := make([]byte, constants.IdLength)
 	n, err := r.r.Body.Read(unwhitelistee)
 	INPUT <- TriedReadingUnwhitelistee{
-		w:    r.w,
-		done: r.done,
-		n:    n,
-		err:  err,
+		w:             r.w,
+		done:          r.done,
+		n:             n,
+		err:           err,
+		myId:          <-MYID,
+		authCode:      <-AUTHCODE,
+		secretSign:    *(<-MYKEYS).sign.secret,
+		unwhitelistee: unwhitelistee,
 	}
 }
 
@@ -804,10 +842,15 @@ func (r ReadWhitelistee) output() {
 	whitelistee := make([]byte, constants.IdLength)
 	n, err := r.r.Body.Read(whitelistee)
 	INPUT <- TriedReadingWhitelistee{
-		w:    r.w,
-		done: r.done,
-		n:    n,
-		err:  err,
+		authCode:    <-AUTHCODE,
+		myId:        <-MYID,
+		secretSign:  *(<-MYKEYS).sign.secret,
+		powInfo:     <-POWINFO,
+		whitelistee: whitelistee,
+		w:           r.w,
+		done:        r.done,
+		n:           n,
+		err:         err,
 	}
 }
 
