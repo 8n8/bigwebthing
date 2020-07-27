@@ -1,5 +1,5 @@
 # Overview
- 
+
 It is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
 
 User data is kept on their own machine, and never sent out unencrypted. Users' private crypto keys are never shared with other people.
@@ -91,6 +91,11 @@ Messages can take the following form:
 
     + 0x05
     + 13 bytes: my ID
+
+6. Send failed
+
+    + 0x06
+    + draft ID string
 
 ## HTTP API
 
@@ -196,7 +201,7 @@ The server will not accept requests greater than 16KB.
 
 ## Proof of work
 
-Some APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create an Argon2id hash with all the bytes greater than the difficulty.  So a proof of work token is like this:
+Some APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create a 32-byte Argon2id hash with all the bytes greater than the difficulty.  So a proof of work token is like this:
 
 + <16 unique bytes provided by the server>
 + <8 calculated by the client>
@@ -204,8 +209,6 @@ Some APIs are protected by a proof of work problem. To create a proof of work to
 The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
 
 ## TCP API
-
-Port 8080
 
 It will accept incoming TCP connections. The client's first message
 should be like this:
@@ -221,8 +224,6 @@ down this connection. They will be prefixed with a four-byte
 Little-Endian length.
 
 ## HTTP API
-
-Port 80
 
 1. /publishkeys
 
@@ -312,21 +313,13 @@ Inside the encryption, the API is as follows:
     + 4 bytes: counter (starting from 0) (Little-Endian)
     + the message chunk
 
-2. small blob
+Once the message is assembled, the first byte is an indicator as follows:
 
-    + 0x02
-    + the blob
+1. message
+2. blob
+3. acknowledgement
 
-3. part of a large blob
-
-    + 0x03
-    + 32 bytes: SHA-256 hash of the whole blob
-    + 4 bytes: counter (starting from 0) (Little-Endian)
-    + the blob chunk
-
-4. acknowledgement
-
-    + 0x02
+An acknowledgement has this structure:
     + signed
         + 16 bytes: 77 0a 8b e7 5a 1a 9e 31 c5 97 5b 61 ec 47 16 ef
         + 8 bytes: Unix time received
