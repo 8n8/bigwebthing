@@ -1,5 +1,9 @@
 package constants
 
+import (
+	"golang.org/x/crypto/nacl/sign"
+)
+
 var TcpAuth = []byte{
 	0x6b, 0x87, 0x4c, 0xde, 0xcc, 0xf0, 0x28, 0xb3,
 	0x7c, 0x4e, 0xde, 0xee, 0x15, 0xca, 0x92, 0x03,
@@ -29,3 +33,7 @@ const AuthCodeLength = 16
 const MeaningLength = 16
 
 const IdLength = 13
+
+const NonceLength = 24
+
+const MessageSendLength = IdLength + sign.Overhead + MeaningLength + AuthCodeLength + IdLength + 1

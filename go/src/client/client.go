@@ -59,6 +59,14 @@ var MYKEYS = make(chan MyKeys, 1)
 var MYID = make(chan []byte, 1)
 var CACHELOCK sync.Mutex
 var POWINFO = make(chan PowInfo, 1)
+var CONTACTS = make(chan map[string]struct{}, 1)
+var LOG = make(chan string)
+
+type bytesliceSet interface {
+	insert([]byte)
+	remove([]byte)
+	contains([]byte) bool
+}
 
 func makeTcpAuth(
 	myId, authCode []byte, secretSign *[64]byte) []byte {
@@ -73,8 +81,10 @@ func makeTcpAuth(
 }
 
 func cachePath(filename string) string {
-	return filepath.Join("clientDataDir", filename)
+	return filepath.Join(frontendDir, filename)
 }
+
+var frontendDir = filepath.Join(homeDir, "frontend")
 
 const keysFileName = "keys"
 
@@ -256,6 +266,25 @@ func (Start) output() {
 	STATE <- GetCryptoKeys{}
 	STATE <- GetAuthCode{}
 	STATE <- GetPowInfo{}
+	STATE <- StartLogger{}
+}
+
+func (StartLogger) output() {
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		panic(err)
+	}
+
+	for {
+		msg := fmt.Sprintf("%v   %s\n", time.Now(), <-LOG)
+		n, err := f.Write([]byte(msg))
+		if n == 0 {
+			panic("log message was empty")
+		}
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 type GetPowInfo struct{}
@@ -1372,9 +1401,245 @@ func (u UiInWithUrl) update(state State) State {
 	return route.handle(u)
 }
 
-func (MsgFromServer) update(state State) State {
-	return Todo{}
+func parseMessageFromServer(raw []byte) (EncryptedAndSigned, error) {
+	if len(raw) < constants.MessageSendLength {
+		return *new(EncryptedAndSigned), errors.New("message from server is too short")
+	}
+
+	return EncryptedAndSigned{
+		fromId: raw[:constants.IdLength],
+		signed: raw[constants.IdLength:],
+	}
 }
+
+type EncryptedAndSigned struct {
+	fromId []byte
+	signed []byte
+}
+
+func (m MsgFromServer) update(state State) State {
+	signed, err := parseMessageFromServer([]byte(m))
+	if err != nil {
+		return Stop{err}
+	}
+	return signed
+}
+
+func (e EncryptedAndSigned) output() {
+	theirKeys, err := getTheirKeys(e.fromId)
+	INPUT <- MsgFromServerContext{
+		myId: <-MYID,
+		signed: e.signed,
+		fromId: e.fromId,
+		contacts: <-CONTACTS,
+		theirKeys: theirKeys,
+		theirKeysErr: err,
+		secretSign: *(<-MYKEYS).sign.secret,
+		secretEncrypt: *(<-MYKEYS).encrypt.secret,
+	}
+}
+
+type TheirKeys struct {
+	encrypt [32]byte
+	sign [32]byte
+}
+
+type MsgFromServerContext struct {
+	myId []byte
+	signed []byte
+	fromId []byte
+	contacts bytesliceSet
+	theirKeys TheirKeys
+	theirKeysErr error
+	secretSign [64]byte
+	secretEncrypt [32]byte
+}
+
+type Encrypted struct {
+	meaning []byte
+	recipient []byte
+	encrypted []byte
+	nonce [constants.NonceLength]byte
+}
+
+func parseUnsigned(raw []byte) (Encrypted, error) {
+	const afterMeaning = constants.MeaningLength
+	const afterAuth = afterMeaning + constants.AuthCodeLength
+	const afterId = afterAuth + constants.IdLength
+	const afterNonce = afterId + constants.NonceLength
+
+	if len(raw) < afterNonce + 1 {
+		return *new(Encrypted), errors.New("raw unsigned was too short")
+	}
+
+	var nonce [constants.NonceLength]byte
+	copy(nonce[:], raw[afterId:])
+
+	return Encrypted{
+		meaning: raw[:afterMeaning],
+		recipient: raw[afterAuth: afterId],
+		encrypted: raw[afterId:],
+		nonce: nonce,
+	}, nil
+}
+
+func (m MsgFromServerContext) update(state State) State {
+	if !m.contacts.contains(m.fromId) {
+		return Log(fmt.Sprintf(
+			"%v is not in my contacts",
+			m.fromId))
+	}
+
+	if m.theirKeysErr != nil {
+		return Log(fmt.Sprintf(
+			"receiving message from %v failed because could not get their encryption keys: %v",
+			m.fromId,
+			m.theirKeysError))
+	}
+
+	unsigned, ok := sign.Open([]byte{}, m.signed, &m.theirKeys.sign)
+	if !ok {
+		return Panic("received bad signature from server")
+	}
+
+	encrypted, err := parseUnsigned(unsigned)
+	if err != nil {
+		return Log(fmt.Sprintf(
+			"message from %v is not in the right format",
+			m.fromId))
+	}
+
+	if !bytes.Equal(encrypted.meaning, constants.SendMessage) {
+		return Log(fmt.Sprintf(
+			"message from %v does not have the right meaning",
+			m.fromId))
+	}
+
+	decrypted, ok := box.Open([]byte{}, encrypted.encrypted, &encrypted.nonce, &m.theirKeys.encrypt, &m.secretEncrypt)
+	if !ok {
+		return Log(fmt.Sprintf(
+			"could not decrypt message from %v",
+			m.fromId))
+	}
+
+	clientChunk, err := parseClientToClient(decrypted)
+	if err != nil {
+		return Log(fmt.Sprintf("error parsing client chunk: ", err))
+	}
+
+	return clientChunk.handle()
+}
+
+func parseClientToClient(raw []byte) (ClientChunk, error) {
+	lenRaw := len(raw)
+	if lenRaw == 0 {
+		return *new(ClientChunk), errors.New("empty client chunk")
+	}
+
+	switch raw[0] {
+	case 0:
+		if lenRaw < 2 {
+			return *new(ClientChunk),
+				errors.New("empty small message")
+		}
+		return SmallClientChunk(raw[1:]), nil
+	case 1:
+		if lenRaw < 1 + 32 + 4 {
+			return *new(ClientChunk),
+				errors.New("large message segment too short")
+		}
+		return MessageSegment{
+			hash: raw[1:33],
+			counter: decodeInt(raw[33:37]),
+			chunk: raw[37:],
+		}, nil
+	}
+	return *new(ClientChunk),
+		errors.New("bad indicator in client message chunk")
+}
+
+type ClientChunk interface {
+	handle() State
+}
+
+const minAcknowledge = sign.Overhead + constants.MeaningLength + 8 + 32
+
+func parseAcknowledgement(raw []byte) (ParsedSmall, error) {
+	if len(raw) < minAcknowledge {
+		return *new(ParsedSmall), errors.New("raw acknowledgement too small")
+	}
+
+	return ParsedAcknowledgement(raw), nil
+}
+
+func parseSmallChunk(raw []byte) (ParsedSmall, error) {
+	rawLen := len(raw)
+	if rawLen == 0 {
+		return *new(ParsedSmall), errors.New("empty raw small chunk")
+	}
+
+	switch raw[0] {
+	case 1:
+		return parseSmallMessage(raw[1:])
+
+	case 2:
+		return parseSmallBlob(raw[1:])
+
+	case 3:
+		return parseAcknowledgement(raw[1:])
+
+	}
+
+	return *new(ParsedSmall), errors.New("bad indicator byte on small chunk from server")
+}
+
+type ParsedSmall interface {
+	handle() State
+}
+
+func (s SmallClientChunk) handle() State {
+	parsed, err := parseSmallChunk([]byte(s))
+	if err != nil {
+		return Log(fmt.Sprintf(
+			"problem parsing small chunk from server: %v",
+			err))
+	}
+	return parsed.handle()
+}
+
+type MessageSegment struct {
+	hash []byte
+	counter int
+	chunk []byte
+}
+
+func (m MessageSegment) handle() State {
+	return m
+}
+
+type SmallClientChunk []byte
+
+type Log string
+
+var backendDir = filepath.Join(homeDir, "backend")
+
+var logPath = filepath.Join(backendDir, "log")
+
+var homeDir = "clientData"
+
+func (log Log) output() {
+	LOG <- string(log)
+}
+
+type Panic string
+
+func (p Panic) output() {
+	panic(string(p))
+}
+
+type DoNothing struct{}
+
+func (DoNothing) output() {}
 
 type Todo struct{}
 

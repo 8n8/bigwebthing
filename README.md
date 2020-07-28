@@ -126,6 +126,11 @@ Messages can take the following form:
     Request:
     + 13 bytes: ID of whitelistee
 
+7. /getcachekey
+
+    Response:
+    + unique string
+
 
 # Crypto server API
 
@@ -136,7 +141,7 @@ There is an HTTP server on port 59285 that does all the crypto. The API is like 
     Request:
     + 32 bytes: public key of recipient
     + the message to encrypt
-    
+
     Response:
     + encrypted message
 
@@ -263,6 +268,7 @@ Little-Endian length.
         + 16 bytes: 0a cb 78 89 67 cf 64 19 2a dd 32 63 61 2d 10 18
         + 16 bytes: auth code
         + 13 bytes: recipient ID
+        + 24 bytes: nonce
         + message
 
 6. /message/delete
