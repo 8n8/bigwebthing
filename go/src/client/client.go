@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"goji.io"
+	"goji.io/pat"
 	"constants"
 	"crypto/rand"
 	"crypto/sha256"
@@ -61,6 +63,7 @@ var CACHELOCK sync.Mutex
 var POWINFO = make(chan PowInfo, 1)
 var CONTACTS = make(chan map[string]struct{}, 1)
 var LOG = make(chan string)
+var UNIQUEID chan string
 
 type bytesliceSet interface {
 	insert([]byte)
@@ -81,6 +84,7 @@ func makeTcpAuth(
 }
 
 func cachePath(filename string) string {
+	file, err := os.Op
 	return filepath.Join(frontendDir, filename)
 }
 
@@ -146,43 +150,92 @@ func encodeKeys(keys MyKeys) []byte {
 
 var STATE = make(chan State)
 
-// func main() {
-// 	initKeys()
-//
-// 	return
-//
-
 func (StartUiServer) output() {
-	http.HandleFunc(
-		"/websocket",
+	mux := goji.NewMux()
+	mux.HandleFunc(
+		pat.Get("/websocket"),
 		func(w http.ResponseWriter, r *http.Request) {
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
-				fmt.Println(err)
-				return
+				panic(err)
 			}
 
 			for {
 				err := conn.WriteMessage(
 					websocket.TextMessage, <-TOWEBSOCKET)
 				if err != nil {
-					fmt.Println(err)
-					return
+					panic(err)
 				}
 			}
 		})
-	http.HandleFunc(
-		"/",
+	mux.HandleFunc(
+		pat.Get("/cache/get/:key"),
 		func(w http.ResponseWriter, r *http.Request) {
-			req := UiInput{
-				w:    w,
-				r:    r,
-				done: make(chan struct{}),
+			path := cachePath(pat.Param(r, "key"))
+			CACHELOCK.Lock()
+			defer CACHELOCK.Unlock()
+			file, err := os.Open(path)
+			if err != nil {
+				panic(err)
 			}
-			INPUT <- req
-			<-req.done
+			n, err := io.Copy(w, file)
+			if n == 0 {
+				panic("did not read any bytes from file", path)
+			}
+			if err != nil {
+				panic(err)
+			}
 		})
-	STOP <- http.ListenAndServe(":11833", nil)
+
+	mux.HandleFunc(
+		pat.Post("/cache/set/:key"),
+		func(w http.ResponseWriter, r *http.Request) {
+			path := cachePath(pat.Param(r, "key"))
+			CACHELOCK.Lock()
+			defer CACHELOCK.Unlock()
+			file, err := os.Create(path)
+			if err != nil {
+				panic(err)
+			}
+			n, err := io.Copy(file, r.Body)
+			if n == 0 {
+				panic("no bytes in request body")
+			}
+			if err != nil {
+				panic(err)
+			}
+		})
+
+	mux.HandleFunc(
+		pat.Post("/cache/delete/:key"),
+		func(w http.ResponseWriter, r *http.Request) {
+			path := cachePath(pat.Param(r, "key"))
+			CACHELOCK.Lock()
+			defer CACHELOCK.Unlock()
+			err := os.Remove(path)
+			if err != nil {
+				panic(err)
+			}
+		})
+
+	mux.HandleFunc(
+		pat.Post("/sendmessage/:draftid"),
+		func(w http.ResponseWriter, r *http.Request) {
+		})
+
+	mux.HandleFunc(
+		pat.Get("/getunique"),
+		func(w http.ResponseWriter, _ *http.Request) {
+			n, err := w.Write(<-UNIQUEID)
+			if n == 0 {
+				panic("didn't write any bytes to unique ID request")
+			}
+			if err != nil {
+				panic(err)
+			}
+		})
+
+	panic(http.ListenAndServe(":11833", nil))
 }
 
 const networkSleep = 30 * time.Second
@@ -267,7 +320,10 @@ func (Start) output() {
 	STATE <- GetAuthCode{}
 	STATE <- GetPowInfo{}
 	STATE <- StartLogger{}
+	STATE <- StartUniqueId{}
 }
+
+type StartLogger struct{}
 
 func (StartLogger) output() {
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
@@ -907,6 +963,9 @@ func (r ReadDraftAndRecipient) output() {
 	}
 }
 
+
+
+
 type TriedReadingDraftAndRecipient struct {
 	w         http.ResponseWriter
 	r         *http.Request
@@ -1428,38 +1487,38 @@ func (m MsgFromServer) update(state State) State {
 func (e EncryptedAndSigned) output() {
 	theirKeys, err := getTheirKeys(e.fromId)
 	INPUT <- MsgFromServerContext{
-		myId: <-MYID,
-		signed: e.signed,
-		fromId: e.fromId,
-		contacts: <-CONTACTS,
-		theirKeys: theirKeys,
-		theirKeysErr: err,
-		secretSign: *(<-MYKEYS).sign.secret,
+		myId:          <-MYID,
+		signed:        e.signed,
+		fromId:        e.fromId,
+		contacts:      <-CONTACTS,
+		theirKeys:     theirKeys,
+		theirKeysErr:  err,
+		secretSign:    *(<-MYKEYS).sign.secret,
 		secretEncrypt: *(<-MYKEYS).encrypt.secret,
 	}
 }
 
 type TheirKeys struct {
 	encrypt [32]byte
-	sign [32]byte
+	sign    [32]byte
 }
 
 type MsgFromServerContext struct {
-	myId []byte
-	signed []byte
-	fromId []byte
-	contacts bytesliceSet
-	theirKeys TheirKeys
-	theirKeysErr error
-	secretSign [64]byte
+	myId          []byte
+	signed        []byte
+	fromId        []byte
+	contacts      bytesliceSet
+	theirKeys     TheirKeys
+	theirKeysErr  error
+	secretSign    [64]byte
 	secretEncrypt [32]byte
 }
 
 type Encrypted struct {
-	meaning []byte
+	meaning   []byte
 	recipient []byte
 	encrypted []byte
-	nonce [constants.NonceLength]byte
+	nonce     [constants.NonceLength]byte
 }
 
 func parseUnsigned(raw []byte) (Encrypted, error) {
@@ -1468,7 +1527,7 @@ func parseUnsigned(raw []byte) (Encrypted, error) {
 	const afterId = afterAuth + constants.IdLength
 	const afterNonce = afterId + constants.NonceLength
 
-	if len(raw) < afterNonce + 1 {
+	if len(raw) < afterNonce+1 {
 		return *new(Encrypted), errors.New("raw unsigned was too short")
 	}
 
@@ -1476,10 +1535,10 @@ func parseUnsigned(raw []byte) (Encrypted, error) {
 	copy(nonce[:], raw[afterId:])
 
 	return Encrypted{
-		meaning: raw[:afterMeaning],
-		recipient: raw[afterAuth: afterId],
+		meaning:   raw[:afterMeaning],
+		recipient: raw[afterAuth:afterId],
 		encrypted: raw[afterId:],
-		nonce: nonce,
+		nonce:     nonce,
 	}, nil
 }
 
@@ -1544,14 +1603,14 @@ func parseClientToClient(raw []byte) (ClientChunk, error) {
 		}
 		return SmallClientChunk(raw[1:]), nil
 	case 1:
-		if lenRaw < 1 + 32 + 4 {
+		if lenRaw < 1+32+4 {
 			return *new(ClientChunk),
 				errors.New("large message segment too short")
 		}
 		return MessageSegment{
-			hash: raw[1:33],
+			hash:    raw[1:33],
 			counter: decodeInt(raw[33:37]),
-			chunk: raw[37:],
+			chunk:   raw[37:],
 		}, nil
 	}
 	return *new(ClientChunk),
@@ -1570,6 +1629,10 @@ func parseAcknowledgement(raw []byte) (ParsedSmall, error) {
 	}
 
 	return ParsedAcknowledgement(raw), nil
+}
+
+func parseSmallBlob(raw []byte) (ParsedSmall, error) {
+
 }
 
 func parseSmallChunk(raw []byte) (ParsedSmall, error) {
@@ -1608,9 +1671,9 @@ func (s SmallClientChunk) handle() State {
 }
 
 type MessageSegment struct {
-	hash []byte
+	hash    []byte
 	counter int
-	chunk []byte
+	chunk   []byte
 }
 
 func (m MessageSegment) handle() State {

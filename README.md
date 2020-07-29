@@ -2,21 +2,21 @@
 
 It is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
 
-User data is kept on their own machine, and never sent out unencrypted. Users' private crypto keys are never shared with other people.
+User data is kept on their own machine, and never sent out unencrypted. Users' private crypto keys never leave their own machine.
 
 Users can write programs and send them to each other safely and run them safely.
 
-There is a message-passing server for sharing data between people. It stores messages till they are collected.
+There is a message-passing server for sharing data between people. It stores messages for a fixed period of time and then deletes them.
 
 The cost of running the server is met by users paying for the resources they use, as they use them.
 
-It operates on a strict whitelist-only policy, so you only receive messages from peopleon your whitelist.
+It operates on a strict whitelist-only policy, so you only receive messages from people on your whitelist.
 
 # Program structure
 
-There are six different parts to the program:
+These are the different parts of the program:
 
-1. (Haskell) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
+1. (Go) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
 
 2. (Elm) The GUI. This runs in a stripped-down web browser via webview.
 
@@ -24,9 +24,7 @@ There are six different parts to the program:
 
 4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produces a DOM-like structure from a user input text box and user-uploaded binary blobs.
 
-5. (Go) The client / server crypto. Haskell doesn't have a simple, trustworthy high-level crypto library, so the crypto is done in Go using the nacl library. This runs on the client and server localhost as an HTTP server, and is used by the client backend and by the server.
-
-6. (Haskell) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
+6. (Go) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
 
 # User ID
 
@@ -67,266 +65,210 @@ The websockets API is for sending messages from the client backend to the fronte
 Messages can take the following form:
 
 1. New inbox message summary
-
     + 0x01
-    + subject as a sized string
+    + sized string: subject
     + 8 bytes: POSIX time
-    + cache key for full message as a sized string
+	+ 13 bytes: sender ID
+    + sized string: cache key for full message
 
 2. New acknowledgement
-
     + 0x02
     + 13 bytes: recipient ID
-    + cache key for full message as a sized string
+    + sized string: cache key for full message
 
 3. Bad network connection
-
     + 0x03
 
 4. Good network connection
-
     + 0x04
 
 5. My ID
-
     + 0x05
     + 13 bytes: my ID
 
 6. Send failed
-
     + 0x06
     + draft ID string
 
+7. Send progress
+	+ 0x07
+	+ 1 byte: % as an integer between 0 and 100
+
 ## HTTP API
 
-1. /cache/get/:cacheKey
-
+1. /cache/get/:key
     Response:
-    + value associated with the key
+    + binary value associated with the key
 
-2. /cache/set/:cacheKey
+2. /cache/set/:key
+	Request:
+	+ binary value
 
-    Request:
-    + value
+3. /cache/delete/:key
 
-3. /cache/delete/:cacheKey
+4. /sendmessage/:draftid
 
-4. /sendmessage/:draftId
-
-    Request:
-    + 13 bytes: recipient ID
-
-5. /whitelist/add
-
-    Request:
-    + 13 bytes: ID of whitelistee
-
-6. /whitelist/remove
-
-    Request:
-    + 13 bytes: ID of whitelistee
-
-7. /getcachekey
-
+5. /getunique
     Response:
-    + unique string
-
-
-# Crypto server API
-
-There is an HTTP server on port 59285 that does all the crypto. The API is like this:
-
-1. /encrypt
-
-    Request:
-    + 32 bytes: public key of recipient
-    + the message to encrypt
-
-    Response:
-    + encrypted message
-
-2. /decrypt
-
-    Request:
-    + 32 bytes: public key of sender
-    + the message to decrypt
-
-    Response:
-    + decrypted message
-
-    (Status 400 if decryption fails.)
-
-3. /sign
-
-    Request:
-    + message to sign
-
-    Response:
-    + signed message
-
-4. /checksignature
-
-    Request:
-    + public key of sender
-    + signed message
-
-    Response:
-    + status 200 if good signature or status 400 if bad signature
-
-5. /getmykeys
-
-    Response:
-    + 32 bytes: public signing key
-    + 32 bytes: public encryption key
-
-6. /userid
-
-    Request:
-    + 32 bytes: public signing key
-    + 32 bytes: public encryption key
-
-    Response:
-    + 13 bytes: user ID
-
-7. /proofofwork
-
-    Request:
-    + 1 byte: difficulty
-    + 16 bytes: random
-
-    Response:
-    + 24 bytes: proof of work
-
+    + unique UTF-8 string
 
 # Server API
 
 The server provides an HTTP API on port 8001, and also a TCP connection on 8002 so that the server can send new messages to the client without them being requested first.
 
-The server will not accept requests greater than 16KB.
-
 ## Proof of work
 
 Some APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create a 32-byte Argon2id hash with all the bytes greater than the difficulty.  So a proof of work token is like this:
 
-+ <16 unique bytes provided by the server>
-+ <8 calculated by the client>
++ 16 bytes: unique from the server
++ 8 bytes: calculated by the client
 
 The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
 
 ## TCP API
 
-It will accept incoming TCP connections. The client's first message
-should be like this:
+It will accept incoming TCP connections. The client's first message should be like this:
 
 + 13 bytes: my ID
 + signed
     + 16 bytes: 6b 87 4c de cc f0 28 b3 7c 4e de ee 15 ca 92 93
     + 16 bytes: auth code
 
-Then the client should just listen on the connection. The server will
-post any messages that it receives or has received from other users
-down this connection. They will be prefixed with a four-byte
-Little-Endian length.
+Then the client should just listen on the connection. The server will post any messages that it receives or has received from other users down this connection. They will be prefixed with a four-byte Little-Endian length.
 
 ## HTTP API
 
-1. /publishkeys
+/api
+
+1. Publish keys
 
     Request:
+	+ 0x01
     + 24 bytes: proof of work
-    + 13 bytes: user ID
     + 32 bytes: public signing key
     + 32 bytes: public encryption key
 
-2. /getkeys
+2. Get keys
 
     Request:
+	+ 0x02
     + 13 bytes: the ID to look up
 
     Response:
+	+ 1 byte: 0x00 if the keys don't exist, 0x01 if they do
     + 32 bytes: their public signing key
     + 32 bytes: their public encryption key
 
 
-3. /proofofworkinfo
+3. Get proof of work info
+
+	Request:
+	+ 0x03
 
     Response:
-    + 1 byte: difficulty, which is the number that each byte in the
-              proof of work must be greater than
+    + 1 byte: difficulty
     + 16 bytes: random
 
-4. /authcode
+4. Get auth code
+
+	Request:
+	+ 0x04
 
     Response:
     + 16 bytes: random
 
-5. /message/send
+5. Upload blob
 
-    Request:
+    Request (max 16KB):
+	+ 0x05
     + 13 bytes: my ID
     + signed
         + 16 bytes: 0a cb 78 89 67 cf 64 19 2a dd 32 63 61 2d 10 18
         + 16 bytes: auth code
-        + 13 bytes: recipient ID
-        + 24 bytes: nonce
-        + message
+        + blob
 
-6. /message/delete
+	The server checks the signature, charges the account for the cost of the storage, and stores the nonce and the message under their hash.
+
+6. Send message
+
+	Request:
+	+ 0x06
+	+ 24 bytes: proof of work
+	+ 24 bytes: nonce
+	+ encrypted with recipient public key:
+		+ 32 bytes: sha256 hash of encrypted blob on server
+		+ 32 bytes: symmetric key of encrypted blob on server
+
+	The recipient attempts to decrypt the message for each of its contacts, and accepts it if one of them succeeds.
+
+7. Delete message
 
     Request:
+	+ 0x07
     + 13 bytes: my ID
     + signed
         + 16 bytes: d3 ad fa b3 b4 67 41 bb 51 19 de d5 56 e5 9c 8e
         + 16 bytes: auth code
         + 32 bytes: SHA256 hash of the message to delete
 
-7. /whitelist/add
+8. Download blob
+	
+	Request:
+	+ 0x08
+	+ 32 bytes: sha256 hash of blob to download
 
-    Request:
-    + 24 bytes: proof of work
-    + 13 bytes: my ID
-    + signed
-        + 16 bytes: df c2 fb 02 ba 19 fd 38 80 fc 93 ca d6 f6 37 33
-        + 16 bytes: auth code
-        + 13 bytes: ID of person to whitelist
+	Response:
+	+ the blob
 
-8. /whitelist/remove
+9. Get price
 
-    Request:
-    + 13 bytes: my ID
-    + signed
-        + 16 bytes: 32 52 4c a3 77 a2 86 0e 8b ec df e4 23 ae f1 8f
-        + 16 bytes: auth code
-        + 13 bytes: ID of person to remove from whitelist
+	Request:
+	+ 0x09
+
+	Response:
+	+ 4 bytes: unsigned Little-Endian int: price in GBP^-4
+
 
 # Client to client API
 
-Since the server only accepts messages of 16KB or less, messages are chunked up into chunks 15.5KB or less, allowing space for crypto overhead.
+To send a message:
 
-All messages are encrypted.
+1. encode it and its blobs and pipe small chunks (~16KB) to a channel
+2. for each chunk in the channel:
+	a. symmetrically encrypt
+	b. take an sha256 hash
+	c. send to server
+3. encode all the hashes and encryption keys and put into the sending channel in (1)
+4. encode the hash and key of the first chunk of (3)
+5. encrypt it with their public key and send it to them
 
-Inside the encryption, the API is as follows:
+Inside the encryption and chunking, the API is as follows:
 
-0. small message
-
-    + 0x00
-    + the message
-
-1. part of a large message
+1. Regular inbox message
 
     + 0x01
-    + 32 bytes: SHA-256 hash of the whole message
-    + 4 bytes: counter (starting from 0) (Little-Endian)
-    + the message chunk
+    + the encoded message
 
-Once the message is assembled, the first byte is an indicator as follows:
+2. Acknowledgement
 
-1. message
-2. blob
-3. acknowledgement
-
-An acknowledgement has this structure:
+	+ 0x02
     + signed
         + 16 bytes: 77 0a 8b e7 5a 1a 9e 31 c5 97 5b 61 ec 47 16 ef
         + 8 bytes: Unix time received
         + 32 bytes: SHA-256 hash of message received
+
+# Pricing
+
+There is a small, fixed charge for each blob upload.
+
+The server keeps two tables in its accounting database:
+
+1. Blob uploads
+	+ user ID
+	+ signed confirmation from user, including the price at the time
+	+ timestamp
+2. Payments (obtained from payments provider API)
+	+ userId
+	+ signed payment confirmation from provider
+
+When someone uploads a new blob, the server queries these tables to calculate the user's balance. If the balance is high enough, the blob is accepted and recorded.
