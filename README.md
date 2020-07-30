@@ -64,7 +64,7 @@ The websockets API is for sending messages from the client backend to the fronte
 
 Messages can take the following form:
 
-1. Summary of new inbox message
+1. Summary of inbox
 	+ 0x01
 	+ summary
 
@@ -78,23 +78,22 @@ Messages can take the following form:
     + 0x04
     + draft ID string
 
-5. Send progress
+5. Progress of sending
 	+ 0x05
-	+ draft ID string
-	+ 1 byte: % as an integer between 0 and 100
+	+ 4 bytes: number of blobs remaining to send
 
 ## HTTP API
 
 /cache
 	/set
-		/:messageid
+		/:message_id
 			/to
 				Request:
 				+ 13 byte user IDs, one after another
 			/subject
 				Request:
 				+ UTF-8 subject
-			/userinput
+			/user_input
 				Request:
 				+ UTF-8 user input
 			/blob
@@ -104,33 +103,60 @@ Messages can take the following form:
 				Request:
 				+ binary blob of Wasm
 			/send
+			/whitelist
+				Request:
+				+ 13 bytes: user ID to add to whitelist
 	/get
-		/:messageid
-			/
-	/get
-    	Response:
-    	+ binary value associated with the key
-	/set
-		Request:
-		+ binary value
+		/:message_id
+			/to
+				Response:
+				+ 13 byte user IDs, one after another
+			/subject
+				Response:
+				+ UTF-8 subject string
+			/user_input
+				Response:
+				+ UTF-8 subject string
+			/blob
+				Request:
+				+ 32-bytes: SHA-256 hash of blob
+				Response:
+				+ the body of the blob
+			/program
+				Response:
+				+ binary blob of program
 	/delete
-/sendmessage/:draftid
+		/:message_d
+			/to
+				Request:
+				+ 13 bytes: user ID to remove from message
+			/subject
+			/userinput
+		/blob
+			Request:
+			+ 32 bytes: SHA-256 hash of blob
+		/whitelist
+			Request:
+			+ 13 bytes: user ID to remove from whitelist
 /unique
     Response:
     + unique UTF-8 string
-/contacts
-	/add
-		Request:
-		+ 13 bytes: user ID
-	/delete
-		Request:
-		+ 13 bytes: userID
-	/get
-		Response:
-		+ encoded contacts
 /myid
 	Response:
 	+ 13 bytes: my ID
+/contacts
+	Response
+	+ sequence of 13-byte user IDs
+/summary
+	/drafts
+		Response:
+		+ summaries of all drafts
+	/sends
+		Response:
+		+ summaries of all sent messages
+	/inbox
+		Response:
+		+ summaries of all received messages
 
 # Server API
 
@@ -284,33 +310,41 @@ Inside the encryption and chunking, the API is as follows:
 		a flat folder full of blobs, named by their sha256 hash
 	SQLite database, with tables as follows:
 		+ blobs
-			- message_id (int)
-			- blob_hash (blob)
+			- message (int)
+			- hash (blob)
 		+ subjects
-			- message_id (unique int)
+			- message (unique int)
 			- subject (text)
-		+ recipients
-			- message_id (int)
-			- to_id (blob)
+		+ tos
+			- message (int)
+			- user (blob)
 		+ user_inputs
 			- message_id (unique int)
 			- user_input (text)
 		+ programs
-			- message_id (unique int)
-			- program_hash (blob)
+			- message (unique int)
+			- hash (blob)
 		+ sends
-			- message_id (unique int)
-			- time (datetime)
+			- message (unique int)
+			- time
+		+ sent_hashes
+			- message (uniqe int)
+			- hash (blob)
 		+ receives
-			- message_id (unique int)
-			- from_id (blob)
+			- message (unique int)
+			- user (blob)
 			- time
 		+ whitelist
-			- user_id (unique blob)
+			- user (unique blob)
 		+ public_keys
-			- user_id (unique blob)
+			- user (unique blob)
 			- sign (unique blob)
 			- encrypt (unique blob)
+		+ acknowledgements
+			- message (unique int)
+			- from (blob)
+			- time
+			- signature
 	outgoing/
 		A flat folder of small chunked blobs to be uploaded to the server and deleted when done. This is so that uploads can be resumed if the program is shut down part-way through a send.
 	incoming/

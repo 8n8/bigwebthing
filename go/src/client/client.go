@@ -42,6 +42,7 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
+
 type MyKeys struct {
 	sign struct {
 		public *[32]byte
@@ -169,7 +170,7 @@ func (StartUiServer) output() {
 			}
 		})
 	mux.HandleFunc(
-		pat.Get("/cache/get/:key"),
+		pat.Get("/cache/:key/get"),
 		func(w http.ResponseWriter, r *http.Request) {
 			path := cachePath(pat.Param(r, "key"))
 			CACHELOCK.Lock()
@@ -188,7 +189,7 @@ func (StartUiServer) output() {
 		})
 
 	mux.HandleFunc(
-		pat.Post("/cache/set/:key"),
+		pat.Post("/cache/:key/set"),
 		func(w http.ResponseWriter, r *http.Request) {
 			path := cachePath(pat.Param(r, "key"))
 			CACHELOCK.Lock()
@@ -207,7 +208,7 @@ func (StartUiServer) output() {
 		})
 
 	mux.HandleFunc(
-		pat.Post("/cache/delete/:key"),
+		pat.Post("/cache/:key/delete"),
 		func(w http.ResponseWriter, r *http.Request) {
 			path := cachePath(pat.Param(r, "key"))
 			CACHELOCK.Lock()
@@ -221,6 +222,18 @@ func (StartUiServer) output() {
 	mux.HandleFunc(
 		pat.Post("/sendmessage/:draftid"),
 		func(w http.ResponseWriter, r *http.Request) {
+			rawDraft, err := ioutil.ReadFile(cachePath(
+				pat.Param(r, "draftid")))
+			if err != nil {
+				panic(err)
+			}
+			draft, err := parseDraft(rawDraft)
+			if err != nil {
+				panic(err)
+			}
+			INPUT <-SendMessageRequest{
+				draft: draft,
+				rawDraft: rawDraft,}
 		})
 
 	mux.HandleFunc(
@@ -235,7 +248,58 @@ func (StartUiServer) output() {
 			}
 		})
 
-	panic(http.ListenAndServe(":11833", nil))
+	mux.HandleFunc(
+		pat.Post("/contacts/add"),
+		func(_ http.ResponseWriter, r *http.Request) {
+			INPUT <- AddToWhitelist(getWhitelistee(r))
+		})
+
+	mux.HandleFunc(
+		pat.Post("/contacts/delete"),
+		func(_ http.ResponseWriter, r *http.Request) {
+			done := make(chan struct{})
+			INPUT <- RemoveFromWhitelist{
+				whitelistee: getWhitelistee(r),
+				done: done,}
+			<-done
+		})
+
+	mux.HandleFunc(
+		pat.Get("/myid"),
+		func(w http.ResponseWriter, _ *http.Request) {
+			n, err := w.Write(<-MYID)
+			if n != constants.IdLength {
+				panic("wrote wrong number of bytes to getmyid request")
+			}
+			if err != nil {
+				panic(err)
+			}
+		})
+
+	mux.HandleFunc(
+		pat.Get("/contacts"),
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, err := w.Write(encodeContacts(<-MYCONTACTS))
+			if err != nil {
+				panic("could not write contacts to response body")
+			}
+		})
+
+	panic(http.ListenAndServe(":11833", mux))
+}
+
+func getWhitelistee(r *http.Request) []byte {
+	whitelistee := make([]byte, constants.IdLength)
+	n, err := r.Body.Read(whitelistee)
+	if n != constants.IdLength {
+		panic(fmt.Sprintf(
+			"/whitelist/add: body must be %v bytes long",
+			constants.IdLength))
+	}
+	if err != nil {
+		panic(err)
+	}
+	return whitelistee
 }
 
 const networkSleep = 30 * time.Second
@@ -252,19 +316,9 @@ func tcpListenTillFail(conn net.Conn) {
 	}
 
 	for {
-		rawLen := make([]byte, 4)
-		n, err := conn.Read(rawLen)
-		if n != 4 {
-			return
-		}
-		if err != nil {
-			return
-		}
-
-		msgLen := decodeInt(rawLen)
-		msg := make([]byte, msgLen)
+		msg := make([]byte, tcpMsgLen)
 		n, err = conn.Read(msg)
-		if n != msgLen {
+		if n != tcpMsgLen {
 			return
 		}
 		if err != nil {
@@ -274,6 +328,10 @@ func tcpListenTillFail(conn net.Conn) {
 		INPUT <- MsgFromServer(msg)
 	}
 }
+
+// The server strips off the indicator byte and the proof of work
+// before forwarding it to the client
+const tcpMsgLen = 24 + box.Overhead + 32 + 32
 
 func (StartTcpListener) output() {
 	for {
@@ -464,7 +522,104 @@ func decodeInt(bs []byte) int {
 	return result
 }
 
-type MsgFromServer []byte
+type MsgFromServer struct {
+	secretEncrypt [32]byte
+	contacts Contacts
+	msg []byte
+}
+
+type Contacts interface {
+	add(Contact)
+	remove([]byte)
+	toList() []Contact
+	lookup([]byte) Contact
+}
+
+type Contact struct {
+	keys PublicKeys
+	id []byte
+}
+
+type PublicKeys struct {
+	sign [32]byte
+	encrypt [32]byte
+}
+
+func (m MsgFromServer) update(state State) State {
+	var nonce [24]byte
+	copy(nonce[:], m.msg[:24])
+	encrypted := m.msg[24:]
+	for _, contact := range m.contacts.toList() {
+		decrypted, ok := box.Open(
+			[]byte{},
+			encrypted,
+			&nonce,
+			&contact.keys.encrypt,
+			&m.secretEncrypt)
+		if ok {
+			var tempKey [32]byte
+			copy(tempKey[:], decrypted[32:])
+			return LookupBlob{
+				hash: decrypted[:32],
+				tempKey: tempKey,
+				contact: contact,
+			}
+		}
+	}
+	return DoNothing{}
+}
+
+type LookupBlob struct {
+	hash []byte
+	tempKey [32]byte
+	contact Contact
+}
+
+const serverApiUrl = serverHttpUrl + "/api"
+
+func (g LookupBlob) output() {
+	inCh := make(chan RawChunk, 1)
+	INPUT <-RawChunkStream(inCh)
+	nextHash := g.hash
+	for {
+		resp, err := http.Post(
+			serverApiUrl,
+			"application/octet-stream",
+			bytes.NewBuffer(append([]byte{8}, g.hash...)))
+		if err != nil {
+			inCh <-BadNetwork{}
+			return
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			inCh <-BadNetwork{}
+			return
+		}
+		chunk := parseBlob(body, g.tempKey)
+		nextHash, theEnd := chunk.next()
+		inCh <- chunk
+		if theEnd {
+			return
+		}
+	}
+}
+
+type RawChunk interface{
+	next() ([]byte, bool)
+}
+
+type RawChunkStream chan RawChunk
+
+
+
+
+type GotBlob struct {
+	tempKey [32]byte
+	contact Contact
+	hash []byte
+	body []byte
+}
 
 type State interface {
 	output()
@@ -597,31 +752,9 @@ func sliceEq(s1 []string, s2 ...string) bool {
 	return true
 }
 
-func sendMessageP(raw []string) (Route, error) {
-	if len(raw) != 2 {
-		return routeErr("path not 2 elements")
-	}
-
-	if raw[0] != "sendmessage" {
-		return routeErr("first item is not \"sendmessage\"")
-	}
-
-	if len(raw[1]) == 0 {
-		return routeErr("draftId is empty")
-	}
-
-	return SendMessageRequest(raw[1]), nil
-}
-
-type SendMessageRequest string
-
-func (s SendMessageRequest) handle(u UiInWithUrl) State {
-	return ReadDraftAndRecipient{
-		w:       u.w,
-		r:       u.r,
-		done:    u.done,
-		draftId: string(s),
-	}
+type SendMessageRequest struct {
+	draft Draft
+	rawDraft []byte
 }
 
 func (w WhitelistRemove) handle(u UiInWithUrl) State {
@@ -992,6 +1125,31 @@ type MaybeCode interface {
 	f()
 }
 
+func (s SendMessageRequest) update(state State) State {
+	return s
+}
+
+
+// Messages are encoded as follows:
+// + sized encoded message metadata
+// + number of blobs
+// + blobs
+//		Each blob is encoded like:
+// 		+ metadata
+//		+ sized blob body
+func (s SendMessageRequest) output() {
+	encoded := make(chan EncodingChunk)
+	INPUTS <- EncodingChunks(encoded)
+
+	draftLength := len(s.rawDraft)
+	encodedDraft := make([]byte, 4 + draftLength)
+	copy(encodedDraft, encodeUint32(draftLength))
+	copy(encodedDraft[4:], s.drawDraft)
+	chunkUpBytes(bytes.NewBuffer(encodedDraft), encoded)
+
+
+}
+
 type NoCode struct{}
 
 type Code struct {
@@ -1186,6 +1344,45 @@ func ceilDiv(a, b int) int {
 		return 1
 	}
 	return (a / b) + 1
+}
+
+func makeDraftReader(s SendMessageRequest) io.Reader {
+	blobReaders := make([]io.Reader, 2 * len(s.blobs))
+	for i, blob := range s.blobs {
+		li := i * 2
+		bi := li + 1
+
+		blobReaders[li] = bytes.NewBuffer(encodeUint32
+	}
+
+	return io.MultiReader(
+		bytes.NewBuffer(encodeUint32(len(s.rawDraft))),
+		bytes.NewBuffer(s.rawDraft),
+		bytes.NewBuffer
+}
+
+func chunkUpBytes(rs []io.Reader, ch chan EncodingChunk) {
+	for _, r := range rs {
+		for {
+			chunk := make([]byte, maxChunkSize)
+
+			n, err := r.Read(chunk)
+			if n == 0 {
+				return
+			}
+
+			if err != EOF && err != nil {
+				panic(err)
+			}
+
+			if n < maxChunkSize {
+				ch <- NotEnd(chunk[:n])
+				return
+			}
+
+			ch <- NotEnd(chunk)
+		}
+	}
 }
 
 func chunkUpDraft(raw []byte) [][]byte {
@@ -1460,42 +1657,9 @@ func (u UiInWithUrl) update(state State) State {
 	return route.handle(u)
 }
 
-func parseMessageFromServer(raw []byte) (EncryptedAndSigned, error) {
-	if len(raw) < constants.MessageSendLength {
-		return *new(EncryptedAndSigned), errors.New("message from server is too short")
-	}
-
-	return EncryptedAndSigned{
-		fromId: raw[:constants.IdLength],
-		signed: raw[constants.IdLength:],
-	}
-}
-
 type EncryptedAndSigned struct {
 	fromId []byte
 	signed []byte
-}
-
-func (m MsgFromServer) update(state State) State {
-	signed, err := parseMessageFromServer([]byte(m))
-	if err != nil {
-		return Stop{err}
-	}
-	return signed
-}
-
-func (e EncryptedAndSigned) output() {
-	theirKeys, err := getTheirKeys(e.fromId)
-	INPUT <- MsgFromServerContext{
-		myId:          <-MYID,
-		signed:        e.signed,
-		fromId:        e.fromId,
-		contacts:      <-CONTACTS,
-		theirKeys:     theirKeys,
-		theirKeysErr:  err,
-		secretSign:    *(<-MYKEYS).sign.secret,
-		secretEncrypt: *(<-MYKEYS).encrypt.secret,
-	}
 }
 
 type TheirKeys struct {
@@ -1542,142 +1706,8 @@ func parseUnsigned(raw []byte) (Encrypted, error) {
 	}, nil
 }
 
-func (m MsgFromServerContext) update(state State) State {
-	if !m.contacts.contains(m.fromId) {
-		return Log(fmt.Sprintf(
-			"%v is not in my contacts",
-			m.fromId))
-	}
-
-	if m.theirKeysErr != nil {
-		return Log(fmt.Sprintf(
-			"receiving message from %v failed because could not get their encryption keys: %v",
-			m.fromId,
-			m.theirKeysError))
-	}
-
-	unsigned, ok := sign.Open([]byte{}, m.signed, &m.theirKeys.sign)
-	if !ok {
-		return Panic("received bad signature from server")
-	}
-
-	encrypted, err := parseUnsigned(unsigned)
-	if err != nil {
-		return Log(fmt.Sprintf(
-			"message from %v is not in the right format",
-			m.fromId))
-	}
-
-	if !bytes.Equal(encrypted.meaning, constants.SendMessage) {
-		return Log(fmt.Sprintf(
-			"message from %v does not have the right meaning",
-			m.fromId))
-	}
-
-	decrypted, ok := box.Open([]byte{}, encrypted.encrypted, &encrypted.nonce, &m.theirKeys.encrypt, &m.secretEncrypt)
-	if !ok {
-		return Log(fmt.Sprintf(
-			"could not decrypt message from %v",
-			m.fromId))
-	}
-
-	clientChunk, err := parseClientToClient(decrypted)
-	if err != nil {
-		return Log(fmt.Sprintf("error parsing client chunk: ", err))
-	}
-
-	return clientChunk.handle()
-}
-
-func parseClientToClient(raw []byte) (ClientChunk, error) {
-	lenRaw := len(raw)
-	if lenRaw == 0 {
-		return *new(ClientChunk), errors.New("empty client chunk")
-	}
-
-	switch raw[0] {
-	case 0:
-		if lenRaw < 2 {
-			return *new(ClientChunk),
-				errors.New("empty small message")
-		}
-		return SmallClientChunk(raw[1:]), nil
-	case 1:
-		if lenRaw < 1+32+4 {
-			return *new(ClientChunk),
-				errors.New("large message segment too short")
-		}
-		return MessageSegment{
-			hash:    raw[1:33],
-			counter: decodeInt(raw[33:37]),
-			chunk:   raw[37:],
-		}, nil
-	}
-	return *new(ClientChunk),
-		errors.New("bad indicator in client message chunk")
-}
-
 type ClientChunk interface {
 	handle() State
-}
-
-const minAcknowledge = sign.Overhead + constants.MeaningLength + 8 + 32
-
-func parseAcknowledgement(raw []byte) (ParsedSmall, error) {
-	if len(raw) < minAcknowledge {
-		return *new(ParsedSmall), errors.New("raw acknowledgement too small")
-	}
-
-	return ParsedAcknowledgement(raw), nil
-}
-
-func parseSmallBlob(raw []byte) (ParsedSmall, error) {
-
-}
-
-func parseSmallChunk(raw []byte) (ParsedSmall, error) {
-	rawLen := len(raw)
-	if rawLen == 0 {
-		return *new(ParsedSmall), errors.New("empty raw small chunk")
-	}
-
-	switch raw[0] {
-	case 1:
-		return parseSmallMessage(raw[1:])
-
-	case 2:
-		return parseSmallBlob(raw[1:])
-
-	case 3:
-		return parseAcknowledgement(raw[1:])
-
-	}
-
-	return *new(ParsedSmall), errors.New("bad indicator byte on small chunk from server")
-}
-
-type ParsedSmall interface {
-	handle() State
-}
-
-func (s SmallClientChunk) handle() State {
-	parsed, err := parseSmallChunk([]byte(s))
-	if err != nil {
-		return Log(fmt.Sprintf(
-			"problem parsing small chunk from server: %v",
-			err))
-	}
-	return parsed.handle()
-}
-
-type MessageSegment struct {
-	hash    []byte
-	counter int
-	chunk   []byte
-}
-
-func (m MessageSegment) handle() State {
-	return m
 }
 
 type SmallClientChunk []byte
