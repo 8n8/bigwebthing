@@ -64,53 +64,52 @@ The websockets API is for sending messages from the client backend to the fronte
 
 Messages can take the following form:
 
-1. New inbox message summary
-    + 0x01
-    + sized string: subject
-    + 8 bytes: POSIX time
-	+ 13 bytes: sender ID
-    + sized string: cache key for full message
+1. Summary of new inbox message
+	+ 0x01
+	+ summary
 
-2. New acknowledgement
+2. Bad network connection
     + 0x02
-    + 13 bytes: recipient ID
-    + sized string: cache key for full message
 
-3. Bad network connection
+3. Good network connection
     + 0x03
 
-4. Good network connection
+4. Send failed
     + 0x04
-
-5. My ID
-    + 0x05
-    + 13 bytes: my ID
-
-6. Send failed
-    + 0x06
     + draft ID string
 
-7. Send progress
-	+ 0x07
+5. Send progress
+	+ 0x05
+	+ draft ID string
 	+ 1 byte: % as an integer between 0 and 100
 
 ## HTTP API
 
-1. /cache/get/:key
-    Response:
-    + binary value associated with the key
-
-2. /cache/set/:key
-	Request:
-	+ binary value
-
-3. /cache/delete/:key
-
-4. /sendmessage/:draftid
-
-5. /getunique
+/cache/:key
+	/get
+    	Response:
+    	+ binary value associated with the key
+	/set
+		Request:
+		+ binary value
+	/delete
+/sendmessage/:draftid
+/unique
     Response:
     + unique UTF-8 string
+/contacts
+	/add
+		Request:
+		+ 13 bytes: user ID
+	/delete
+		Request:
+		+ 13 bytes: userID
+	/get
+		Response:
+		+ encoded contacts
+/myid
+	Response:
+	+ 13 bytes: my ID
 
 # Server API
 
@@ -134,7 +133,7 @@ It will accept incoming TCP connections. The client's first message should be li
     + 16 bytes: 6b 87 4c de cc f0 28 b3 7c 4e de ee 15 ca 92 93
     + 16 bytes: auth code
 
-Then the client should just listen on the connection. The server will post any messages that it receives or has received from other users down this connection. They will be prefixed with a four-byte Little-Endian length.
+Then the client should just listen on the connection. The server will post any messages that it receives or has received from other users down this connection.
 
 ## HTTP API
 
@@ -218,7 +217,8 @@ Then the client should just listen on the connection. The server will post any m
 	+ 32 bytes: sha256 hash of blob to download
 
 	Response:
-	+ the blob
+	+ 1 byte: 0x00 if there is no such blob, 0x01 if there is
+	+ the blob if it exists
 
 9. Get price
 
@@ -234,13 +234,12 @@ Then the client should just listen on the connection. The server will post any m
 To send a message:
 
 1. encode it and its blobs and pipe small chunks (~16KB) to a channel
+	+ each chunk is prefixed with the hash of the previous chunk
 2. for each chunk in the channel:
 	a. symmetrically encrypt
-	b. take an sha256 hash
-	c. send to server
-3. encode all the hashes and encryption keys and put into the sending channel in (1)
-4. encode the hash and key of the first chunk of (3)
-5. encrypt it with their public key and send it to them
+	b. send to server
+3. encode the hash and key of the first chunk of (3)
+4. encrypt it with their public key and send it to them
 
 Inside the encryption and chunking, the API is as follows:
 
@@ -256,6 +255,32 @@ Inside the encryption and chunking, the API is as follows:
         + 16 bytes: 77 0a 8b e7 5a 1a 9e 31 c5 97 5b 61 ec 47 16 ef
         + 8 bytes: Unix time received
         + 32 bytes: SHA-256 hash of message received
+
+# Client cache
+
+~/.bigwebthing/
+	blobs/
+		mutable/
+			a flat folder full of blobs, named by their sha256 hash
+		immutable/
+			a flat folder full of blobs, named by their sha256 hash
+	messages/
+		<messageid>/
+			to.txt
+			userinput.txt
+			program.wasm
+			subject.txt
+			acknowledgement.txt
+			sent
+				empty file, if it exists then the user has decided to send it
+			blobs.txt
+				contains a blob hash on each line
+	outgoing/
+		A flat folder of small chunked blobs to be uploaded to the server and deleted when done. The purpose of this is so that uploads can be resumed if the program is shut down part-way through a send.
+	incoming/
+		<some unique ID>/
+			+ the header file
+			+ all the blobs downloaded so far
 
 # Pricing
 
