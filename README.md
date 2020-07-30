@@ -281,27 +281,46 @@ Inside the encryption and chunking, the API is as follows:
 
 ~/.bigwebthing/
 	blobs/
-		mutable/
-			a flat folder full of blobs, named by their sha256 hash
-		immutable/
-			a flat folder full of blobs, named by their sha256 hash
-	drafts/
-		<messageid>.json
-			{"to": [<list of user IDs>],
-			 "userinput": "user input string",
-			 "subject": "subject string",
-			 "program": "hash of wasm blob",
-			 "blobs": [<list of blob hashes>]}
-	sending/
-		the same as drafts
-	sent/
-		the same as drafts
+		a flat folder full of blobs, named by their sha256 hash
+	SQLite database, with tables as follows:
+		+ blobs
+			- message_id (int)
+			- blob_hash (blob)
+		+ subjects
+			- message_id (unique int)
+			- subject (text)
+		+ recipients
+			- message_id (int)
+			- to_id (blob)
+		+ user_inputs
+			- message_id (unique int)
+			- user_input (text)
+		+ programs
+			- message_id (unique int)
+			- program_hash (blob)
+		+ sends
+			- message_id (unique int)
+			- time (datetime)
+		+ receives
+			- message_id (unique int)
+			- from_id (blob)
+			- time
+		+ whitelist
+			- user_id (unique blob)
+		+ public_keys
+			- user_id (unique blob)
+			- sign (unique blob)
+			- encrypt (unique blob)
 	outgoing/
 		A flat folder of small chunked blobs to be uploaded to the server and deleted when done. This is so that uploads can be resumed if the program is shut down part-way through a send.
 	incoming/
 		<some unique ID>/
-			+ the header file
-			+ all the blobs downloaded so far
+			+ the header file, called 'header'
+			+ all the blobs downloaded so far, named by their SHA256 hash
+	myKeys
+		a binary file containing my crypto keys
+	iota
+		an 8-byte file containing an 64-bit uint, which is used to generate unique IDs
 
 # Pricing
 
