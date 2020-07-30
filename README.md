@@ -85,7 +85,28 @@ Messages can take the following form:
 
 ## HTTP API
 
-/cache/:key
+/cache
+	/set
+		/:messageid
+			/to
+				Request:
+				+ 13 byte user IDs, one after another
+			/subject
+				Request:
+				+ UTF-8 subject
+			/userinput
+				Request:
+				+ UTF-8 user input
+			/blob
+				Request:
+				+ binary blob
+			/program
+				Request:
+				+ binary blob of Wasm
+			/send
+	/get
+		/:messageid
+			/
 	/get
     	Response:
     	+ binary value associated with the key
@@ -264,19 +285,19 @@ Inside the encryption and chunking, the API is as follows:
 			a flat folder full of blobs, named by their sha256 hash
 		immutable/
 			a flat folder full of blobs, named by their sha256 hash
-	messages/
-		<messageid>/
-			to.txt
-			userinput.txt
-			program.wasm
-			subject.txt
-			acknowledgement.txt
-			sent
-				empty file, if it exists then the user has decided to send it
-			blobs.txt
-				contains a blob hash on each line
+	drafts/
+		<messageid>.json
+			{"to": [<list of user IDs>],
+			 "userinput": "user input string",
+			 "subject": "subject string",
+			 "program": "hash of wasm blob",
+			 "blobs": [<list of blob hashes>]}
+	sending/
+		the same as drafts
+	sent/
+		the same as drafts
 	outgoing/
-		A flat folder of small chunked blobs to be uploaded to the server and deleted when done. The purpose of this is so that uploads can be resumed if the program is shut down part-way through a send.
+		A flat folder of small chunked blobs to be uploaded to the server and deleted when done. This is so that uploads can be resumed if the program is shut down part-way through a send.
 	incoming/
 		<some unique ID>/
 			+ the header file
