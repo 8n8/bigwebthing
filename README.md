@@ -76,10 +76,11 @@ Messages can take the following form:
 
 4. Send failed
     + 0x04
-    + draft ID string
+    + 8 bytes: draft ID
 
 5. Progress of sending
 	+ 0x05
+	+ 8 bytes: draft ID
 	+ 4 bytes: number of blobs remaining to send
 
 ## HTTP API
@@ -89,7 +90,7 @@ Messages can take the following form:
 		/:message_id
 			/to
 				Request:
-				+ 13 byte user IDs, one after another
+				+ 13 byte user ID
 			/subject
 				Request:
 				+ UTF-8 subject
@@ -324,15 +325,16 @@ Inside the encryption and chunking, the API is as follows:
 		+ programs
 			- message (unique int)
 			- hash (blob)
-		+ sends
+		+ sent
 			- message (unique int)
 			- time
 		+ sent_hashes
 			- message (uniqe int)
 			- hash (blob)
-		+ receives
+		+ received
 			- message (unique int)
 			- user (blob)
+			- hash (blob)
 			- time
 		+ whitelist
 			- user (unique blob)
@@ -344,9 +346,11 @@ Inside the encryption and chunking, the API is as follows:
 			- message (unique int)
 			- from (blob)
 			- time
-			- signature
+			- hash (blob)
+			- signature (blob)
 	outgoing/
-		A flat folder of small chunked blobs to be uploaded to the server and deleted when done. This is so that uploads can be resumed if the program is shut down part-way through a send.
+		<message ID>/
+			A flat folder of small chunked blobs to be uploaded to the server and deleted when done. This is so that uploads can be resumed if the program is shut down part-way through a send.
 	incoming/
 		<some unique ID>/
 			+ the header file, called 'header'

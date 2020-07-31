@@ -351,6 +351,8 @@ func (StartTcpListener) output() {
 }
 
 func main() {
+	initConstants()
+
 	STATE <- Start{}
 
 	go func() {
@@ -379,6 +381,22 @@ func (Start) output() {
 	STATE <- GetPowInfo{}
 	STATE <- StartLogger{}
 	STATE <- StartUniqueId{}
+	STATE <- SetUpDatabase{}
+	STATE <- GetPaths{}
+}
+
+func rootDir() string {
+	homedir, err := os.UserHomeDir()
+	if err != nil {
+		panic(fmt.Sprintf(
+			"could not get user home directory: "
+			err))
+	}
+	return homedir + "/.bigwebthing"
+}
+
+func (SetUpDatabase) output() {
+	database, err := sql.Open("sqlite3", 
 }
 
 type StartLogger struct{}
