@@ -58,7 +58,7 @@ var STOP = make(chan error)
 var INPUT = make(chan RawInput)
 var TOWEBSOCKET = make(chan []byte)
 var AUTHCODE = make(chan []byte, 1)
-var MYKEYS = make(chan MyKeys, 1)
+var MYKEYS = makeCryptoKeys()
 var MYID = make(chan []byte, 1)
 var CACHELOCK sync.Mutex
 var POWINFO = make(chan PowInfo, 1)
@@ -351,7 +351,7 @@ func (StartTcpListener) output() {
 }
 
 func main() {
-	initConstants()
+	setUpDatabase()
 
 	STATE <- Start{}
 
@@ -388,15 +388,54 @@ func (Start) output() {
 func rootDir() string {
 	homedir, err := os.UserHomeDir()
 	if err != nil {
-		panic(fmt.Sprintf(
-			"could not get user home directory: "
-			err))
+		panic("could not get user home directory: " + err.Error())
 	}
 	return homedir + "/.bigwebthing"
 }
 
-func (SetUpDatabase) output() {
-	database, err := sql.Open("sqlite3", 
+var PATHS = makePaths()
+
+func setUpDatabase() {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("could not open database: " + err.Error())
+	}
+	defer database.Close()
+
+	_, err = database.Exec(`
+CREATE TABLE IF NOT EXISTS blobs (
+	message INTEGER NOT NULL,
+	hash BLOB NOT NULL,
+	PRIMARY KEY (message, hash)
+);`)
+	if err != nil {
+		panic("could not make blobs table: " + err.Error())
+	}
+
+	_, err = database.Exec(`
+CREATE TABLE IF NOT EXISTS subjects (
+	message INTEGER UNIQUE NOT NULL,
+	subject TEXT NOT NULL,
+	PRIMARY KEY (message, subject)
+);`)
+	if err != nil {
+		panic("could not make subjects table: " + err.Error())
+	}
+
+	_, err = database.Exec(`
+CREATE TABLE IF NOT EXISTS tos (
+	message INTEGER NOT NULL,
+	user BLOB NOT NULL,
+	PRIMARY KEY (message, user)
+);`)
+	if err != nil {
+		panic("could not make tos table: " + err.Error())
+	}
+
+	_, err = database.Exec(`
+CREATE TABLE IF NOT EXISTS user_inputs (
+	message INTEGER UNIQUE NOT NULL,
+	user_input TEXT NOT NULL
 }
 
 type StartLogger struct{}
@@ -510,17 +549,15 @@ func (GetUserId) output() {
 
 type GetCryptoKeys struct{}
 
-func (GetCryptoKeys) output() {
+func makeCryptoKeys() MyKeys {
 	keys, err := readKeysFromFile()
 	if err != nil {
 		keys, err = makeNewKeys()
 	}
 	if err != nil {
-		STOP <- err
+		panic("could not make crypto keys: " + err.Error())
 	}
-	for {
-		MYKEYS <- keys
-	}
+	return keys
 }
 
 func intPower(base, power int) int {

@@ -30,7 +30,7 @@ These are the different parts of the program:
 
 A user ID is a public key fingerprint.
 
-The fingerprint is the first few bits of a slow hash of a concatentation of a user's public signing and encryption keys.
+The fingerprint is the first few bits of a slow hash of a user's public signing key.
 
 The user fingerprint length is calculated as follows:
 
@@ -44,7 +44,7 @@ Lets say that 2^70 'fast' operations is too much for the attacker. Then if I mak
 
 Say there are a maximum 2^40 different users, then that means the user ID should be 58 + 40 = 98 bits. This will fit in 13 bytes.
 
-The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 2^98 bit fingerprint will need 8 words, like:
+The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 98 bit fingerprint will need 8 words, like:
 
 fried veal frightful untoasted uplifting carnation breezy hazy
 
@@ -85,9 +85,16 @@ Messages can take the following form:
 
 ## HTTP API
 
+
 /cache
 	/set
 		/:message_id
+			/diff
+				+ 4 bytes: where to insert the text
+				+ 4 bytes: position of the end of the text
+				+ 32 bytes: hash before diff
+				+ 32 bytes: hash after diff
+				+ string: the text to insert
 			/to
 				Request:
 				+ 13 byte user ID
@@ -306,59 +313,41 @@ Inside the encryption and chunking, the API is as follows:
 
 # Client cache
 
-~/.bigwebthing/
-	blobs/
-		a flat folder full of blobs, named by their sha256 hash
-	SQLite database, with tables as follows:
-		+ blobs
-			- message (int)
-			- hash (blob)
-		+ subjects
-			- message (unique int)
-			- subject (text)
-		+ tos
-			- message (int)
-			- user (blob)
-		+ user_inputs
-			- message_id (unique int)
-			- user_input (text)
-		+ programs
-			- message (unique int)
-			- hash (blob)
-		+ sent
-			- message (unique int)
-			- time
-		+ sent_hashes
-			- message (uniqe int)
-			- hash (blob)
-		+ received
-			- message (unique int)
-			- user (blob)
-			- hash (blob)
-			- time
-		+ whitelist
-			- user (unique blob)
-		+ public_keys
-			- user (unique blob)
-			- sign (unique blob)
-			- encrypt (unique blob)
-		+ acknowledgements
-			- message (unique int)
-			- from (blob)
-			- time
-			- hash (blob)
-			- signature (blob)
-	outgoing/
-		<message ID>/
-			A flat folder of small chunked blobs to be uploaded to the server and deleted when done. This is so that uploads can be resumed if the program is shut down part-way through a send.
-	incoming/
-		<some unique ID>/
-			+ the header file, called 'header'
-			+ all the blobs downloaded so far, named by their SHA256 hash
-	myKeys
-		a binary file containing my crypto keys
-	iota
-		an 8-byte file containing an 64-bit uint, which is used to generate unique IDs
+blobs/
+	A flat folder full of blobs, named by their sha256 hash.
+messages/
+	A flat directory of sqlite databases, one per message, each with an integer name. Each has one table, called 'diffs':
+		+ insertion (text)
+		+ start (integer)
+		+ end (integer)
+		+ hash (blob)
+		+ last_hash (blob)
+database
+	+ sent
+		- message
+		- hash
+		- time
+	+ received
+		- message
+		- user
+		- hash
+		- time
+	+ whitelist
+		- user
+	+ public_keys
+		- user
+		- sign
+		- encrypt
+	+ acknowledgements
+		- message
+		- from
+		- time
+		- hash
+		- signature
+myKeys
+	A binary file containing my crypto keys.
+iota
+	An 8-byte file containing an 64-bit uint, which is used to generate unique IDs.
 
 # Pricing
 
