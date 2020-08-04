@@ -1,12 +1,12 @@
 # Overview
 
-It is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
+BigWebThing is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
 
 User data is kept on their own machine, and never sent out unencrypted. Users' private crypto keys never leave their own machine.
 
 Users can write programs and send them to each other safely and run them safely.
 
-There is a message-passing server for sharing data between people. It stores messages for a fixed period of time and then deletes them.
+There is a message-passing server for sharing data between people.
 
 The cost of running the server is met by users paying for the resources they use, as they use them.
 
@@ -22,7 +22,7 @@ These are the different parts of the program:
 
 3. (Javascript) The GUI plumbing. This handles the connection between the client backend and the Elm GUI, passing data through ports to Elm and websockets to the client backend.
 
-4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produces a DOM-like structure from a user input text box and user-uploaded binary blobs.
+4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produce a DOM-like structure from a user input text box and user-uploaded binary blobs.
 
 6. (Go) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
 
@@ -40,23 +40,27 @@ is convenient for people to read and share.
 
 The only thing the adversary can do is keep generating keys and testing if the ID matches one on the system.
 
-Lets say that 2^70 'fast' operations is too much for the attacker. Then if I make them use a slow hash in each operation, that is around 2^12 'fast' operations. So 2^58 'slow' operations is too much for the attacker.
+Lets say that 2^70 'fast' operations is too much for the attacker. Then if I make them use a slow hash in each operation, and say that is equivalent to around 2^12 'fast' operations. So 2^58 'slow' operations is too much for the attacker.
 
-Say there are a maximum 2^40 different users, then that means the user ID should be 58 + 40 = 98 bits. This will fit in 13 bytes.
+Say there are a maximum 2^40 different users, then that means the user ID should be at least 58 + 40 = 98 bits. This will fit in 13 bytes.
 
-The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 98 bit fingerprint will need 8 words, like:
+The encoding uses a 7776 word list from the EFF, very similar to Diceware. So a 98 bit fingerprint will need at least 8 words, or say 9 for a bit more safety, like:
 
-fried veal frightful untoasted uplifting carnation breezy hazy
+basin glue tree
+unusable chug crushing
+hardwired varsity coma
 
 or
 
-rethink doornail refining handiness lend strainer appealing deputy
+feminist polish fanfare
+front barber resume
+palpable carpool return
 
-Which is pretty long, but it's the best I can do.
+So a user ID is 14 bytes long, since 14 bytes will fit in 9 words.
 
 # Client backend API
 
-The client backend provides a server on port 11833. It provides a websockets server, an HTTP API, and a static file server on /static.
+The client backend provides a server on port 11833. It provides a static file server on /static, a websockets server, and an HTTP API.
 
 ## Websockets API
 
@@ -64,107 +68,79 @@ The websockets API is for sending messages from the client backend to the fronte
 
 Messages can take the following form:
 
-1. Summary of inbox
-	+ 0x01
-	+ summary
-
-2. Bad network connection
-    + 0x02
-
-3. Good network connection
-    + 0x03
-
-4. Send failed
-    + 0x04
-    + 8 bytes: draft ID
-
-5. Progress of sending
-	+ 0x05
-	+ 8 bytes: draft ID
-	+ 4 bytes: number of blobs remaining to send
+	Summary of inbox
+		1 byte: 0
+		summary
+	Bad network connection
+		1 byte: 1
+	Good network connection
+		1 byte: 2
+	Send failed
+		1 byte: 3
+		20 bytes: message hash
+	Progress of sending
+		1 byte: 4
+		20 bytes: message hash
+		4 bytes: number of blobs remaining to send
 
 ## HTTP API
 
-
-/cache
-	/set
-		/:message_id
-			/diff
-				+ 4 bytes: where to insert the text
-				+ 4 bytes: position of the end of the text
-				+ 32 bytes: hash before diff
-				+ 32 bytes: hash after diff
-				+ string: the text to insert
-			/to
-				Request:
-				+ 13 byte user ID
-			/subject
-				Request:
-				+ UTF-8 subject
-			/user_input
-				Request:
-				+ UTF-8 user input
-			/blob
-				Request:
-				+ binary blob
-			/program
-				Request:
-				+ binary blob of Wasm
-			/send
-			/whitelist
-				Request:
-				+ 13 bytes: user ID to add to whitelist
-	/get
-		/:message_id
-			/to
-				Response:
-				+ 13 byte user IDs, one after another
-			/subject
-				Response:
-				+ UTF-8 subject string
-			/user_input
-				Response:
-				+ UTF-8 subject string
-			/blob
-				Request:
-				+ 32-bytes: SHA-256 hash of blob
-				Response:
-				+ the body of the blob
-			/program
-				Response:
-				+ binary blob of program
-	/delete
-		/:message_d
-			/to
-				Request:
-				+ 13 bytes: user ID to remove from message
-			/subject
-			/userinput
-		/blob
-			Request:
-			+ 32 bytes: SHA-256 hash of blob
-		/whitelist
-			Request:
-			+ 13 bytes: user ID to remove from whitelist
-/unique
-    Response:
-    + unique UTF-8 string
-/myid
-	Response:
-	+ 13 bytes: my ID
-/contacts
+/setblob
+	Request
+		binary blob
 	Response
-	+ sequence of 13-byte user IDs
-/summary
-	/drafts
-		Response:
-		+ summaries of all drafts
-	/sends
-		Response:
-		+ summaries of all sent messages
-	/inbox
-		Response:
-		+ summaries of all received messages
+		hash of blob
+/api
+	Set snapshot
+		Request
+			1 byte: 0
+			sized string: previous snapshot
+			string: new snapshot
+	Send message
+		Request
+			1 byte: 1
+			20 bytes: diff hash to send
+			14 bytes: user ID
+	Add to whitelist
+		Request
+			1 byte: 2
+			14 bytes: user ID
+	Get blob
+		Request
+			1 byte: 3
+		Response
+			blob
+	Get snapshot
+		Request
+			1 byte: 4
+			20 bytes: hash of snapshot
+		Response
+			snapshot
+	Get whitelist
+		Request
+			1 byte: 5
+		Response
+			sequence of 14-byte user IDs
+	Get my ID
+		Request
+			1 byte: 6
+		Response
+			14 bytes: my ID
+	Get drafts summary
+		Request
+			1 byte: 7
+		Response
+			summaries of all drafts
+	Get sent summary
+		Request
+			1 byte: 8
+		Response
+			summaries of all sent messages
+	Get inbox summary
+		Request
+			1 byte: 9
+		Response
+			summaries of received messages
 
 # Server API
 
@@ -183,184 +159,199 @@ The server checks that the first part is indeed something that it recently gave 
 
 It will accept incoming TCP connections. The client's first message should be like this:
 
-+ 13 bytes: my ID
-+ signed
-    + 16 bytes: 6b 87 4c de cc f0 28 b3 7c 4e de ee 15 ca 92 93
-    + 16 bytes: auth code
+	14 bytes: my ID
+	signed
+	    16 bytes: 6b 87 4c de cc f0 28 b3 7c 4e de ee 15 ca 92 93
+	    16 bytes: auth code
 
-Then the client should just listen on the connection. The server will post any messages that it receives or has received from other users down this connection.
+Then the client should just listen on the connection. Messages from the server can take these forms:
+
+	Request for more encryption keys
+		1 byte: 0
+	New message from another user
+		1 byte: 1
+		104 bytes: message
 
 ## HTTP API
 
 /api
-
-1. Publish keys
-
-    Request:
-	+ 0x01
-    + 24 bytes: proof of work
-    + 32 bytes: public signing key
-    + 32 bytes: public encryption key
-
-2. Get keys
-
-    Request:
-	+ 0x02
-    + 13 bytes: the ID to look up
-
-    Response:
-	+ 1 byte: 0x00 if the keys don't exist, 0x01 if they do
-    + 32 bytes: their public signing key
-    + 32 bytes: their public encryption key
-
-
-3. Get proof of work info
-
-	Request:
-	+ 0x03
-
-    Response:
-    + 1 byte: difficulty
-    + 16 bytes: random
-
-4. Get auth code
-
-	Request:
-	+ 0x04
-
-    Response:
-    + 16 bytes: random
-
-5. Upload blob
-
-    Request (max 16KB):
-	+ 0x05
-    + 13 bytes: my ID
-    + signed
-        + 16 bytes: 0a cb 78 89 67 cf 64 19 2a dd 32 63 61 2d 10 18
-        + 16 bytes: auth code
-        + blob
-
-	The server checks the signature, charges the account for the cost of the storage, and stores the nonce and the message under their hash.
-
-6. Send message
-
-	Request:
-	+ 0x06
-	+ 24 bytes: proof of work
-	+ 24 bytes: nonce
-	+ encrypted with recipient public key:
-		+ 32 bytes: sha256 hash of encrypted blob on server
-		+ 32 bytes: symmetric key of encrypted blob on server
-
-	The recipient attempts to decrypt the message for each of its contacts, and accepts it if one of them succeeds.
-
-7. Delete message
-
-    Request:
-	+ 0x07
-    + 13 bytes: my ID
-    + signed
-        + 16 bytes: d3 ad fa b3 b4 67 41 bb 51 19 de d5 56 e5 9c 8e
-        + 16 bytes: auth code
-        + 32 bytes: SHA256 hash of the message to delete
-
-8. Download blob
-	
-	Request:
-	+ 0x08
-	+ 32 bytes: sha256 hash of blob to download
-
-	Response:
-	+ 1 byte: 0x00 if there is no such blob, 0x01 if there is
-	+ the blob if it exists
-
-9. Get price
-
-	Request:
-	+ 0x09
-
-	Response:
-	+ 4 bytes: unsigned Little-Endian int: price in GBP^-4
-
-
+	Create account
+	    Request
+			1 byte: 0
+			24 bytes: proof of work
+	    	32 bytes: public signing key
+	Upload public encryption key
+		Request
+			1 byte: 1
+			14 bytes: my ID
+			32 + 96 bytes: signed public encryption key
+		Response
+			1 byte: 0 if server has enough keys; 1 if OK
+	Get signing key for ID
+		Request
+			1 byte: 2
+			14 bytes: user ID
+		Response
+			either
+				1 byte: 0 (the key doesn't exist)
+			or
+				1 byte: 1 (the key exists)
+				32 bytes: the key
+	Get disposable encryption key for ID
+		Request
+			1 byte: 3
+			14 bytes: user ID
+			24 bytes: proof of work
+		Response
+			either
+				1 byte: 0 (no keys available)
+			or
+				1 byte: 1 (key is available)
+				32 bytes: public encryption key
+	Get proof of work info
+		Request
+			1 byte: 4
+		Response
+			1 byte: difficulty
+			16 bytes: random
+	Get auth code
+		Request:
+			1 byte: 5
+		Response:
+			16 bytes: random
+	Upload blob
+		Request
+			1 byte: 6
+			14 bytes: my ID
+			signed
+				16 bytes: 0a cb 78 89 67 cf 64 19 2a dd 32 63 61 2d 10 18
+				16 bytes: auth code
+				blob
+	Send message
+		Request
+			1 byte: 7
+			24 bytes: proof of work
+			14 bytes: recipient ID
+			104 bytes:
+				24 bytes: nonce
+				16 bytes: NACL box overhead
+				encrypted box containing
+					32 bytes: hash of encrypted blob on server
+					32 bytes: symmetric key of encrypted blob on server
+	Delete message
+		Request
+			1 byte: 8
+			14 bytes: my ID
+			signed
+				16 bytes: d3 ad fa b3 b4 67 41 bb 51 19 de d5 56 e5 9c 8e
+				16 bytes: auth code
+				32 bytes: hash of the message to delete
+	Download blob
+		Request
+			1 byte: 9
+			32 bytes: hash of blob to download
+		Response
+			either
+				1 byte: 0 (the blob doesn't exist)
+			or
+				1 byte: 1 (the blob exists)
+				blob
+	Get price
+		Request
+			1 byte: 10
+		Response
+			4 bytes: unsigned Little-Endian int: price in GBP^-4
+			
 # Client to client API
 
 To send a message:
 
 1. encode it and its blobs and pipe small chunks (~16KB) to a channel
-	+ each chunk is prefixed with the hash of the previous chunk
+	+ each chunk is prefixed with the hash of the next chunk
 2. for each chunk in the channel:
 	a. symmetrically encrypt
 	b. send to server
-3. encode the hash and key of the first chunk of (3)
+3. encode the hash and key of the first chunk
 4. encrypt it with their public key and send it to them
 
 Inside the encryption and chunking, the API is as follows:
 
-1. Regular inbox message
-
-    + 0x01
-    + the encoded message
-
-2. Acknowledgement
-
-	+ 0x02
-    + signed
-        + 16 bytes: 77 0a 8b e7 5a 1a 9e 31 c5 97 5b 61 ec 47 16 ef
-        + 8 bytes: Unix time received
-        + 32 bytes: SHA-256 hash of message received
+	Regular inbox message
+	    1 byte: 0
+	    104 bytes: encoded message
+	Acknowledgement
+		1 byte: 1
+	    signed
+	        16 bytes: 77 0a 8b e7 5a 1a 9e 31 c5 97 5b 61 ec 47 16 ef
+	        8 bytes: Unix time received
+	        32 bytes: hash of message received
 
 # Client cache
 
 blobs/
-	A flat folder full of blobs, named by their sha256 hash.
-messages/
-	A flat directory of sqlite databases, one per message, each with an integer name. Each has one table, called 'diffs':
-		+ insertion (text)
-		+ start (integer)
-		+ end (integer)
-		+ hash (blob)
-		+ last_hash (blob)
+	A flat folder full of blobs, named by hash.
 database
-	+ sent
-		- message
-		- hash
-		- time
-	+ received
-		- message
-		- user
-		- hash
-		- time
-	+ whitelist
-		- user
-	+ public_keys
-		- user
-		- sign
-		- encrypt
-	+ acknowledgements
-		- message
-		- from
-		- time
-		- hash
-		- signature
+	diffs
+		start
+		stop
+		insert
+		hash
+		previous_hash
+		author
+	sent
+		hash
+		time
+		user
+	received
+		user
+		hash
+		time
+	whitelist
+		user
+	public_keys
+		user
+		sign
+	acknowledgements
+		from
+		time
+		hash
+		signature
+	encryption_keys
+		public
+		secret
 myKeys
-	A binary file containing my crypto keys.
-iota
-	An 8-byte file containing an 64-bit uint, which is used to generate unique IDs.
+	A binary file containing my public and private signing keys.
+
+# Server cache
+
+blobs/
+	A flat directory containing files named by their hash.
+proofOfWorkDifficulty
+	A file containing the proof of work difficulty.
+price
+	A file containing the price.
+database
+	uploads
+		user_id
+		signed confirmation from user:
+			4 bytes: price
+			8 bytes: Unix timestamp
+			16 bytes: de 76 b4 ba 27 13 5d 9a e0 6e ca b7 5e 20 48 e4
+			32 bytes: hash of uploaded blob
+	payments (obtained from payments provider API)
+		user_id
+		signed payment confirmation from provider
+	users
+		user_id
+		public_signing_key
+	encryption_keys
+		user_id
+		key
 
 # Pricing
 
-There is a small, fixed charge for each blob upload.
+There is a small fixed charge for each blob upload.
 
-The server keeps two tables in its accounting database:
+Blobs last for a few weeks and are then deleted automatically.
 
-1. Blob uploads
-	+ user ID
-	+ signed confirmation from user, including the price at the time
-	+ timestamp
-2. Payments (obtained from payments provider API)
-	+ userId
-	+ signed payment confirmation from provider
-
-When someone uploads a new blob, the server queries these tables to calculate the user's balance. If the balance is high enough, the blob is accepted and recorded.
+In its database, the server records blob uploads for each user, and payments by each user.  When someone uploads a new blob, the server queries these tables to calculate the user's balance. If the balance is high enough, the blob is accepted.
