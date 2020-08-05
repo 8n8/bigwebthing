@@ -293,7 +293,7 @@ blobs/
 database
 	diffs
 		start
-		stop
+		end
 		insert
 		hash
 		previous_hash
@@ -301,14 +301,14 @@ database
 	sent
 		hash
 		time
-		user
+		to
 	received
-		user
+		from
 		hash
 		time
 	whitelist
 		user
-	public_keys
+	public_sign_keys
 		user
 		sign
 	acknowledgements
@@ -316,11 +316,13 @@ database
 		time
 		hash
 		signature
-	encryption_keys
+	my_encryption_keys
 		public
 		secret
 myKeys
 	A binary file containing my public and private signing keys.
+log
+	A log of errors, for debugging.
 
 # Server cache
 
