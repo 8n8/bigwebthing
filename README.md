@@ -282,7 +282,7 @@ A messages is made up of a chain of diffs, and some blobs. It is encoded as foll
 	+ sequence of diffs
 	+ sequence of blobs, where a blob is some length-encoded bytes
 
-To send a message:
+Then the 
 
 1. encode it and its blobs and pipe small chunks (~16KB) to a channel
 	+ each chunk is prefixed with the hash of the next chunk
@@ -343,11 +343,10 @@ database
 		from
 		hash
 		time
-	whitelist
-		user
-	public_sign_keys
+	public_keys
 		user
 		sign
+		encrypt
 	acknowledgements
 		from
 		time

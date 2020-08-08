@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/nacl/sign"
 	"io"
 	"io/ioutil"
@@ -47,18 +48,25 @@ var upgrader = websocket.Upgrader{
 
 
 type MyKeys struct {
-	public [32]byte
-	secret [64]byte
+	sign struct{
+		public *[32]byte
+		secret *[64]byte
+		}
+	encrypt struct{
+		public *[32]byte
+		secret *[32]byte
+		}
 }
 
 var STOP = make(chan error)
 var INPUT = make(chan Input)
 var TOWEBSOCKET = make(chan []byte)
-var AUTHCODE = make(chan []byte, 1)
+var AUTHCODE = make(chan [constants.AuthCodeLength]byte, 1)
 var MYKEYS = getCryptoKeys()
 var PATHS = makePaths()
 var CACHELOCK sync.Mutex
 var POWINFO = make(chan PowInfo, 1)
+var PROOFOFWORK = make(chan [24]byte, 1)
 var CONTACTS = make(chan map[string]struct{}, 1)
 var LOG = make(chan string)
 var UNIQUEID chan string
@@ -78,7 +86,7 @@ func makePaths() Paths {
 			base64.URLEncoding.EncodeToString(hash)
 	}
 
-	tmp := func(hash [32]byte) string {
+	tmp := func(hash []byte) string {
 		return root + "tmp" + os.PathSeparator +
 			base64.URLEncoding.EncodeToString(hash)
 	}
@@ -89,6 +97,7 @@ func makePaths() Paths {
 		blob: blob,
 		log: root + "log",
 		tmp: tmp,
+		myId: root + "myId",
 	}
 }
 
@@ -107,7 +116,7 @@ func chunkToTempFiles(encoded io.Reader) [][32]byte {
 			panic(fmt.Sprintf("failed writing temporary file: ", err))
 		}
 		tmpHashes = append([][32]byte{hash}, tmpHashes...)
-		if err == EOF || n < chunkSize {
+		if err == io.EOF || n < chunkSize {
 			return tmpHashes
 		}
 	}
@@ -118,6 +127,8 @@ type Paths struct {
 	database string
 	blob func([hashLen]byte) string
 	log string
+	tmp func([32]byte) string
+	myId string
 }
 
 type bytesliceSet interface {
@@ -127,20 +138,17 @@ type bytesliceSet interface {
 }
 
 func makeTcpAuth(
-	myId, authCode []byte, secretSign *[64]byte) []byte {
+	myId [constants.IdLength]byte,
+	authCode [constants.AuthCodeLength]byte,
+	secretSign *[64]byte) []byte {
 
 	auth := make([]byte, 13+sign.Overhead+16+16)
-	copy(auth, myId)
+	copy(auth, myId[:])
 	toSign := make([]byte, 32)
 	copy(toSign, constants.TcpAuth)
-	copy(toSign[32:], authCode)
+	copy(toSign[32:], authCode[:])
 	copy(auth[13:], sign.Sign([]byte{}, toSign, secretSign))
 	return auth
-}
-
-func cachePath(filename string) string {
-	file, err := os.Op
-	return filepath.Join(frontendDir, filename)
 }
 
 var frontendDir = filepath.Join(homeDir, "frontend")
@@ -157,12 +165,14 @@ func readKeysFromFile() (MyKeys, error) {
 func parseKeys(raw []byte) (MyKeys, error) {
 	var keys MyKeys
 
-	if len(raw) != 32+64 {
+	if len(raw) != 32+64+32+32 {
 		return keys, errors.New("keys file is the wrong length")
 	}
 
-	copy(keys.public[:], raw)
-	copy(keys.secret[:], raw[32:])
+	copy(keys.sign.public[:], raw)
+	copy(keys.sign.secret[:], raw[32:])
+	copy(keys.encrypt.public[:], raw[32+64:])
+	copy(keys.encrypt.secret[:], raw[32+64+32:])
 
 	return keys, nil
 }
@@ -183,7 +193,7 @@ func makeNewKeys() (MyKeys, error) {
 	}
 
 	err = ioutil.WriteFile(
-		cachePath(PATHS.myKeys),
+		PATHS.myKeys,
 		encodeKeys(keys),
 		0500)
 
@@ -191,9 +201,12 @@ func makeNewKeys() (MyKeys, error) {
 }
 
 func encodeKeys(keys MyKeys) []byte {
-	encoded := make([]byte, 32 + 64)
-	copy(encoded, keys.public[:])
-	copy(encoded[32:], keys.secret[:])
+	encoded := make([]byte, 32 + 64 + 32 + 32)
+	copy(encoded, keys.sign.public[:])
+	copy(encoded[32:], keys.sign.secret[:])
+	copy(encoded[32+64:], keys.encrypt.public[:])
+	copy(encoded[32+64+32:], keys.encrypt.secret[:])
+
 	return encoded
 }
 
@@ -434,7 +447,7 @@ func getDiffsFromDb(messageId int) []DiffFromDb {
 	defer database.Close()
 	rows, err := database.Query("SELECT hash, previous_hash, start, end, insert, i_wrote_it, time FROM diffs WHERE message_id = ?;", messageId)
 	if err != nil {
-		panic("couldn't read diffs from database")
+		panic("couldn't read diffs from database: " + err.Error())
 	}
 
 	diffs := make([]DiffFromDb, 0)
@@ -497,13 +510,13 @@ func hashDiff(hash, previousHash [hashLen]byte) string {
 func signDiff(
 	hash [hashLen]byte,
 	previousHash [hashLen]byte,
-	secretKey [64]byte) [32 + sign.Overhead]byte {
+	secretKey *[64]byte) [32 + sign.Overhead]byte {
 
 	catHash := make([]byte, 2 * hashLen)
 	copy(catHash, hash[:])
 	copy(catHash[hashLen:], previousHash[:])
 	toSign := makeHash(catHash)
-	signed := sign.Sign([]byte{}, toSign[:], &secretKey)
+	signed := sign.Sign([]byte{}, toSign[:], secretKey)
 	var signArr [32 + sign.Overhead]byte
 	copy(signArr[:], signed)
 	return signArr
@@ -527,7 +540,7 @@ func parseDiff(
 	d DiffFromDb,
 	diffSignatures []DiffSigDb,
 	myId [constants.IdLength]byte,
-	secretKey [64]byte) (Diff, error) {
+	secretKey *[64]byte) (Diff, error) {
 
 	var author [constants.IdLength]byte
 	var signature [32 + sign.Overhead]byte
@@ -558,11 +571,11 @@ func parseDiff(
 	}, nil
 }
 
-func parseDiffs(
+func parseDiffsFromDb(
 	rawDiffs []DiffFromDb,
 	diffSignatures []DiffSigDb,
 	myId [constants.IdLength]byte,
-	secretKey [64]byte) (map[string]Diff, error) {
+	secretKey *[64]byte) (map[string]Diff, error) {
 
 	diffs := make(map[string]Diff)
 	for _, rawDiff := range rawDiffs {
@@ -737,9 +750,17 @@ func encodeDiff(diff Diff) []byte {
 		encodeUint32(diff.start),
 		encodeUint32(diff.end),
 		encodeUint32(len(diff.insert)),
-		diff.insert,
+		encodeBytes(diff.insert),
 		encodeUint64(diff.time),
 		diff.signature[:])
+}
+
+func encodeBytes(bytes []byte) []byte {
+	numBytes := len(bytes)
+	result := make([]byte, 4 + numBytes)
+	copy(result, encodeUint32(numBytes))
+	copy(result[4:], bytes)
+	return result
 }
 
 func encodeDiffs(diffs []Diff) []byte {
@@ -755,7 +776,7 @@ func (s SendMessage) output() {
 	rawDiffs := getDiffsFromDb(s.messageId)
 	diffSignatures := getDiffSignaturesFromDb(s.messageId)
 
-	fullDiffs, err := parseDiffs(rawDiffs, diffSignatures, MYID, MYKEYS.secret)
+	fullDiffs, err := parseDiffsFromDb(rawDiffs, diffSignatures, MYID, MYKEYS.sign.secret)
 	if err != nil {
 		panic("could not parse diffs from database: " + err.Error())
 	}
@@ -771,7 +792,7 @@ func (s SendMessage) output() {
 	}
 
 	encodedDiffs := encodeDiffs(prunedDiffs)
-	encodeAndSend(encodedDiffs, blobs)
+	encodeAndSend(encodedDiffs, blobs, s)
 }
 
 const blobOverhead = (
@@ -784,33 +805,7 @@ const blobOverhead = (
 	secretbox.Overhead -
 	32) // for the hash of the next blob in the chain
 
-func readChunk(r io.Reader) ([]byte, bool) {
-	const chunkSize = constants.MaxChunk - blobOverhead
-	chunk := make([]byte, chunkSize)
-	n, err := r.Read(chunk)
-	if err != nil && err != EOF {
-		panic(fmt.Sprintf("failed reading multireader: ", err))
-	}
-	chunks <- chunkSize
-	return chunk, n != chunkSize
-}
-
-func streamToChan(r io.Reader, ch chan []byte) {
-	for {
-		const chunkSize = constants.MaxChunk - blobOverhead
-		chunk := make([]byte, chunkSize)
-		n, err := r.Read(chunk)
-		if err != nil && err != EOF {
-			panic(fmt.Sprintf("failed reading multireader: ", err))
-		}
-		ch <- chunk
-		if n != chunkSize {
-			return
-		}
-	}
-}
-
-func encodeAndSend(diffs []byte, blobs [][hashLen]byte) {
+func encodeAndSend(diffs []byte, blobs [][hashLen]byte, s SendMessage) {
 	readers := []io.Reader{bytes.NewBuffer(diffs)}
 	totalSize := int64(len(diffs))
 
@@ -824,7 +819,7 @@ func encodeAndSend(diffs []byte, blobs [][hashLen]byte) {
 		if err != nil {
 			panic(fmt.Sprintf("cannot Stat file for blob %v", blob))
 		}
-		size := encodeInt32(fileInfo.Size())
+		size := encodeUint32(int(fileInfo.Size()))
 		readers = append(readers, bytes.NewBuffer(size))
 		totalSize += fileInfo.Size()
 
@@ -837,10 +832,11 @@ func encodeAndSend(diffs []byte, blobs [][hashLen]byte) {
 
 	var lastHash [32]byte
 	var secretKey [32]byte
-	_, err := io.ReadFull(rand.Reader, secretKey)
+	_, err := io.ReadFull(rand.Reader, secretKey[:])
 	if err != nil {
 		panic(err)
 	}
+	bytesSent := 0
 	for _, chunkHash := range reversed {
 		chunk, err := ioutil.ReadFile(PATHS.tmp(chunkHash))
 		if err != nil {
@@ -848,7 +844,7 @@ func encodeAndSend(diffs []byte, blobs [][hashLen]byte) {
 		}
 		withHash := append(lastHash[:], chunk...)
 		var nonce [24]byte
-		_, err = io.ReadFull(rand.Reader, nonce)
+		_, err = io.ReadFull(rand.Reader, nonce[:])
 		if err != nil {
 			panic(err)
 		}
@@ -856,36 +852,102 @@ func encodeAndSend(diffs []byte, blobs [][hashLen]byte) {
 		encrypted := secretbox.Seal(nonce[:], withHash, &nonce, &secretKey)
 		lastHash = blake2b.Sum256(encrypted)
 
-		toSign := combine(constants.UploadBlob, <-AUTHCODE, encrypted)
-		preamble := combine([]byte{6}, <-MYID)
-		signed := sign.Sign(preamble, toSign, MYKEYS.secret)
+		authCode := <-AUTHCODE
+		toSign := combine(constants.UploadBlob, authCode[:], encrypted)
+		preamble := combine([]byte{6}, MYID[:])
+		signed := sign.Sign(preamble, toSign, MYKEYS.sign.secret)
 		_, err = http.Post(
 			serverApiUrl,
-			"application/octet-stream"
+			"application/octet-stream",
 			bytes.NewBuffer(signed))
 		if err != nil {
 			LOG <- "Blob upload failed: " + err.Error()
 			TOWEBSOCKET <- []byte{1}
 			return
 		}
+
+		TOWEBSOCKET <- combine(
+			[]byte{4},
+			s.hash[:],
+			s.previousHash[:],
+			encodeUint32(int(totalSize)),
+			encodeUint32(bytesSent))
 	}
 
-	for {
-		first := <-chunks
-		second := <-chunks
+	sendPointer(lastHash, secretKey, s.to)
+}
 
-		chunk, finished := makeChunk(encoded)
-		uploadChunk(chunk)
-		bytesSent += len(chunk)
-		sendStatus(makeStatus(bytesSent, totalSize))
-		if finished {
-			break
-		}
+func sendPointer(
+	hash,
+	secretKey [32]byte,
+	to [constants.IdLength]byte) {
+
+	encryptionKey, err := getEncryptionKey(to)
+	if err != nil {
+		LOG <- fmt.Sprintf("Could not get encryption key for %v: %v", to, err)
+		TOWEBSOCKET <- []byte{1}
+		return
+	}
+
+	var nonce [24]byte
+	_, err = io.ReadFull(rand.Reader, nonce[:])
+	if err != nil {
+		panic(err)
+	}
+
+	message := append(hash[:], secretKey[:]...)
+
+	pow := <-PROOFOFWORK
+	preamble := combine([]byte{7}, pow[:], to[:], nonce[:])
+
+	encrypted := box.Seal(preamble, message, &nonce, &encryptionKey, MYKEYS.encrypt.secret)
+
+	_, err = http.Post(
+		serverApiUrl,
+		"application/octet-stream",
+		bytes.NewBuffer(encrypted))
+
+	if err != nil {
+		LOG <- fmt.Sprintf("Failed sending pointer message: %v", err)
+		TOWEBSOCKET <- []byte{1}
 	}
 }
 
-func makeChunk(stream io.Reader) []byte {
-	
+func getEncryptionKey(to [constants.IdLength]byte) ([32]byte, error) {
+	response, err := http.Post(
+		serverApiUrl,
+		"application/octet-stream",
+		bytes.NewBuffer(append([]byte{3}, to[:]...)))
+	if err != nil {
+		return *new([32]byte), err
+	}
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return *new([32]byte), err
+	}
+
+	return parseNewEncryptionKey(body)
+}
+
+func parseNewEncryptionKey(raw []byte) ([32]byte, error) {
+	lenRaw := len(raw)
+	if lenRaw == 0 {
+		return *new([32]byte), errors.New("empty body")
+	}
+
+	switch raw[0] {
+	case 0:
+		return *new([32]byte), errors.New("no key available")
+	case 1:
+		if lenRaw != 33 {
+			return *new([32]byte), fmt.Errorf("body should be 33 bytes long, but it is %d", lenRaw)
+		}
+		var key [32]byte
+		copy(key[:], raw[1:])
+		return key, nil
+	}
+	return *new([32]byte), fmt.Errorf("bad indicator byte: expecting 0 or 1, but got %d", raw[0])
 }
 
 func parseUiRequest(body []byte) (UiRequest, error) {
@@ -898,24 +960,24 @@ func parseUiRequest(body []byte) (UiRequest, error) {
 		return parseSetSnapshot(body[1:])
 	case 1:
 		return parseSendMessage(body[1:])
-	case 2:
-		return parseAddToWhitelist(body[1:])
-	case 3:
-		return parseRemoveFromWhitelist(body[1:])
-	case 4:
-		return parseGetBlob(body[1:])
-	case 5:
-		return parseGetSnapshot(body[1:])
-	case 6:
-		return parseGetWhitelist(body[1:])
-	case 7:
-		return parseGetMyId(body[1:])
-	case 8:
-		return parseGetDraftsSummary(body[1:])
-	case 9:
-		return parseGetSentSummary(body[1:])
-	case 10:
-		return parseGetInboxSummary(body[1:])
+	// case 2:
+	// 	return parseAddToWhitelist(body[1:])
+	// case 3:
+	// 	return parseRemoveFromWhitelist(body[1:])
+	// case 4:
+	// 	return parseGetBlob(body[1:])
+	// case 5:
+	// 	return parseGetSnapshot(body[1:])
+	// case 6:
+	// 	return parseGetWhitelist(body[1:])
+	// case 7:
+	// 	return parseGetMyId(body[1:])
+	// case 8:
+	// 	return parseGetDraftsSummary(body[1:])
+	// case 9:
+	// 	return parseGetSentSummary(body[1:])
+	// case 10:
+	// 	return parseGetInboxSummary(body[1:])
 	}
 
 	return *new(UiRequest), errors.New(
@@ -957,14 +1019,15 @@ func sendNewEncryptionKey() {
 
 	preamble := make([]byte, 1 + constants.IdLength)
 	preamble[0] = 1
-	copy(preamble[1:], <-MYID)
+	copy(preamble[1:], MYID[:])
 
 	toSign := make([]byte, 32 + constants.MeaningLength + constants.AuthCodeLength)
 	copy(toSign, public[:])
 	copy(toSign[32:], constants.MyEncryptionKey)
-	copy(toSign[32+constants.MeaningLength:], <-AUTHCODE)
+	authCode := <-AUTHCODE
+	copy(toSign[32+constants.MeaningLength:], authCode[:])
 
-	signed := sign.Sign(preamble, toSign, MYKEYS.secret)
+	signed := sign.Sign(preamble, toSign, MYKEYS.sign.secret)
 
 	_, err = http.Post(
 		serverApiUrl,
@@ -994,7 +1057,7 @@ const networkSleep = 30 * time.Second
 
 func tcpListenTillFail(conn net.Conn) {
 	auth := makeTcpAuth(
-		<-MYID, <-AUTHCODE, MYKEYS.secret)
+		MYID, <-AUTHCODE, MYKEYS.sign.secret)
 	n, err := conn.Write(auth)
 	if n != len(auth) {
 		return
@@ -1026,11 +1089,57 @@ func tcpListenTillFail(conn net.Conn) {
 				return
 			}
 
-			INPUT <- MsgFromServer(msg)
+			INPUT <- MsgFromServer{
+				myCryptoKeys: getMyCryptoKeysFromDb(),
+				msg: msg,
+				contacts: getContactsFromDb(),
+				}
 		default:
 			panic("received bad message from the server: " + string(indicator[0]))
 		}
 	}
+}
+
+func getMyCryptoKeysFromDb() []*[32]byte {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("could not open database: " + err.Error())
+	}
+	defer database.Close()
+
+	rows, err := database.Query("SELECT secret FROM my_encryption_keys;")
+	if err != nil {
+		panic("couldn't read crypto keys from database: " + err.Error())
+	}
+
+	keys := make([]*[32]byte, 0)
+	for rows.Next() {
+		var k [32]byte
+		rows.Scan(&k)
+		keys = append(keys, &k)
+	}
+	return keys
+}
+
+func getContactsFromDb() []Contact {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("could not open database: " + err.Error())
+	}
+	defer database.Close()
+
+	rows, err := database.Query("SELECT user, sign, encrypt FROM public_keys;")
+	if err != nil {
+		panic("couldn't read public_keys from database: " + err.Error())
+	}
+
+	contacts := make([]Contact, 0)
+	for rows.Next() {
+		var c Contact
+		rows.Scan(&c.id, &c.sign, &c.encrypt)
+		contacts = append(contacts, c)
+	}
+	return contacts
 }
 
 // The server strips off the indicator byte and the proof of work
@@ -1078,9 +1187,20 @@ func (Start) output() {
 	OUTPUT <- SetupDatabase{}
 	OUTPUT <- StartTcpListener{}
 	OUTPUT <- StartUiServer{}
-	OUTPUT <- GetUserId{}
 	OUTPUT <- StartLogger{}
+	OUTPUT <- GetPowInfo{}
+	OUTPUT <- MakeProofOfWork{}
 }
+
+type MakeProofOfWork struct{}
+
+func (MakeProofOfWork) output() {
+	for {
+		PROOFOFWORK <- makePow(<-POWINFO)
+	}
+}
+
+type SetupDatabase struct {}
 
 var makeTables = []string{
 `CREATE TABLE IF NOT EXISTS diffs (
@@ -1124,7 +1244,7 @@ var makeTables = []string{
 );`,
 	}
 
-func setUpDatabase() {
+func (SetupDatabase) output() {
 	database, err := sql.Open("sqlite3", PATHS.database)
 	if err != nil {
 		panic("could not open database: " + err.Error())
@@ -1206,8 +1326,8 @@ func (GetAuthCode) output() {
 			continue
 		}
 
-		authCode := make([]byte, constants.AuthCodeLength)
-		n, err := resp.Body.Read(authCode)
+		var authCode [constants.AuthCodeLength]byte
+		n, err := resp.Body.Read(authCode[:])
 		if n != constants.AuthCodeLength {
 			bad()
 			continue
@@ -1224,28 +1344,29 @@ type StartTcpListener struct{}
 
 type StartUiServer struct{}
 
-type GetUserId struct{}
-
 const myIdPath = "myId"
 
 func getMyId() [constants.IdLength]byte {
-	myId, err := ioutil.ReadFile(PATHS.myId)
+	myIdBytes, err := ioutil.ReadFile(PATHS.myId)
+	var myId [constants.IdLength]byte
+	copy(myId[:], myIdBytes)
 	if err == nil {
 		return myId
 	}
 
-	myId = argon2.IDKey(
+	newIdBytes := argon2.IDKey(
 		append(MYKEYS.sign.public[:], MYKEYS.encrypt.public[:]...),
 		[]byte{},
 		60,
 		256*1024,
 		4,
 		constants.IdLength)
-	err = ioutil.WriteFile(PATHS.myId, myId, 0500)
+	err = ioutil.WriteFile(PATHS.myId, newIdBytes, 0500)
 	if err != nil {
 		panic("could not write my new ID to file: " + err.Error())
 	}
 
+	copy(myId[:], newIdBytes)
 	return myId
 }
 
@@ -1270,6 +1391,15 @@ func intPower(base, power int) int {
 	return result
 }
 
+func int64Power(base, power int64) int64 {
+	var result int64 = 1
+	for i := int64(0); i < power; i++ {
+		result = result * base
+	}
+
+	return result
+}
+
 func decodeInt(bs []byte) int {
 	// Most significant byte should be the last one (Little-Endian).
 	result := 0
@@ -1279,25 +1409,22 @@ func decodeInt(bs []byte) int {
 	return result
 }
 
+func decodeInt64(bs [8]byte) int64 {
+	var result int64 = 0
+	for i, b := range bs {
+		result += int64(b) * int64Power(256, int64(i))
+	}
+	return result
+}
+
 type MsgFromServer struct {
-	secretEncrypt [32]byte
-	contacts Contacts
+	myCryptoKeys []*[32]byte
+	contacts []Contact
 	msg []byte
 }
 
-type Contacts interface {
-	add(Contact)
-	remove([]byte)
-	toList() []Contact
-	lookup([]byte) Contact
-}
-
 type Contact struct {
-	keys PublicKeys
 	id []byte
-}
-
-type PublicKeys struct {
 	sign [32]byte
 	encrypt [32]byte
 }
@@ -1306,24 +1433,26 @@ func (m MsgFromServer) update() Output {
 	var nonce [24]byte
 	copy(nonce[:], m.msg[:24])
 	encrypted := m.msg[24:]
-	for _, contact := range m.contacts.toList() {
-		decrypted, ok := box.Open(
-			[]byte{},
-			encrypted,
-			&nonce,
-			&contact.keys.encrypt,
-			&m.secretEncrypt)
-		if ok {
-			var tempKey [32]byte
-			copy(tempKey[:], decrypted[32:])
-			return LookupBlob{
-				hash: decrypted[:32],
-				tempKey: tempKey,
-				contact: contact,
+	for _, contact := range m.contacts {
+		for _, secretKey := range m.myCryptoKeys {
+			decrypted, ok := box.Open(
+				[]byte{},
+				encrypted,
+				&nonce,
+				&contact.encrypt,
+				secretKey)
+			if ok {
+				var tempKey [32]byte
+				copy(tempKey[:], decrypted[32:])
+				return LookupBlob{
+					hash: decrypted[:32],
+					tempKey: tempKey,
+					contact: contact,
+				}
 			}
 		}
 	}
-	return DoNothing{}
+	return Log("received a bad message")
 }
 
 type LookupBlob struct {
@@ -1334,39 +1463,256 @@ type LookupBlob struct {
 
 const serverApiUrl = serverHttpUrl + "/api"
 
+func parseDiffFromServer(r io.Reader) (Diff, error) {
+	var diff Diff
+	_, err := io.ReadFull(r, diff.hash[:])
+	if err != nil {
+		return diff, fmt.Errorf("failed reading diff hash: %v", err)
+	}
+
+	_, err = io.ReadFull(r, diff.previousHash[:])
+	if err != nil {
+		return diff, fmt.Errorf("failed reading diff previous hash: %v", err)
+	}
+
+	diff.start, err = parseUint32Reader(r)
+	if err != nil {
+		return diff, fmt.Errorf("failed reading diff start: %v", err)
+	}
+
+	diff.end, err = parseUint32Reader(r)
+	if err != nil {
+		return diff, fmt.Errorf("failed reading diff end: %v", err)
+	}
+
+	insertLength, err := parseUint32Reader(r)
+	if err != nil {
+		return diff, fmt.Errorf("failed reading insert length: %v", err)
+	}
+
+	insert := make([]byte, insertLength)
+	_, err = io.ReadFull(r, insert)
+	if err != nil {
+		return diff, fmt.Errorf("failed reading insert: %v", err)
+	}
+	diff.insert = insert
+
+	var rawTime [8]byte
+	_, err = io.ReadFull(r, rawTime[:])
+	if err != nil {
+		return diff, fmt.Errorf("failed reading raw time: %v", err)
+	}
+	diff.time = decodeInt64(rawTime)
+
+	_, err = io.ReadFull(r, diff.author[:])
+	if err != nil {
+		return diff, fmt.Errorf("failed reading diff author: %v", err)
+	}
+
+	_, err = io.ReadFull(r, diff.signature[:])
+	if err != nil {
+		return diff, fmt.Errorf("failed reading diff signature: %v", err)
+	}
+
+	return diff, nil
+}
+
+func parseUint32Reader(r io.Reader) (int, error) {
+	raw := make([]byte, 4)
+	_, err := io.ReadFull(r, raw)
+	return decodeInt(raw), err
+}
+
+func parseDiffsFromServer(r io.Reader) ([]Diff, error) {
+	rawLength := make([]byte, 4)
+	_, err := io.ReadFull(r, rawLength)
+	if err != nil {
+		return *new([]Diff), fmt.Errorf("couldnt't read number of diffs: %v", err)
+	}
+
+	numDiffs := decodeInt(rawLength)
+
+	diffs := make([]Diff, numDiffs)
+	for i := 0; i < numDiffs; i++ {
+		diff, err := parseDiffFromServer(r)
+		if err != nil {
+			return diffs, fmt.Errorf("failed parsing diff %d out of %d: %v", i + 1, numDiffs, err)
+		}
+		diffs[i] = diff
+	}
+	return diffs, nil
+}
+
 func (g LookupBlob) output() {
-	inCh := make(chan RawChunk, 1)
-	INPUT <-RawChunkStream(inCh)
+	const mediumSizedNumberNothingSpecial = 1000
+	ch := make(chan ByteStream, mediumSizedNumberNothingSpecial)
+	go getChunkStream(ch, g)
+	reader := Reader{
+		ch: ch,
+		finished: false,
+	}
+
+	diffs, err := parseDiffsFromServer(reader)
+	if err != nil {
+		LOG <- fmt.Sprintf("could not parse diffs from %v: %v", g.contact.id, err)
+		return
+	}
+
+	blobHashes, err := extractBlobHashes(diffs)
+	if err != nil {
+		LOG <- fmt.Sprintf("could not extract blob hashes in message from %v: %v", g.contact.id, err)
+		return
+	}
+
+	for {
+		final, err := readBlobToFile(reader, blobHashes)
+		if err != nil {
+			err = deleteBlobs(blobHashes)
+			if err != nil {
+				panic("could not delete blobs after failed message decoding from %v: %v", g.contact.id, err)
+			}
+			LOG <- fmt.Sprintf("could not read blob in message from %v: %v", g.contact.id, err)
+			return
+		}
+	}
+
+	err = writeDiffsToDb(diffs)
+	if err != nil {
+		panic("could not write diffs to database: " + err.Error())
+	}
+}
+
+func readBlobToFile(
+	r io.Reader, blobHashes [][hashLen]byte) (bool, error) {
+
+	blobLength, err := parseUint32Reader(r)
+	if err == io.EOF {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed reading blob length: %v", err)
+	}
+
+	tmpFilename := encodeUint64(<-UNIQUE)
+
+	tmpFile, err := os.Create(PATHS.tmp(tmpFilename))
+	if err != nil {
+		return false, err
+	}
+	defer tmpFile.Close()
+
+	hashHandle := blake2b.New256(nil)
+	tee := io.TeeReader(r, hashHandle)
+
+	_, err = io.CopyN(tmpFile, tee, blobLength)
+	if err != nil {
+		return false, err
+	}
+
+	hash := hashHandle.Sum([]byte{})
+
+	err = os.Rename(PATHS.tmp(tmpFileName), PATHS.blob(hash))
+	if err != nil {
+		return false, err
+	}
+}
+
+type Reader struct {
+	ch chan ByteStream
+	finished bool
+}
+
+func (r Reader) Read(p []byte) (int, error) {
+	for i := range p {
+		if r.finished {
+			return i, io.EOF
+		}
+		element := <-r.ch
+		r.finished = element.read(p, i)
+	}
+	return len(p), nil
+}
+
+func getChunkStream(ch chan ByteStream, g LookupBlob) {
 	nextHash := g.hash
 	for {
 		resp, err := http.Post(
 			serverApiUrl,
 			"application/octet-stream",
-			bytes.NewBuffer(append([]byte{8}, g.hash...)))
+			bytes.NewBuffer(append([]byte{9}, g.hash...)))
 		if err != nil {
-			inCh <-BadNetwork{}
+			INPUTS <-BadNetwork{}
 			return
 		}
 		defer resp.Body.Close()
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			inCh <-BadNetwork{}
+			INPUTS <-BadNetwork{}
 			return
 		}
-		chunk := parseBlob(body, g.tempKey)
-		nextHash, theEnd := chunk.next()
-		inCh <- chunk
-		if theEnd {
+		parsed, err := parseChunk(body, g.tempKey)
+		if err != nil {
+			panic("bad chunk from server: " + err.Error())
+		}
+		for _, b := range parsed.chunk{
+			ch <- Byte(b)
+		}
+
+		if parsed.final {
+			ch <- EndOfStream{}
 			return
 		}
+		nextHash = parsed.nextHash
 	}
 }
 
-type RawChunk interface{
-	next() ([]byte, bool)
+type Byte byte
+
+func (b Byte) read(p []byte, i int) bool {
+	p[i] = byte(b)
+	return false
 }
 
-type RawChunkStream chan RawChunk
+type EndOfStream struct{}
+
+func (EndOfStream) read(_ []byte, _ int) bool {
+	return true
+}
+
+type ByteStream interface {
+	read([]byte, int) bool
+}
+
+func parseChunk(raw []byte, secretKey *[32]byte) (ParsedChunk, error) {
+	lenRaw := len(raw)
+	const minLen = 24 + 32 + 1 + secretbox.Overhead
+	if lenRaw < 24 + 32 + 1 + secretbox.Overhead {
+		return *new(ParsedChunk), fmt.Errorf("expecting chunk from server to be at least %d bytes, but only got %d bytes", minLen, lenRaw)
+	}
+	var nonce [24]byte
+	copy(nonce[:], raw)
+
+	decrypted, ok := secretbox.Open([]byte{}, raw[24:], &nonce, secretKey)
+	if !ok {
+		return *new(ParsedChunk), errors.New("decryption of server chunk failed")
+	}
+
+	var nextHash [32]byte
+	copy(nextHash[:], decrypted)
+	return ParsedChunk{
+		final: allZeros(nextHash),
+		chunk: decrypted[32:],
+		nextHash: nextHash,
+	}
+}
+
+type ParsedChunk struct {
+	final bool
+	chunk []byte
+	nextHash [32]byte
+}
+
+type RawChunkStream chan []byte
 
 
 
@@ -1687,13 +2033,13 @@ func (f FailedRelay) output() {
 	INPUT <- BadNetwork{}
 }
 
-func makePow(info PowInfo) []byte {
+func makePow(info PowInfo) [24]byte {
 	counter := 0
-	toHash := make([]byte, 24)
-	copy(toHash, info.unique)
+	var toHash [24]byte
+	copy(toHash[:], info.unique)
 	for {
 		copy(toHash[16:], encodeUint32(counter))
-		hash := argon2.IDKey(toHash, []byte{}, 1, 64*1024, 4, 32)
+		hash := argon2.IDKey(toHash[:], []byte{}, 1, 64*1024, 4, 32)
 		counter += 1
 		for _, b := range hash {
 			if b < info.difficulty {
