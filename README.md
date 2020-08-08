@@ -80,8 +80,10 @@ Messages can take the following form:
 		20 bytes: message hash
 	Progress of sending
 		1 byte: 4
-		20 bytes: message hash
-		4 bytes: number of blobs remaining to send
+		20 bytes: snapshot hash
+		20 bytes: previous hash
+		4 bytes: total bytes in message
+		4 bytes: bytes sent
 
 ## HTTP API
 
@@ -94,51 +96,59 @@ Messages can take the following form:
 	Set snapshot
 		Request
 			1 byte: 0
+			4 bytes: message ID
 			sized string: previous snapshot
 			string: new snapshot
 	Send message
 		Request
 			1 byte: 1
-			20 bytes: diff hash to send
+			4 bytes: message ID
+			20 bytes: snapshot hash
+			20 bytes: previous hash
 			14 bytes: user ID
 	Add to whitelist
 		Request
 			1 byte: 2
 			14 bytes: user ID
-	Get blob
+	Remove from whitelist
 		Request
 			1 byte: 3
-		Response
-			blob
-	Get snapshot
+			14 bytes: user ID
+	Get blob
 		Request
 			1 byte: 4
-			20 bytes: hash of snapshot
+			20 bytes: hash of blob
 		Response
-			snapshot
-	Get whitelist
+			blob
+	Get message
 		Request
 			1 byte: 5
+			4 bytes: message ID
+		Response
+			message
+	Get whitelist
+		Request
+			1 byte: 6
 		Response
 			sequence of 14-byte user IDs
 	Get my ID
 		Request
-			1 byte: 6
+			1 byte: 7
 		Response
 			14 bytes: my ID
 	Get drafts summary
 		Request
-			1 byte: 7
+			1 byte: 8
 		Response
 			summaries of all drafts
 	Get sent summary
 		Request
-			1 byte: 8
+			1 byte: 9
 		Response
 			summaries of all sent messages
 	Get inbox summary
 		Request
-			1 byte: 9
+			1 byte: 10
 		Response
 			summaries of received messages
 
@@ -184,7 +194,10 @@ Then the client should just listen on the connection. Messages from the server c
 		Request
 			1 byte: 1
 			14 bytes: my ID
-			32 + 96 bytes: signed public encryption key
+			signed:
+				32 bytes: public encryption key
+				16 bytes: 89 99 56 3a ca 82 1c 5b 0b 73 4a ac da 7e 49 1f 
+				16 bytes: auth code
 		Response
 			1 byte: 0 if server has enough keys; 1 if OK
 	Get signing key for ID
@@ -264,6 +277,11 @@ Then the client should just listen on the connection. Messages from the server c
 			
 # Client to client API
 
+A messages is made up of a chain of diffs, and some blobs. It is encoded as follows:
+	+ 4 bytes: number of diffs
+	+ sequence of diffs
+	+ sequence of blobs, where a blob is some length-encoded bytes
+
 To send a message:
 
 1. encode it and its blobs and pipe small chunks (~16KB) to a channel
@@ -286,20 +304,39 @@ Inside the encryption and chunking, the API is as follows:
 	        8 bytes: Unix time received
 	        32 bytes: hash of message received
 
+## Message snapshot format
+
+A snapshot contains the current state of a message. It is a binary blob, encoded as follows:
+	+ sized string: subject
+	+ sized string: user input box contents
+	+ 20 bytes: hash of program
+	+ sequence of blobs, where a blob is:
+		+ 20 bytes: hash
+		+ 4 bytes: size in bytes
+
 # Client cache
 
 blobs/
 	A flat folder full of blobs, named by hash.
 database
 	diffs
+		message_id
+		hash
+		previous_hash
 		start
 		end
 		insert
+		i_wrote_it
+		time
+	diff_signatures
+		message_id
+		author
 		hash
 		previous_hash
-		author
+		signature
 	sent
 		hash
+		previous_hash
 		time
 		to
 	received

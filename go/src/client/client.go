@@ -9,6 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"golang.org/x/crypto/blake2b"
+	"database/sql"
+	_ "github.com/mattn/go-sqlite3"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/argon2"
@@ -44,27 +47,78 @@ var upgrader = websocket.Upgrader{
 
 
 type MyKeys struct {
-	sign struct {
-		public *[32]byte
-		secret *[64]byte
-	}
-	encrypt struct {
-		public *[32]byte
-		secret *[32]byte
-	}
+	public [32]byte
+	secret [64]byte
 }
 
 var STOP = make(chan error)
-var INPUT = make(chan RawInput)
+var INPUT = make(chan Input)
 var TOWEBSOCKET = make(chan []byte)
 var AUTHCODE = make(chan []byte, 1)
-var MYKEYS = makeCryptoKeys()
-var MYID = make(chan []byte, 1)
+var MYKEYS = getCryptoKeys()
+var PATHS = makePaths()
 var CACHELOCK sync.Mutex
 var POWINFO = make(chan PowInfo, 1)
 var CONTACTS = make(chan map[string]struct{}, 1)
 var LOG = make(chan string)
 var UNIQUEID chan string
+var MYID [constants.IdLength]byte = getMyId()
+
+func makePaths() Paths {
+	homedir, err := os.UserHomeDir()
+	if err != nil {
+		panic("could not get user home directory: " + err.Error())
+	}
+
+	root := homedir + os.PathSeparator + ".bigwebthing" +
+		os.PathSeparator
+
+	blob := func(hash [hashLen]byte) string {
+		return root + "blobs" + os.PathSeparator +
+			base64.URLEncoding.EncodeToString(hash)
+	}
+
+	tmp := func(hash [32]byte) string {
+		return root + "tmp" + os.PathSeparator +
+			base64.URLEncoding.EncodeToString(hash)
+	}
+
+	return Paths{
+		myKeys: root + "myKeys",
+		db: root + "database.sqlite",
+		blob: blob,
+		log: root + "log",
+		tmp: tmp,
+	}
+}
+
+func chunkToTempFiles(encoded io.Reader) [][32]byte {
+	tmpHashes := make([][32]byte, 0)
+	for {
+		const chunkSize = constants.MaxChunk - blobOverhead
+		chunk := make([]byte, chunkSize)
+		n, err := encoded.Read(chunk)
+		if err != nil && err != EOF {
+			panic(fmt.Sprintf("failed reading multireader: ", err))
+		}
+		hash := blake2b.Sum256(chunk)
+		err := ioutil.WriteFile(PATHS.tmp(hash), chunk)
+		if err != nil {
+			panic(fmt.Sprintf("failed writing temporary file: ", err))
+		}
+		tmpHashes = append([][32]byte{hash}, tmpHashes...)
+		if err == EOF || n < chunkSize {
+			return tmpHashes
+		}
+	}
+}
+
+type Paths struct {
+	myKeys string
+	database string
+	blob func([hashLen]byte) string
+	log string
+}
 
 type bytesliceSet interface {
 	insert([]byte)
@@ -91,10 +145,8 @@ func cachePath(filename string) string {
 
 var frontendDir = filepath.Join(homeDir, "frontend")
 
-const keysFileName = "keys"
-
 func readKeysFromFile() (MyKeys, error) {
-	raw, err := ioutil.ReadFile(cachePath(keysFileName))
+	raw, err := ioutil.ReadFile(PATHS.myKeys)
 	if err != nil {
 		return *new(MyKeys), err
 	}
@@ -105,14 +157,12 @@ func readKeysFromFile() (MyKeys, error) {
 func parseKeys(raw []byte) (MyKeys, error) {
 	var keys MyKeys
 
-	if len(raw) != 32+64+32+32 {
+	if len(raw) != 32+64 {
 		return keys, errors.New("keys file is the wrong length")
 	}
 
-	copy(keys.sign.public[:], raw)
-	copy(keys.sign.secret[:], raw[32:])
-	copy(keys.encrypt.public[:], raw[32+64:])
-	copy(keys.encrypt.secret[:], raw[32+64+32:])
+	copy(keys.public[:], raw)
+	copy(keys.secret[:], raw[32:])
 
 	return keys, nil
 }
@@ -133,7 +183,7 @@ func makeNewKeys() (MyKeys, error) {
 	}
 
 	err = ioutil.WriteFile(
-		cachePath(keysFileName),
+		cachePath(PATHS.myKeys),
 		encodeKeys(keys),
 		0500)
 
@@ -141,20 +191,17 @@ func makeNewKeys() (MyKeys, error) {
 }
 
 func encodeKeys(keys MyKeys) []byte {
-	encoded := make([]byte, 160)
-	copy(encoded, keys.sign.public[:])
-	copy(encoded[32:], keys.sign.secret[:])
-	copy(encoded[32+64:], keys.encrypt.public[:])
-	copy(encoded[32+64+32:], keys.encrypt.secret[:])
+	encoded := make([]byte, 32 + 64)
+	copy(encoded, keys.public[:])
+	copy(encoded[32:], keys.secret[:])
 	return encoded
 }
 
-var STATE = make(chan State)
+var OUTPUT = make(chan Output)
 
 func (StartUiServer) output() {
-	mux := goji.NewMux()
-	mux.HandleFunc(
-		pat.Get("/websocket"),
+	http.HandleFunc(
+		"/websocket",
 		func(w http.ResponseWriter, r *http.Request) {
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
@@ -169,123 +216,723 @@ func (StartUiServer) output() {
 				}
 			}
 		})
-	mux.HandleFunc(
-		pat.Get("/cache/:key/get"),
+	http.HandleFunc(
+		"/api",
 		func(w http.ResponseWriter, r *http.Request) {
-			path := cachePath(pat.Param(r, "key"))
-			CACHELOCK.Lock()
-			defer CACHELOCK.Unlock()
-			file, err := os.Open(path)
-			if err != nil {
-				panic(err)
-			}
-			n, err := io.Copy(w, file)
-			if n == 0 {
-				panic("did not read any bytes from file", path)
-			}
-			if err != nil {
-				panic(err)
-			}
-		})
-
-	mux.HandleFunc(
-		pat.Post("/cache/:key/set"),
-		func(w http.ResponseWriter, r *http.Request) {
-			path := cachePath(pat.Param(r, "key"))
-			CACHELOCK.Lock()
-			defer CACHELOCK.Unlock()
-			file, err := os.Create(path)
-			if err != nil {
-				panic(err)
-			}
-			n, err := io.Copy(file, r.Body)
-			if n == 0 {
-				panic("no bytes in request body")
-			}
-			if err != nil {
-				panic(err)
-			}
-		})
-
-	mux.HandleFunc(
-		pat.Post("/cache/:key/delete"),
-		func(w http.ResponseWriter, r *http.Request) {
-			path := cachePath(pat.Param(r, "key"))
-			CACHELOCK.Lock()
-			defer CACHELOCK.Unlock()
-			err := os.Remove(path)
-			if err != nil {
-				panic(err)
-			}
-		})
-
-	mux.HandleFunc(
-		pat.Post("/sendmessage/:draftid"),
-		func(w http.ResponseWriter, r *http.Request) {
-			rawDraft, err := ioutil.ReadFile(cachePath(
-				pat.Param(r, "draftid")))
-			if err != nil {
-				panic(err)
-			}
-			draft, err := parseDraft(rawDraft)
-			if err != nil {
-				panic(err)
-			}
-			INPUT <-SendMessageRequest{
-				draft: draft,
-				rawDraft: rawDraft,}
-		})
-
-	mux.HandleFunc(
-		pat.Get("/getunique"),
-		func(w http.ResponseWriter, _ *http.Request) {
-			n, err := w.Write(<-UNIQUEID)
-			if n == 0 {
-				panic("didn't write any bytes to unique ID request")
-			}
-			if err != nil {
-				panic(err)
-			}
-		})
-
-	mux.HandleFunc(
-		pat.Post("/contacts/add"),
-		func(_ http.ResponseWriter, r *http.Request) {
-			INPUT <- AddToWhitelist(getWhitelistee(r))
-		})
-
-	mux.HandleFunc(
-		pat.Post("/contacts/delete"),
-		func(_ http.ResponseWriter, r *http.Request) {
 			done := make(chan struct{})
-			INPUT <- RemoveFromWhitelist{
-				whitelistee: getWhitelistee(r),
-				done: done,}
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				panic(err)
+			}
+			INPUT <- ApiRequest{
+				done: done,
+				body: body,
+				w: w,
+			}
 			<-done
 		})
+	panic(http.ListenAndServe(":11833", nil))
+}
 
-	mux.HandleFunc(
-		pat.Get("/myid"),
-		func(w http.ResponseWriter, _ *http.Request) {
-			n, err := w.Write(<-MYID)
-			if n != constants.IdLength {
-				panic("wrote wrong number of bytes to getmyid request")
-			}
-			if err != nil {
-				panic(err)
-			}
-		})
+type ApiRequest struct {
+	done chan struct{}
+	body []byte
+	w http.ResponseWriter
+}
 
-	mux.HandleFunc(
-		pat.Get("/contacts"),
-		func(w http.ResponseWriter, _ *http.Request) {
-			_, err := w.Write(encodeContacts(<-MYCONTACTS))
-			if err != nil {
-				panic("could not write contacts to response body")
-			}
-		})
+func parseSetSnapshot(body []byte) (UiRequest, error) {
+	messageId, pos, err := parseUint32(body, 0)
+	if err != nil {
+		return *new(UiRequest), errors.New(
+			"set snapshot: " + err.Error())
+	}
 
-	panic(http.ListenAndServe(":11833", mux))
+	previous, pos, err := parseBytes(body, pos)
+	if err != nil {
+		return *new(UiRequest), errors.New(
+			"set snapshot: " + err.Error())
+	}
+
+	snapshot := body[pos:]
+
+	return SetSnapshot{
+		previous: previous,
+		snapshot: snapshot,
+		messageId: messageId,
+	}, nil
+}
+
+type SetSnapshot struct {
+	previous []byte
+	snapshot []byte
+	messageId int
+}
+
+type DiffFromDb struct {
+	hash [hashLen]byte
+	previousHash [hashLen]byte
+	start int
+	end int
+	insert []byte
+	iWroteIt bool
+	time int64
+}
+
+type BytesDiff struct {
+	insert []byte
+	// Positions between bytes in the old slice. So 0 means
+	// the front of the slice, 1 means between the first and second
+	// bytes.
+	start int // end of identical section at front of slice
+	end int // start of identical section at end of slice
+}
+
+func makeDiff(old, new_ []byte) BytesDiff {
+	oldLen := len(old)
+	newLen := len(new_)
+
+	shortest := func() []byte {
+		if oldLen < newLen {
+			return old
+		}
+		return new_
+	}()
+
+	start := 0
+	for _ = range shortest {
+		oldChar := old[start]
+		newChar := new_[start]
+		if oldChar != newChar {
+			break
+		}
+		start++
+	}
+
+	end := oldLen
+	for _ = range shortest {
+		oldChar := old[end - 1]
+		newChar := new_[end - 1]
+		if oldChar != newChar {
+			break
+		}
+		end--
+	}
+
+	insertChars := new_[start: newLen - end]
+
+	return BytesDiff{
+		insert: insertChars,
+		start: start,
+		end: end,
+	}
+}
+
+const hashLen = 20
+
+func makeHash(blob []byte) [hashLen]byte {
+	var result [hashLen]byte
+	hash := blake2b.Sum256(blob)
+	copy(result[:], hash[:])
+	return result
+}
+
+func (s SetSnapshot) update(done chan struct{}, w http.ResponseWriter) Output {
+	diff := makeDiff(s.previous, s.snapshot)
+	return CacheDiff{
+		diff: diff,
+		messageId: s.messageId,
+		hash: makeHash([]byte(s.snapshot)),
+		previousHash: makeHash([]byte(s.previous)),
+	}
+}
+
+type CacheDiff struct {
+	diff BytesDiff
+	messageId int
+	hash [hashLen]byte
+	previousHash [hashLen]byte
+}
+
+type DiffSigDb struct {
+	author [constants.IdLength]byte
+	hash [hashLen]byte
+	previousHash [hashLen]byte
+	signature [32 + sign.Overhead]byte
+}
+
+func (s CacheDiff) output() {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("could not open database: " + err.Error())
+	}
+
+	statement, err := database.Prepare("INSERT INTO diffs (message_id, hash, previous_hash, start, end, insert, i_wrote_it, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?);")
+	if err != nil {
+		panic("could not prepare database statement: " + err.Error())
+	}
+
+	_, err = statement.Exec(
+		s.messageId,
+		s.hash,
+		s.previousHash,
+		s.diff.start,
+		s.diff.end,
+		s.diff.insert,
+		true,
+		time.Now().Unix())
+	if err != nil {
+		panic("could not insert new diff into database: " + err.Error())
+	}
+}
+
+func parseSendMessage(body []byte) (UiRequest, error) {
+	bodyLen := len(body)
+	const expectedLen = 4 + 2 * hashLen + constants.IdLength
+	if bodyLen != expectedLen {
+		return *new(UiRequest), fmt.Errorf("send message request body should be %v bytes, but is actually %v bytes", expectedLen, bodyLen)
+	}
+
+	var result SendMessageRequest
+	result.messageId = decodeInt(body[:4])
+	copy(result.hash[:], body[4:])
+	copy(result.previousHash[:], body[4 + hashLen:])
+	copy(result.to[:], body[4 + 2 * hashLen:])
+
+	return result, nil
+}
+
+type SendMessageRequest struct {
+	hash [hashLen]byte
+	previousHash [hashLen]byte
+	to [constants.IdLength]byte
+	messageId int
+}
+
+func (s SendMessageRequest) update(done chan struct{}, w http.ResponseWriter) Output {
+	return SendMessage{
+		done: done,
+		messageId: s.messageId,
+		hash: s.hash,
+		previousHash: s.previousHash,
+		to: s.to,
+	}
+}
+
+type SendMessage struct {
+	done chan struct{}
+	messageId int
+	hash [hashLen]byte
+	previousHash [hashLen]byte
+	to [constants.IdLength]byte
+}
+
+func getDiffsFromDb(messageId int) []DiffFromDb {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("couldn't get database handle: " + err.Error())
+	}
+	defer database.Close()
+	rows, err := database.Query("SELECT hash, previous_hash, start, end, insert, i_wrote_it, time FROM diffs WHERE message_id = ?;", messageId)
+	if err != nil {
+		panic("couldn't read diffs from database")
+	}
+
+	diffs := make([]DiffFromDb, 0)
+	for rows.Next() {
+		var d DiffFromDb
+		rows.Scan(&d.hash, &d.previousHash, &d.start, &d.end, &d.insert, &d.iWroteIt, &d.time)
+		diffs = append(diffs, d)
+	}
+	return diffs
+}
+
+func getDiffSignaturesFromDb(messageId int) []DiffSigDb {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("couldn't get database handle: " + err.Error())
+	}
+	defer database.Close()
+	rows, err := database.Query("SELECT author, hash, previous_hash, signature FROM diff_signatures WHERE message_id = ?;", messageId)
+	if err != nil {
+		panic("couldn't read diff_signatures from database")
+	}
+
+	sigs := make([]DiffSigDb, 0)
+	for rows.Next() {
+		var d DiffSigDb
+		rows.Scan(&d.author, &d.hash, &d.previousHash, &d.signature)
+		sigs = append(sigs, d)
+	}
+	return sigs
+}
+
+type Diff struct {
+	hash [hashLen]byte
+	previousHash [hashLen]byte
+	start int
+	end int
+	insert []byte
+	time int64
+	author [constants.IdLength]byte
+	signature [32 + sign.Overhead]byte
+}
+
+func equalBytes(b1, b2 []byte) bool {
+	for i, b := range b1 {
+		if b != b2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func hashDiff(hash, previousHash [hashLen]byte) string {
+	catHash := make([]byte, 2 * hashLen)
+	copy(catHash, hash[:])
+	copy(catHash[hashLen:], previousHash[:])
+	bytes := makeHash(catHash)
+	return base64.URLEncoding.EncodeToString(bytes[:])
+}
+
+func signDiff(
+	hash [hashLen]byte,
+	previousHash [hashLen]byte,
+	secretKey [64]byte) [32 + sign.Overhead]byte {
+
+	catHash := make([]byte, 2 * hashLen)
+	copy(catHash, hash[:])
+	copy(catHash[hashLen:], previousHash[:])
+	toSign := makeHash(catHash)
+	signed := sign.Sign([]byte{}, toSign[:], &secretKey)
+	var signArr [32 + sign.Overhead]byte
+	copy(signArr[:], signed)
+	return signArr
+}
+
+func equalHash(h1, h2 [hashLen]byte) bool {
+	for i, h := range h1 {
+		if h != h2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func diffMatchesSig(d DiffFromDb, s DiffSigDb) bool {
+	return equalHash(d.hash, s.hash) &&
+		equalHash(d.previousHash, s.previousHash)
+}
+
+func parseDiff(
+	d DiffFromDb,
+	diffSignatures []DiffSigDb,
+	myId [constants.IdLength]byte,
+	secretKey [64]byte) (Diff, error) {
+
+	var author [constants.IdLength]byte
+	var signature [32 + sign.Overhead]byte
+
+	if d.iWroteIt {
+		author = myId
+		signature = signDiff(d.hash, d.previousHash, secretKey)
+	} else {
+		for _, sig := range diffSignatures {
+			if diffMatchesSig(d, sig) {
+				author = sig.author
+				signature = sig.signature
+				break
+			}
+		}
+		return *new(Diff), fmt.Errorf("could not find signature for foreign diff: %v", d)
+	}
+
+	return Diff{
+		hash: d.hash,
+		previousHash: d.previousHash,
+		start: d.start,
+		end: d.end,
+		insert: d.insert,
+		time: d.time,
+		author: author,
+		signature: signature,
+	}, nil
+}
+
+func parseDiffs(
+	rawDiffs []DiffFromDb,
+	diffSignatures []DiffSigDb,
+	myId [constants.IdLength]byte,
+	secretKey [64]byte) (map[string]Diff, error) {
+
+	diffs := make(map[string]Diff)
+	for _, rawDiff := range rawDiffs {
+		diff, err := parseDiff(rawDiff, diffSignatures, myId, secretKey)
+		if err != nil {
+			return diffs, err
+		}
+		diffs[hashDiff(diff.hash, diff.previousHash)] = diff
+	}
+	return diffs, nil
+}
+
+var emptyHash = makeHash([]byte{})
+
+func findDiff(hash [hashLen]byte, diffs map[string]Diff) (Diff, error) {
+	for _, diff := range diffs {
+		if equalHash(hash, diff.hash) {
+			return diff, nil
+		}
+	}
+	return *new(Diff), fmt.Errorf(
+		"could not find diff with hash %v", hash)
+}
+
+func pruneDiffs(oldDiffs map[string]Diff, send SendMessage) ([]Diff, error) {
+	newDiffs := make([]Diff, 0)
+	topHash := hashDiff(send.hash, send.previousHash)
+	oldestDiff, foundIt := oldDiffs[topHash]
+	if !foundIt {
+		return newDiffs, fmt.Errorf("could not find top diff")
+	}
+
+	for {
+		diffHash := hashDiff(oldestDiff.hash, oldestDiff.previousHash)
+		newDiffs = append([]Diff{oldestDiff}, newDiffs...)
+		if equalHash(oldestDiff.previousHash, emptyHash) {
+			return newDiffs, nil
+		}
+
+		oldestDiff, err := findDiff(oldestDiff.previousHash, oldDiffs)
+		if err != nil {
+			return newDiffs, fmt.Errorf(
+				"could not find diff: " + err.Error())
+		}
+	}
+}
+
+func applyDiff(snapshot []byte, diff Diff) ([]byte, error) {
+	oldHash := makeHash(snapshot)
+	if !equalHash(oldHash, diff.previousHash) {
+		return []byte{}, errors.New("bad previous hash")
+	}
+	oldLen := len(snapshot)
+	if diff.start > oldLen - 1 {
+		return []byte{}, errors.New("start index out of range")
+	}
+	if diff.end > oldLen - 1 {
+		return []byte{}, errors.New("end index out of range")
+	}
+	front := snapshot[:diff.start]
+	end := snapshot[diff.end:]
+	newShot := append(front, append(diff.insert, end...)...)
+	newHash := makeHash(newShot)
+	if !equalHash(newHash, diff.hash) {
+		return []byte{}, errors.New("bad new hash")
+	}
+	return newShot, nil
+}
+
+func parseBlob(raw []byte, pos int) (Blob, int, error) {
+	hash, pos, err := parseHash(raw, pos)
+	if err != nil {
+		return *new(Blob), pos, err
+	}
+
+	size, pos, err := parseUint32(raw, pos)
+	if err != nil {
+		return *new(Blob), pos, err
+	}
+
+	return Blob{
+		hash: hash,
+		size: size,
+	}, pos, nil
+}
+
+type Snapshot struct {
+	subject string
+	userInput string
+	programHash [hashLen]byte
+	blobs []Blob
+}
+
+func parseSnapshot(raw []byte) (Snapshot, error) {
+	subject, pos, err := parseString(raw, 0)
+	if err != nil {
+		return *new(Snapshot), err
+	}
+
+	userInput, pos, err := parseString(raw, pos)
+	if err != nil {
+		return *new(Snapshot), err
+	}
+
+	programHash, pos, err := parseHash(raw, pos)
+	if err != nil {
+		return *new(Snapshot), err
+	}
+
+	blobs := make([]Blob, 0)
+	rawLen := len(raw)
+	for {
+		if pos == rawLen {
+			return Snapshot{
+				subject: subject,
+				userInput: userInput,
+				programHash: programHash,
+				blobs: blobs,
+			}, nil
+		}
+
+		blob, pos, err := parseBlob(raw, pos)
+		if err != nil {
+			return *new(Snapshot), err
+		}
+
+		blobs = append(blobs, blob)
+	}
+}
+
+func extractBlobsFromSnapshot(snapshot []byte) ([][hashLen]byte, error) {
+	parsed, err := parseSnapshot(snapshot)
+	blobNames := make([][hashLen]byte, 0)
+	for _, blob := range parsed.blobs {
+		blobNames = append(blobNames, blob.hash)
+	}
+	return blobNames, nil
+}
+
+func extractBlobHashes(diffs []Diff) ([][hashLen]byte, error) {
+	blobNames := make([][hashLen]byte, 0)
+	snapshot := []byte{}
+	for _, diff := range diffs {
+		var err error
+		snapshot, err = applyDiff(snapshot, diff)
+		if err != nil {
+			return blobNames, err
+		}
+		newBlobs, err := extractBlobsFromSnapshot(snapshot)
+		if err != nil {
+			return blobNames, err
+		}
+		for _, blob := range newBlobs {
+			blobNames = append(blobNames, blob)
+		}
+	}
+	return blobNames, nil
+}
+
+func combine(byteses ...[]byte) []byte {
+	combined := make([]byte, 0)
+	for _, bytes := range byteses {
+		combined = append(combined, bytes...)
+	}
+	return combined
+}
+
+func encodeDiff(diff Diff) []byte {
+	return combine(
+		diff.hash[:],
+		diff.previousHash[:],
+		encodeUint32(diff.start),
+		encodeUint32(diff.end),
+		encodeUint32(len(diff.insert)),
+		diff.insert,
+		encodeUint64(diff.time),
+		diff.signature[:])
+}
+
+func encodeDiffs(diffs []Diff) []byte {
+	encoded := make([]byte, 0)
+	for _, diff := range diffs {
+		encoded = append(encoded, encodeDiff(diff)...)
+	}
+	return encoded
+}
+
+func (s SendMessage) output() {
+	s.done <- struct{}{}
+	rawDiffs := getDiffsFromDb(s.messageId)
+	diffSignatures := getDiffSignaturesFromDb(s.messageId)
+
+	fullDiffs, err := parseDiffs(rawDiffs, diffSignatures, MYID, MYKEYS.secret)
+	if err != nil {
+		panic("could not parse diffs from database: " + err.Error())
+	}
+
+	prunedDiffs, err := pruneDiffs(fullDiffs, s)
+	if err != nil {
+		panic("couldn't prune the diffs: " + err.Error())
+	}
+
+	blobs, err := extractBlobHashes(prunedDiffs)
+	if err != nil {
+		panic("couldn't extract blob names from diffs: " + err.Error())
+	}
+
+	encodedDiffs := encodeDiffs(prunedDiffs)
+	encodeAndSend(encodedDiffs, blobs)
+}
+
+const blobOverhead = (
+	1 + // indicator
+	constants.IdLength +
+	sign.Overhead +
+	constants.MeaningLength +
+	constants.AuthCodeLength +
+	24 + // nonce
+	secretbox.Overhead -
+	32) // for the hash of the next blob in the chain
+
+func readChunk(r io.Reader) ([]byte, bool) {
+	const chunkSize = constants.MaxChunk - blobOverhead
+	chunk := make([]byte, chunkSize)
+	n, err := r.Read(chunk)
+	if err != nil && err != EOF {
+		panic(fmt.Sprintf("failed reading multireader: ", err))
+	}
+	chunks <- chunkSize
+	return chunk, n != chunkSize
+}
+
+func streamToChan(r io.Reader, ch chan []byte) {
+	for {
+		const chunkSize = constants.MaxChunk - blobOverhead
+		chunk := make([]byte, chunkSize)
+		n, err := r.Read(chunk)
+		if err != nil && err != EOF {
+			panic(fmt.Sprintf("failed reading multireader: ", err))
+		}
+		ch <- chunk
+		if n != chunkSize {
+			return
+		}
+	}
+}
+
+func encodeAndSend(diffs []byte, blobs [][hashLen]byte) {
+	readers := []io.Reader{bytes.NewBuffer(diffs)}
+	totalSize := int64(len(diffs))
+
+	for _, blob := range blobs {
+		file, err := os.Open(PATHS.blob(blob))
+		if err != nil {
+			panic(fmt.Sprintf("cannot find file for blob %v", blob))
+		}
+		defer file.Close()
+		fileInfo, err := file.Stat()
+		if err != nil {
+			panic(fmt.Sprintf("cannot Stat file for blob %v", blob))
+		}
+		size := encodeInt32(fileInfo.Size())
+		readers = append(readers, bytes.NewBuffer(size))
+		totalSize += fileInfo.Size()
+
+		readers = append(readers, file)
+	}
+
+	encoded := io.MultiReader(readers...)
+
+	reversed := chunkToTempFiles(encoded)
+
+	var lastHash [32]byte
+	var secretKey [32]byte
+	_, err := io.ReadFull(rand.Reader, secretKey)
+	if err != nil {
+		panic(err)
+	}
+	for _, chunkHash := range reversed {
+		chunk, err := ioutil.ReadFile(PATHS.tmp(chunkHash))
+		if err != nil {
+			panic("failed reading temporary file: " + err.Error())
+		}
+		withHash := append(lastHash[:], chunk...)
+		var nonce [24]byte
+		_, err = io.ReadFull(rand.Reader, nonce)
+		if err != nil {
+			panic(err)
+		}
+
+		encrypted := secretbox.Seal(nonce[:], withHash, &nonce, &secretKey)
+		lastHash = blake2b.Sum256(encrypted)
+
+		toSign := combine(constants.UploadBlob, <-AUTHCODE, encrypted)
+		preamble := combine([]byte{6}, <-MYID)
+		signed := sign.Sign(preamble, toSign, MYKEYS.secret)
+		_, err = http.Post(
+			serverApiUrl,
+			"application/octet-stream"
+			bytes.NewBuffer(signed))
+		if err != nil {
+			LOG <- "Blob upload failed: " + err.Error()
+			TOWEBSOCKET <- []byte{1}
+			return
+		}
+	}
+
+	for {
+		first := <-chunks
+		second := <-chunks
+
+		chunk, finished := makeChunk(encoded)
+		uploadChunk(chunk)
+		bytesSent += len(chunk)
+		sendStatus(makeStatus(bytesSent, totalSize))
+		if finished {
+			break
+		}
+	}
+}
+
+func makeChunk(stream io.Reader) []byte {
+	
+}
+
+func parseUiRequest(body []byte) (UiRequest, error) {
+	if len(body) == 0 {
+		return *new(UiRequest), errors.New("empty")
+	}
+
+	switch body[0] {
+	case 0:
+		return parseSetSnapshot(body[1:])
+	case 1:
+		return parseSendMessage(body[1:])
+	case 2:
+		return parseAddToWhitelist(body[1:])
+	case 3:
+		return parseRemoveFromWhitelist(body[1:])
+	case 4:
+		return parseGetBlob(body[1:])
+	case 5:
+		return parseGetSnapshot(body[1:])
+	case 6:
+		return parseGetWhitelist(body[1:])
+	case 7:
+		return parseGetMyId(body[1:])
+	case 8:
+		return parseGetDraftsSummary(body[1:])
+	case 9:
+		return parseGetSentSummary(body[1:])
+	case 10:
+		return parseGetInboxSummary(body[1:])
+	}
+
+	return *new(UiRequest), errors.New(
+		"bad indicator byte: " + string(body[0]))
+}
+
+type UiRequest interface {
+	update(chan struct{}, http.ResponseWriter) Output
+}
+
+func (a ApiRequest) update() Output {
+	parsed, err := parseUiRequest(a.body)
+	if err != nil {
+		return Panic(
+			"could not parse API request from UI: " + err.Error())
+	}
+	return parsed.update(a.done, a.w)
 }
 
 func getWhitelistee(r *http.Request) []byte {
@@ -302,11 +949,52 @@ func getWhitelistee(r *http.Request) []byte {
 	return whitelistee
 }
 
+func sendNewEncryptionKey() {
+	public, secret, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		panic("could not generate encryption keys: " + err.Error())
+	}
+
+	preamble := make([]byte, 1 + constants.IdLength)
+	preamble[0] = 1
+	copy(preamble[1:], <-MYID)
+
+	toSign := make([]byte, 32 + constants.MeaningLength + constants.AuthCodeLength)
+	copy(toSign, public[:])
+	copy(toSign[32:], constants.MyEncryptionKey)
+	copy(toSign[32+constants.MeaningLength:], <-AUTHCODE)
+
+	signed := sign.Sign(preamble, toSign, MYKEYS.secret)
+
+	_, err = http.Post(
+		serverApiUrl,
+		"application/octet-stream",
+		bytes.NewBuffer(signed))
+	if err != nil {
+		LOG <- err.Error()
+		return
+	}
+
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		panic("could not open database: " + err.Error())
+	}
+	defer database.Close()
+	statement, err := database.Prepare("INSERT INTO my_encryption_keys (public, secret) VALUES (?, ?);")
+	if err != nil {
+		panic("could not prepare database statement: " + err.Error())
+	}
+	_, err = statement.Exec(public, secret)
+	if err != nil {
+		panic("could not insert new encryption keys into database: " + err.Error())
+	}
+}
+
 const networkSleep = 30 * time.Second
 
 func tcpListenTillFail(conn net.Conn) {
 	auth := makeTcpAuth(
-		<-MYID, <-AUTHCODE, (<-MYKEYS).sign.secret)
+		<-MYID, <-AUTHCODE, MYKEYS.secret)
 	n, err := conn.Write(auth)
 	if n != len(auth) {
 		return
@@ -316,16 +1004,32 @@ func tcpListenTillFail(conn net.Conn) {
 	}
 
 	for {
-		msg := make([]byte, tcpMsgLen)
-		n, err = conn.Read(msg)
-		if n != tcpMsgLen {
+		indicator := make([]byte, 1)
+		n, err = conn.Read(indicator)
+		if n != 1 {
 			return
 		}
 		if err != nil {
 			return
 		}
 
-		INPUT <- MsgFromServer(msg)
+		switch indicator[0] {
+		case 0:
+			sendNewEncryptionKey()
+		case 1:
+			msg := make([]byte, tcpMsgLen)
+			n, err = conn.Read(msg)
+			if n != tcpMsgLen {
+				return
+			}
+			if err != nil {
+				return
+			}
+
+			INPUT <- MsgFromServer(msg)
+		default:
+			panic("received bad message from the server: " + string(indicator[0]))
+		}
 	}
 }
 
@@ -351,49 +1055,74 @@ func (StartTcpListener) output() {
 }
 
 func main() {
-	setUpDatabase()
-
-	STATE <- Start{}
+	OUTPUT <- Start{}
 
 	go func() {
 		for {
-			STATE <- ((<-INPUT).update(<-STATE))
+			OUTPUT <- (<-INPUT).update()
 		}
 	}()
 
 	go func() {
 		for {
-			go (<-STATE).output()
+			go (<-OUTPUT).output()
 		}
 	}()
 
-	fmt.Println(<-STOP)
+	select{}
 }
 
 type Start struct{}
 
 func (Start) output() {
-	STATE <- StartTcpListener{}
-	STATE <- StartUiServer{}
-	STATE <- GetUserId{}
-	STATE <- GetCryptoKeys{}
-	STATE <- GetAuthCode{}
-	STATE <- GetPowInfo{}
-	STATE <- StartLogger{}
-	STATE <- StartUniqueId{}
-	STATE <- SetUpDatabase{}
-	STATE <- GetPaths{}
+	OUTPUT <- SetupDatabase{}
+	OUTPUT <- StartTcpListener{}
+	OUTPUT <- StartUiServer{}
+	OUTPUT <- GetUserId{}
+	OUTPUT <- StartLogger{}
 }
 
-func rootDir() string {
-	homedir, err := os.UserHomeDir()
-	if err != nil {
-		panic("could not get user home directory: " + err.Error())
+var makeTables = []string{
+`CREATE TABLE IF NOT EXISTS diffs (
+	message_id INTEGER NOT NULL,
+	hash BLOB NOT NULL,
+	previous_hash BLOB NOT NULL,
+	author BLOB,
+	time INTEGER NOT NULL,
+	start INTEGER NOT NULL,
+	end INTEGER NOT NULL,
+	PRIMARY KEY (hash, previous_hash)
+);`,
+`CREATE TABLE IF NOT EXISTS sent (
+	hash BLOB NOT NULL,
+	time INTEGER NOT NULL,
+	to BLOB NOT NULL,
+	PRIMARY KEY (hash, time, to)
+);`,
+`CREATE TABLE IF NOT EXISTS received (
+	from BLOB NOT NULL,
+	hash BLOB NOT NULL,
+	time INTEGER NOT NULL,
+	PRIMARY KEY (from, hash, time)
+);`,
+`CREATE TABLE IF NOT EXISTS whitelist (
+	user BLOB NOT NULL PRIMARY KEY
+);`,
+`CREATE TABLE IF NOT EXISTS public_sign_keys (
+	user BLOB NOT NULL PRIMARY KEY,
+	key BLOB NOT NULL UNIQUE
+);`,
+`CREATE TABLE IF NOT EXISTS acknowledgements (
+	from BLOB NOT NULL,
+	time INTEGER NOT NULL,
+	hash BLOB NOT NULL,
+	signature BLOB NOT NULL PRIMARY KEY
+);`,
+`CREATE TABLE IF NOT EXISTS my_encryption_keys (
+	public BLOB NOT NULL PRIMARY KEY,
+	secret BLOB NOT NULL UNIQUE
+);`,
 	}
-	return homedir + "/.bigwebthing"
-}
-
-var PATHS = makePaths()
 
 func setUpDatabase() {
 	database, err := sql.Open("sqlite3", PATHS.database)
@@ -402,40 +1131,13 @@ func setUpDatabase() {
 	}
 	defer database.Close()
 
-	_, err = database.Exec(`
-CREATE TABLE IF NOT EXISTS blobs (
-	message INTEGER NOT NULL,
-	hash BLOB NOT NULL,
-	PRIMARY KEY (message, hash)
-);`)
-	if err != nil {
-		panic("could not make blobs table: " + err.Error())
+	for _, query := range makeTables {
+		_, err = database.Exec(query)
+		if err != nil {
+			panic(fmt.Sprintf(
+				"error running query:\n%s\n%s", err.Error()))
+		}
 	}
-
-	_, err = database.Exec(`
-CREATE TABLE IF NOT EXISTS subjects (
-	message INTEGER UNIQUE NOT NULL,
-	subject TEXT NOT NULL,
-	PRIMARY KEY (message, subject)
-);`)
-	if err != nil {
-		panic("could not make subjects table: " + err.Error())
-	}
-
-	_, err = database.Exec(`
-CREATE TABLE IF NOT EXISTS tos (
-	message INTEGER NOT NULL,
-	user BLOB NOT NULL,
-	PRIMARY KEY (message, user)
-);`)
-	if err != nil {
-		panic("could not make tos table: " + err.Error())
-	}
-
-	_, err = database.Exec(`
-CREATE TABLE IF NOT EXISTS user_inputs (
-	message INTEGER UNIQUE NOT NULL,
-	user_input TEXT NOT NULL
 }
 
 type StartLogger struct{}
@@ -526,30 +1228,30 @@ type GetUserId struct{}
 
 const myIdPath = "myId"
 
-func (GetUserId) output() {
-	myId, err := ioutil.ReadFile(cachePath(myIdPath))
+func getMyId() [constants.IdLength]byte {
+	myId, err := ioutil.ReadFile(PATHS.myId)
+	if err == nil {
+		return myId
+	}
+
+	myId = argon2.IDKey(
+		append(MYKEYS.sign.public[:], MYKEYS.encrypt.public[:]...),
+		[]byte{},
+		60,
+		256*1024,
+		4,
+		constants.IdLength)
+	err = ioutil.WriteFile(PATHS.myId, myId, 0500)
 	if err != nil {
-		keys := <-MYKEYS
-		myId = argon2.IDKey(
-			append(keys.sign.public[:], keys.encrypt.public[:]...),
-			[]byte{},
-			60,
-			256*1024,
-			4,
-			13)
-		err = ioutil.WriteFile(cachePath(myIdPath), myId, 0500)
-		if err != nil {
-			STOP <- err
-		}
+		panic("could not write my new ID to file: " + err.Error())
 	}
-	for {
-		MYID <- myId
-	}
+
+	return myId
 }
 
 type GetCryptoKeys struct{}
 
-func makeCryptoKeys() MyKeys {
+func getCryptoKeys() MyKeys {
 	keys, err := readKeysFromFile()
 	if err != nil {
 		keys, err = makeNewKeys()
@@ -600,7 +1302,7 @@ type PublicKeys struct {
 	encrypt [32]byte
 }
 
-func (m MsgFromServer) update(state State) State {
+func (m MsgFromServer) update() Output {
 	var nonce [24]byte
 	copy(nonce[:], m.msg[:24])
 	encrypted := m.msg[24:]
@@ -676,15 +1378,15 @@ type GotBlob struct {
 	body []byte
 }
 
-type State interface {
+type Output interface {
 	output()
 }
 
-type RawInput interface {
-	update(State) State
+type Input interface {
+	update() Output
 }
 
-func (u UiInput) update(state State) State {
+func (u UiInput) update() Output {
 	return u
 }
 
@@ -807,12 +1509,7 @@ func sliceEq(s1 []string, s2 ...string) bool {
 	return true
 }
 
-type SendMessageRequest struct {
-	draft Draft
-	rawDraft []byte
-}
-
-func (w WhitelistRemove) handle(u UiInWithUrl) State {
+func (w WhitelistRemove) handle(u UiInWithUrl) Output {
 	return ReadUnwhitelistee{
 		w:    u.w,
 		r:    u.r,
@@ -852,7 +1549,7 @@ type TriedReadingUnwhitelistee struct {
 	unwhitelistee []byte
 }
 
-func (t TriedReadingUnwhitelistee) update(state State) State {
+func (t TriedReadingUnwhitelistee) update() Output {
 	fail := func(msg string) HttpFail {
 		return HttpFail{
 			w:      t.w,
@@ -900,7 +1597,7 @@ type TriedReadingWhitelistee struct {
 	err         error
 }
 
-func (t TriedReadingWhitelistee) update(state State) State {
+func (t TriedReadingWhitelistee) update() Output {
 	fail := func(msg string) HttpFail {
 		return HttpFail{
 			w:      t.w,
@@ -958,7 +1655,7 @@ type SentWhitelistRequest struct {
 	done chan struct{}
 }
 
-func (s SentWhitelistRequest) update(state State) State {
+func (s SentWhitelistRequest) update() Output {
 	if s.err != nil {
 		return FailedRelay{
 			w:      s.w,
@@ -1007,14 +1704,14 @@ func makePow(info PowInfo) []byte {
 	}
 }
 
-func (c CacheDeleteRequest) handle(u UiInWithUrl) State {
+func (c CacheDeleteRequest) handle(u UiInWithUrl) Output {
 	return UiCacheDelete{
 		done: u.done,
 		path: cachePath(string(c)),
 	}
 }
 
-func (c CacheGetRequest) handle(u UiInWithUrl) State {
+func (c CacheGetRequest) handle(u UiInWithUrl) Output {
 	return UiCacheGet{
 		path: cachePath(string(c)),
 		w:    u.w,
@@ -1028,7 +1725,7 @@ type UiCacheGet struct {
 	w    http.ResponseWriter
 }
 
-func (c CacheSetRequest) handle(u UiInWithUrl) State {
+func (c CacheSetRequest) handle(u UiInWithUrl) Output {
 	return UiCacheSet{
 		done: u.done,
 		path: cachePath(string(c)),
@@ -1097,7 +1794,7 @@ func (u UiCacheDelete) output() {
 	u.done <- struct{}{}
 }
 
-func (w WhitelistAdd) handle(u UiInWithUrl) State {
+func (w WhitelistAdd) handle(u UiInWithUrl) Output {
 	return ReadWhitelistee{
 		w:    u.w,
 		r:    u.r,
@@ -1180,11 +1877,6 @@ type MaybeCode interface {
 	f()
 }
 
-func (s SendMessageRequest) update(state State) State {
-	return s
-}
-
-
 // Messages are encoded as follows:
 // + sized encoded message metadata
 // + number of blobs
@@ -1213,9 +1905,7 @@ type Code struct {
 }
 
 type Blob struct {
-	id       string
-	mime     string
-	filename string
+	hash [hashLen]byte
 	size     int
 }
 
@@ -1234,6 +1924,17 @@ func parseBytes(raw []byte, pos int) ([]byte, int, error) {
 	}
 
 	return raw[4:length], pos + length, nil
+}
+
+func parseHash(raw []byte, pos int) ([hashLen]byte, int, error) {
+	rawLen := len(raw)
+	if rawLen < pos + hashLen {
+		return *new([hashLen]byte), pos, fmt.Errorf("raw must be at least %d bytes, but got %d", hashLen, rawLen)
+	}
+
+	var hash [hashLen]byte
+	copy(hash[:], raw)
+	return hash, pos + hashLen, nil
 }
 
 func parseDraft(raw []byte) (Draft, error) {
@@ -1284,37 +1985,6 @@ func parseDraft(raw []byte) (Draft, error) {
 		code:      code,
 		blobs:     blobs,
 	}, nil
-}
-
-func parseBlob(raw []byte, pos int) (Blob, int, error) {
-	var blob Blob
-
-	id, pos, err := parseString(raw, pos)
-	if err != nil {
-		return blob, pos, err
-	}
-
-	mime, pos, err := parseString(raw, pos)
-	if err != nil {
-		return blob, pos, err
-	}
-
-	filename, pos, err := parseString(raw, pos)
-	if err != nil {
-		return blob, pos, err
-	}
-
-	size, pos, err := parseUint32(raw, pos)
-	if err != nil {
-		return blob, pos, err
-	}
-
-	return Blob{
-		id:       id,
-		mime:     mime,
-		filename: filename,
-		size:     size,
-	}, pos, nil
 }
 
 func parseUint32(raw []byte, pos int) (int, int, error) {
@@ -1379,6 +2049,14 @@ func (NoCode) f() {}
 
 const maxChunkSize = 15500
 
+func encodeUint64(theInt int64) []byte {
+	result := make([]byte, 8)
+	for i, _ := range result {
+		result[i] = byte((theInt >> (i * 8)) & 0xFF)
+	}
+	return result
+}
+
 func encodeUint32(theInt int) []byte {
 	result := make([]byte, 4)
 	for i, _ := range result {
@@ -1399,45 +2077,6 @@ func ceilDiv(a, b int) int {
 		return 1
 	}
 	return (a / b) + 1
-}
-
-func makeDraftReader(s SendMessageRequest) io.Reader {
-	blobReaders := make([]io.Reader, 2 * len(s.blobs))
-	for i, blob := range s.blobs {
-		li := i * 2
-		bi := li + 1
-
-		blobReaders[li] = bytes.NewBuffer(encodeUint32
-	}
-
-	return io.MultiReader(
-		bytes.NewBuffer(encodeUint32(len(s.rawDraft))),
-		bytes.NewBuffer(s.rawDraft),
-		bytes.NewBuffer
-}
-
-func chunkUpBytes(rs []io.Reader, ch chan EncodingChunk) {
-	for _, r := range rs {
-		for {
-			chunk := make([]byte, maxChunkSize)
-
-			n, err := r.Read(chunk)
-			if n == 0 {
-				return
-			}
-
-			if err != EOF && err != nil {
-				panic(err)
-			}
-
-			if n < maxChunkSize {
-				ch <- NotEnd(chunk[:n])
-				return
-			}
-
-			ch <- NotEnd(chunk)
-		}
-	}
 }
 
 func chunkUpDraft(raw []byte) [][]byte {
@@ -1462,7 +2101,7 @@ func chunkUpDraft(raw []byte) [][]byte {
 	return chunks
 }
 
-func (t TriedReadingDraftAndRecipient) update(state State) State {
+func (t TriedReadingDraftAndRecipient) update() Output {
 	fail := func(msg string) HttpFail {
 		return HttpFail{
 			w:      t.w,
@@ -1539,7 +2178,7 @@ func (s StartSendingDraft) output() {
 	s.done <- struct{}{}
 }
 
-func (c ChunkToSend) update(state State) State {
+func (c ChunkToSend) update() Output {
 	firstPart := make([]byte, 16+16+13)
 	copy(firstPart, constants.SendMessage)
 	copy(firstPart[16:], c.authCode)
@@ -1587,7 +2226,7 @@ type BlobToSend struct {
 	errs      chan error
 }
 
-func (b BlobToSend) update(state State) State {
+func (b BlobToSend) update() Output {
 	if b.blob.size <= maxChunkSize {
 		return SendSmallBlob{
 			path:      cachePath(b.blob.id),
@@ -1639,7 +2278,7 @@ type FailedSend struct {
 	err       error
 }
 
-func (f FailedSend) update(state State) State {
+func (f FailedSend) update() Output {
 	return HttpFail{
 		w:      f.w,
 		status: 500,
@@ -1659,7 +2298,7 @@ type WhitelistAdd struct{}
 type WhitelistRemove struct{}
 
 type Route interface {
-	handle(UiInWithUrl) State
+	handle(UiInWithUrl) Output
 }
 
 func parsePath(raw string) (Route, error) {
@@ -1698,7 +2337,7 @@ func parsePath(raw string) (Route, error) {
 	return *new(Route), errors.New("bad path: " + raw)
 }
 
-func (u UiInWithUrl) update(state State) State {
+func (u UiInWithUrl) update() Output {
 	route, err := parsePath(u.path)
 	if err != nil {
 		return HttpFail{
@@ -1762,7 +2401,7 @@ func parseUnsigned(raw []byte) (Encrypted, error) {
 }
 
 type ClientChunk interface {
-	handle() State
+	handle() Output
 }
 
 type SmallClientChunk []byte
@@ -1798,7 +2437,7 @@ type GoodNetwork struct{}
 
 type BadNetwork struct{}
 
-func (GoodNetwork) update(state State) State {
+func (GoodNetwork) update() Output {
 	msg := base64.StdEncoding.EncodeToString([]byte{4})
 	return ToWebsocket(msg)
 }
@@ -1809,7 +2448,7 @@ func (t ToWebsocket) output() {
 	TOWEBSOCKET <- []byte(t)
 }
 
-func (BadNetwork) update(state State) State {
+func (BadNetwork) update() Output {
 	msg := base64.StdEncoding.EncodeToString([]byte{3})
 	return ToWebsocket(msg)
 }
