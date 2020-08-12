@@ -304,23 +304,15 @@ blobs/
 	A flat folder full of blobs, named by hash.
 database
 	diffs
-		message_id
-		hash
-		previous_hash
+		hash // hash of all the other fields
 		start
 		end
 		insert
-		i_wrote_it
-		time
-	diff_signatures
-		message_id
-		author
-		hash
 		previous_hash
-		signature
+		time
+		author username
 	sent
 		hash
-		previous_hash
 		time
 		to
 	received
@@ -328,47 +320,43 @@ database
 		hash
 		time
 	public_keys
-		user
-		sign
-		encrypt
-	acknowledgements
-		from
-		time
-		hash
-		signature
-	my_encryption_keys
+		username
+		static_key
+	my_ephemeral_keys
 		public
 		secret
 myKeys
-	A binary file containing my public and private signing keys.
+	A binary file containing my public and private static keys, and my session key.
 log
-	A log of errors, for debugging.
+	A log of error messages, for debugging.
 
 # Server cache
 
-blobs/
-	A flat directory containing files named by their hash.
 proofOfWorkDifficulty
 	A file containing the proof of work difficulty.
 price
 	A file containing the price.
+messages/
+	a flat directory of messages, named by hash
 database
 	uploads
-		user_id
-		signed confirmation from user:
-			4 bytes: price
-			8 bytes: Unix timestamp
-			16 bytes: de 76 b4 ba 27 13 5d 9a e0 6e ca b7 5e 20 48 e4
-			32 bytes: hash of uploaded blob
+		sender username
+		4 bytes: price
+		8 bytes: Unix timestamp
+		32 bytes: hash of message
 	payments (obtained from payments provider API)
-		user_id
+		username
 		signed payment confirmation from provider
 	users
-		user_id
-		public_signing_key
-	encryption_keys
-		user_id
+		username
+		hashed session key
+	ephemeral_keys
+		username
 		key
+	tofrom
+		to username
+		from username
+		hash of message
 
 # Pricing
 
