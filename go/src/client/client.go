@@ -69,7 +69,7 @@ var POWINFO = make(chan PowInfo, 1)
 var PROOFOFWORK = make(chan [24]byte, 1)
 var CONTACTS = make(chan map[string]struct{}, 1)
 var LOG = make(chan string)
-var UNIQUEID chan string
+var UNIQUE chan int64
 var MYID [constants.IdLength]byte = getMyId()
 
 func makePaths() Paths {
@@ -98,6 +98,7 @@ func makePaths() Paths {
 		log: root + "log",
 		tmp: tmp,
 		myId: root + "myId",
+		unique: root + "unique",
 	}
 }
 
@@ -111,7 +112,7 @@ func chunkToTempFiles(encoded io.Reader) [][32]byte {
 			panic(fmt.Sprintf("failed reading multireader: ", err))
 		}
 		hash := blake2b.Sum256(chunk)
-		err := ioutil.WriteFile(PATHS.tmp(hash), chunk)
+		err := ioutil.WriteFile(PATHS.tmp(hash[:]), chunk)
 		if err != nil {
 			panic(fmt.Sprintf("failed writing temporary file: ", err))
 		}
@@ -127,8 +128,9 @@ type Paths struct {
 	database string
 	blob func([hashLen]byte) string
 	log string
-	tmp func([32]byte) string
+	tmp func([]byte) string
 	myId string
+	unique string
 }
 
 type bytesliceSet interface {
@@ -838,7 +840,7 @@ func encodeAndSend(diffs []byte, blobs [][hashLen]byte, s SendMessage) {
 	}
 	bytesSent := 0
 	for _, chunkHash := range reversed {
-		chunk, err := ioutil.ReadFile(PATHS.tmp(chunkHash))
+		chunk, err := ioutil.ReadFile(PATHS.tmp(chunkHash[:]))
 		if err != nil {
 			panic("failed reading temporary file: " + err.Error())
 		}
@@ -1190,6 +1192,27 @@ func (Start) output() {
 	OUTPUT <- StartLogger{}
 	OUTPUT <- GetPowInfo{}
 	OUTPUT <- MakeProofOfWork{}
+	OUTPUT <- StartUniqueGenerator{}
+}
+
+type StartUniqueGenerator struct{}
+
+func (StartUniqueGenerator) output() {
+	var unique int64 = 0
+	rawBytes, err := ioutil.ReadFile(PATHS.unique)
+	var raw [8]byte
+	copy(raw[:], rawBytes)
+	if err == nil {
+		unique = decodeUint64(raw)
+	}
+	for {
+		UNIQUE <- unique
+		unique++
+		err := ioutil.WriteFile(PATHS.unique, encodeUint64(unique), 0644)
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 type MakeProofOfWork struct{}
@@ -1409,7 +1432,7 @@ func decodeInt(bs []byte) int {
 	return result
 }
 
-func decodeInt64(bs [8]byte) int64 {
+func decodeUint64(bs [8]byte) int64 {
 	var result int64 = 0
 	for i, b := range bs {
 		result += int64(b) * int64Power(256, int64(i))
@@ -1446,7 +1469,7 @@ func (m MsgFromServer) update() Output {
 				copy(tempKey[:], decrypted[32:])
 				return LookupBlob{
 					hash: decrypted[:32],
-					tempKey: tempKey,
+					tempKey: &tempKey,
 					contact: contact,
 				}
 			}
@@ -1456,8 +1479,8 @@ func (m MsgFromServer) update() Output {
 }
 
 type LookupBlob struct {
-	hash []byte
-	tempKey [32]byte
+	hash [32]byte
+	tempKey *[32]byte
 	contact Contact
 }
 
@@ -1502,7 +1525,7 @@ func parseDiffFromServer(r io.Reader) (Diff, error) {
 	if err != nil {
 		return diff, fmt.Errorf("failed reading raw time: %v", err)
 	}
-	diff.time = decodeInt64(rawTime)
+	diff.time = decodeUint64(rawTime)
 
 	_, err = io.ReadFull(r, diff.author[:])
 	if err != nil {
@@ -1567,10 +1590,7 @@ func (g LookupBlob) output() {
 	for {
 		final, err := readBlobToFile(reader, blobHashes)
 		if err != nil {
-			err = deleteBlobs(blobHashes)
-			if err != nil {
-				panic("could not delete blobs after failed message decoding from %v: %v", g.contact.id, err)
-			}
+			deleteBlobs(blobHashes)
 			LOG <- fmt.Sprintf("could not read blob in message from %v: %v", g.contact.id, err)
 			return
 		}
@@ -1579,6 +1599,66 @@ func (g LookupBlob) output() {
 	err = writeDiffsToDb(diffs)
 	if err != nil {
 		panic("could not write diffs to database: " + err.Error())
+	}
+}
+
+func equalAuthors(a1, a2 [constants.IdLength]byte) bool {
+	for i, a := range a1 {
+		if a != a2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeDiffsToDb(diffs []Diff) error {
+	database, err := sql.Open("sqlite3", PATHS.database)
+	if err != nil {
+		return err
+	}
+
+	messageId := <-UNIQUE
+
+	diffStatement, err := database.Prepare("INSERT INTO diffs (message_id, hash, previous_hash, start, end, insert, i_wrote_it, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?);")
+	if err != nil {
+		return err
+	}
+
+	sigStatement, err := database.Prepare("INSERT INTO diff_signatures (message_id, author, hash, previous_hash, signature) VALUES (?, ?, ?, ?, ?);")
+	if err != nil {
+		return err
+	}
+
+	for _, diff := range diffs {
+		_, err = diffStatement.Exec(
+			messageId,
+			diff.hash,
+			diff.previousHash,
+			diff.start,
+			diff.end,
+			diff.insert,
+			false,
+			diff.time)
+		if err != nil {
+			return err
+		}
+
+		_, err = sigStatement.Exec(
+			messageId,
+			diff.author,
+			diff.hash,
+			diff.previousHash,
+			diff.signature)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteBlobs(blobHashes [][20]byte) {
+	for _, blobHash := range blobHashes {
+		_ = os.Remove(PATHS.blob(blobHash))
 	}
 }
 
@@ -1601,20 +1681,23 @@ func readBlobToFile(
 	}
 	defer tmpFile.Close()
 
-	hashHandle := blake2b.New256(nil)
+	hashHandle, err := blake2b.New256(nil)
+	if err != nil {
+		panic("cannot open hash handle: " + err.Error())
+	}
 	tee := io.TeeReader(r, hashHandle)
 
-	_, err = io.CopyN(tmpFile, tee, blobLength)
+	_, err = io.CopyN(tmpFile, tee, int64(blobLength))
 	if err != nil {
 		return false, err
 	}
 
-	hash := hashHandle.Sum([]byte{})
+	hashBytes := hashHandle.Sum([]byte{})
+	var hash [hashLen]byte
+	copy(hash[:], hashBytes)
 
-	err = os.Rename(PATHS.tmp(tmpFileName), PATHS.blob(hash))
-	if err != nil {
-		return false, err
-	}
+	err = os.Rename(PATHS.tmp(tmpFilename), PATHS.blob(hash))
+	return false, err
 }
 
 type Reader struct {
@@ -1639,15 +1722,15 @@ func getChunkStream(ch chan ByteStream, g LookupBlob) {
 		resp, err := http.Post(
 			serverApiUrl,
 			"application/octet-stream",
-			bytes.NewBuffer(append([]byte{9}, g.hash...)))
+			bytes.NewBuffer(append([]byte{9}, g.hash[:]...)))
 		if err != nil {
-			INPUTS <-BadNetwork{}
+			INPUT <-BadNetwork{}
 			return
 		}
 		defer resp.Body.Close()
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			INPUTS <-BadNetwork{}
+			INPUT <-BadNetwork{}
 			return
 		}
 		parsed, err := parseChunk(body, g.tempKey)
@@ -1703,7 +1786,16 @@ func parseChunk(raw []byte, secretKey *[32]byte) (ParsedChunk, error) {
 		final: allZeros(nextHash),
 		chunk: decrypted[32:],
 		nextHash: nextHash,
+	}, nil
+}
+
+func allZeros(hash [32]byte) bool {
+	for _, h := range hash {
+		if h != 0 {
+			return false
+		}
 	}
+	return true
 }
 
 type ParsedChunk struct {
@@ -1870,16 +1962,16 @@ type ReadUnwhitelistee struct {
 }
 
 func (r ReadUnwhitelistee) output() {
-	unwhitelistee := make([]byte, constants.IdLength)
-	n, err := r.r.Body.Read(unwhitelistee)
+	var unwhitelistee [constants.IdLength]byte
+	n, err := r.r.Body.Read(unwhitelistee[:])
 	INPUT <- TriedReadingUnwhitelistee{
 		w:             r.w,
 		done:          r.done,
 		n:             n,
 		err:           err,
-		myId:          <-MYID,
+		myId:          MYID,
 		authCode:      <-AUTHCODE,
-		secretSign:    *(<-MYKEYS).sign.secret,
+		secretSign:    (MYKEYS).sign.secret,
 		unwhitelistee: unwhitelistee,
 	}
 }
@@ -1889,10 +1981,10 @@ type TriedReadingUnwhitelistee struct {
 	done          chan struct{}
 	n             int
 	err           error
-	myId          []byte
-	authCode      []byte
-	secretSign    [64]byte
-	unwhitelistee []byte
+	myId          [constants.IdLength]byte
+	authCode      [constants.AuthCodeLength]byte
+	secretSign    *[64]byte
+	unwhitelistee [constants.IdLength]byte
 }
 
 func (t TriedReadingUnwhitelistee) update() Output {
@@ -1973,25 +2065,6 @@ func (t TriedReadingWhitelistee) update() Output {
 		body: signed,
 		done: t.done,
 		path: serverHttpUrl + "/whitelist/add",
-	}
-}
-
-type WhitelistRequest struct {
-	w    http.ResponseWriter
-	body []byte
-	done chan struct{}
-	path string
-}
-
-func (w WhitelistRequest) output() {
-	_, err := http.Post(
-		w.path,
-		"application/octet-stream",
-		bytes.NewBuffer(w.body))
-	INPUT <- SentWhitelistRequest{
-		w:    w.w,
-		err:  err,
-		done: w.done,
 	}
 }
 
