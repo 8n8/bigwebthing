@@ -64,34 +64,6 @@ packages:
       sha256: 2db26ddb77184186e0d5b2b020bdfbeb044c168024767b1fa3691682ca618896
   original:
     hackage: text-format-0.3.2@sha256:2a3fc17cf87120fcfdbca62a0da59759755549285841cdc1483081c35fb3d115,1814
-- completed:
-    hackage: aeson-1.4.7.1@sha256:6d8d2fd959b7122a1df9389cf4eca30420a053d67289f92cdc0dbc0dab3530ba,7098
-    pantry-tree:
-      size: 40133
-      sha256: caa9306e519c601ab0170d113daa03c1163db53e5466be2968bbd61a771bebcb
-  original:
-    hackage: aeson-1.4.7.1@sha256:6d8d2fd959b7122a1df9389cf4eca30420a053d67289f92cdc0dbc0dab3530ba,7098
-- completed:
-    hackage: data-fix-0.2.1@sha256:7a6cc445ac2a3bad1b9862aa82e6a39fa986602183cc1a858a16119d0b4f5fe6,936
-    pantry-tree:
-      size: 207
-      sha256: 693a85d178c08764f9da24c67ccefa0ffcd01c9d41aae87c2f8098b21bc593ab
-  original:
-    hackage: data-fix-0.2.1@sha256:7a6cc445ac2a3bad1b9862aa82e6a39fa986602183cc1a858a16119d0b4f5fe6,936
-- completed:
-    hackage: repline-0.2.2.0@sha256:bd1be2875df20a823a68854cadcdf9d4a8a64185b88e82a0408ffa64170b8ef4,1266
-    pantry-tree:
-      size: 323
-      sha256: 4c98161db04ce4971d6c3b7fbf9a5190b95170d7b51c1843f19d4d41931a1f8d
-  original:
-    hackage: repline-0.2.2.0@sha256:bd1be2875df20a823a68854cadcdf9d4a8a64185b88e82a0408ffa64170b8ef4,1266
-- completed:
-    hackage: template-haskell-2.15.0.0@sha256:6e803fbff5069effa18a921c76b3fed4535542e0721b464f38012b2f9eb66562,1894
-    pantry-tree:
-      size: 850
-      sha256: f791cf4dc36c6205e259019389bff7c4a146ef06117f36d63a571521d147779b
-  original:
-    hackage: template-haskell-2.15.0.0@sha256:6e803fbff5069effa18a921c76b3fed4535542e0721b464f38012b2f9eb66562,1894
 snapshots:
 - completed:
     size: 520859

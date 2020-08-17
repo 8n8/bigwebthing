@@ -24,6 +24,7 @@ import qualified Crypto.Hash.BLAKE2.BLAKE2b as Blake
 import qualified System.IO as Io
 import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
+import Data.Word (Word8)
 
 
 main :: IO ()
@@ -105,7 +106,7 @@ io output =
 
         WriteToHandleO handle bytes path -> do
             Bl.hPut handle bytes
-            return $ Just $ WrittenToTmpM path
+            return $ Just $ WrittenToHandleM path handle
 
         MoveFileO oldPath newPath -> do
             Dir.renameFile oldPath newPath
@@ -116,7 +117,11 @@ io output =
                 q_ <- q
                 Q.writeTQueue q_ bytes
             return Nothing
-            
+
+        CloseFileO handle -> do
+            Io.hClose handle
+            return Nothing
+
 
 httpApi :: IO Wai.Application
 httpApi =
@@ -127,19 +132,29 @@ httpApi =
             Sc.file $ "static/" ++ requested
 
         Sc.post "/setblob" $
-            let
-                responseQ :: Stm.STM (Q.TQueue Bl.ByteString)
-                responseQ =
-                    Q.newTQueue
-            in do
-                body <- Sc.body
-                liftIO $ Stm.atomically $ do
-                    q <- msgQ
-                    Q.writeTQueue q $ SetBlobM body Q.newTQueue
-                response <- liftIO $ Stm.atomically $ do
-                    q <- responseQ
-                    Q.readTQueue q
-                Sc.raw response
+            httpPost SetBlobM
+
+        Sc.post "/api" $
+            httpPost UiApiM
+
+
+httpPost
+    :: (Bl.ByteString -> Stm.STM (Q.TQueue Bl.ByteString) -> Msg)
+    -> Sc.ActionM ()
+httpPost msg =
+    let
+        responseQ :: Stm.STM (Q.TQueue Bl.ByteString)
+        responseQ =
+            Q.newTQueue
+    in do
+        body <- Sc.body
+        liftIO $ Stm.atomically $ do
+            q <- msgQ
+            Q.writeTQueue q $ msg body Q.newTQueue
+        response <- liftIO $ Stm.atomically $ do
+            q <- responseQ
+            Q.readTQueue q
+        Sc.raw response
 
 
 clientPort :: Int
@@ -166,6 +181,7 @@ data Output
     | WriteToHandleO Io.Handle Bl.ByteString FilePath
     | MoveFileO FilePath FilePath
     | BytesInQO (Stm.STM (Q.TQueue Bl.ByteString)) Bl.ByteString
+    | CloseFileO Io.Handle
 
 
 data Msg
@@ -176,8 +192,9 @@ data Msg
     | BatchM [Maybe Msg]
     | SetBlobM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
     | TmpFileHandleM FilePath Io.Handle
-    | WrittenToTmpM FilePath
+    | WrittenToHandleM FilePath Io.Handle
     | MovedFileM FilePath
+    | UiApiM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
 
 
 websocket :: Ws.ServerApp
@@ -286,11 +303,142 @@ update model msg =
         TmpFileHandleM path handle ->
             onTmpFileHandleUpdate path handle model
 
-        WrittenToTmpM path ->
-            onWrittenToTmp path model
+        WrittenToHandleM path handle ->
+            onWrittenToTmp path handle model
 
         MovedFileM new ->
             onMovedFile new model
+
+        UiApiM body q ->
+            case parseApiInput body of
+                Left err ->
+                    ( ErrorO $ "couldn't parse API input: " <> err
+                    , FailedS
+                    )
+                Right apiInput ->
+                    uiApiUpdate apiInput q model
+
+
+parseApiInput :: Bl.ByteString -> Either String ApiInput 
+parseApiInput raw =
+    P.eitherResult $ P.parse apiInputP $ Bl.toStrict raw
+
+
+newtype UserId =
+    UserId Integer
+
+
+newtype Hash20 =
+    Hash20 B.ByteString
+
+
+userIdP :: P.Parser UserId
+userIdP = do
+    size <- P.anyWord8
+    userId <- P.take $ fromIntegral size
+    return $ UserId $ decodeInt userId
+
+
+decodeInt :: B.ByteString -> Integer
+decodeInt raw =
+    decodeIntHelp (B.unpack raw) 0 0
+        
+
+decodeIntHelp :: [Word8] -> Integer -> Integer -> Integer
+decodeIntHelp raw counter accum =
+    case raw of
+        [] ->
+            accum
+
+        r : aw ->
+            decodeIntHelp
+                aw
+                (counter + 1)
+                (accum + (fromIntegral r) * 256 ^ counter)
+
+
+hash20P :: P.Parser Hash20
+hash20P = do
+    hash <- P.take 20
+    return $ Hash20 hash
+
+
+hash32P :: P.Parser Hash32
+hash32P = do
+    hash <- P.take 32
+    return $ Hash32 hash
+
+
+data ApiInput
+    = SetSnapshotA B.ByteString B.ByteString
+    | SendMessageA Hash20 Hash20 UserId
+    | AddToWhitelistA UserId
+    | RemoveFromWhitelistA UserId
+    | GetBlobA Hash32
+    | GetMessageA Hash20 Hash20
+    | GetWhitelistA
+    | GetMyIdA
+    | GetDraftsSummaryA
+    | GetSentSummaryA
+    | GetInboxSummaryA
+
+
+apiInputP :: P.Parser ApiInput
+apiInputP = do
+    P.choice
+        [ do
+            _ <- P.word8 0
+            previous <- bytesP
+            new <- P.takeByteString
+            return $ SetSnapshotA previous new
+        , do
+            _ <- P.word8 1
+            previous <- hash20P
+            new <- hash20P
+            userId <- userIdP
+            return $ SendMessageA previous new userId
+        , do
+            _ <- P.word8 2
+            userId <- userIdP
+            return $ AddToWhitelistA userId
+        , do
+            _ <- P.word8 3
+            userId <- userIdP
+            return $ RemoveFromWhitelistA userId
+        , do
+            _ <- P.word8 4
+            hash <- hash32P
+            return $ GetBlobA hash
+        , do
+            _ <- P.word8 5
+            previous <- hash20P
+            new <- hash20P
+            return $ GetMessageA previous new
+        , do
+            _ <- P.word8 6
+            return GetWhitelistA
+        , do
+            _ <- P.word8 7
+            return GetMyIdA
+        , do
+            _ <- P.word8 8
+            return GetDraftsSummaryA
+        , do
+            _ <- P.word8 9 
+            return GetSentSummaryA
+        , do
+            _ <- P.word8 10
+            return GetInboxSummaryA
+        ]
+
+
+uiApiUpdate
+    :: ApiInput
+    -> Stm.STM (Q.TQueue Bl.ByteString)
+    -> State
+    -> (Output, State)
+uiApiUpdate apiInput responseQ model =
+    undefined
 
 
 onMovedFile :: FilePath -> State -> (Output, State)
@@ -324,8 +472,8 @@ onMovedFile new model =
             (DoNothingO, model)
 
 
-onWrittenToTmp :: FilePath -> State -> (Output, State)
-onWrittenToTmp writtenPath model =
+onWrittenToTmp :: FilePath -> Io.Handle -> State -> (Output, State)
+onWrittenToTmp writtenPath handle model =
     case model of
         EmptyS ->
             (DoNothingO, model)
@@ -344,7 +492,10 @@ onWrittenToTmp writtenPath model =
                 let
                     blobPath = makeBlobPath rootPath hash
                 in
-                    ( MoveFileO writtenPath blobPath
+                    ( BatchO
+                        [ MoveFileO writtenPath blobPath
+                        , CloseFileO handle
+                        ]
                     , MainS
                         rootPath
                         keys
@@ -502,6 +653,26 @@ errToText e =
 parseKeys :: B.ByteString -> Either T.Text StaticKeys
 parseKeys raw =
     errToText $ P.eitherResult $ P.parse myKeysP raw
+
+
+uint32P :: P.Parser Int
+uint32P = do
+    b0 <- uint8P
+    b1 <- uint8P
+    b2 <- uint8P
+    b3 <- uint8P
+    return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
+
+
+uint8P :: P.Parser Int
+uint8P =
+    fromIntegral <$> P.anyWord8
+
+
+bytesP :: P.Parser B.ByteString
+bytesP = do
+    n <- uint32P
+    P.take n
 
 
 sessionKeyLength :: Int

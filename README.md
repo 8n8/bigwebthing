@@ -83,22 +83,22 @@ Messages can take the following form:
 	Set snapshot
 		Request
 			1 byte: 0
-			sized string: previous snapshot
+			sized bytes: previous snapshot
 			string: new snapshot
 	Send message
 		Request
 			1 byte: 1
-			20 bytes: snapshot hash
 			20 bytes: previous hash
-			user ID
+			20 bytes: snapshot hash
+            sized user ID
 	Add to whitelist
 		Request
 			1 byte: 2
-			user ID
+			sized user ID
 	Remove from whitelist
 		Request
 			1 byte: 3
-			user ID
+			sized user ID
 	Get blob
 		Request
 			1 byte: 4
@@ -108,8 +108,8 @@ Messages can take the following form:
 	Get message
 		Request
 			1 byte: 5
-			20 bytes: snapshot hash
 			20 bytes: previous hash
+			20 bytes: snapshot hash
 		Response
 			message
 	Get whitelist
