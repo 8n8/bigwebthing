@@ -17,7 +17,7 @@
 #
 # resolver: ./custom-snapshot.yaml
 # resolver: https://example.com/snapshots/2018-01-01.yaml
-resolver: lts-16.5
+resolver: nightly-2020-08-15
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -43,9 +43,21 @@ packages:
 
 extra-deps:
 - dhall-1.30.0@sha256:38d6c37fda7fc5d32bd90cd6172efe25a4eb7c9949c0ce015a4be500c7825fdd,32875
+- sqlite-simple-0.4.18.0@sha256:3ceea56375c0a3590c814e411a4eb86943f8d31b93b110ca159c90689b6b39e5,3002
+- direct-sqlite-2.3.26@sha256:04e835402f1508abca383182023e4e2b9b86297b8533afbd4e57d1a5652e0c23,3718
+- github: lettier/webviewhs
+  commit: 21ddd4b4872b2e7eb50c9735e70cfbdedf2c6c1a
+- liquidhaskell-0.8.10.1@sha256:4d71d01c8d7b42ffd6b7a6a926dd0b2893105a8d91f1576394a490c28031e92d,15674
+- Diff-0.3.4@sha256:5ab20a407f9e65d13b642c3cd414906a40280343a31b388f6ed69b9228fe42c1,1127
+- liquid-fixpoint-0.8.10.1@sha256:7b40e5d29b72504014fc289bb4807330996c63b37fc33b40a906664c1ea074b1,7291
+- text-format-0.3.2@sha256:2a3fc17cf87120fcfdbca62a0da59759755549285841cdc1483081c35fb3d115,1814
+
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
+flags:
+  webviewhs:
+    light: true
 
 # Extra package databases containing global packages
 # extra-package-dbs: []

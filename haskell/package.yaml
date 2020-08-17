@@ -20,10 +20,8 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
-- streamly
 - bytestring
 - text
-- network-simple
 - stm
 - attoparsec
 - wai-websockets
@@ -31,11 +29,16 @@ dependencies:
 - warp
 - websockets
 - scotty
-- cryptohash-sha256
 - http-types
 - containers
 - directory
-- req
+- cacophony
+- filepath
+- sqlite-simple
+- webviewhs
+- liquidhaskell
+- blake2
+- base64-bytestring
 
 library:
   source-dirs: src

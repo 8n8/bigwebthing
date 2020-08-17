@@ -190,59 +190,48 @@ The maximum request body size is 16KB.
 			1 byte: 0
 			24 bytes: proof of work
 			16 bytes: random session key
-			32 bytes: public static key
 		Response:
 			username
-	Get signing key for username
-		Request
-			1 byte: 1
-			username
-		Response
-			either
-				1 byte: 0 (the key doesn't exist)
-			or
-				1 byte: 1 (the key exists)
-				32 bytes: the key
 	Get proof of work info
 		Request
-			1 byte: 2
+			1 byte: 1
 		Response
 			1 byte: difficulty
 			16 bytes: random
 	Send message
 		Request
-			1 byte: 3
+			1 byte: 2
 			16 bytes: session key
 			sized bytes: my username
 			sized bytes: recipient username
 			message
 	Download message
 		Request
-			1 byte: 4
+			1 byte: 3
 			16 bytes: session key
 			sized bytes: my username
 			32 bytes: message hash
 	Delete message
 		Request
-			1 byte: 5
+			1 byte: 4
 			16 bytes: session key
 			sized bytes: my username
 			32 bytes: message hash
 	Get price
 		Request
-			1 byte: 6 
+			1 byte: 5 
 		Response
 			4 bytes: price in GBP^-4
 	Get ephemeral key for user:
 		Request:
-			1 byte: 7
+			1 byte: 6
 			24 bytes: proof of work
 			sized bytes: their username
 		Response:
 			a key or empty if there isn't one
 	Upload ephemeral key:
 		Request:
-			1 byte: 8
+			1 byte: 7
 			16 bytes: session key
 			sized bytes: my username
 			32 bytes: the key
@@ -319,14 +308,14 @@ database
 		from
 		hash
 		time
-	public_keys
+	fingerprints
 		username
-		static_key
+		fingerprint
 	my_ephemeral_keys
 		public
 		secret
 myKeys
-	A binary file containing my public and private static keys, and my session key.
+	A binary file containing my private static key and my session key.
 log
 	A log of error messages, for debugging.
 

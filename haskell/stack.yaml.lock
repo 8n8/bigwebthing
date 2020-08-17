@@ -11,9 +11,90 @@ packages:
       sha256: 04ab967ef886c3cbf95cef574d8e906a81be3cb56ca192921ea280aaf1fa0f42
   original:
     hackage: dhall-1.30.0@sha256:38d6c37fda7fc5d32bd90cd6172efe25a4eb7c9949c0ce015a4be500c7825fdd,32875
+- completed:
+    hackage: sqlite-simple-0.4.18.0@sha256:3ceea56375c0a3590c814e411a4eb86943f8d31b93b110ca159c90689b6b39e5,3002
+    pantry-tree:
+      size: 1930
+      sha256: e58b9955e483d51ee0966f8ba4384305d871480e2a38b32ee0fcd4573d74cf95
+  original:
+    hackage: sqlite-simple-0.4.18.0@sha256:3ceea56375c0a3590c814e411a4eb86943f8d31b93b110ca159c90689b6b39e5,3002
+- completed:
+    hackage: direct-sqlite-2.3.26@sha256:04e835402f1508abca383182023e4e2b9b86297b8533afbd4e57d1a5652e0c23,3718
+    pantry-tree:
+      size: 770
+      sha256: 11874ab21e10c5b54cd1e02a037b677dc1e2ee9986f38c599612c56654dc01c3
+  original:
+    hackage: direct-sqlite-2.3.26@sha256:04e835402f1508abca383182023e4e2b9b86297b8533afbd4e57d1a5652e0c23,3718
+- completed:
+    size: 88815
+    url: https://github.com/lettier/webviewhs/archive/21ddd4b4872b2e7eb50c9735e70cfbdedf2c6c1a.tar.gz
+    name: webviewhs
+    version: 0.1.0.0
+    sha256: 22ae32733f4d6ee9d2426bbac744738d501daff3cb3634fc8e95b8de15d3655d
+    pantry-tree:
+      size: 4168
+      sha256: 3b13369a771be7e6b7554ae23b311f80e256c8dece6cbf69674a7c63bcedde61
+  original:
+    url: https://github.com/lettier/webviewhs/archive/21ddd4b4872b2e7eb50c9735e70cfbdedf2c6c1a.tar.gz
+- completed:
+    hackage: liquidhaskell-0.8.10.1@sha256:4d71d01c8d7b42ffd6b7a6a926dd0b2893105a8d91f1576394a490c28031e92d,15674
+    pantry-tree:
+      size: 69381
+      sha256: e2f25ebf7b83c10cf432a1fe33bd40fdb0ed361931416a2f93da80bd32f12032
+  original:
+    hackage: liquidhaskell-0.8.10.1@sha256:4d71d01c8d7b42ffd6b7a6a926dd0b2893105a8d91f1576394a490c28031e92d,15674
+- completed:
+    hackage: Diff-0.3.4@sha256:5ab20a407f9e65d13b642c3cd414906a40280343a31b388f6ed69b9228fe42c1,1127
+    pantry-tree:
+      size: 416
+      sha256: 48d1b942ff99293d69a8ca4ea60f372093e5aeea73f63d11829ceca01d63c7fd
+  original:
+    hackage: Diff-0.3.4@sha256:5ab20a407f9e65d13b642c3cd414906a40280343a31b388f6ed69b9228fe42c1,1127
+- completed:
+    hackage: liquid-fixpoint-0.8.10.1@sha256:7b40e5d29b72504014fc289bb4807330996c63b37fc33b40a906664c1ea074b1,7291
+    pantry-tree:
+      size: 14011
+      sha256: 6bde6d15104bc05dfcede4eb85469adc333844660ca7f8404eeebe6a6d401065
+  original:
+    hackage: liquid-fixpoint-0.8.10.1@sha256:7b40e5d29b72504014fc289bb4807330996c63b37fc33b40a906664c1ea074b1,7291
+- completed:
+    hackage: text-format-0.3.2@sha256:2a3fc17cf87120fcfdbca62a0da59759755549285841cdc1483081c35fb3d115,1814
+    pantry-tree:
+      size: 1029
+      sha256: 2db26ddb77184186e0d5b2b020bdfbeb044c168024767b1fa3691682ca618896
+  original:
+    hackage: text-format-0.3.2@sha256:2a3fc17cf87120fcfdbca62a0da59759755549285841cdc1483081c35fb3d115,1814
+- completed:
+    hackage: aeson-1.4.7.1@sha256:6d8d2fd959b7122a1df9389cf4eca30420a053d67289f92cdc0dbc0dab3530ba,7098
+    pantry-tree:
+      size: 40133
+      sha256: caa9306e519c601ab0170d113daa03c1163db53e5466be2968bbd61a771bebcb
+  original:
+    hackage: aeson-1.4.7.1@sha256:6d8d2fd959b7122a1df9389cf4eca30420a053d67289f92cdc0dbc0dab3530ba,7098
+- completed:
+    hackage: data-fix-0.2.1@sha256:7a6cc445ac2a3bad1b9862aa82e6a39fa986602183cc1a858a16119d0b4f5fe6,936
+    pantry-tree:
+      size: 207
+      sha256: 693a85d178c08764f9da24c67ccefa0ffcd01c9d41aae87c2f8098b21bc593ab
+  original:
+    hackage: data-fix-0.2.1@sha256:7a6cc445ac2a3bad1b9862aa82e6a39fa986602183cc1a858a16119d0b4f5fe6,936
+- completed:
+    hackage: repline-0.2.2.0@sha256:bd1be2875df20a823a68854cadcdf9d4a8a64185b88e82a0408ffa64170b8ef4,1266
+    pantry-tree:
+      size: 323
+      sha256: 4c98161db04ce4971d6c3b7fbf9a5190b95170d7b51c1843f19d4d41931a1f8d
+  original:
+    hackage: repline-0.2.2.0@sha256:bd1be2875df20a823a68854cadcdf9d4a8a64185b88e82a0408ffa64170b8ef4,1266
+- completed:
+    hackage: template-haskell-2.15.0.0@sha256:6e803fbff5069effa18a921c76b3fed4535542e0721b464f38012b2f9eb66562,1894
+    pantry-tree:
+      size: 850
+      sha256: f791cf4dc36c6205e259019389bff7c4a146ef06117f36d63a571521d147779b
+  original:
+    hackage: template-haskell-2.15.0.0@sha256:6e803fbff5069effa18a921c76b3fed4535542e0721b464f38012b2f9eb66562,1894
 snapshots:
 - completed:
-    size: 531707
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/16/5.yaml
-    sha256: 9751e25e0af5713a53ddcfcc79564b082c71b1b357fadef0d85672a5b5ba3703
-  original: lts-16.5
+    size: 520859
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2020/8/15.yaml
+    sha256: 1e0aa20d7651982298ee4865963f903da072f2536b1f7e2bce75650cf6312f25
+  original: nightly-2020-08-15

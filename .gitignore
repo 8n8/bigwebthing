@@ -25,3 +25,5 @@ purescript/.spago/
 static/main.js
 haskell/haskell.cabal
 main.pdf
+*.hie
+haskell/haskell.cabal
