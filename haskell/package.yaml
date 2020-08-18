@@ -39,6 +39,7 @@ dependencies:
 - liquidhaskell
 - blake2
 - base64-bytestring
+- time
 
 library:
   source-dirs: src

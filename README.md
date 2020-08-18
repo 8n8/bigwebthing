@@ -87,6 +87,8 @@ Backend to frontend:
     Inbox summary
         1 byte: 10
         inbox summary
+    Backend ready
+        1 byte: 11
 
 Frontend to backend:
 
@@ -311,7 +313,7 @@ database
 		public
 		secret
 myKeys
-	A binary file containing my private static key and my session key.
+	A binary file containing my private static key, session key, and username.
 log
 	A log of error messages, for debugging.
 

@@ -25,6 +25,8 @@ import qualified System.IO as Io
 import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
+import Control.Concurrent (forkIO)
+import qualified Data.Time.Clock as Time
 
 
 main :: IO ()
@@ -74,6 +76,11 @@ io output =
                 Sql.execute_ conn query
             return Nothing
 
+        DbExecuteO path query params -> do
+            Sql.withConnection path $ \conn ->
+                Sql.execute conn query params
+            return Nothing
+
         BatchO outputs -> do
             inputs <- mapM io outputs
             return $ Just $ BatchM inputs
@@ -121,6 +128,11 @@ io output =
         CloseFileO handle -> do
             Io.hClose handle
             return Nothing
+
+        GetTimeO -> do
+            time <- Time.getCurrentTime
+            return $ Just $ TheTimeM time
+
 
 
 httpApi :: IO Wai.Application
@@ -173,6 +185,7 @@ data Output
     | DoNothingO
     | ReadFileO FilePath
     | DbExecute_O FilePath Sql.Query
+    | DbExecuteO FilePath Sql.Query Diff
     | BatchO [Output]
     | StartUiO
     | StartUiServerO
@@ -182,6 +195,7 @@ data Output
     | MoveFileO FilePath FilePath
     | BytesInQO (Stm.STM (Q.TQueue Bl.ByteString)) Bl.ByteString
     | CloseFileO Io.Handle
+    | GetTimeO
 
 
 data Msg
@@ -194,7 +208,9 @@ data Msg
     | TmpFileHandleM FilePath Io.Handle
     | WrittenToHandleM FilePath Io.Handle
     | MovedFileM FilePath
-    | UiApiM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
+    | GetBlobM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
+    | FromWebsocketM Ws.DataMessage
+    | TheTimeM Time.UTCTime
 
 
 websocket :: Ws.ServerApp
@@ -263,14 +279,16 @@ newtype Iota
 
 
 data State
-    = EmptyS
+    = Ready
+        { rootS :: RootPath
+        , keysS :: StaticKeys
+        , blobsUpS :: [BlobUploading]
+        , setSnapsS :: [SetSnapshot]
+        }
+    | EmptyS
     | FailedS
     | MakingRootDirS RootPath
-    | MainS
-        RootPath
-        (Maybe StaticKeys)
-        [BlobUploading]
-        [SetSnapshot]
+    | NoKeysS RootPath
 
 
 data SetSnapshot
@@ -330,14 +348,130 @@ update model msg =
         MovedFileM new ->
             onMovedFile new model
 
-        UiApiM body q ->
-            case parseApiInput body of
-                Left err ->
-                    ( ErrorO $ "couldn't parse API input: " <> err
+        FromWebsocketM raw ->
+            case raw of
+                Ws.Text _ _ ->
+                    ( ErrorO "received text message from websocket"
                     , FailedS
                     )
-                Right apiInput ->
-                    uiApiUpdate apiInput q model
+
+                Ws.Binary bin ->
+                    case parseApiInput bin of
+                        Left err ->
+                            ( ErrorO $
+                                "couldn't parse API input: " <> err
+                            , FailedS
+                            )
+
+                        Right apiInput ->
+                            uiApiUpdate apiInput model
+
+        TheTimeM t ->
+            onTimeUpdate t model
+
+        GetBlobM _ _ ->
+            undefined
+
+
+onTimeUpdate :: Time.UTCTime -> State -> (Output, State)
+onTimeUpdate t model =
+    case model of
+        EmptyS ->
+            (DoNothingO, model)
+
+        FailedS ->
+            (DoNothingO, model)
+
+        MakingRootDirS _ ->
+            (DoNothingO, model)
+
+        NoKeysS _ ->
+            (DoNothingO, model)
+
+        Ready _ _ _ [] ->
+            (DoNothingO, model)
+
+        Ready root keys@(StaticKeys _ _ userId) blobs (s:naps) ->
+            let
+                (query, params) = makeDiffDbInsert userId s t
+            in
+                ( DbExecuteO (dbPath root) query params
+                , Ready root keys blobs naps
+                )
+
+
+makeDiffDbInsert
+    :: UserId
+    -> SetSnapshot
+    -> Time.UTCTime
+    -> (Sql.Query, Diff)
+makeDiffDbInsert (UserId userId) (TimeS previous next) t =
+    let
+        (start, end, insert) = makeDiff previous next
+        (Hash20 previousHash) = hash20 previous
+        (Hash20 hash) = hash20 next
+    in
+        ( "INSERT INTO diffs (\n\
+          \    hash,\n\
+          \    previous_hash,\n\
+          \    start,\n\
+          \    end,\n\
+          \    insert,\n\
+          \    time,\n\
+          \    author)\n\
+          \VALUES (?, ?, ?, ?, ?, ?, ?);"
+        , (hash, previousHash, start, end, insert, t, userId)
+        )
+
+
+type Diff =
+    ( B.ByteString
+    , B.ByteString
+    , Int
+    , Int
+    , B.ByteString
+    , Time.UTCTime
+    , Integer
+    )
+
+
+makeDiff :: B.ByteString -> B.ByteString -> (Int, Int, B.ByteString)
+makeDiff previous next =
+    let
+        prevUnpack = B.unpack previous
+        nextUnpack = B.unpack next
+        zipForward = zip prevUnpack nextUnpack
+        zipBackward = zip (reverse prevUnpack) (reverse nextUnpack)
+        start = countIdentical zipForward
+        end = length zipBackward - (countIdentical zipBackward) 
+        newEnd = end + length prevUnpack - length nextUnpack
+        insert = B.pack $ drop start $ drop newEnd nextUnpack
+    in
+        (start, end, insert)
+
+
+countIdentical :: [(Word8, Word8)] -> Int
+countIdentical zipped =
+    countIdenticalHelp zipped 0
+
+
+countIdenticalHelp :: [(Word8, Word8)] -> Int -> Int
+countIdenticalHelp zipped count =
+    case zipped of
+        [] ->
+            count
+
+        (z1, z2) : ipped ->
+            if z1 == z2 then
+                countIdenticalHelp ipped $ count + 1
+            else
+                count
+            
+
+hash20 :: B.ByteString -> Hash20
+hash20 bytes =
+    (Hash20 . Blake.finalize 20 . Blake.update bytes)
+     (Blake.initialize 20)
 
 
 parseApiInput :: Bl.ByteString -> Either String ApiInput 
@@ -396,7 +530,6 @@ data ApiInput
     | SendMessageA Hash20 Hash20 UserId
     | AddToWhitelistA UserId
     | RemoveFromWhitelistA UserId
-    | GetBlobA Hash32
     | GetMessageA Hash20 Hash20
     | GetWhitelistA
     | GetMyIdA
@@ -428,10 +561,6 @@ apiInputP = do
             userId <- userIdP
             return $ RemoveFromWhitelistA userId
         , do
-            _ <- P.word8 4
-            hash <- hash32P
-            return $ GetBlobA hash
-        , do
             _ <- P.word8 5
             previous <- hash20P
             new <- hash20P
@@ -456,22 +585,47 @@ apiInputP = do
 
 uiApiUpdate
     :: ApiInput
-    -> Stm.STM (Q.TQueue Bl.ByteString)
     -> State
     -> (Output, State)
-uiApiUpdate apiInput responseQ model =
+uiApiUpdate apiInput model =
     case apiInput of
         SetSnapshotA before after ->
-            onSetSnapshot before after responseQ model
+            onSetSnapshot before after model
+
+        SendMessageA _ _ _ ->
+            undefined
+
+        AddToWhitelistA _ ->
+            undefined
+
+        RemoveFromWhitelistA _ ->
+            undefined
+
+        GetMessageA _ _ ->
+            undefined
+
+        GetWhitelistA ->
+            undefined
+
+        GetMyIdA ->
+            undefined
+
+        GetDraftsSummaryA ->
+            undefined
+
+        GetSentSummaryA ->
+            undefined
+
+        GetInboxSummaryA ->
+            undefined
 
 
 onSetSnapshot
     :: B.ByteString
     -> B.ByteString
-    -> Stm.STM (Q.TQueue Bl.ByteString)
     -> State
     -> (Output, State)
-onSetSnapshot before after q model =
+onSetSnapshot before after model =
     case model of
         EmptyS ->
             (DoNothingO, model)
@@ -482,11 +636,13 @@ onSetSnapshot before after q model =
         MakingRootDirS _ ->
             (DoNothingO, model)
 
-        MainS root keys blobs setSnaps ->
-            ( GetTimeO
-            , MainS root keys blobs (TimeS before after q)
+        NoKeysS _ ->
+            (DoNothingO, model)
 
-            
+        Ready root keys blobs setSnaps ->
+            ( GetTimeO
+            , Ready root keys blobs (TimeS before after : setSnaps)
+            )
 
 
 onMovedFile :: FilePath -> State -> (Output, State)
@@ -501,22 +657,25 @@ onMovedFile new model =
         MakingRootDirS _ ->
             (DoNothingO, model)
 
-        MainS _ _ [] ->
+        NoKeysS _ ->
             (DoNothingO, model)
 
-        MainS rootPath keys (AwaitingMoveB q (Hash32 hash) toPath : lobs) ->
+        Ready _ _ [] _ ->
+            (DoNothingO, model)
+
+        Ready rootPath keys (AwaitingMoveB q (Hash32 hash) toPath : lobs) snaps ->
             if toPath == new then
                 ( BytesInQO q (Bl.singleton 1 <> Bl.fromStrict hash) 
-                , MainS rootPath keys lobs
+                , Ready rootPath keys lobs snaps
                 )
 
             else
                 ( DoNothingO, model)
 
-        MainS _ _ (AwaitingTmpWriteB _ _ _ : _) ->
+        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ ->
             (DoNothingO, model)
 
-        MainS _ _ (AwaitingHandleB _ _ _ : _) ->
+        Ready _ _ (AwaitingHandleB _ _ _ : _) _ ->
             (DoNothingO, model)
 
 
@@ -532,10 +691,13 @@ onWrittenToTmp writtenPath handle model =
         MakingRootDirS _ ->
             (DoNothingO, model)
 
-        MainS _ _ [] ->
+        NoKeysS _ ->
             (DoNothingO, model)
 
-        MainS rootPath keys (AwaitingTmpWriteB q hash expectPath : lobs) ->
+        Ready _ _ [] _ ->
+            (DoNothingO, model)
+
+        Ready rootPath keys (AwaitingTmpWriteB q hash expectPath : lobs) snaps ->
             if writtenPath == expectPath then
                 let
                     blobPath = makeBlobPath rootPath hash
@@ -544,18 +706,19 @@ onWrittenToTmp writtenPath handle model =
                         [ MoveFileO writtenPath blobPath
                         , CloseFileO handle
                         ]
-                    , MainS
+                    , Ready
                         rootPath
                         keys
                         (AwaitingMoveB q hash blobPath : lobs)
+                        snaps
                     )
             else
                 (DoNothingO, model)
 
-        MainS _ _ (AwaitingHandleB _ _ _ : _) ->
+        Ready _ _ (AwaitingHandleB _ _ _ : _) _ ->
             (DoNothingO, model)
 
-        MainS _ _ (AwaitingMoveB _ _ _ : _) ->
+        Ready _ _ (AwaitingMoveB _ _ _ : _) _ ->
             (DoNothingO, model)
 
 
@@ -585,21 +748,25 @@ onTmpFileHandleUpdate path handle model =
         MakingRootDirS _ ->
             (DoNothingO, model)
 
-        MainS _ _ [] ->
+        NoKeysS _ ->
             (DoNothingO, model)
 
-        MainS rootPath keys (AwaitingHandleB q blob hash : lobs) ->
+        Ready _ _ [] _ ->
+            (DoNothingO, model)
+
+        Ready root keys (AwaitingHandleB q blob hash : lobs) snaps ->
             ( WriteToHandleO handle blob path
-            , MainS
-                rootPath
+            , Ready
+                root
                 keys
                 (AwaitingTmpWriteB q hash path : lobs)
+                snaps
             )
 
-        MainS _ _ (AwaitingTmpWriteB _ _ _ : _) ->
+        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ ->
             (DoNothingO, model)
 
-        MainS _ _ (AwaitingMoveB _ _ _ : _) ->
+        Ready _ _ (AwaitingMoveB _ _ _ : _) _ ->
             (DoNothingO, model)
 
 
@@ -619,9 +786,12 @@ setBlobUpdate blob responseQ model =
         MakingRootDirS _ ->
             (DoNothingO, model)
 
-        MainS rootPath keys blobs ->
+        NoKeysS _ -> 
+            (DoNothingO, model)
+
+        Ready rootPath keys blobs snaps ->
             ( GetTmpFileHandleO $ tempPath rootPath
-            , MainS
+            , Ready
                 rootPath
                 keys
                 (AwaitingHandleB
@@ -629,6 +799,7 @@ setBlobUpdate blob responseQ model =
                     blob
                     (hash32 blob) :
                 blobs)
+                snaps
             )
 
 
@@ -678,13 +849,13 @@ fileContentsUpdate path contents model =
         MakingRootDirS _ ->
             (DoNothingO, model)
 
-        MainS root Nothing blobs ->
+        NoKeysS root ->
             if path == keysPath root then
-                rawKeysUpdate contents root blobs
+                rawKeysUpdate contents root
             else
                 (DoNothingO, model)
 
-        MainS _ (Just _) _ ->
+        Ready _ _ _ _ ->
             (DoNothingO, model)
 
 
@@ -731,17 +902,18 @@ sessionKeyLength =
 myKeysP :: P.Parser StaticKeys
 myKeysP = do
     sessionKey <- P.take sessionKeyLength
+    userId <- userIdP
     rawDhKey <- P.takeByteString
     case Dh.dhBytesToPair $ Noise.convert rawDhKey of
         Nothing ->
             fail "could not parse secret key from file"
 
         Just dhKeys ->
-            return $ StaticKeys dhKeys (SessionKey sessionKey)
+            return $ StaticKeys dhKeys (SessionKey sessionKey) userId
 
         
-rawKeysUpdate :: B.ByteString -> RootPath -> [BlobUploading] -> (Output, State)
-rawKeysUpdate rawKeys root blobs =
+rawKeysUpdate :: B.ByteString -> RootPath ->(Output, State)
+rawKeysUpdate rawKeys root =
     case parseKeys rawKeys of
         Left err ->
             ( ErrorO $ T.unpack $
@@ -750,20 +922,23 @@ rawKeysUpdate rawKeys root blobs =
             )
 
         Right keys ->
-            ( DoNothingO, MainS root (Just keys) blobs)
+            ( BytesInQO toWebsocketQ (Bl.singleton 11)
+            , Ready root keys [] []
+            )
 
 
 setupDatabase :: RootPath -> Output
 setupDatabase (RootPath root) =
     BatchO $ map (DbExecute_O root)
         [ "CREATE TABLE IF NOT EXISTS diffs (\n\
-          \    hash BLOB NOT NULL PRIMARY KEY,\n\
+          \    hash BLOB NOT NULL,\n\
+          \    previous_hash BLOB NOT NULL,\n\
           \    start INTEGER NOT NULL,\n\
           \    end INTEGER NOT NULL,\n\
           \    insert BLOB NOT NULL,\n\
-          \    previous_hash BLOB NOT NULL,\n\
           \    time TEXT NOT NULL,\n\
           \    author INTEGER NOT NULL,\n\
+          \    PRIMARY KEY (hash, previous_hash)\n\
           \);"
         , "CREATE TABLE IF NOT EXISTS sent (\n\
           \    hash BLOB NOT NULL,\n\
@@ -805,10 +980,13 @@ dirExistsUpdate path model =
                     , StartUiServerO
                     , StartUiO
                     ]
-                , MainS (RootPath path) Nothing []
+                , NoKeysS $ RootPath path
                 )
             else
                 (DoNothingO, model)
 
-        MainS _ _ _ ->
+        NoKeysS _ ->
+            (DoNothingO, model)
+
+        Ready _ _ _ _ ->
             (DoNothingO, model)
