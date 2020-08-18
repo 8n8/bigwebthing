@@ -344,6 +344,7 @@ decodeInt raw =
     decodeIntHelp (B.unpack raw) 0 0
         
 
+-- Little Endian
 decodeIntHelp :: [Word8] -> Integer -> Integer -> Integer
 decodeIntHelp raw counter accum =
     case raw of
@@ -354,7 +355,7 @@ decodeIntHelp raw counter accum =
             decodeIntHelp
                 aw
                 (counter + 1)
-                (accum + (fromIntegral r) * 256 ^ counter)
+                (accum + (fromIntegral r) * (256 ^ counter))
 
 
 hash20P :: P.Parser Hash20
