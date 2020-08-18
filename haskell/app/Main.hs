@@ -134,8 +134,8 @@ httpApi =
         Sc.post "/setblob" $
             httpPost SetBlobM
 
-        Sc.post "/api" $
-            httpPost UiApiM
+        Sc.post "/getBlob" $
+            httpPost GetBlobM
 
 
 httpPost
@@ -200,7 +200,8 @@ data Msg
 websocket :: Ws.ServerApp
 websocket pending = do
     conn <- Ws.acceptRequest pending
-    websocketSend conn
+    _ <- forkIO $ websocketSend conn
+    websocketReceive conn
 
 
 websocketSend :: Ws.Connection -> IO ()
@@ -210,6 +211,15 @@ websocketSend conn = do
         Q.readTQueue q
     Ws.sendDataMessage conn $ Ws.Binary out
     websocketSend conn
+
+
+websocketReceive :: Ws.Connection -> IO ()
+websocketReceive conn = do
+    msg <- Ws.receiveDataMessage conn
+    Stm.atomically $ do
+        q <- msgQ
+        Q.writeTQueue q (FromWebsocketM msg)
+    websocketReceive conn
 
 
 toWebsocketQ :: Stm.STM (Q.TQueue Bl.ByteString)
@@ -224,7 +234,10 @@ newtype RootPath
     = RootPath FilePath
 
 data StaticKeys
-    = StaticKeys (Dh.KeyPair Curve.Curve25519) SessionKey
+    = StaticKeys
+        (Dh.KeyPair Curve.Curve25519)
+        SessionKey
+        UserId
 
 
 newtype Hash32 = Hash32 B.ByteString
@@ -257,6 +270,14 @@ data State
         RootPath
         (Maybe StaticKeys)
         [BlobUploading]
+        [SetSnapshot]
+
+
+data SetSnapshot
+    = TimeS B.ByteString B.ByteString
+
+
+type Q = Stm.STM (Q.TQueue Bl.ByteString)
 
 
 keysPath :: RootPath -> FilePath
@@ -439,7 +460,33 @@ uiApiUpdate
     -> State
     -> (Output, State)
 uiApiUpdate apiInput responseQ model =
-    undefined
+    case apiInput of
+        SetSnapshotA before after ->
+            onSetSnapshot before after responseQ model
+
+
+onSetSnapshot
+    :: B.ByteString
+    -> B.ByteString
+    -> Stm.STM (Q.TQueue Bl.ByteString)
+    -> State
+    -> (Output, State)
+onSetSnapshot before after q model =
+    case model of
+        EmptyS ->
+            (DoNothingO, model)
+
+        FailedS ->
+            (DoNothingO, model)
+
+        MakingRootDirS _ ->
+            (DoNothingO, model)
+
+        MainS root keys blobs setSnaps ->
+            ( GetTimeO
+            , MainS root keys blobs (TimeS before after q)
+
+            
 
 
 onMovedFile :: FilePath -> State -> (Output, State)

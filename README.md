@@ -52,9 +52,7 @@ The client backend provides a server on port 11833. It provides a static file se
 
 ## Websockets API
 
-The websockets API is for sending messages from the client backend to the frontend.
-
-Messages can take the following form:
+Backend to frontend:
 
 	Inbox altered
 		1 byte: 0
@@ -71,6 +69,56 @@ Messages can take the following form:
 		20 bytes: previous hash
 		4 bytes: total bytes in message
 		4 bytes: bytes sent
+    Whole message:
+        1 byte: 5
+        message:
+    Whitelist:
+        1 byte: 6
+		sequence of sized user IDs
+    My ID
+        1 byte: 7
+        my ID
+    Drafts summary
+        1 byte: 8
+        drafts summary
+    Sent summary
+        1 byte: 9
+        sent summary
+    Inbox summary
+        1 byte: 10
+        inbox summary
+
+Frontend to backend:
+
+	Set snapshot
+		1 byte: 0
+		sized bytes: previous snapshot
+		string: new snapshot
+	Send message
+		1 byte: 1
+		20 bytes: previous hash
+		20 bytes: snapshot hash
+        sized user ID
+	Add to whitelist
+		1 byte: 2
+		sized user ID
+	Remove from whitelist
+		1 byte: 3
+		sized user ID
+	Get message
+		1 byte: 4
+		20 bytes: previous hash
+		20 bytes: snapshot hash
+	Get whitelist
+		1 byte: 5
+	Get my ID
+		1 byte: 6
+	Get drafts summary
+		1 byte: 7
+	Get sent summary
+		1 byte: 8
+	Get inbox summary
+		1 byte: 9
 
 ## HTTP API
 
@@ -79,64 +127,12 @@ Messages can take the following form:
 		binary blob
 	Response
 		hash of blob
-/api
-	Set snapshot
-		Request
-			1 byte: 0
-			sized bytes: previous snapshot
-			string: new snapshot
-	Send message
-		Request
-			1 byte: 1
-			20 bytes: previous hash
-			20 bytes: snapshot hash
-            sized user ID
-	Add to whitelist
-		Request
-			1 byte: 2
-			sized user ID
-	Remove from whitelist
-		Request
-			1 byte: 3
-			sized user ID
-	Get blob
-		Request
-			1 byte: 4
-			20 bytes: hash of blob
-		Response
-			blob
-	Get message
-		Request
-			1 byte: 5
-			20 bytes: previous hash
-			20 bytes: snapshot hash
-		Response
-			message
-	Get whitelist
-		Request
-			1 byte: 6
-		Response
-			sequence of sized user IDs
-	Get my ID
-		Request
-			1 byte: 7
-		Response
-			my ID
-	Get drafts summary
-		Request
-			1 byte: 8
-		Response
-			summaries of all drafts
-	Get sent summary
-		Request
-			1 byte: 9
-		Response
-			summaries of all sent messages
-	Get inbox summary
-		Request
-			1 byte: 10
-		Response
-			summaries of received messages
+/getBlob
+	Request
+		1 byte: 4
+		20 bytes: hash of blob
+	Response
+		blob
 
 ## Message snapshot format
 
@@ -293,11 +289,11 @@ blobs/
 	A flat folder full of blobs, named by hash.
 database
 	diffs
-		hash // hash of all the other fields
+		hash
+		previous_hash
 		start
 		end
 		insert
-		previous_hash
 		time
 		author username
 	sent
