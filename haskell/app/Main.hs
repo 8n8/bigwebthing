@@ -133,6 +133,9 @@ io output =
             time <- Time.getCurrentTime
             return $ Just $ TheTimeM time
 
+        ReadFileLazyO path -> do
+            bytes <- Bl.readFile path
+            return $ Just $ LazyFileContentsM path bytes
 
 
 httpApi :: IO Wai.Application
@@ -196,6 +199,7 @@ data Output
     | BytesInQO (Stm.STM (Q.TQueue Bl.ByteString)) Bl.ByteString
     | CloseFileO Io.Handle
     | GetTimeO
+    | ReadFileLazyO FilePath
 
 
 data Msg
@@ -211,6 +215,7 @@ data Msg
     | GetBlobM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
     | FromWebsocketM Ws.DataMessage
     | TheTimeM Time.UTCTime
+    | LazyFileContentsM FilePath Bl.ByteString
 
 
 websocket :: Ws.ServerApp
@@ -284,11 +289,17 @@ data State
         , keysS :: StaticKeys
         , blobsUpS :: [BlobUploading]
         , setSnapsS :: [SetSnapshot]
+        , getBlobS :: [GetBlob]
         }
     | EmptyS
     | FailedS
     | MakingRootDirS RootPath
     | NoKeysS RootPath
+
+
+
+data GetBlob
+    = GetBlob Q Hash32
 
 
 data SetSnapshot
@@ -313,11 +324,43 @@ makeRootPath appDataDir =
     appDataDir </> "bigwebthing"
 
 
+updateOnLazyFileContents
+    :: FilePath
+    -> Bl.ByteString
+    -> State
+    -> (Output, State)
+updateOnLazyFileContents path bytes model =
+    case model of
+        EmptyS ->
+            (DoNothingO, model)
+
+        FailedS ->
+            (DoNothingO, model)
+
+        MakingRootDirS _ ->
+            (DoNothingO, model)
+
+        NoKeysS _ ->
+            (DoNothingO, model)
+
+        Ready _ _ _ _ [] ->
+            (DoNothingO, model)
+
+        Ready r k b s (GetBlob q hash : etBlobs) ->
+            if path == makeBlobPath r hash then
+                ( BytesInQO q bytes, Ready r k b s etBlobs)
+            else
+                (DoNothingO, model)
+
+
 update :: State -> Msg -> (Output, State)
 update model msg =
     case msg of
         StartM ->
             (GetAppDataDirO, EmptyS)
+
+        LazyFileContentsM path bytes ->
+            updateOnLazyFileContents path bytes model
 
         AppDataDirM path ->
             ( MakeDirIfMissingO $ makeRootPath path
@@ -369,8 +412,41 @@ update model msg =
         TheTimeM t ->
             onTimeUpdate t model
 
-        GetBlobM _ _ ->
-            undefined
+        GetBlobM body q ->
+            onGetBlobUpdate model body q
+
+
+onGetBlobUpdate :: State -> Bl.ByteString -> Q -> (Output, State)
+onGetBlobUpdate model body q =
+    case P.eitherResult $ P.parse blobHashP $ Bl.toStrict body of
+        Left err ->
+            ( ErrorO $ "could not parse GetBlob: " <> err
+            , FailedS
+            )
+
+        Right hash ->
+            case model of
+                EmptyS ->
+                    (DoNothingO, model)
+
+                FailedS ->
+                    (DoNothingO, model)
+
+                MakingRootDirS _ ->
+                    (DoNothingO, model)
+
+                NoKeysS _ ->
+                    (DoNothingO, model)
+
+                Ready r k b s getBlobs ->
+                    ( ReadFileLazyO $ makeBlobPath r hash
+                    , Ready r k b s (consEnd (GetBlob q hash) getBlobs)
+                    )
+
+
+consEnd :: a -> [a] -> [a]
+consEnd new old =
+    reverse $ new : reverse old
 
 
 onTimeUpdate :: Time.UTCTime -> State -> (Output, State)
@@ -388,15 +464,15 @@ onTimeUpdate t model =
         NoKeysS _ ->
             (DoNothingO, model)
 
-        Ready _ _ _ [] ->
+        Ready _ _ _ [] _ ->
             (DoNothingO, model)
 
-        Ready root keys@(StaticKeys _ _ userId) blobs (s:naps) ->
+        Ready root keys@(StaticKeys _ _ userId) blobs (s:naps) getBlobs ->
             let
                 (query, params) = makeDiffDbInsert userId s t
             in
                 ( DbExecuteO (dbPath root) query params
-                , Ready root keys blobs naps
+                , Ready root keys blobs naps getBlobs
                 )
 
 
@@ -519,6 +595,13 @@ hash20P = do
     return $ Hash20 hash
 
 
+blobHashP :: P.Parser Hash32
+blobHashP = do
+    hash <- hash32P
+    P.endOfInput
+    return hash
+
+
 hash32P :: P.Parser Hash32
 hash32P = do
     hash <- P.take 32
@@ -639,9 +722,9 @@ onSetSnapshot before after model =
         NoKeysS _ ->
             (DoNothingO, model)
 
-        Ready root keys blobs setSnaps ->
+        Ready root keys blobs setSnaps getBlobs ->
             ( GetTimeO
-            , Ready root keys blobs (TimeS before after : setSnaps)
+            , Ready root keys blobs (TimeS before after : setSnaps) getBlobs
             )
 
 
@@ -660,22 +743,22 @@ onMovedFile new model =
         NoKeysS _ ->
             (DoNothingO, model)
 
-        Ready _ _ [] _ ->
+        Ready _ _ [] _ _ ->
             (DoNothingO, model)
 
-        Ready rootPath keys (AwaitingMoveB q (Hash32 hash) toPath : lobs) snaps ->
+        Ready rootPath keys (AwaitingMoveB q (Hash32 hash) toPath : lobs) snaps getBlobs ->
             if toPath == new then
                 ( BytesInQO q (Bl.singleton 1 <> Bl.fromStrict hash) 
-                , Ready rootPath keys lobs snaps
+                , Ready rootPath keys lobs snaps getBlobs
                 )
 
             else
                 ( DoNothingO, model)
 
-        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ ->
+        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ _ ->
             (DoNothingO, model)
 
-        Ready _ _ (AwaitingHandleB _ _ _ : _) _ ->
+        Ready _ _ (AwaitingHandleB _ _ _ : _) _ _ ->
             (DoNothingO, model)
 
 
@@ -694,10 +777,10 @@ onWrittenToTmp writtenPath handle model =
         NoKeysS _ ->
             (DoNothingO, model)
 
-        Ready _ _ [] _ ->
+        Ready _ _ [] _ _ ->
             (DoNothingO, model)
 
-        Ready rootPath keys (AwaitingTmpWriteB q hash expectPath : lobs) snaps ->
+        Ready rootPath keys (AwaitingTmpWriteB q hash expectPath : lobs) snaps getBlobs ->
             if writtenPath == expectPath then
                 let
                     blobPath = makeBlobPath rootPath hash
@@ -711,14 +794,15 @@ onWrittenToTmp writtenPath handle model =
                         keys
                         (AwaitingMoveB q hash blobPath : lobs)
                         snaps
+                        getBlobs
                     )
             else
                 (DoNothingO, model)
 
-        Ready _ _ (AwaitingHandleB _ _ _ : _) _ ->
+        Ready _ _ (AwaitingHandleB _ _ _ : _) _ _ ->
             (DoNothingO, model)
 
-        Ready _ _ (AwaitingMoveB _ _ _ : _) _ ->
+        Ready _ _ (AwaitingMoveB _ _ _ : _) _ _ ->
             (DoNothingO, model)
 
 
@@ -751,22 +835,23 @@ onTmpFileHandleUpdate path handle model =
         NoKeysS _ ->
             (DoNothingO, model)
 
-        Ready _ _ [] _ ->
+        Ready _ _ [] _ _ ->
             (DoNothingO, model)
 
-        Ready root keys (AwaitingHandleB q blob hash : lobs) snaps ->
+        Ready root keys (AwaitingHandleB q blob hash : lobs) snaps getBlobs ->
             ( WriteToHandleO handle blob path
             , Ready
                 root
                 keys
                 (AwaitingTmpWriteB q hash path : lobs)
                 snaps
+                getBlobs
             )
 
-        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ ->
+        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ _ ->
             (DoNothingO, model)
 
-        Ready _ _ (AwaitingMoveB _ _ _ : _) _ ->
+        Ready _ _ (AwaitingMoveB _ _ _ : _) _ _ ->
             (DoNothingO, model)
 
 
@@ -789,7 +874,7 @@ setBlobUpdate blob responseQ model =
         NoKeysS _ -> 
             (DoNothingO, model)
 
-        Ready rootPath keys blobs snaps ->
+        Ready rootPath keys blobs snaps getBlobs ->
             ( GetTmpFileHandleO $ tempPath rootPath
             , Ready
                 rootPath
@@ -800,6 +885,7 @@ setBlobUpdate blob responseQ model =
                     (hash32 blob) :
                 blobs)
                 snaps
+                getBlobs
             )
 
 
@@ -855,7 +941,7 @@ fileContentsUpdate path contents model =
             else
                 (DoNothingO, model)
 
-        Ready _ _ _ _ ->
+        Ready _ _ _ _ _ ->
             (DoNothingO, model)
 
 
@@ -923,7 +1009,7 @@ rawKeysUpdate rawKeys root =
 
         Right keys ->
             ( BytesInQO toWebsocketQ (Bl.singleton 11)
-            , Ready root keys [] []
+            , Ready root keys [] [] []
             )
 
 
@@ -988,5 +1074,5 @@ dirExistsUpdate path model =
         NoKeysS _ ->
             (DoNothingO, model)
 
-        Ready _ _ _ _ ->
+        Ready _ _ _ _ _ ->
             (DoNothingO, model)
