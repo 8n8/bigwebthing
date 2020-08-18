@@ -159,78 +159,47 @@ The server checks that the first part is indeed something that it recently gave 
 
 ## TCP API
 
-It will accept incoming TCP connections. The client's first message should be like this:
+It will accept incoming TCP connections, with a Noise XX pattern on top. The client's first message should be:
 
-	sized server ID
-	16 bytes: secret session key
+    signed by payments authority:
+        1 byte: 0 for a user certificate, 1 for a server certificate
+        16 bytes: d7 83 69 ed 53 f5 35 2e 74 22 c5 7c 70 b6 96 22
+        32 bytes: client's public static key
+        8 bytes: expiry time
+        
 
-Then the client should just listen on the connection. Messages from the server can take these forms:
+The server has the payment authority's public key in its configuration.
 
-	Request for an ephemeral key:
-		1 byte: 0
+The server will close the connection after a timeout, or if the certificate is not valid.
 
-	New message from another user
-		1 byte: 1
-		sized bytes: sender username
-		32 bytes: message hash
+Subsequent messages like this (the first byte of each message contains the indicator number):
 
-		(The reason for sending the hash rather than the whole message is to protect the user from DDOS attacks from unwanted senders. If they don't recognise the username they can just request that the message is deleted without downloading it.)
-
-## HTTP API
-
-The maximum request body size is 16KB.
-
-/api
-	Create account
-	    Request
-			1 byte: 0
-			24 bytes: proof of work
-			16 bytes: random session key
-		Response:
-			username
-	Get proof of work info
-		Request
-			1 byte: 1
-		Response
-			1 byte: difficulty
-			16 bytes: random
-	Send message
-		Request
-			1 byte: 2
-			16 bytes: session key
-			sized bytes: my username
-			sized bytes: recipient username
-			message
-	Download message
-		Request
-			1 byte: 3
-			16 bytes: session key
-			sized bytes: my username
-			32 bytes: message hash
-	Delete message
-		Request
-			1 byte: 4
-			16 bytes: session key
-			sized bytes: my username
-			32 bytes: message hash
-	Get price
-		Request
-			1 byte: 5 
-		Response
-			4 bytes: price in GBP^-4
-	Get ephemeral key for user:
-		Request:
-			1 byte: 6
-			24 bytes: proof of work
-			sized bytes: their username
-		Response:
-			a key or empty if there isn't one
-	Upload ephemeral key:
-		Request:
-			1 byte: 7
-			16 bytes: session key
-			sized bytes: my username
-			32 bytes: the key
+1. Give me an ephemeral key. (client to server, server to server)
+    32 bytes: owner of the ephemeral key
+2. Here is an ephemeral key. (client to server)
+    32 bytes: ephemeral key
+3. Here is an ephemeral key. (server to client, server to server)
+    32 bytes: owner of the key
+    32 bytes: ephemeral key
+4. Where is this blob? (client to server, server to server)
+    32 bytes: hash of the blob
+5. The blob is here. (server to server, server to client)
+    32 bytes: hash of the blob
+    sized string: url of blob location
+6. Give me a blob. (client to server)
+    32 bytes: hash of the blob
+7. Here is a blob. (server to client)
+    the blob
+8. Upload blob. (client to server)
+    the blob
+9. Backup my blob. (server to server)
+    the blob
+10. Blob backed up. (server to server)
+    32 bytes: hash of the blob
+11. Message stub (client to server, server to server, server to client)
+    32 bytes: recipient
+    encrypted (includes sender's encrypted static key):
+        32 bytes: hash of encrypted blob
 			
 # Client to client
 
@@ -321,8 +290,10 @@ proofOfWorkDifficulty
 	A file containing the proof of work difficulty.
 price
 	A file containing the price.
-messages/
+blobs/
 	a flat directory of messages, named by hash
+blobBackups/
+    a flat directory of backed-up blobs from other servers
 database
 	uploads
 		sender username
