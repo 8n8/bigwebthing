@@ -54,63 +54,72 @@ The client backend provides a server on port 11833. It provides a static file se
 
 Backend to frontend:
 
-	Inbox altered
-		1 byte: 0
 	Bad network connection
-		1 byte: 1
+		1 byte: 0
 	Good network connection
-		1 byte: 2
+		1 byte: 1
 	Send failed
-		1 byte: 3
-		20 bytes: message hash
+		1 byte: 2
+		4 bytes: message ID
 	Progress of sending
-		1 byte: 4
-		20 bytes: snapshot hash
-		20 bytes: previous hash
+		1 byte: 3
+        4 bytes: message ID
 		4 bytes: total bytes in message
 		4 bytes: bytes sent
-    Whole message:
-        1 byte: 5
-        message:
+    Message:
+        1 byte: 4
+        4 bytes: message ID
+        sized string: commit hash
+        sized string: subject
+        sized string: main box
+        string: metadata
     Whitelist:
-        1 byte: 6
+        1 byte: 5
 		sequence of sized user IDs
     My ID
-        1 byte: 7
+        1 byte: 6
         my ID
     Drafts summary
-        1 byte: 8
+        1 byte: 7
         drafts summary
     Sent summary
-        1 byte: 9
+        1 byte: 8
         sent summary
     Inbox summary
-        1 byte: 10
+        1 byte: 9
         inbox summary
     Backend ready
+        1 byte: 10
+    Merge candidates
         1 byte: 11
+        4 bytes: message ID
+        list of 4-byte message IDs
+    Message history
+        1 byte: 12
+        4 bytes: message ID
+        string: output of git log
 
 Frontend to backend:
 
-	Set snapshot
-		1 byte: 0
-		sized bytes: previous snapshot
-		string: new snapshot
+    Set message:
+        1 byte: 0
+        4 bytes: message ID
+        sized string: subject
+        sized string: main box
+        string: metadata
 	Send message
 		1 byte: 1
-		20 bytes: previous hash
-		20 bytes: snapshot hash
-        sized user ID
+        4 bytes: message ID
+        user ID
 	Add to whitelist
 		1 byte: 2
-		sized user ID
+		user ID
 	Remove from whitelist
 		1 byte: 3
-		sized user ID
+		user ID
 	Get message
 		1 byte: 4
-		20 bytes: previous hash
-		20 bytes: snapshot hash
+        4 bytes: message ID
 	Get whitelist
 		1 byte: 5
 	Get my ID
@@ -121,6 +130,24 @@ Frontend to backend:
 		1 byte: 8
 	Get inbox summary
 		1 byte: 9
+    Get merge candidates
+        1 byte: 10
+        4 bytes: message ID
+    Merge
+        1 byte: 11
+        4 bytes: message ID to merge into
+        4 bytes: message ID to merge from
+    Get history
+        1 byte: 12
+        4 bytes: message ID
+    Revert
+        1 byte: 13
+        4 bytes: message ID
+        string: commit hash to revert to
+    Get previous commit
+        1 byte: 14
+        4 bytes: message ID
+        string: commit hash to look at
 
 ## HTTP API
 
@@ -128,23 +155,17 @@ Frontend to backend:
 	Request
 		binary blob
 	Response
-		hash of blob
-/getBlob
+		32 bytes: hash of blob
+        4 bytes: size of blob
+        sized string: file name of blob
+        string: mime of blob
+/getblob
 	Request
 		1 byte: 4
-		20 bytes: hash of blob
+        4 bytes: message ID
+		32 bytes: hash of blob
 	Response
 		blob
-
-## Message snapshot format
-
-A snapshot contains the current state of a message. It is a binary blob, encoded as follows:
-	+ sized string: subject
-	+ sized string: user input box contents
-	+ 20 bytes: hash of program
-	+ sequence of blobs, where a blob is:
-		+ 20 bytes: hash
-		+ 4 bytes: size in bytes
 
 # Server API
 
@@ -287,24 +308,23 @@ When I receive a message, I need to:
 
 # Client cache
 
-blobs/
-	A flat folder full of blobs, named by hash.
+messages/
+    A flat folder of Git repositories, named by some unique ID. Each Git repository contains:
+        subject.txt
+        mainBox.txt
+        metadata
+        blobs/
+            A flat folder of blobs, named by hash.
+        program.wasm
 database
-	diffs
-		hash
-		previous_hash
-		start
-		end
-		insert
-		time
-		author username
 	sent
-		hash
+		message ID
+        git commit hash
 		time
 		to
 	received
 		from
-		hash
+		message ID
 		time
 	fingerprints
 		username
@@ -316,6 +336,8 @@ myKeys
 	A binary file containing my private static key, session key, and username.
 log
 	A log of error messages, for debugging.
+unique
+    an 8-byte file containing an encoded uint64, used for making unique values, such message IDs
 
 # Server cache
 
