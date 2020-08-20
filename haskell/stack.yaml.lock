@@ -66,7 +66,7 @@ packages:
     hackage: text-format-0.3.2@sha256:2a3fc17cf87120fcfdbca62a0da59759755549285841cdc1483081c35fb3d115,1814
 snapshots:
 - completed:
-    size: 520859
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2020/8/15.yaml
-    sha256: 1e0aa20d7651982298ee4865963f903da072f2536b1f7e2bce75650cf6312f25
-  original: nightly-2020-08-15
+    size: 521290
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2020/8/20.yaml
+    sha256: bd6e924dd6683540b88b47dfaf91ac46e85b48d09be6e10c16d632ec5031fbd8
+  original: nightly-2020-08-20

@@ -1,4 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE GADTs #-}
 module Main where
 
 import qualified Control.Concurrent.STM as Stm
@@ -26,20 +30,19 @@ import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
 import Control.Concurrent (forkIO)
-import qualified Data.Time.Clock as Time
 
 
 main :: IO ()
 main =
-    mainHelp EmptyS StartM
-            
+    mainHelp (InitS EmptyI) StartM
+
 
 msgQ :: Stm.STM (Q.TQueue Msg)
 msgQ =
     Q.newTQueue
 
 
-mainHelp :: State -> Msg -> IO () 
+mainHelp :: State -> Msg -> IO ()
 mainHelp oldState oldMsg = do
     let (output, newState) = update oldState oldMsg
     maybeMsg <- io output
@@ -51,7 +54,7 @@ mainHelp oldState oldMsg = do
         Just m ->
             return m
     mainHelp newState newMsg
- 
+
 
 io :: Output -> IO (Maybe Msg)
 io output =
@@ -129,10 +132,6 @@ io output =
             Io.hClose handle
             return Nothing
 
-        GetTimeO -> do
-            time <- Time.getCurrentTime
-            return $ Just $ TheTimeM time
-
         ReadFileLazyO path -> do
             bytes <- Bl.readFile path
             return $ Just $ LazyFileContentsM path bytes
@@ -154,11 +153,11 @@ httpApi =
 
 
 httpPost
-    :: (Bl.ByteString -> Stm.STM (Q.TQueue Bl.ByteString) -> Msg)
+    :: (Bl.ByteString -> Q -> Msg)
     -> Sc.ActionM ()
 httpPost msg =
     let
-        responseQ :: Stm.STM (Q.TQueue Bl.ByteString)
+        responseQ :: Q
         responseQ =
             Q.newTQueue
     in do
@@ -182,24 +181,23 @@ clientUrl =
     "http://localhost:" <> T.pack (show clientPort)
 
 
-data Output
-    = GetAppDataDirO
-    | MakeDirIfMissingO FilePath
-    | DoNothingO
-    | ReadFileO FilePath
-    | DbExecute_O FilePath Sql.Query
-    | DbExecuteO FilePath Sql.Query Diff
-    | BatchO [Output]
-    | StartUiO
-    | StartUiServerO
-    | ErrorO String
-    | GetTmpFileHandleO FilePath
-    | WriteToHandleO Io.Handle Bl.ByteString FilePath
-    | MoveFileO FilePath FilePath
-    | BytesInQO (Stm.STM (Q.TQueue Bl.ByteString)) Bl.ByteString
-    | CloseFileO Io.Handle
-    | GetTimeO
-    | ReadFileLazyO FilePath
+data Output where
+    GetAppDataDirO :: Output
+    MakeDirIfMissingO :: FilePath -> Output
+    DoNothingO :: Output
+    ReadFileO :: FilePath -> Output
+    DbExecute_O :: FilePath -> Sql.Query -> Output
+    DbExecuteO :: Sql.ToRow q => FilePath -> Sql.Query -> q -> Output
+    BatchO :: [Output] -> Output
+    StartUiO :: Output
+    StartUiServerO :: Output
+    ErrorO :: String -> Output
+    GetTmpFileHandleO :: FilePath -> Output
+    WriteToHandleO :: Io.Handle -> Bl.ByteString -> FilePath -> Output
+    MoveFileO :: FilePath -> FilePath -> Output
+    BytesInQO :: Q -> Bl.ByteString -> Output
+    CloseFileO :: Io.Handle -> Output
+    ReadFileLazyO :: FilePath -> Output
 
 
 data Msg
@@ -208,13 +206,12 @@ data Msg
     | DirExistsM FilePath
     | FileContentsM FilePath B.ByteString
     | BatchM [Maybe Msg]
-    | SetBlobM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
+    | SetBlobM Bl.ByteString Q
     | TmpFileHandleM FilePath Io.Handle
     | WrittenToHandleM FilePath Io.Handle
     | MovedFileM FilePath
-    | GetBlobM Bl.ByteString (Stm.STM (Q.TQueue Bl.ByteString))
+    | GetBlobM Bl.ByteString Q
     | FromWebsocketM Ws.DataMessage
-    | TheTimeM Time.UTCTime
     | LazyFileContentsM FilePath Bl.ByteString
 
 
@@ -243,7 +240,7 @@ websocketReceive conn = do
     websocketReceive conn
 
 
-toWebsocketQ :: Stm.STM (Q.TQueue Bl.ByteString)
+toWebsocketQ :: Q
 toWebsocketQ =
     Q.newTQueue
 
@@ -264,19 +261,36 @@ data StaticKeys
 newtype Hash32 = Hash32 B.ByteString
 
 
-data BlobUploading
+data BlobUpWait
+    = BlobUpWait Bl.ByteString Q
+
+
+data BlobUp
     = AwaitingHandleB
-        (Stm.STM (Q.TQueue Bl.ByteString))
+        Q
         Bl.ByteString
         Hash32
     | AwaitingTmpWriteB
-        (Stm.STM (Q.TQueue Bl.ByteString))
+        Q
         Hash32
         FilePath
     | AwaitingMoveB
-        (Stm.STM (Q.TQueue Bl.ByteString))
+        Q
         Hash32
         FilePath
+
+
+promoteBlobsUp :: Jobs BlobUp BlobUpWait -> Jobs BlobUp BlobUpWait
+promoteBlobsUp jobs =
+    case jobs of
+        NoJobs ->
+            NoJobs
+
+        Jobs _ [] ->
+            NoJobs
+
+        Jobs _ (BlobUpWait body q : aiting) ->
+            Jobs (AwaitingHandleB q body (hash32 body)) aiting
 
 
 newtype Iota
@@ -284,18 +298,40 @@ newtype Iota
 
 
 data State
-    = Ready
-        { rootS :: RootPath
-        , keysS :: StaticKeys
-        , blobsUpS :: [BlobUploading]
-        , setSnapsS :: [SetSnapshot]
-        , getBlobS :: [GetBlob]
-        }
-    | EmptyS
-    | FailedS
-    | MakingRootDirS RootPath
-    | NoKeysS RootPath
+    = ReadyS Ready
+    | InitS Init
 
+data Init
+    = EmptyI
+    | FailedI
+    | MakingRootDirI RootPath
+    | NoKeysI RootPath
+
+
+data Ready = Ready
+    { root :: RootPath
+    , keys :: StaticKeys
+    , blobsUp :: Jobs BlobUp BlobUpWait
+    , getBlob :: Jobs GetBlob GetBlobWait
+    , send :: Jobs Send SendWait
+    }
+
+
+data Jobs a b
+    = Jobs a [b]
+    | NoJobs
+
+
+data GetBlobWait
+    = GetBlobWait Bl.ByteString Q
+
+
+data Send
+    = GettingDiffs
+
+
+data SendWait
+    = SendWait Hash20 Hash20 UserId
 
 
 data GetBlob
@@ -327,48 +363,72 @@ makeRootPath appDataDir =
 updateOnLazyFileContents
     :: FilePath
     -> Bl.ByteString
-    -> State
+    -> Ready
     -> (Output, State)
-updateOnLazyFileContents path bytes model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
+updateOnLazyFileContents path bytes ready =
+    case getBlob ready of
+        NoJobs ->
+            (DoNothingO, ReadyS ready)
 
-        FailedS ->
-            (DoNothingO, model)
+        jobs@(Jobs (GetBlob q hash) _) ->
+            if path == makeBlobPath (root ready) hash then
+                ( BytesInQO q bytes
+                , ReadyS $ ready { getBlob = promoteGetBlob jobs }
+                )
 
-        MakingRootDirS _ ->
-            (DoNothingO, model)
-
-        NoKeysS _ ->
-            (DoNothingO, model)
-
-        Ready _ _ _ _ [] ->
-            (DoNothingO, model)
-
-        Ready r k b s (GetBlob q hash : etBlobs) ->
-            if path == makeBlobPath r hash then
-                ( BytesInQO q bytes, Ready r k b s etBlobs)
             else
-                (DoNothingO, model)
+                (DoNothingO, ReadyS ready)
+
+
+promoteGetBlob :: Jobs GetBlob GetBlobWait -> Jobs GetBlob GetBlobWait
+promoteGetBlob jobs =
+    case jobs of
+        NoJobs ->
+            NoJobs
+
+        Jobs _ [] ->
+            NoJobs
+
+        Jobs _ (GetBlobWait body q : aiting) ->
+            Jobs (GetBlob q (hash32 body)) aiting
+
+
+updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
+updateReady model f =
+    case model of
+        InitS _ ->
+            (DoNothingO, model)
+
+        ReadyS ready ->
+            f ready
+
+
+updateInit :: State -> (Init -> (Output, State)) -> (Output, State)
+updateInit model f =
+    case model of
+        InitS init_ ->
+            f init_
+
+        ReadyS _ ->
+            (DoNothingO, model)
 
 
 update :: State -> Msg -> (Output, State)
 update model msg =
     case msg of
         StartM ->
-            (GetAppDataDirO, EmptyS)
+            (GetAppDataDirO, InitS EmptyI)
 
         LazyFileContentsM path bytes ->
-            updateOnLazyFileContents path bytes model
+            updateReady model $ updateOnLazyFileContents path bytes
 
         AppDataDirM path ->
             ( MakeDirIfMissingO $ makeRootPath path
-            , MakingRootDirS $ RootPath $ makeRootPath path
+            , InitS $ MakingRootDirI $ RootPath $ makeRootPath path
             )
 
         DirExistsM path ->
-            dirExistsUpdate path model
+            updateInit model $ dirExistsUpdate path
 
         FileContentsM path contents ->
             fileContentsUpdate path contents model
@@ -380,22 +440,22 @@ update model msg =
                 (BatchO outputs, newModel)
 
         SetBlobM blob responseQ ->
-            setBlobUpdate blob responseQ model
+            updateReady model $ setBlobUpdate blob responseQ
 
         TmpFileHandleM path handle ->
-            onTmpFileHandleUpdate path handle model
+            updateReady model $ onTmpFileHandleUpdate path handle
 
         WrittenToHandleM path handle ->
-            onWrittenToTmp path handle model
+            updateReady model $ onWrittenToTmp path handle
 
         MovedFileM new ->
-            onMovedFile new model
+            updateReady model $ onMovedFile new
 
         FromWebsocketM raw ->
             case raw of
                 Ws.Text _ _ ->
                     ( ErrorO "received text message from websocket"
-                    , FailedS
+                    , InitS FailedI
                     )
 
                 Ws.Binary bin ->
@@ -403,112 +463,45 @@ update model msg =
                         Left err ->
                             ( ErrorO $
                                 "couldn't parse API input: " <> err
-                            , FailedS
+                            , InitS FailedI
                             )
 
                         Right apiInput ->
                             uiApiUpdate apiInput model
 
-        TheTimeM t ->
-            onTimeUpdate t model
-
         GetBlobM body q ->
-            onGetBlobUpdate model body q
+            updateReady model $ onGetBlobUpdate body q
 
 
-onGetBlobUpdate :: State -> Bl.ByteString -> Q -> (Output, State)
-onGetBlobUpdate model body q =
+onGetBlobUpdate :: Bl.ByteString -> Q -> Ready -> (Output, State)
+onGetBlobUpdate body q ready =
     case P.eitherResult $ P.parse blobHashP $ Bl.toStrict body of
         Left err ->
             ( ErrorO $ "could not parse GetBlob: " <> err
-            , FailedS
+            , InitS FailedI
             )
 
         Right hash ->
-            case model of
-                EmptyS ->
-                    (DoNothingO, model)
+            case getBlob ready of
+                NoJobs ->
+                    ( ReadFileLazyO $ makeBlobPath (root ready) hash
+                    , ReadyS $ ready
+                        { getBlob = Jobs (GetBlob q hash) [] }
+                    )
 
-                FailedS ->
-                    (DoNothingO, model)
-
-                MakingRootDirS _ ->
-                    (DoNothingO, model)
-
-                NoKeysS _ ->
-                    (DoNothingO, model)
-
-                Ready r k b s getBlobs ->
-                    ( ReadFileLazyO $ makeBlobPath r hash
-                    , Ready r k b s (consEnd (GetBlob q hash) getBlobs)
+                Jobs current waiting ->
+                    ( DoNothingO
+                    , ReadyS $ ready
+                        { getBlob = Jobs
+                            current
+                            (GetBlobWait body q : waiting)
+                        }
                     )
 
 
 consEnd :: a -> [a] -> [a]
 consEnd new old =
     reverse $ new : reverse old
-
-
-onTimeUpdate :: Time.UTCTime -> State -> (Output, State)
-onTimeUpdate t model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
-
-        FailedS ->
-            (DoNothingO, model)
-
-        MakingRootDirS _ ->
-            (DoNothingO, model)
-
-        NoKeysS _ ->
-            (DoNothingO, model)
-
-        Ready _ _ _ [] _ ->
-            (DoNothingO, model)
-
-        Ready root keys@(StaticKeys _ _ userId) blobs (s:naps) getBlobs ->
-            let
-                (query, params) = makeDiffDbInsert userId s t
-            in
-                ( DbExecuteO (dbPath root) query params
-                , Ready root keys blobs naps getBlobs
-                )
-
-
-makeDiffDbInsert
-    :: UserId
-    -> SetSnapshot
-    -> Time.UTCTime
-    -> (Sql.Query, Diff)
-makeDiffDbInsert (UserId userId) (TimeS previous next) t =
-    let
-        (start, end, insert) = makeDiff previous next
-        (Hash20 previousHash) = hash20 previous
-        (Hash20 hash) = hash20 next
-    in
-        ( "INSERT INTO diffs (\n\
-          \    hash,\n\
-          \    previous_hash,\n\
-          \    start,\n\
-          \    end,\n\
-          \    insert,\n\
-          \    time,\n\
-          \    author)\n\
-          \VALUES (?, ?, ?, ?, ?, ?, ?);"
-        , (hash, previousHash, start, end, insert, t, userId)
-        )
-
-
-type Diff =
-    ( B.ByteString
-    , B.ByteString
-    , Int
-    , Int
-    , B.ByteString
-    , Time.UTCTime
-    , Integer
-    )
 
 
 makeDiff :: B.ByteString -> B.ByteString -> (Int, Int, B.ByteString)
@@ -519,7 +512,7 @@ makeDiff previous next =
         zipForward = zip prevUnpack nextUnpack
         zipBackward = zip (reverse prevUnpack) (reverse nextUnpack)
         start = countIdentical zipForward
-        end = length zipBackward - (countIdentical zipBackward) 
+        end = length zipBackward - (countIdentical zipBackward)
         newEnd = end + length prevUnpack - length nextUnpack
         insert = B.pack $ drop start $ drop newEnd nextUnpack
     in
@@ -542,7 +535,7 @@ countIdenticalHelp zipped count =
                 countIdenticalHelp ipped $ count + 1
             else
                 count
-            
+
 
 hash20 :: B.ByteString -> Hash20
 hash20 bytes =
@@ -550,7 +543,7 @@ hash20 bytes =
      (Blake.initialize 20)
 
 
-parseApiInput :: Bl.ByteString -> Either String ApiInput 
+parseApiInput :: Bl.ByteString -> Either String ApiInput
 parseApiInput raw =
     P.eitherResult $ P.parse apiInputP $ Bl.toStrict raw
 
@@ -573,7 +566,7 @@ userIdP = do
 decodeInt :: B.ByteString -> Integer
 decodeInt raw =
     decodeIntHelp (B.unpack raw) 0 0
-        
+
 
 -- Little Endian
 decodeIntHelp :: [Word8] -> Integer -> Integer -> Integer
@@ -607,18 +600,61 @@ hash32P = do
     hash <- P.take 32
     return $ Hash32 hash
 
-
 data ApiInput
-    = SetSnapshotA B.ByteString B.ByteString
-    | SendMessageA Hash20 Hash20 UserId
+    = SetMessageA MessageId Subject MainBox Metadata
+    | SendMessageA MessageId UserId
     | AddToWhitelistA UserId
     | RemoveFromWhitelistA UserId
-    | GetMessageA Hash20 Hash20
+    | GetMessageA MessageId
     | GetWhitelistA
     | GetMyIdA
     | GetDraftsSummaryA
     | GetSentSummaryA
     | GetInboxSummaryA
+    | GetMergeCandidatesA MessageId
+    | MergeA MessageId MessageId
+    | GetHistoryA MessageId
+    | RevertA MessageId CommitHash
+    | GetCommitA MessageId CommitHash
+    | GetUniqueA
+
+
+newtype Subject
+    = Subject B.ByteString
+
+
+newtype MainBox
+    = MainBox B.ByteString
+
+
+newtype Metadata
+    = Metadata B.ByteString
+
+
+newtype MessageId
+    = MessageId Int
+
+
+newtype CommitHash
+    = CommitHash B.ByteString
+
+
+stringP :: P.Parser B.ByteString
+stringP = do
+    size <- uint32P
+    P.take size
+
+
+commitP :: P.Parser CommitHash
+commitP = do
+    commit <- P.take 40
+    return $ CommitHash commit
+
+
+messageIdP :: P.Parser MessageId
+messageIdP = do
+    id_ <- uint32P
+    return $ MessageId id_
 
 
 apiInputP :: P.Parser ApiInput
@@ -626,15 +662,16 @@ apiInputP = do
     P.choice
         [ do
             _ <- P.word8 0
-            previous <- bytesP
-            new <- P.takeByteString
-            return $ SetSnapshotA previous new
+            messageId <- messageIdP
+            subject <- fmap Subject stringP
+            mainBox <- fmap MainBox stringP
+            metadata <- fmap Metadata stringP
+            return $ SetMessageA messageId subject mainBox metadata
         , do
             _ <- P.word8 1
-            previous <- hash20P
-            new <- hash20P
+            messageId <- messageIdP
             userId <- userIdP
-            return $ SendMessageA previous new userId
+            return $ SendMessageA messageId userId
         , do
             _ <- P.word8 2
             userId <- userIdP
@@ -644,38 +681,60 @@ apiInputP = do
             userId <- userIdP
             return $ RemoveFromWhitelistA userId
         , do
-            _ <- P.word8 5
-            previous <- hash20P
-            new <- hash20P
-            return $ GetMessageA previous new
+            _ <- P.word8 4
+            messageId <- messageIdP
+            return $ GetMessageA messageId
         , do
-            _ <- P.word8 6
+            _ <- P.word8 5
             return GetWhitelistA
         , do
-            _ <- P.word8 7
+            _ <- P.word8 6
             return GetMyIdA
         , do
-            _ <- P.word8 8
+            _ <- P.word8 7
             return GetDraftsSummaryA
         , do
-            _ <- P.word8 9 
+            _ <- P.word8 8
             return GetSentSummaryA
         , do
-            _ <- P.word8 10
+            _ <- P.word8 9
             return GetInboxSummaryA
+        , do
+            _ <- P.word8 10
+            messageId <- messageIdP
+            return $ GetMergeCandidatesA messageId
+        , do
+            _ <- P.word8 11
+            from <- messageIdP
+            to <- fmap MessageId uint32P
+            return $ MergeA from to
+        , do
+            _ <- P.word8 12
+            messageId <- messageIdP
+            return $ GetHistoryA messageId
+        , do
+            _ <- P.word8 13
+            messageId <- messageIdP
+            commit <- commitP
+            return $ RevertA messageId commit
+        , do
+            _ <- P.word8 14
+            messageId <- messageIdP
+            commit <- commitP
+            return $ GetCommitA messageId commit
+        , do
+            _ <- P.word8 15
+            return $ GetUniqueA
         ]
 
 
-uiApiUpdate
-    :: ApiInput
-    -> State
-    -> (Output, State)
-uiApiUpdate apiInput model =
+uiApiUpdate :: ApiInput -> State -> (Output, State)
+uiApiUpdate apiInput _ =
     case apiInput of
-        SetSnapshotA before after ->
-            onSetSnapshot before after model
+        SetMessageA _ _ _ _ ->
+            undefined
 
-        SendMessageA _ _ _ ->
+        SendMessageA _ _ ->
             undefined
 
         AddToWhitelistA _ ->
@@ -684,7 +743,7 @@ uiApiUpdate apiInput model =
         RemoveFromWhitelistA _ ->
             undefined
 
-        GetMessageA _ _ ->
+        GetMessageA _ ->
             undefined
 
         GetWhitelistA ->
@@ -702,108 +761,114 @@ uiApiUpdate apiInput model =
         GetInboxSummaryA ->
             undefined
 
+        GetMergeCandidatesA _ ->
+            undefined
 
-onSetSnapshot
-    :: B.ByteString
-    -> B.ByteString
-    -> State
-    -> (Output, State)
-onSetSnapshot before after model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
+        MergeA _ _ ->
+            undefined
 
-        FailedS ->
-            (DoNothingO, model)
+        GetHistoryA _ ->
+            undefined
 
-        MakingRootDirS _ ->
-            (DoNothingO, model)
+        RevertA _ _ ->
+            undefined
 
-        NoKeysS _ ->
-            (DoNothingO, model)
+        GetCommitA _ _ ->
+            undefined
 
-        Ready root keys blobs setSnaps getBlobs ->
-            ( GetTimeO
-            , Ready root keys blobs (TimeS before after : setSnaps) getBlobs
-            )
+        GetUniqueA ->
+            undefined
 
 
-onMovedFile :: FilePath -> State -> (Output, State)
-onMovedFile new model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
 
-        FailedS ->
-            (DoNothingO, model)
+getHash20 :: Hash20 -> B.ByteString
+getHash20 (Hash20 h) =
+    h
 
-        MakingRootDirS _ ->
-            (DoNothingO, model)
 
-        NoKeysS _ ->
-            (DoNothingO, model)
+onMovedFile :: FilePath -> Ready -> (Output, State)
+onMovedFile new ready =
+    case blobsUp ready of
+        NoJobs ->
+            pass
 
-        Ready _ _ [] _ _ ->
-            (DoNothingO, model)
-
-        Ready rootPath keys (AwaitingMoveB q (Hash32 hash) toPath : lobs) snaps getBlobs ->
+        Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
             if toPath == new then
                 ( BytesInQO q (Bl.singleton 1 <> Bl.fromStrict hash) 
-                , Ready rootPath keys lobs snaps getBlobs
+                , ReadyS $ ready { blobsUp = NoJobs }
                 )
 
             else
-                ( DoNothingO, model)
+                pass
 
-        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ _ ->
-            (DoNothingO, model)
+        Jobs
+            (AwaitingMoveB q (Hash32 hash) toPath)
+            (BlobUpWait blob newQ : _) ->
 
-        Ready _ _ (AwaitingHandleB _ _ _ : _) _ _ ->
-            (DoNothingO, model)
+            if toPath == new then
+                let
+                    (output, newModel) = update
+                        (ReadyS $ ready
+                            { blobsUp = promoteBlobsUp $ blobsUp ready
+                            })
+                        (SetBlobM blob newQ)
+                in
+                    ( BatchO
+                        [ BytesInQO
+                            q
+                            (Bl.singleton 1 <>
+                                Bl.fromStrict hash)
+                        , output
+                        ]
+                    , newModel
+                    )
+            else
+                pass
+
+        Jobs (AwaitingTmpWriteB _ _ _) _ ->
+            pass
+
+        Jobs (AwaitingHandleB _ _ _) _ ->
+            pass
+
+  where
+    pass = (DoNothingO, ReadyS ready)
 
 
-onWrittenToTmp :: FilePath -> Io.Handle -> State -> (Output, State)
-onWrittenToTmp writtenPath handle model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
+onWrittenToTmp :: FilePath -> Io.Handle -> Ready -> (Output, State)
+onWrittenToTmp writtenPath handle ready =
+    case blobsUp ready of
+        NoJobs ->
+            pass
 
-        FailedS ->
-            (DoNothingO, model)
-
-        MakingRootDirS _ ->
-            (DoNothingO, model)
-
-        NoKeysS _ ->
-            (DoNothingO, model)
-
-        Ready _ _ [] _ _ ->
-            (DoNothingO, model)
-
-        Ready rootPath keys (AwaitingTmpWriteB q hash expectPath : lobs) snaps getBlobs ->
+        Jobs (AwaitingTmpWriteB q hash expectPath) waiting ->
             if writtenPath == expectPath then
                 let
-                    blobPath = makeBlobPath rootPath hash
+                    blobPath = makeBlobPath (root ready) hash
                 in
                     ( BatchO
                         [ MoveFileO writtenPath blobPath
                         , CloseFileO handle
                         ]
-                    , Ready
-                        rootPath
-                        keys
-                        (AwaitingMoveB q hash blobPath : lobs)
-                        snaps
-                        getBlobs
+                    , ReadyS $ ready
+                        { blobsUp =
+                            Jobs
+                                (AwaitingMoveB q hash blobPath)
+                                waiting
+                        }
                     )
+
             else
-                (DoNothingO, model)
+                pass
 
-        Ready _ _ (AwaitingHandleB _ _ _ : _) _ _ ->
-            (DoNothingO, model)
+        Jobs (AwaitingHandleB _ _ _) _ ->
+            pass
 
-        Ready _ _ (AwaitingMoveB _ _ _ : _) _ _ ->
-            (DoNothingO, model)
+        Jobs (AwaitingMoveB _ _ _) _ ->
+            pass
+
+    where
+        pass = (DoNothingO, ReadyS ready)
 
 
 encodeHash :: Hash32 -> String
@@ -819,73 +884,48 @@ makeBlobPath (RootPath rootPath) hash =
 onTmpFileHandleUpdate
     :: FilePath
     -> Io.Handle
-    -> State
+    -> Ready
     -> (Output, State)
-onTmpFileHandleUpdate path handle model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
+onTmpFileHandleUpdate path handle ready =
+    case blobsUp ready of
+        NoJobs ->
+            (DoNothingO, ReadyS ready)
 
-        FailedS ->
-            (DoNothingO, model)
-
-        MakingRootDirS _ ->
-            (DoNothingO, model)
-
-        NoKeysS _ ->
-            (DoNothingO, model)
-
-        Ready _ _ [] _ _ ->
-            (DoNothingO, model)
-
-        Ready root keys (AwaitingHandleB q blob hash : lobs) snaps getBlobs ->
+        Jobs (AwaitingHandleB q blob hash) waiting ->
             ( WriteToHandleO handle blob path
-            , Ready
-                root
-                keys
-                (AwaitingTmpWriteB q hash path : lobs)
-                snaps
-                getBlobs
+            , ReadyS $ ready {
+                blobsUp = Jobs
+                    (AwaitingTmpWriteB q hash path)
+                    waiting
+                }
             )
 
-        Ready _ _ (AwaitingTmpWriteB _ _ _ : _) _ _ ->
-            (DoNothingO, model)
-
-        Ready _ _ (AwaitingMoveB _ _ _ : _) _ _ ->
-            (DoNothingO, model)
+        Jobs _ _ ->
+            (DoNothingO, ReadyS ready)
 
 
 setBlobUpdate ::
     Bl.ByteString ->
-    Stm.STM (Q.TQueue Bl.ByteString) ->
-    State ->
+    Q ->
+    Ready ->
     (Output, State)
-setBlobUpdate blob responseQ model =
-    case model of
-        EmptyS ->
-            (DoNothingO, model)
+setBlobUpdate blob q ready =
+    case blobsUp ready of
+        NoJobs ->
+            ( GetTmpFileHandleO $ tempPath $ root ready
+            , ReadyS $ ready
+                { blobsUp =
+                    Jobs (AwaitingHandleB q blob (hash32 blob)) []
+                }
+            )
 
-        FailedS ->
-            (DoNothingO, model)
-
-        MakingRootDirS _ ->
-            (DoNothingO, model)
-
-        NoKeysS _ -> 
-            (DoNothingO, model)
-
-        Ready rootPath keys blobs snaps getBlobs ->
-            ( GetTmpFileHandleO $ tempPath rootPath
-            , Ready
-                rootPath
-                keys
-                (AwaitingHandleB
-                    responseQ
-                    blob
-                    (hash32 blob) :
-                blobs)
-                snaps
-                getBlobs
+        Jobs current waiting ->
+            ( DoNothingO
+            , ReadyS $
+                ready
+                    { blobsUp =
+                        Jobs current (BlobUpWait blob q : waiting)
+                    }
             )
 
 
@@ -894,14 +934,14 @@ hash32 =
     Hash32 .
     Blake.finalize 32 .
     Bl.foldrChunks Blake.update (Blake.initialize 32)
-                        
+
 
 tempPath :: RootPath -> FilePath
 tempPath (RootPath root) =
     root </> "temporary"
 
-                    
-iotaPlusOne :: Iota -> Iota            
+
+iotaPlusOne :: Iota -> Iota
 iotaPlusOne (Iota i) =
     Iota (i + 1)
 
@@ -920,29 +960,28 @@ batchUpdate model msgs outputs =
                 (output, newModel) = update model m
             in
                 batchUpdate newModel sgs (output : outputs)
-            
 
 
 fileContentsUpdate :: FilePath -> B.ByteString -> State -> (Output, State)
 fileContentsUpdate path contents model =
     case model of
-        FailedS ->
+        ReadyS _ ->
             (DoNothingO, model)
 
-        EmptyS ->
+        InitS FailedI ->
             (DoNothingO, model)
 
-        MakingRootDirS _ ->
+        InitS EmptyI ->
             (DoNothingO, model)
 
-        NoKeysS root ->
+        InitS (MakingRootDirI _) ->
+            (DoNothingO, model)
+
+        InitS (NoKeysI root) ->
             if path == keysPath root then
                 rawKeysUpdate contents root
             else
                 (DoNothingO, model)
-
-        Ready _ _ _ _ _ ->
-            (DoNothingO, model)
 
 
 errToText :: Either String a -> Either T.Text a
@@ -997,46 +1036,42 @@ myKeysP = do
         Just dhKeys ->
             return $ StaticKeys dhKeys (SessionKey sessionKey) userId
 
-        
+
 rawKeysUpdate :: B.ByteString -> RootPath ->(Output, State)
 rawKeysUpdate rawKeys root =
     case parseKeys rawKeys of
         Left err ->
             ( ErrorO $ T.unpack $
                 "could not parse static keys: " <> err
-            , FailedS
+            , InitS FailedI
             )
 
         Right keys ->
             ( BytesInQO toWebsocketQ (Bl.singleton 11)
-            , Ready root keys [] [] []
+            , ReadyS $ Ready
+                { root
+                , keys
+                , blobsUp = NoJobs
+                , getBlob = NoJobs
+                , send = NoJobs
+                }
             )
 
 
 setupDatabase :: RootPath -> Output
-setupDatabase (RootPath root) =
-    BatchO $ map (DbExecute_O root)
-        [ "CREATE TABLE IF NOT EXISTS diffs (\n\
-          \    hash BLOB NOT NULL,\n\
-          \    previous_hash BLOB NOT NULL,\n\
-          \    start INTEGER NOT NULL,\n\
-          \    end INTEGER NOT NULL,\n\
-          \    insert BLOB NOT NULL,\n\
-          \    time TEXT NOT NULL,\n\
-          \    author INTEGER NOT NULL,\n\
-          \    PRIMARY KEY (hash, previous_hash)\n\
-          \);"
-        , "CREATE TABLE IF NOT EXISTS sent (\n\
-          \    hash BLOB NOT NULL,\n\
+setupDatabase (RootPath rootPath) =
+    BatchO $ map (DbExecute_O rootPath)
+        [ "CREATE TABLE IF NOT EXISTS sent (\n\
+          \    message_id INTEGER NOT NULL,\n\
           \    time TEXT NOT NULL,\n\
           \    to INTEGER NOT NULL,\n\
-          \    PRIMARY KEY (hash, time, to)\n\
+          \    PRIMARY KEY (message_id, time, to)\n\
           \);"
         , "CREATE TABLE IF NOT EXISTS received (\n\
-          \    from INTEGER NOT NULL,\n\
-          \    hash BLOB NOT NULL,\n\
+          \    message_id BLOB NOT NULL,\n\
           \    time TEXT NOT NULL,\n\
-          \    PRIMARY KEY (from, hash, time)\n\
+          \    from INTEGER NOT NULL,\n\
+          \    PRIMARY KEY (message_id, time, from)\n\
           \);"
         , "CREATE TABLE IF NOT EXISTS fingerprints (\n\
           \    username INTEGER NOT NULL PRIMARY KEY,\n\
@@ -1049,30 +1084,30 @@ setupDatabase (RootPath root) =
         ]
 
 
-dirExistsUpdate :: FilePath -> State -> (Output, State)
-dirExistsUpdate path model =
-    case model of
-        FailedS ->
-            (DoNothingO, model)
+dirExistsUpdate :: FilePath -> Init -> (Output, State)
+dirExistsUpdate path initModel =
+    case initModel of
+        FailedI ->
+            pass
 
-        EmptyS ->
-            (DoNothingO, model)
+        EmptyI ->
+            pass
 
-        MakingRootDirS root@(RootPath r) ->
+        MakingRootDirI rootPath@(RootPath r) ->
             if path == r then
                 ( BatchO
-                    [ setupDatabase root
-                    , ReadFileO $ keysPath root
+                    [ setupDatabase rootPath
+                    , ReadFileO $ keysPath rootPath
                     , StartUiServerO
                     , StartUiO
                     ]
-                , NoKeysS $ RootPath path
+                , InitS $ NoKeysI $ RootPath path
                 )
             else
-                (DoNothingO, model)
+                pass
 
-        NoKeysS _ ->
-            (DoNothingO, model)
+        NoKeysI _ ->
+            pass
+  where
+    pass = (DoNothingO, InitS initModel)
 
-        Ready _ _ _ _ _ ->
-            (DoNothingO, model)
