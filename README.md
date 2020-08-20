@@ -98,19 +98,21 @@ Backend to frontend:
         1 byte: 12
         4 bytes: message ID
         string: output of git log
+    Unique
+        1 byte: 13
+        4 bytes: unique
 
 Frontend to backend:
-
     Set message:
         1 byte: 0
         4 bytes: message ID
         sized string: subject
         sized string: main box
-        string: metadata
+        sized string: metadata
 	Send message
 		1 byte: 1
         4 bytes: message ID
-        user ID
+        user ID of recipient
 	Add to whitelist
 		1 byte: 2
 		user ID
@@ -144,10 +146,12 @@ Frontend to backend:
         1 byte: 13
         4 bytes: message ID
         string: commit hash to revert to
-    Get previous commit
+    Get commit
         1 byte: 14
         4 bytes: message ID
         string: commit hash to look at
+    Get unique
+        1 byte: 15
 
 ## HTTP API
 
@@ -319,7 +323,6 @@ messages/
 database
 	sent
 		message ID
-        git commit hash
 		time
 		to
 	received
