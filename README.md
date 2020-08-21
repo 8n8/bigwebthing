@@ -282,15 +282,14 @@ Before encryption, a chunk must be exactly 15KB long. A chunk is encoded like th
 
 ## Crypto
 
-The end-to-end cryptography is done using Noise, using the KK pattern, i.e. both parties know the other's public static key before the handshake.
+The end-to-end cryptography is done using Noise, using the KX pattern, i.e. the sender (the respondent) knows the receiver's (initiator) public static key in advance.
 
-The KK handshake is:
+The KX handshake is:
 
 -> s
-<- s
 ...
--> e, es, ss
-<- e, ee, se
+-> e
+<- e, ee, se, s, es
 
 Any message payloads after this handshake are secure.
 
@@ -300,15 +299,16 @@ So to send someone a message, I download one of their ephemeral keys from the se
 
 Then I use Noise again to encrypt a payload. So I send them:
 
-their ephemeral key || my encrypted ephemeral key || my transport message
+their ephemeral key || my encrypted ephemeral key || my encrypted static key || my transport message
 
-Each user must keep a record of their valid, unused ephemeral keys, and never accept a message the reuses an ephemeral key.
+Each user must keep a record of their valid, unused ephemeral keys, and never accept a message that reuses an ephemeral key.
 
 When I receive a message, I need to:
 
 1. get their static key from my cache
 2. check that the ephemeral key they are offering (originally from me) has not been used
-3. feed it all through Noise and get the plain-text
+3. feed it all through Noise and get the plain-text, AND check their static key is in my contacts
+
 
 # Client cache
 
