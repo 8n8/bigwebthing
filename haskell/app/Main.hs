@@ -3,7 +3,7 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GADTs #-}
-module Main where
+module Main (main) where
 
 import qualified Control.Concurrent.STM as Stm
 import Network.Wai.Handler.WebSockets (websocketsOr)
@@ -30,6 +30,7 @@ import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
 import Control.Concurrent (forkIO)
+import qualified System.Process as Process
 
 
 main :: IO ()
@@ -68,7 +69,7 @@ io output =
 
         MakeDirIfMissingO path -> do
             Dir.createDirectoryIfMissing False path
-            return $ Just $ DirExistsM path
+            return $ Just $ DirCreatedIfMissingM path
 
         ReadFileO path -> do
             bytes <- B.readFile path
@@ -136,6 +137,51 @@ io output =
             bytes <- Bl.readFile path
             return $ Just $ LazyFileContentsM path bytes
 
+        DoesDirExistO path -> do
+            exists <- Dir.doesDirectoryExist path
+            return $ Just $ DirExistsM path exists
+
+        RunCommandO process -> do
+            (out, err) <- Process.withCreateProcess
+                process
+                processProcess
+            return $ Just $ CommandResultM out err process
+
+
+processProcess
+    :: Maybe Io.Handle
+    -> Maybe Io.Handle
+    -> Maybe Io.Handle
+    -> Process.ProcessHandle
+    -> IO (StdOut, StdErr)
+processProcess _ maybeStdoutH maybeStderrH _ = do
+    stdOut <- drainMaybeHandle maybeStdoutH
+    stdErr <- drainMaybeHandle maybeStderrH
+    return $ (StdOut stdOut, StdErr stdErr)
+
+
+instance Show MessageId where
+    show (MessageId m) = show m
+
+
+drainMaybeHandle :: Maybe Io.Handle -> IO (Maybe String)
+drainMaybeHandle maybeHandle =
+    case maybeHandle of
+        Nothing ->
+            return Nothing
+
+        Just h -> do
+            contents <- Io.hGetContents h
+            return $ Just contents
+
+
+newtype StdOut
+    = StdOut (Maybe String)
+
+
+newtype StdErr
+    = StdErr (Maybe String)
+
 
 httpApi :: IO Wai.Application
 httpApi =
@@ -198,12 +244,15 @@ data Output where
     BytesInQO :: Q -> Bl.ByteString -> Output
     CloseFileO :: Io.Handle -> Output
     ReadFileLazyO :: FilePath -> Output
+    DoesDirExistO :: FilePath -> Output
+    RunCommandO :: Process.CreateProcess -> Output
+    WriteFileO :: FilePath -> B.ByteString -> Output
 
 
 data Msg
     = StartM
     | AppDataDirM FilePath
-    | DirExistsM FilePath
+    | DirCreatedIfMissingM FilePath
     | FileContentsM FilePath B.ByteString
     | BatchM [Maybe Msg]
     | SetBlobM Bl.ByteString Q
@@ -213,6 +262,8 @@ data Msg
     | GetBlobM Bl.ByteString Q
     | FromWebsocketM Ws.DataMessage
     | LazyFileContentsM FilePath Bl.ByteString
+    | DirExistsM FilePath Bool
+    | CommandResultM StdOut StdErr Process.CreateProcess
 
 
 websocket :: Ws.ServerApp
@@ -293,17 +344,13 @@ promoteBlobsUp jobs =
             Jobs (AwaitingHandleB q body (hash32 body)) aiting
 
 
-newtype Iota
-    = Iota Integer
-
-
 data State
     = ReadyS Ready
     | InitS Init
+    | FailedS
 
 data Init
     = EmptyI
-    | FailedI
     | MakingRootDirI RootPath
     | NoKeysI RootPath
 
@@ -313,8 +360,21 @@ data Ready = Ready
     , keys :: StaticKeys
     , blobsUp :: Jobs BlobUp BlobUpWait
     , getBlob :: Jobs GetBlob GetBlobWait
-    , send :: Jobs Send SendWait
+    , setMessage :: Jobs SetMessage SetMessageWait
     }
+
+
+data SetMessageWait
+    = SetMessageWait MessageId Subject MainBox Metadata
+
+
+data SetMessage
+    = DoesItExist MessageId Subject MainBox Metadata
+    | Initializing MessageId Subject MainBox Metadata
+    | SettingSubject MessageId Subject MainBox Metadata
+    | SettingMainBox MessageId MainBox Metadata
+    | SettingMetadata MessageId Metadata
+    | GitAdding MessageId
 
 
 data Jobs a b
@@ -326,20 +386,8 @@ data GetBlobWait
     = GetBlobWait Bl.ByteString Q
 
 
-data Send
-    = GettingDiffs
-
-
-data SendWait
-    = SendWait Hash20 Hash20 UserId
-
-
 data GetBlob
     = GetBlob Q Hash32
-
-
-data SetSnapshot
-    = TimeS B.ByteString B.ByteString
 
 
 type Q = Stm.STM (Q.TQueue Bl.ByteString)
@@ -348,11 +396,6 @@ type Q = Stm.STM (Q.TQueue Bl.ByteString)
 keysPath :: RootPath -> FilePath
 keysPath (RootPath root) =
     root </> "staticKeys"
-
-
-dbPath :: RootPath -> FilePath
-dbPath (RootPath root) =
-    root </> "database.sqlite"
 
 
 makeRootPath :: FilePath -> FilePath
@@ -399,6 +442,9 @@ updateReady model f =
         InitS _ ->
             (DoNothingO, model)
 
+        FailedS ->
+            (DoNothingO, model)
+
         ReadyS ready ->
             f ready
 
@@ -408,6 +454,9 @@ updateInit model f =
     case model of
         InitS init_ ->
             f init_
+
+        FailedS ->
+            (DoNothingO, model)
 
         ReadyS _ ->
             (DoNothingO, model)
@@ -427,8 +476,8 @@ update model msg =
             , InitS $ MakingRootDirI $ RootPath $ makeRootPath path
             )
 
-        DirExistsM path ->
-            updateInit model $ dirExistsUpdate path
+        DirCreatedIfMissingM path ->
+            updateInit model $ dirCreatedUpdate path
 
         FileContentsM path contents ->
             fileContentsUpdate path contents model
@@ -455,7 +504,7 @@ update model msg =
             case raw of
                 Ws.Text _ _ ->
                     ( ErrorO "received text message from websocket"
-                    , InitS FailedI
+                    , FailedS
                     )
 
                 Ws.Binary bin ->
@@ -463,7 +512,7 @@ update model msg =
                         Left err ->
                             ( ErrorO $
                                 "couldn't parse API input: " <> err
-                            , InitS FailedI
+                            , FailedS
                             )
 
                         Right apiInput ->
@@ -472,13 +521,176 @@ update model msg =
         GetBlobM body q ->
             updateReady model $ onGetBlobUpdate body q
 
+        DirExistsM path exists ->
+            updateReady model $ dirExistsUpdate path exists
+
+        CommandResultM stdout stderr process ->
+            updateReady model $
+                commandResultUpdate process stdout stderr
+
+
+panicOnStdErr :: StdErr -> Process.CreateProcess -> (Output, State) -> (Output, State)
+panicOnStdErr (StdErr stdErr) process ok =
+    case stdErr of
+        Nothing ->
+            ok
+
+        Just err ->
+            (ErrorO $ mconcat
+                [ "failed external process:\n"
+                , show process
+                , ":\n"
+                , err
+                ]
+            , FailedS
+            )
+
+
+commandResultUpdate
+    :: Process.CreateProcess
+    -> StdOut
+    -> StdErr
+    -> Ready
+    -> (Output, State)
+commandResultUpdate command _ stdErr ready =
+    panicOnStdErr stdErr command $
+    case setMessage ready of
+        NoJobs ->
+            pass
+
+        Jobs (DoesItExist _ _ _ _) _ ->
+            pass
+
+        Jobs (Initializing mId sub@(Subject s) box meta) waiting ->
+            if command == gitInit (root ready) mId then
+                ( WriteFileO (subjectPath (root ready) mId) s
+                , ReadyS $ ready
+                    { setMessage =
+                        Jobs
+                            (SettingSubject mId sub box meta)
+                            waiting
+                    }
+                )
+            else
+                pass
+
+        Jobs (SettingSubject _ _ _ _) _ ->
+            pass
+
+        Jobs (SettingMainBox _ _ _) _ ->
+            pass
+
+        Jobs (SettingMetadata _ _) _ ->
+            pass
+
+        Jobs (GitAdding mId) _ ->
+            if command == gitAdd (root ready) mId then
+                ( RunCommandO $ gitCommit (root ready) mId
+                , ReadyS $ ready
+                    { setMessage =
+                        promoteSetMessage $ setMessage ready
+                    }
+                )
+            else
+                pass
+
+  where
+    pass = (DoNothingO, ReadyS ready)
+
+
+promoteSetMessage
+    :: Jobs SetMessage SetMessageWait
+    -> Jobs SetMessage SetMessageWait
+promoteSetMessage job =
+    case job of
+        NoJobs ->
+            NoJobs
+
+        Jobs _ [] ->
+            NoJobs
+
+        Jobs _ (SetMessageWait mId sub box meta:aiting) ->
+            Jobs
+                (DoesItExist mId sub box meta)
+                aiting
+
+
+gitInit :: RootPath -> MessageId -> Process.CreateProcess
+gitInit root mId =
+        (Process.proc "git" ["init", show mId])
+        { Process.cwd = Just $ messagesDirPath root }
+
+
+gitCommit :: RootPath -> MessageId -> Process.CreateProcess
+gitCommit root mId =
+        (Process.proc "git" ["commit", "-m", "x"])
+        {Process.cwd = Just $ messagePath root mId}
+
+
+gitAdd :: RootPath -> MessageId -> Process.CreateProcess
+gitAdd root mId =
+        (Process.proc "git" ["add", "."])
+        { Process.cwd = Just $ messagePath root mId }
+
+
+subjectPath :: RootPath -> MessageId -> FilePath
+subjectPath root mId =
+    messagePath root mId </> "subject.txt"
+
+
+dirExistsUpdate :: FilePath -> Bool -> Ready -> (Output, State)
+dirExistsUpdate path exists ready =
+    case setMessage ready of
+        NoJobs ->
+            pass
+
+        Jobs (DoesItExist mId sub@(Subject s) box meta) waiting ->
+            if exists && path == messagePath (root ready) mId then
+                ( WriteFileO (subjectPath (root ready) mId) s
+                , ReadyS $ ready
+                    { setMessage =
+                        Jobs
+                            (SettingSubject mId sub box meta)
+                            waiting
+                    }
+                )
+            else
+                ( RunCommandO $ gitInit (root ready) mId
+                , ReadyS $ ready
+                    { setMessage =
+                        Jobs
+                            (Initializing mId sub box meta)
+                            waiting
+                    }
+                )
+
+        Jobs (Initializing _ _ _ _) _ ->
+            pass
+
+        Jobs (SettingSubject _ _ _ _) _ ->
+            pass
+
+        Jobs (SettingMainBox _ _ _) _ ->
+            pass
+
+        Jobs (SettingMetadata _ _) _ ->
+            pass
+
+        Jobs (GitAdding _) _ ->
+            pass
+
+  where
+    pass = (DoNothingO, ReadyS ready)
+
+
+
 
 onGetBlobUpdate :: Bl.ByteString -> Q -> Ready -> (Output, State)
 onGetBlobUpdate body q ready =
     case P.eitherResult $ P.parse blobHashP $ Bl.toStrict body of
         Left err ->
             ( ErrorO $ "could not parse GetBlob: " <> err
-            , InitS FailedI
+            , FailedS
             )
 
         Right hash ->
@@ -499,50 +711,6 @@ onGetBlobUpdate body q ready =
                     )
 
 
-consEnd :: a -> [a] -> [a]
-consEnd new old =
-    reverse $ new : reverse old
-
-
-makeDiff :: B.ByteString -> B.ByteString -> (Int, Int, B.ByteString)
-makeDiff previous next =
-    let
-        prevUnpack = B.unpack previous
-        nextUnpack = B.unpack next
-        zipForward = zip prevUnpack nextUnpack
-        zipBackward = zip (reverse prevUnpack) (reverse nextUnpack)
-        start = countIdentical zipForward
-        end = length zipBackward - (countIdentical zipBackward)
-        newEnd = end + length prevUnpack - length nextUnpack
-        insert = B.pack $ drop start $ drop newEnd nextUnpack
-    in
-        (start, end, insert)
-
-
-countIdentical :: [(Word8, Word8)] -> Int
-countIdentical zipped =
-    countIdenticalHelp zipped 0
-
-
-countIdenticalHelp :: [(Word8, Word8)] -> Int -> Int
-countIdenticalHelp zipped count =
-    case zipped of
-        [] ->
-            count
-
-        (z1, z2) : ipped ->
-            if z1 == z2 then
-                countIdenticalHelp ipped $ count + 1
-            else
-                count
-
-
-hash20 :: B.ByteString -> Hash20
-hash20 bytes =
-    (Hash20 . Blake.finalize 20 . Blake.update bytes)
-     (Blake.initialize 20)
-
-
 parseApiInput :: Bl.ByteString -> Either String ApiInput
 parseApiInput raw =
     P.eitherResult $ P.parse apiInputP $ Bl.toStrict raw
@@ -550,10 +718,6 @@ parseApiInput raw =
 
 newtype UserId =
     UserId Integer
-
-
-newtype Hash20 =
-    Hash20 B.ByteString
 
 
 userIdP :: P.Parser UserId
@@ -582,12 +746,6 @@ decodeIntHelp raw counter accum =
                 (accum + (fromIntegral r) * (256 ^ counter))
 
 
-hash20P :: P.Parser Hash20
-hash20P = do
-    hash <- P.take 20
-    return $ Hash20 hash
-
-
 blobHashP :: P.Parser Hash32
 blobHashP = do
     hash <- hash32P
@@ -599,6 +757,7 @@ hash32P :: P.Parser Hash32
 hash32P = do
     hash <- P.take 32
     return $ Hash32 hash
+
 
 data ApiInput
     = SetMessageA MessageId Subject MainBox Metadata
@@ -728,11 +887,56 @@ apiInputP = do
         ]
 
 
+setMessageUpdate
+    :: MessageId
+    -> Subject
+    -> MainBox
+    -> Metadata
+    -> Ready
+    -> (Output, State)
+setMessageUpdate messageId subject mainBox metadata ready =
+    case setMessage ready of
+        NoJobs ->
+            ( DoesDirExistO $ messagePath (root ready) messageId
+            , ReadyS $ ready { setMessage =
+                Jobs
+                    (DoesItExist messageId subject mainBox metadata)
+                    []
+                }
+            )
+
+        Jobs current waiting ->
+            ( DoNothingO
+            , ReadyS $ ready { setMessage =
+                Jobs
+                    current
+                    (SetMessageWait
+                        messageId
+                        subject
+                        mainBox
+                        metadata
+                            : waiting)
+                }
+            )
+
+
+messagesDirPath :: RootPath -> FilePath
+messagesDirPath (RootPath root) =
+    root </> "messages"
+
+
+messagePath :: RootPath -> MessageId -> FilePath
+messagePath root (MessageId messageId) =
+    messagesDirPath root </> show messageId
+
+
 uiApiUpdate :: ApiInput -> State -> (Output, State)
-uiApiUpdate apiInput _ =
+uiApiUpdate apiInput model =
     case apiInput of
-        SetMessageA _ _ _ _ ->
-            undefined
+        SetMessageA messageId subject mainBox metadata ->
+            updateReady
+                model
+                (setMessageUpdate messageId subject mainBox metadata)
 
         SendMessageA _ _ ->
             undefined
@@ -780,12 +984,6 @@ uiApiUpdate apiInput _ =
             undefined
 
 
-
-getHash20 :: Hash20 -> B.ByteString
-getHash20 (Hash20 h) =
-    h
-
-
 onMovedFile :: FilePath -> Ready -> (Output, State)
 onMovedFile new ready =
     case blobsUp ready of
@@ -794,7 +992,7 @@ onMovedFile new ready =
 
         Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
             if toPath == new then
-                ( BytesInQO q (Bl.singleton 1 <> Bl.fromStrict hash) 
+                ( BytesInQO q (Bl.singleton 1 <> Bl.fromStrict hash)
                 , ReadyS $ ready { blobsUp = NoJobs }
                 )
 
@@ -941,11 +1139,6 @@ tempPath (RootPath root) =
     root </> "temporary"
 
 
-iotaPlusOne :: Iota -> Iota
-iotaPlusOne (Iota i) =
-    Iota (i + 1)
-
-
 batchUpdate :: State -> [Maybe Msg] -> [Output] -> ([Output], State)
 batchUpdate model msgs outputs =
     case msgs of
@@ -968,7 +1161,7 @@ fileContentsUpdate path contents model =
         ReadyS _ ->
             (DoNothingO, model)
 
-        InitS FailedI ->
+        FailedS ->
             (DoNothingO, model)
 
         InitS EmptyI ->
@@ -1013,12 +1206,6 @@ uint8P =
     fromIntegral <$> P.anyWord8
 
 
-bytesP :: P.Parser B.ByteString
-bytesP = do
-    n <- uint32P
-    P.take n
-
-
 sessionKeyLength :: Int
 sessionKeyLength =
     16
@@ -1043,7 +1230,7 @@ rawKeysUpdate rawKeys root =
         Left err ->
             ( ErrorO $ T.unpack $
                 "could not parse static keys: " <> err
-            , InitS FailedI
+            , FailedS
             )
 
         Right keys ->
@@ -1053,7 +1240,7 @@ rawKeysUpdate rawKeys root =
                 , keys
                 , blobsUp = NoJobs
                 , getBlob = NoJobs
-                , send = NoJobs
+                , setMessage = NoJobs
                 }
             )
 
@@ -1084,12 +1271,9 @@ setupDatabase (RootPath rootPath) =
         ]
 
 
-dirExistsUpdate :: FilePath -> Init -> (Output, State)
-dirExistsUpdate path initModel =
+dirCreatedUpdate :: FilePath -> Init -> (Output, State)
+dirCreatedUpdate path initModel =
     case initModel of
-        FailedI ->
-            pass
-
         EmptyI ->
             pass
 
@@ -1110,4 +1294,3 @@ dirExistsUpdate path initModel =
             pass
   where
     pass = (DoNothingO, InitS initModel)
-

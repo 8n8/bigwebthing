@@ -40,6 +40,7 @@ dependencies:
 - blake2
 - base64-bytestring
 - time
+- process
 
 library:
   source-dirs: src
@@ -52,6 +53,7 @@ executables:
     - -threaded
     - -rtsopts
     - -Wall
+    - -Werror
     - -with-rtsopts=-N
     dependencies:
     - haskell
