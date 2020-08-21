@@ -29,17 +29,13 @@ dependencies:
 - warp
 - websockets
 - scotty
-- http-types
-- containers
 - directory
 - cacophony
 - filepath
 - sqlite-simple
 - webviewhs
-- liquidhaskell
 - blake2
 - base64-bytestring
-- time
 - process
 
 library:
@@ -52,11 +48,12 @@ executables:
     ghc-options:
     - -threaded
     - -rtsopts
-    - -Wall
-    - -Werror
+    - -Weverything
+    - -Wno-prepositive-qualified-module
+    - -Wno-unsafe
+    - -Wno-missing-safe-haskell-mode
+    - -Wno-implicit-prelude
     - -with-rtsopts=-N
-    dependencies:
-    - haskell
 
 tests:
   haskell-test:

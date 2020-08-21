@@ -147,6 +147,10 @@ io output =
                 processProcess
             return $ Just $ CommandResultM out err process
 
+        WriteFileO path contents -> do
+            B.writeFile path contents
+            return Nothing
+
 
 processProcess
     :: Maybe Io.Handle
