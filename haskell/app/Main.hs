@@ -942,8 +942,8 @@ uiApiUpdate apiInput model =
                 model
                 (setMessageUpdate messageId subject mainBox metadata)
 
-        SendMessageA _ _ ->
-            undefined
+        SendMessageA messageId userId ->
+            updateReady model $ sendMessageUpdate messageId userId
 
         AddToWhitelistA _ ->
             undefined

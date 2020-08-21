@@ -184,89 +184,105 @@ Some APIs are protected by a proof of work problem. To create a proof of work to
 
 The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
 
+## Username encoding
+
+A username is a variable-length integer, at least one byte long. It is encoded by prefixing it by a byte containing its length.
+
 ## TCP API
 
 It will accept incoming TCP connections. The client's first message should be like this:
 
-	sized server ID
+	sized username
 	16 bytes: secret session key
 
-Then the client should just listen on the connection. Messages from the server can take these forms:
+Then the client should just listen on the connection, and use it to upload messages to the server. Each message should be not more than 16KB, and should start with a 2-byte Little-Endian length.
 
-	Request for an ephemeral key:
+Server to client
+
+	Request for an ephemeral key
 		1 byte: 0
-
 	New message from another user
 		1 byte: 1
-		sized bytes: sender username
-		32 bytes: message hash
+        32 bytes: my ephemeral public key
+        96 bytes: handshake message
+            32 bytes: sender ephemeral public key
+            48 bytes: sender encrypted static key
+                32 bytes: sender static key
+                16 bytes: authentication tag
+            16 bytes: authentication tag for empty payload
+        48 bytes: encrypted transport message
+            32 bytes: blob ID
+            16 bytes: authentication tag
+    New username
+        1 byte: 2
+        username
+    Proof of work info
+        1 byte: 3
+		1 byte: difficulty
+		16 bytes: random
+    Price
+        1 byte: 4
+        4 bytes: price in GBP^(-4)
+    Ephemeral key
+        1 byte: 5
+        32 bytes: public ephemeral key
+        username: owner of key
+    No ephemeral key
+        1 byte: 6
+        username: potential owner of key
+    Blob
+        1 byte: 7
+        32 bytes: blob ID
+        blob
 
-		(The reason for sending the hash rather than the whole message is to protect the user from DDOS attacks from unwanted senders. If they don't recognise the username they can just request that the message is deleted without downloading it.)
+Client to server
 
-## HTTP API
-
-The maximum request body size is 16KB.
-
-/api
 	Create account
-	    Request
-			1 byte: 0
-			24 bytes: proof of work
-			16 bytes: random session key
-		Response:
-			username
+		1 byte: 0
+		24 bytes: proof of work
+		16 bytes: random session key
+        32 bytes: static public key
 	Get proof of work info
-		Request
-			1 byte: 1
-		Response
-			1 byte: difficulty
-			16 bytes: random
+        1 byte: 1
 	Send message
-		Request
-			1 byte: 2
-			16 bytes: session key
-			sized bytes: my username
-			sized bytes: recipient username
-			message
-	Download message
-		Request
-			1 byte: 3
-			16 bytes: session key
-			sized bytes: my username
-			32 bytes: message hash
+		1 byte: 2
+		16 bytes: session key
+		my username
+		recipient username
+		message
+    Upload blob
+        1 byte: 3
+        16 bytes: session key
+        sized bytes: my username
+        32 bytes: blob ID (must be unique, so random is best)
+        blob
+	Download blob
+		1 byte: 4
+		16 bytes: session key
+		my username
+		32 bytes: blob ID
 	Delete message
-		Request
-			1 byte: 4
-			16 bytes: session key
-			sized bytes: my username
-			32 bytes: message hash
+		1 byte: 5
+		16 bytes: session key
+		sized bytes: my username
+		32 bytes: message hash
 	Get price
-		Request
-			1 byte: 5 
-		Response
-			4 bytes: price in GBP^-4
-	Get ephemeral key for user:
-		Request:
-			1 byte: 6
-			24 bytes: proof of work
-			sized bytes: their username
-		Response:
-			a key or empty if there isn't one
-	Upload ephemeral key:
-		Request:
-			1 byte: 7
-			16 bytes: session key
-			sized bytes: my username
-			32 bytes: the key
+		1 byte: 6 
+	Get ephemeral key for user
+		1 byte: 7
+		24 bytes: proof of work
+		their username
+	Upload ephemeral key
+		1 byte: 8
+		16 bytes: session key
+		sized bytes: my username
+		32 bytes: the key
 			
 # Client to client
 
 ## API
 
-A message is made up of a chain of diffs, and some blobs. It is encoded as follows:
-	+ 4 bytes: number of diffs
-	+ sequence of diffs
-	+ sequence of blobs, where a blob is some length-encoded bytes
+A message is a tarred Git repository. 
 
 Then the message is sliced up into 15KB chunks, each chunk is encrypted, and is sent.
 
@@ -309,6 +325,7 @@ When I receive a message, I need to:
 2. check that the ephemeral key they are offering (originally from me) has not been used
 3. feed it all through Noise and get the plain-text, AND check their static key is in my contacts
 
+If the plaintext is too long to fit into a Noise message, it is chunked up, and subsequent messages are sent using the same session. The session should be thrown away after the whole message has been sent, to preserver forward secrecy between messages.
 
 # Client cache
 
