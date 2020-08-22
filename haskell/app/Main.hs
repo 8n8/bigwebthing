@@ -362,10 +362,35 @@ data Init
 data Ready = Ready
     { root :: RootPath
     , keys :: StaticKeys
+    , iota :: Iota
     , blobsUp :: Jobs BlobUp BlobUpWait
     , getBlob :: Jobs GetBlob GetBlobWait
     , setMessage :: Jobs SetMessage SetMessageWait
+    , sendMessage :: Jobs SendMessage SendMessageWait
     }
+
+
+data SendMessage
+    = Cloning MessageId UserId
+    | Tarring MessageId UserId
+    | ReadingTar MessageId UserId
+    | ToStaticKeyFromDb MessageId UserId PlainText
+    | ToEphemeralFromServer MessageId UserId PlainText ToStatic
+    | MakingMyEphemeral
+        MessageId UserId PlainText ToStatic ToEphemeral
+    | MakingBlobIds
+        MessageId UserId PlainText ToStatic ToEphemeral MyEphemeral
+    | SendingPointer
+        MessageId UserId PlainText Noise.NoiseState BlobIds
+    | SendingChunks
+        MessageId UserId PlainText Crypto.NoiseState BlobIds Hash32
+    | MakingNewMessageId MessageId UserId
+    | MovingTmpToNew NewMessageId UserId
+    | PuttingSentInDb
+
+
+data SendMessageWait
+    = SendMessageWait MessageId UserId
 
 
 data SetMessageWait
@@ -932,6 +957,12 @@ messagesDirPath (RootPath root) =
 messagePath :: RootPath -> MessageId -> FilePath
 messagePath root (MessageId messageId) =
     messagesDirPath root </> show messageId
+
+
+sendMessageUpdate :: MessageId -> UserId -> Ready -> (Output, State)
+sendMessageUpdate messageId userId ready =
+    ( CpRO (messagePath
+
 
 
 uiApiUpdate :: ApiInput -> State -> (Output, State)

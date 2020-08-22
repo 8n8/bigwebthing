@@ -288,13 +288,19 @@ Then the message is sliced up into 15KB chunks, each chunk is encrypted, and is 
 
 Before encryption, a chunk must be exactly 15KB long. A chunk is encoded like this:
 
-	sized padding
-		2 bytes: length of padding
-		the padding: it doesn't matter what it is, so just use zeros
+    either:
+        1 byte: 0 // There isn't another chunk: this is the last one in the sequence
+	    32 bytes: the hash of the whole message before chunking
+        2 bytes: length of padding
+        the padding
+    or
+        1 byte: 1: // There are more chunks to come.
+        32 bytes: the ID of the next chunk
 	4 bytes: a counter, starting at 0
 	4 bytes: the total number of chunks in the whole message
-	32 bytes: the hash of the whole message before chunking
 	all the rest of the bytes: the chunk
+
+The message ID of the first chunk is encrypted and sent to the user, using the 'send message' API. The chunks themselves are encrypted and uploaded as anonymous blobs, with their message IDs.
 
 ## Crypto
 
@@ -325,7 +331,7 @@ When I receive a message, I need to:
 2. check that the ephemeral key they are offering (originally from me) has not been used
 3. feed it all through Noise and get the plain-text, AND check their static key is in my contacts
 
-If the plaintext is too long to fit into a Noise message, it is chunked up, and subsequent messages are sent using the same session. The session should be thrown away after the whole message has been sent, to preserver forward secrecy between messages.
+All the chunks in a message are sent using the same session. The session should be thrown away after the whole message has been sent, to preserve forward secrecy between messages.
 
 # Client cache
 
