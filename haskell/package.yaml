@@ -22,6 +22,7 @@ dependencies:
 - base >= 4.7 && < 5
 - bytestring
 - text
+- time
 - stm
 - attoparsec
 - wai-websockets
@@ -37,6 +38,10 @@ dependencies:
 - blake2
 - base64-bytestring
 - process
+- containers
+- tar
+- cryptonite
+- network-simple
 
 library:
   source-dirs: src
@@ -51,8 +56,10 @@ executables:
     - -Weverything
     - -Wno-prepositive-qualified-module
     - -Wno-unsafe
+    - -Wno-safe
     - -Wno-missing-safe-haskell-mode
     - -Wno-implicit-prelude
+    - -Wno-monomorphism-restriction
     - -with-rtsopts=-N
 
 tests:
