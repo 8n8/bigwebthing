@@ -16,7 +16,7 @@ It operates on a strict whitelist-only policy, so you only receive messages from
 
 These are the different parts of the program:
 
-1. (Haskell) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
+1. (Go) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
 
 2. (Elm) The GUI. This runs in a stripped-down web browser via webview.
 
@@ -24,9 +24,9 @@ These are the different parts of the program:
 
 4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produce a DOM-like structure from a user input text box and user-uploaded binary blobs.
 
-6. (Haskell) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
+6. (Go) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
 
-# User ID
+# User ID displayed to the user
 
 A user ID has two components:
 
@@ -36,9 +36,7 @@ A user ID has two components:
 
 So the whole user ID is:
 
-	very_slow_hash(public_key || username, salt)[:8] || username
-
-The salt is stored alongside the public key in the database on the server.
+	very_slow_hash(public_key)[:8] || username
 
 The encoding uses a custom word list with about 8000 words, very similar to Diceware. So for someone with a 3-byte username, their user ID will be 11 bytes, which will require 7 words, like:
 
@@ -202,10 +200,10 @@ Server to client
 	New message from another user (AUTH)
 		1 byte: 0
         8 bytes: sender username
-        15991 bytes: the message
+        15983 bytes: the message
     New username (AUTH)
         1 byte: 1
-        username
+        8 bytes: username
     Proof of work info
         1 byte: 2
 		1 byte: difficulty
@@ -221,11 +219,12 @@ Client to server
     Sign in
         1 byte: 1
 	    16 bytes: secret session key
-	    sized username
+	    8 bytes: username
     New account
 		1 byte: 2
 		24 bytes: proof of work
 		16 bytes: random session key
+        32 bytes: public static encryption key
 	Send message (AUTH)
 		1 byte: 3
 		8 bytes: recipient username
@@ -248,28 +247,47 @@ Client to server
 
 A message is a tarred Git repository.
 
-Then the message is sliced up into 15KB chunks, each chunk is encrypted, and is sent.
+Then the message is sliced up into chunks, each chunk is encrypted, and is sent.
 
-Before encryption, a chunk must be exactly 15KB long. A chunk is encoded like this:
+Before encryption, a chunk must be exactly 15902 bytes long. A chunk is encoded like this:
 
-    either:
-        1 byte: 0 // There isn't another chunk: this is the last one in the sequence
-	    32 bytes: the hash of the whole message before chunking
-        2 bytes: length of padding
-        the padding
-    or
-        1 byte: 1: // There are more chunks to come.
-	4 bytes: a counter, starting at 0
-	4 bytes: the total number of chunks in the whole message
-	all the rest of the bytes: the chunk
+15902 bytes
+    either the whole message fits in one chunk
+        1 byte: 0
+        2 bytes: the length of the message
+        the message
+        padding
+    or this is a part of a sequence but not the last item
+        1 byte: 1
+        4 bytes: chunk counter, starting at 0
+        4 bytes: total number of chunks in the sequence
+        the chunk
+    or this is the final message in a sequence
+        1 byte: 2
+        32 bytes: the hash of the whole message before chunking
+        2 bytes: length of the chunk
+        the chunk
+        padding
 
 ## Crypto
 
-The end-to-end cryptography is done using Noise, using the XX pattern, i.e. the parties exchange their public keys during the handshake.
+The cryptography is done using golang.org/x/crypto/nacl/box. Each user has a pair of static keys. For each of their contacts they have a public static key and some public temporary keys. Temporary keys are used once only and then deleted. The server will accept messages that are 15991 bytes long:
 
-For each session I need to check that the sender static public key matches the fingerprint they gave me.
-
-All the chunks in a message are sent using the same session. The session should be thrown thrown away after a while and a fresh one made, as there is not forward secrecy within sessions.
+15991 bytes
+    24 bytes: random nonce
+    15967 bytes: Nacl box encrypted with recipient's static public key
+        16 bytes: encryption overhead
+        15951 bytes
+            either transport message
+                1 byte: 0
+                32 bytes: temporary public key used for encryption
+                15918 bytes: Nacl box encrypted with temporary public key and blank nonce
+                    16 bytes: encryption overhead
+                    15902 bytes: plain text
+            or fresh key supply
+                1 byte: 1
+                15936 bytes: 498 32-byte temporary public keys
+                14 bytes: padding
 
 # Client cache
 
@@ -293,6 +311,15 @@ database
 		message ID
         commit hash
 		time
+    temporary_keys
+        public
+        secret
+    static_keys
+        username
+        key
+    contacts
+        username
+        fingerprint
 crypto
     A binary file containing all my keys and other crypto information.
 log
@@ -318,6 +345,7 @@ database
 	users
 		username
 		hashed session key
+        static_key
     contacts
         owner username
         contact username
