@@ -200,18 +200,18 @@ Each message should be not more than 16KB, and should start with a 2-byte Little
 Server to client
 
 	New message from another user (AUTH)
-		1 byte: 1
+		1 byte: 0
         8 bytes: sender username
         15991 bytes: the message
     New username (AUTH)
-        1 byte: 2
+        1 byte: 1
         username
     Proof of work info
-        1 byte: 3
+        1 byte: 2
 		1 byte: difficulty
 		16 bytes: random
     Price (AUTH)
-        1 byte: 4
+        1 byte: 3
         4 bytes: price in GBP^(-4)
 
 Client to server
@@ -231,15 +231,15 @@ Client to server
 		8 bytes: recipient username
 		15991 bytes: message
 	Delete message (AUTH)
-		1 byte: 6
+		1 byte: 4
 		32 bytes: message hash
 	Get price (AUTH)
-		1 byte: 7
+		1 byte: 5
     Add contact (AUTH)
-        1 byte: 8
+        1 byte: 6
         8 bytes: contact username
     Remove contact (AUTH)
-        1 byte: 9
+        1 byte: 7
         8 bytes: contact username
 
 # Client to client
@@ -259,12 +259,9 @@ Before encryption, a chunk must be exactly 15KB long. A chunk is encoded like th
         the padding
     or
         1 byte: 1: // There are more chunks to come.
-        32 bytes: the ID of the next chunk
 	4 bytes: a counter, starting at 0
 	4 bytes: the total number of chunks in the whole message
 	all the rest of the bytes: the chunk
-
-The message ID of the first chunk is encrypted and sent to the user, using the 'send message' API. The chunks themselves are encrypted and uploaded as anonymous blobs, with their message IDs.
 
 ## Crypto
 

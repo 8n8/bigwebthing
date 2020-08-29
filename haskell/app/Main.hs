@@ -3,6 +3,7 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Main (main) where
 
 import qualified Control.Concurrent.STM as Stm
@@ -43,6 +44,11 @@ import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.KDF.Argon2 as Argon2
 import qualified Network.Simple.TCP as Tcp
 import qualified Data.Bits as Bits
+import qualified Data.Map as Map
+import qualified Crypto.Noise.Internal.NoiseState as Nint
+import qualified Crypto.Noise.Internal.Handshake.State as Hint
+import qualified Data.Binary as Binary
+import GHC.Generics (Generic)
 
 
 main :: IO ()
@@ -502,7 +508,76 @@ data Ready = Ready
     , time :: [Clock.UTCTime]
     , sendingEphemeral :: Bool
     , authStatus :: AuthStatus
+    , sessions :: Map.Map Integer Session
     }
+
+
+encodeUid :: UserId -> Bl.ByteString
+encodeUid (UserId uid) =
+    encodeUint64 uid 
+
+
+type HandshakeState 
+    = Hint.HandshakeState ChaChaPoly1305 Curve25519 BLAKE2s
+
+
+encodeHandshake :: HandshakeState -> Bl.ByteString
+encodeHandshake handshake =
+    undefined
+
+
+encodeNoise :: NoiseState -> Bl.ByteString
+encodeNoise noise =
+    mconcat
+        [ encodeHandshake $ Nint._nsHandshakeState noise        
+        ]
+
+
+encodeSent =
+    undefined
+
+
+encodeRole =
+    undefined
+
+
+encodeStart =
+    undefined
+
+
+encodeSession :: Session -> Bl.ByteString
+encodeSession session =
+    mconcat
+        [ encodeUid $ with session
+        , encodeNoise $ noise session
+        , encodeSent $ sent session
+        , encodeRole $ role session
+        , encodeStart $ start session
+        ]
+
+
+data Session
+    = Session
+        { with :: UserId
+        , noise :: NoiseState
+        , sent :: NoiseSent
+        , role :: NoiseRole
+        , start :: Clock.UTCTime
+        }
+
+
+data NoiseRole
+    = Initiator
+    | Responder
+
+
+data NoiseSent
+    = NothingS
+    | RightE00
+    | LeftEEeSEs21
+    | RightSSe25
+    | AllHandshake
+
 
 
 data PowInfo
@@ -528,17 +603,20 @@ data SendMessage
 data SendStatus
     = BareCloning
     | Reading
-    | ToStaticKeyFromDb PlainText
-    | ToEphemeralFromServer PlainText TheirStatic
-    | MakingMyEphemeral PlainText TheirStatic TheirEphemeral
-    | SendingPointer PlainText NoiseState
     | SendingChunks PlainText NoiseState Hash32
-    | PuttingSentInDb
-
 
 
 newtype TheirStatic
     = TheirStatic (Dh.PublicKey Curve25519)
+
+
+
+newtype SomeNoise
+    = SomeNoise NoiseState
+    deriving (Generic)
+
+
+instance Binary.Binary SomeNoise
 
 
 type NoiseState
@@ -773,8 +851,9 @@ update model msg =
         FileExistenceM path exists ->
             updateInit model $ fileExistenceUpdate path exists
 
-        NewDhKeysM keys ->
-            updateReady model $ newDhKeysUpdate keys
+        NewDhKeysM _ ->
+            undefined
+            -- updateReady model $ newDhKeysUpdate keys
 
 
 makeSignUp
@@ -813,20 +892,20 @@ makePow powInfo =
     powInfoHelp powInfo 0
 
 
-encodeUint8 :: Integer -> Bl.ByteString
-encodeUint8 i =
-    Bl.pack $ map (encodeUint8Help i) (take 8 [0..])
+encodeUint64 :: Integer -> Bl.ByteString
+encodeUint64 i =
+    Bl.pack $ map (encodeUint64Help i) (take 8 [0..])
 
 
-encodeUint8Help :: Integer -> Int -> Word8
-encodeUint8Help int counter =
+encodeUint64Help :: Integer -> Int -> Word8
+encodeUint64Help int counter =
     fromIntegral $ (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
 
 
 powInfoHelp :: PowInfo -> Integer -> Either String Bl.ByteString
 powInfoHelp p@(PowInfo difficulty unique) counter =
     let
-        candidate = encodeUint8 counter
+        candidate = encodeUint64 counter
         hashE = Argon2.hash
             argonOptions
             (Bl.toStrict $ unique <> candidate)
@@ -881,82 +960,22 @@ encodeSec =
     Noise.convert . Dh.dhSecToBytes
 
 
-newDhKeysUpdate :: Dh.KeyPair Curve25519 -> Ready -> (Output, State)
-newDhKeysUpdate keys ready =
-    if sendingEphemeral ready then
-        ( BatchO
-            [ DbExecuteO (dbPath $ root ready) $ cacheEphemeral keys
-            , BytesInQO toServerQ $ uploadEphemeral (snd keys)
-            ]
-        , ReadyS $ ready { sendingEphemeral = False }
-        )
-
-    else case ephemeralForAuthUpdate keys ready of
-        Just used ->
-            used
-
-        Nothing ->
-            ephemeralForSend keys ready
-
-
-ephemeralForSend :: MyEphemeral -> Ready -> (Output, State)
-ephemeralForSend keys ready =
-    case sendMessage ready of
-        Nothing ->
-            pass
-
-        Just send ->
-            case status send of
-                BareCloning ->
-                    pass
-
-                Reading ->
-                    pass
-
-                ToStaticKeyFromDb _ ->
-                    pass
-
-                ToEphemeralFromServer _ _ ->
-                    pass
-
-                MakingMyEphemeral plain theirStat theirEph ->
-                    sendPointer
-                        plain
-                        theirStat
-                        theirEph
-                        keys
-                        ready
-                        send
-
-  where
-    pass = (DoNothingO, ReadyS ready)
-
-
-sendPointer plain theirStatic theirEphem myEphem ready send =
-    case authStatus send of
-        GettingPowInfoA ->
-            pass
-
-        GeneratingStaticKeys _ ->
-            pass
-
-        AwaitingUsername _ _ ->
-            pass
-
-        LoggedIn (StaticKeys myKeys _ _) ->
-            let
-                (noise, pointer) = makePointer
-                    theirStatic
-                    theirEphem
-                    myKeys
-                    myEphem
-            in
-                ( BytesInQO toServerQ pointer
-                , SendingPointer plain noise
-                )
-
-  where
-    pass = (DoNothingO, ReadyS ready)
+-- newDhKeysUpdate :: Dh.KeyPair Curve25519 -> Ready -> (Output, State)
+-- newDhKeysUpdate keys ready =
+--     if sendingEphemeral ready then
+--         ( BatchO
+--             [ DbExecuteO (dbPath $ root ready) $ cacheEphemeral keys
+--             , BytesInQO toServerQ $ uploadEphemeral (snd keys)
+--             ]
+--         , ReadyS $ ready { sendingEphemeral = False }
+--         )
+-- 
+--     else case ephemeralForAuthUpdate keys ready of
+--         Just used ->
+--             used
+-- 
+--         Nothing ->
+--             ephemeralForSend keys ready
 
 
 newtype MyEphemeral
@@ -982,46 +1001,46 @@ makeInitNoise (TheirStatic theirStatic) (MyStatic myStatic) (MyEphemeral myEphem
         Noise.noiseState options noiseKX
 
 
-makePointer
-    :: TheirEphemeral
-    -> NoiseState
-    -> BlobId
-    -> Either T.Text (Bl.ByteString, NoiseState)
-makePointer (TheirEphemeral theirEphemeral) noise0 (BlobId blobId) =
-    case Noise.readMessage theirEphemeral noise0 of
-        err@(Noise.NoiseResultNeedPSK _) ->
-            Left $ T.pack $ show err
+-- makePointer
+--     :: TheirEphemeral
+--     -> NoiseState
+--     -> BlobId
+--     -> Either T.Text (Bl.ByteString, NoiseState)
+-- makePointer (TheirEphemeral theirEphemeral) noise0 (BlobId blobId) =
+--     case Noise.readMessage theirEphemeral noise0 of
+--         err@(Noise.NoiseResultNeedPSK _) ->
+--             Left $ T.pack $ show err
+-- 
+--         err@(Noise.NoiseResultException _) ->
+--             Left $ T.pack $ show err
+-- 
+--         Noise.NoiseResultMessage "" noise1 ->
+--             case Noise.writeMessage "" noise1 of
+--                 err@(Noise.NoiseResultNeedPSK _) ->
+--                     Left $ T.pack $ show err
+-- 
+--                 err@(Noise.NoiseResultException _) ->
+--                     Left $ T.pack $ show err
+-- 
+--                 Noise.NoiseResultMessage cipher2 noise2 ->
+--                     case Noise.writeMessage blobId noise2 of
+--                         err@(Noise.NoiseResultNeedPSK _) ->
+--                             Left $ T.pack $ show err
+-- 
+--                         err@(Noise.NoiseResultException _) ->
+--                             Left $ T.pack $ show err
+-- 
+--                         Noise.NoiseResultMessage cipher3 noise3 ->
+--                             Right (cipher2 <> cipher3, noise3)
+-- 
+-- 
+--         err@(Noise.NoiseResultMessage nonEmpty _) ->
+--             Left $ mconcat
+--                 [ "non-empty payload on ephemeral key"
+--                 , T.pack $ show err
+--                 ]
 
-        err@(Noise.NoiseResultException _) ->
-            Left $ T.pack $ show err
 
-        Noise.NoiseResultMessage "" noise1 ->
-            case Noise.writeMessage "" noise1 of
-                err@(Noise.NoiseResultNeedPSK _) ->
-                    Left $ T.pack $ show err
-
-                err@(Noise.NoiseResultException _) ->
-                    Left $ T.pack $ show err
-
-                Noise.NoiseResultMessage cipher2 noise2 ->
-                    case Noise.writeMessage blobId noise2 of
-                        err@(Noise.NoiseResultNeedPSK _) ->
-                            Left $ T.pack $ show err
-
-                        err@(Noise.NoiseResultException _) ->
-                            Left $ T.pack $ show err
-
-                        Noise.NoiseResultMessage cipher3 noise3 ->
-                            Right (cipher2 <> cipher3, noise3)
-            
-
-        err@(Noise.NoiseResultMessage nonEmpty _) ->
-            Left $ mconcat
-                [ "non-empty payload on ephemeral key"
-                , T.pack $ show err
-                ]
-
-                
 ephemeralForAuthUpdate
     :: Dh.KeyPair Curve25519
     -> Ready
@@ -1174,14 +1193,13 @@ encodeUintHelp int remainder counter accum =
             (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
 
         value :: Integer
-        value = word `Bits.shiftL` (counter * 8)    
+        value = word `Bits.shiftL` (counter * 8)
     in
         encodeUintHelp
             int
             (remainder - value)
             (counter + 1)
             (fromIntegral word : accum)
-        
 
 
 tcpMessageUpdate raw ready =
@@ -1191,12 +1209,7 @@ tcpMessageUpdate raw ready =
             , FailedS
             )
 
-        Right GiveMeEphemeral ->
-            ( GenerateDhPairO
-            , ReadyS $ ready { sendingEphemeral = True }
-            )
-
-        Right (NewMessageT _ _ _) ->
+        Right (NewMessageT _ _) ->
             undefined
 
         Right (NewUserId _) ->
@@ -1208,68 +1221,6 @@ tcpMessageUpdate raw ready =
         Right (Price _) ->
             undefined
 
-        Right (Ephemeral key userId) ->
-            ephemeralFromServerUpdate key userId ready
-
-        Right (NoEphemeral _) ->
-            undefined
-
-        Right (BlobT _ _) ->
-            undefined
-
-
-ephemeralFromServerUpdate
-    :: TheirEphemeral
-    -> UserId
-    -> Ready
-    -> (Output, State)
-ephemeralFromServerUpdate key ownerId ready =
-    case sendMessage ready of
-        Nothing ->
-            pass
-
-        Just send ->
-            case status send of
-                BareCloning ->
-                    pass
-
-                Reading ->
-                    pass
-
-                ToStaticKeyFromDb _ ->
-                    pass
-
-                ToEphemeralFromServer plain theirStatic ->
-                    if ownerId == userId send then
-                        ( GenerateDhPairO
-                        , ReadyS $ ready
-                            { sendMessage = Just $ send
-                                { status =
-                                    MakingMyEphemeral
-                                        plain
-                                        theirStatic
-                                        key
-                                }
-                            }
-                        )
-
-                    else
-                        pass
-
-                MakingMyEphemeral _ _ _ ->
-                    pass
-
-                SendingPointer _ _ ->
-                    pass
-
-                SendingChunks _ _ _ ->
-                    pass
-
-                PuttingSentInDb ->
-                    pass
-
-  where
-    pass = (DoNothingO, ReadyS ready)
 
 
 randomGenUpdate
@@ -1286,7 +1237,7 @@ randomGenUpdate gen init_ =
 
         GettingTimesI _ ->
             pass
-        
+
         GettingRandomGenI root times ->
             ( DoesFileExistO $ keysPath root
             , InitS $ DoKeysExistI root times gen
@@ -1297,7 +1248,7 @@ randomGenUpdate gen init_ =
 
         GettingKeysFromFileI _ _ _ ->
             pass
-        
+
   where
     pass = (DoNothingO, InitS init_)
 
@@ -1316,23 +1267,9 @@ dbPublicKeyUpdate rows ready =
                 Reading ->
                     pass
 
-                ToStaticKeyFromDb plain ->
-                    dbPublicKeyHelp rows ready send plain
-
-                ToEphemeralFromServer _ _ ->
-                    pass
-
-                MakingMyEphemeral _ _ _ ->
-                    pass
-
-                SendingPointer _ _ ->
-                    pass
-
                 SendingChunks _ _ _ ->
                     pass
 
-                PuttingSentInDb ->
-                    pass
   where
     pass = (DoNothingO, ReadyS ready)
 
@@ -1347,44 +1284,12 @@ getEphemeral userId =
     Bl.singleton 8 <> encodeUserId userId
 
 
-dbPublicKeyHelp
-    :: [(Integer, B.ByteString)]
-    -> Ready
-    -> SendMessage
-    -> PlainText
-    -> (Output, State)
-dbPublicKeyHelp rows ready send plain =
-    case rows of
-        [] ->
-            ( ErrorO $ "no static key for " ++ show (userId send)
-            , FailedS
-            )
-
-        [(rawUserId, rawKey)] ->
-            if UserId rawUserId == userId send then
-                ( BytesInQO toServerQ $ getEphemeral (userId send)
-                , ReadyS $ ready
-                    { sendMessage = Just $ send
-                        { status = ToEphemeralFromServer
-                            plain (TheirStatic rawKey)
-                        }
-                    }
-                )
-
-            else
-                (DoNothingO, ReadyS ready)
-
-        _ : _ ->
-            ( ErrorO $
-                "multiple static keys for " ++
-                show (userId send)
-            , FailedS
-            )
-
-
 newtype MyPublicEphemeral
     = MyPublicEphemeral B.ByteString
 
+
+messageInLength =
+    15991
 
 
 tcpP :: P.Parser TcpMsg
@@ -1392,13 +1297,12 @@ tcpP =
     P.choice
         [ do
             _ <- P.word8 0
-            return GiveMeEphemeral
-        , do
-            _ <- P.word8 1
-            myEphemeral <- fmap MyPublicEphemeral $ P.take 32
-            handshake <- fmap Handshake $ P.take 96
-            pointer <- fmap Pointer $ P.take 48
-            return $ NewMessageT myEphemeral handshake pointer
+            userId <- userIdP
+            messageIn <- fmap
+                (MessageIn . Bl.fromStrict)
+                (P.take messageInLength)
+            P.endOfInput
+            return $ NewMessageT userId messageIn
         , do
             _ <- P.word8 2
             userId <- userIdP
@@ -1407,25 +1311,11 @@ tcpP =
             _ <- P.word8 3
             difficulty <- uint8P
             unique <- P.take 16
-            return $ PowInfoT difficulty unique
+            return $ PowInfoT (fromIntegral difficulty) unique
         , do
             _ <- P.word8 4
             price <- uint32P
             return $ Price price
-        , do
-            _ <- P.word8 5
-            key <- fmap TheirEphemeral $ P.take 32
-            userId <- userIdP
-            return $ Ephemeral key userId
-        , do
-            _ <- P.word8 6
-            userId <- userIdP
-            return $ NoEphemeral userId
-        , do
-            _ <- P.word8 7
-            blobId <- fmap BlobId $ P.take blobIdLen
-            blob <- fmap EncryptedBlob $ P.takeByteString
-            return $ BlobT blobId blob
         ]
 
 
@@ -1444,57 +1334,41 @@ tarUpdate
     -> [Tar.Entry]
     -> Ready
     -> (Output, State)
-tarUpdate paths tar ready =
-    case sendMessage ready of
-        Nothing ->
-            pass
-
-        Just send ->
-            case status send of
-                BareCloning ->
-                    pass
-
-                Reading ->
-                    if paths ==
-                        ( tempPath $ root ready
-                        , clonedFilePath $ messageId send) then
-
-                        ( DbPublicKeyO
-                            (dbPath $ root ready)
-                            (dbGetPublicKey $ userId send)
-                        , ReadyS $ ready
-                            { sendMessage = Just $ send
-                                { status = ToStaticKeyFromDb $
-                                    PlainText $ Tar.write tar
-                                }
-                            }
-                        )
-
-                    else
-                        pass
-
-                ToStaticKeyFromDb _ ->
-                    pass
-
-                ToEphemeralFromServer _ _ ->
-                    pass
-
-                MakingMyEphemeral _ _ _ ->
-                    pass
-
-                SendingPointer _ _ ->
-                    pass
-
-                SendingChunks _ _ _ ->
-                    pass
-
-                PuttingSentInDb ->
-                    pass
-
-  where
-    pass = (DoNothingO, ReadyS ready)
-
-                    
+tarUpdate _ _ _ = -- paths tar ready =
+    undefined
+--     case sendMessage ready of
+--         Nothing ->
+--             pass
+-- 
+--         Just send ->
+--             case status send of
+--                 BareCloning ->
+--                     pass
+-- 
+--                 Reading ->
+--                     if paths ==
+--                         ( tempPath $ root ready
+--                         , clonedFilePath $ messageId send) then
+-- 
+--                         ( DbPublicKeyO
+--                             (dbPath $ root ready)
+--                             (dbGetPublicKey $ userId send)
+--                         , ReadyS $ ready
+--                             { sendMessage = Just $ send
+--                                 { status = SendingChunks $
+--                                     PlainText $ Tar.write tar
+--                                 }
+--                             }
+--                         )
+-- 
+--                     else
+--                         pass
+-- 
+--                 SendingChunks _ _ _ ->
+--                     pass
+-- 
+--   where
+--     pass = (DoNothingO, ReadyS ready)
 
 
 panicOnStdErr :: StdErr -> Process.CreateProcess -> (Output, State) -> (Output, State)
@@ -1647,22 +1521,7 @@ sendMessageCatchHelp command send ready =
         Reading ->
             Nothing
 
-        ToStaticKeyFromDb _ ->
-            Nothing
-
-        ToEphemeralFromServer _ _ ->
-            Nothing
-
-        MakingMyEphemeral _ _ _ ->
-            Nothing
-
-        SendingPointer _ _ ->
-            Nothing
-
         SendingChunks _ _ _ ->
-            Nothing
-
-        PuttingSentInDb ->
             Nothing
 
 
@@ -1792,14 +1651,14 @@ newtype BlobId
 
 
 data TcpMsg
-    = GiveMeEphemeral
-    | NewMessageT MyPublicEphemeral Handshake Pointer
+    = NewMessageT UserId MessageIn
     | NewUserId UserId
-    | PowInfoT Int B.ByteString
+    | PowInfoT Word8 B.ByteString
     | Price Int
-    | Ephemeral TheirEphemeral UserId
-    | NoEphemeral UserId
-    | BlobT BlobId EncryptedBlob
+
+
+newtype MessageIn
+    = MessageIn Bl.ByteString
 
 
 onGetBlobUpdate :: Bl.ByteString -> Q -> Ready -> (Output, State)
@@ -1843,10 +1702,8 @@ instance Eq UserId where
 
 
 userIdP :: P.Parser UserId
-userIdP = do
-    size <- P.anyWord8
-    userId <- P.take $ fromIntegral size
-    return $ UserId $ decodeInt userId
+userIdP =
+    fmap UserId uint64P
 
 
 decodeInt :: B.ByteString -> Integer
@@ -2444,6 +2301,13 @@ uint32P = do
     b2 <- uint8P
     b3 <- uint8P
     return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
+
+
+uint64P :: P.Parser Integer
+uint64P = do
+    words <- mapM (\_ -> P.anyWord8) (take 8 [1..])
+    let powered = map (\(i, w) -> (fromIntegral w) * (256 ^ i)) (zip [0..] words)
+    return $ sum powered
 
 
 uint8P :: P.Parser Int

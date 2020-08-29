@@ -42,6 +42,7 @@ dependencies:
 - tar
 - cryptonite
 - network-simple
+- binary
 
 library:
   source-dirs: src
