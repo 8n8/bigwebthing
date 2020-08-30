@@ -249,9 +249,9 @@ A message is a tarred Git repository.
 
 Then the message is sliced up into chunks, each chunk is encrypted, and is sent.
 
-Before encryption, a chunk must be exactly 15902 bytes long. A chunk is encoded like this:
+Before encryption, a chunk must be exactly 15894 bytes long. A chunk is encoded like this:
 
-15902 bytes
+15894 bytes
     either the whole message fits in one chunk
         1 byte: 0
         2 bytes: the length of the message
@@ -277,17 +277,18 @@ The cryptography is done using golang.org/x/crypto/nacl/box. Each user has a pai
     24 bytes: random nonce
     15967 bytes: Nacl box encrypted with recipient's static public key
         16 bytes: encryption overhead
-        15951 bytes
+        8 bytes: counter that increments for every message sent, reject messages where the counter hasn't increased
+        15943 bytes
             either transport message
                 1 byte: 0
                 32 bytes: temporary public key used for encryption
-                15918 bytes: Nacl box encrypted with temporary public key and blank nonce
+                15910 bytes: Nacl box encrypted with temporary public key and blank nonce
                     16 bytes: encryption overhead
-                    15902 bytes: plain text
+                    15894 bytes: plain text
             or fresh key supply
                 1 byte: 1
                 15936 bytes: 498 32-byte temporary public keys
-                14 bytes: padding
+                6 bytes: padding
 
 # Client cache
 
@@ -358,5 +359,3 @@ database
 # Pricing
 
 There is a small fixed charge for each blob upload.
-
-In its database, the server records message uploads for each user, and payments by each user.  When someone uploads a new message, the server queries these tables to calculate the user's balance. If the balance is high enough, the blob is accepted.
