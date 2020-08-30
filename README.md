@@ -271,24 +271,28 @@ Before encryption, a chunk must be exactly 15894 bytes long. A chunk is encoded 
 
 ## Crypto
 
-The cryptography is done using golang.org/x/crypto/nacl/box. Each user has a pair of static keys. For each of their contacts they have a public static key and some public temporary keys. Temporary keys are used once only and then deleted. The server will accept messages that are 15991 bytes long:
+The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have a public static key and some public temporary keys. Temporary keys are used once only and then deleted. The server will accept messages that are 15991 bytes long:
 
 15991 bytes
-    24 bytes: random nonce
-    15967 bytes: Nacl box encrypted with recipient's static public key
-        16 bytes: encryption overhead
-        8 bytes: counter that increments for every message sent, reject messages where the counter hasn't increased
-        15943 bytes
-            either transport message
-                1 byte: 0
-                32 bytes: temporary public key used for encryption
-                15910 bytes: Nacl box encrypted with temporary public key and blank nonce
-                    16 bytes: encryption overhead
-                    15894 bytes: plain text
-            or fresh key supply
-                1 byte: 1
-                15936 bytes: 498 32-byte temporary public keys
-                6 bytes: padding
+    either some fresh first handshake messages
+        1 byte: 0
+        15960 bytes: 285 56-byte messages
+            32 bytes: plain-text ephemeral key
+            16 + 8 bytes: encrypted session ID
+        30 bytes: padding
+    or some fresh second handshake messages
+        1 byte: 1
+        15984 bytes: 222 72-byte messages
+            16 + 32 bytes: encrypted ephemeral key
+            16 + 8 bytes: encrypted session ID
+        6 bytes: padding
+    or a transport message
+        1 byte: 2
+        15990 bytes: Noise transport message
+            16 bytes: crypto overhead
+            encrypted
+                8 bytes: session ID
+                15966 bytes: plaintext
 
 # Client cache
 
