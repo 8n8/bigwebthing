@@ -76,28 +76,42 @@ Backend to frontend:
         1 byte: 4
         8 bytes: my username
         8 bytes: my fingerprint
-    Drafts summary
-        1 byte: 5
-        drafts summary
-    Sent summary
-        1 byte: 6
-        sent summary
-    Inbox summary
-        1 byte: 7
-        inbox summary
     Backend ready
-        1 byte: 8
-    Merge candidates
-        1 byte: 9
-        4 bytes: message ID
-        list of 4-byte message IDs
+        1 byte: 5
     Message history
-        1 byte: 10
+        1 byte: 6
         4 bytes: message ID
         string: output of git log
     Unique
-        1 byte: 11
+        1 byte: 7
         4 bytes: unique
+    Payments
+        1 byte: 8
+        sequence of payments, where a payment is
+            8 bytes: Unix time of payment date
+            4 bytes: amount paid in pence
+    Price
+        1 byte: 9
+        4 bytes: price in pence
+    Messages summary
+        1 byte: 10
+        sequence of message summaries, where a summary is
+            4 bytes: message ID
+            sized string: subject
+            8 bytes: UNIX time of last edit
+            membership, where a member is
+                8 bytes: fingerprint
+                8 bytes: username
+    Membership status
+        1 byte: 11
+        either in free period
+            1 byte: 0
+            8 bytes: start time
+        or lapsed due to missing payments
+            1 byte: 1
+        or paid up
+            1 byte: 2
+
 
 Frontend to backend:
     Set message:
@@ -122,25 +136,29 @@ Frontend to backend:
 		1 byte: 4
 	Get my ID
 		1 byte: 5
-	Get drafts summary
-		1 byte: 6
-	Get sent summary
-		1 byte: 7
-	Get inbox summary
-		1 byte: 8
     Get history
-        1 byte: 9
+        1 byte: 6
         4 bytes: message ID
     Revert
-        1 byte: 10
+        1 byte: 7
         4 bytes: message ID
         20 bytes: commit hash to revert to
     Get commit
-        1 byte: 11
+        1 byte: 8
         4 bytes: message ID
         20 bytes: commit hash to look at
     Get unique
+        1 byte: 9
+    Get payments
+        1 byte: 10
+    Get price
+        1 byte: 11
+    Get messages summary
         1 byte: 12
+    Get membership
+        1 byte: 13
+
+
 
 ## HTTP API
 
@@ -178,7 +196,7 @@ It will accept incoming TCP connections. A connection begins unauthenticated, an
 
 Each message should be not more than 16KB, and should be prefixed with a 2-byte Little-Endian length.
 
-Server to client
+### Server to client
 
 	New message from another user (AUTH)
 		1 byte: 0
@@ -191,15 +209,15 @@ Server to client
         1 byte: 2
 		1 byte: difficulty
 		16 bytes: random
-    Price (AUTH)
+    Price
         1 byte: 3
-        4 bytes: price in GBP^(-4)
-    Public static key:
+        4 bytes: monthly price in GBP^(-2)
+    Public static key
         1 byte: 4
         8 bytes: key owner
         32 bytes: their key
 
-Client to server
+### Client to server
 
     Get proof of work info
         1 byte: 0
@@ -315,14 +333,12 @@ price
 messages/
 	A flat directory of messages, named by counter.
 database
-	uploads
+	message_counts
 		sender username
-		4 bytes: price
-		8 bytes: Unix timestamp
-		32 bytes: hash of message
-	payments (obtained from payments provider API)
-		username
-		signed payment confirmation from provider
+        number of messages this month
+    payments
+        username
+        timestamp
 	users
 		username
 		hashed session key
@@ -337,4 +353,4 @@ database
 
 # Pricing
 
-There is a small fixed charge for each blob upload.
+There is a fixed monthly charge, paid in advance, but the first part of a month and full month is free. There is a generous usage allowance, that is intended to be high enough that non-abusive users will never reach it.
