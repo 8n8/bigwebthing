@@ -36,7 +36,7 @@ A user ID has two components:
 
 So the whole user ID is:
 
-	very_slow_hash(public_key)[:8] || username
+	very_slow_hash(public_key || username)[:8] || (username without leading zeroes)
 
 The encoding uses a custom word list with about 8000 words, very similar to Diceware. So for someone with a 3-byte username, their user ID will be 11 bytes, which will require 7 words, like:
 
@@ -58,48 +58,45 @@ Backend to frontend:
 		1 byte: 0
 	Good network connection
 		1 byte: 1
-	Send failed
-		1 byte: 2
-		4 bytes: message ID
-	Progress of sending
-		1 byte: 3
-        4 bytes: message ID
-		4 bytes: total bytes in message
-		4 bytes: bytes sent
     Message:
-        1 byte: 4
+        1 byte: 2
         4 bytes: message ID
         sized string: commit hash
         sized string: subject
         sized string: main box
-        string: metadata
+        sized string: blobs
+        sized string: wasm
+        sized string: members
     Whitelist:
-        1 byte: 5
-		sequence of sized user IDs
-    My ID
-        1 byte: 6
-        my ID
+        1 byte: 3
+		sequence of username / fingerprint pairs:
+            8 bytes: username
+            8 bytes: fingerprint
+    My user ID:
+        1 byte: 4
+        8 bytes: my username
+        8 bytes: my fingerprint
     Drafts summary
-        1 byte: 7
+        1 byte: 5
         drafts summary
     Sent summary
-        1 byte: 8
+        1 byte: 6
         sent summary
     Inbox summary
-        1 byte: 9
+        1 byte: 7
         inbox summary
     Backend ready
-        1 byte: 10
+        1 byte: 8
     Merge candidates
-        1 byte: 11
+        1 byte: 9
         4 bytes: message ID
         list of 4-byte message IDs
     Message history
-        1 byte: 12
+        1 byte: 10
         4 bytes: message ID
         string: output of git log
     Unique
-        1 byte: 13
+        1 byte: 11
         4 bytes: unique
 
 Frontend to backend:
@@ -108,51 +105,42 @@ Frontend to backend:
         4 bytes: message ID
         sized string: subject
         sized string: main box
-        sized string: metadata
-	Send message
-		1 byte: 1
-        4 bytes: message ID
-        20 bytes: commit hash
-        user ID of recipient
+        sized string: blobs
+        sized string: wasm
+        sized string: members
 	Add to whitelist
-		1 byte: 2
-		user ID
+		1 byte: 1
+        8 bytes: username
+        8 bytes: fingerprint
 	Remove from whitelist
-		1 byte: 3
-		user ID
+		1 byte: 2
+		8 bytes: username
 	Get message
-		1 byte: 4
+		1 byte: 3
         4 bytes: message ID
 	Get whitelist
-		1 byte: 5
+		1 byte: 4
 	Get my ID
-		1 byte: 6
+		1 byte: 5
 	Get drafts summary
-		1 byte: 7
+		1 byte: 6
 	Get sent summary
-		1 byte: 8
+		1 byte: 7
 	Get inbox summary
-		1 byte: 9
-    Get merge candidates
-        1 byte: 10
-        4 bytes: message ID
-    Merge
-        1 byte: 11
-        4 bytes: message ID to merge into
-        4 bytes: message ID to merge from
+		1 byte: 8
     Get history
-        1 byte: 12
+        1 byte: 9
         4 bytes: message ID
     Revert
-        1 byte: 13
+        1 byte: 10
         4 bytes: message ID
-        string: commit hash to revert to
+        20 bytes: commit hash to revert to
     Get commit
-        1 byte: 14
+        1 byte: 11
         4 bytes: message ID
-        string: commit hash to look at
+        20 bytes: commit hash to look at
     Get unique
-        1 byte: 15
+        1 byte: 12
 
 ## HTTP API
 
@@ -166,7 +154,6 @@ Frontend to backend:
         string: mime of blob
 /getblob
 	Request
-		1 byte: 4
         4 bytes: message ID
 		32 bytes: hash of blob
 	Response
@@ -185,22 +172,18 @@ Some APIs are protected by a proof of work problem. To create a proof of work to
 
 The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
 
-## Username encoding
-
-A username is a variable-length integer, at least one byte long. It is encoded by prefixing it by a byte containing its length.
-
 ## TCP API
 
 It will accept incoming TCP connections. A connection begins unauthenticated, and can change to authenticated. Messages that are only sent/acceptable on an authenticated channel are marked "AUTH".
 
-Each message should be not more than 16KB, and should start with a 2-byte Little-Endian length.
+Each message should be not more than 16KB, and should be prefixed with a 2-byte Little-Endian length.
 
 Server to client
 
 	New message from another user (AUTH)
 		1 byte: 0
         8 bytes: sender username
-        15983 bytes: the message
+        15991 bytes: the message
     New username (AUTH)
         1 byte: 1
         8 bytes: username
@@ -211,6 +194,10 @@ Server to client
     Price (AUTH)
         1 byte: 3
         4 bytes: price in GBP^(-4)
+    Public static key:
+        1 byte: 4
+        8 bytes: key owner
+        32 bytes: their key
 
 Client to server
 
@@ -240,6 +227,9 @@ Client to server
     Remove contact (AUTH)
         1 byte: 7
         8 bytes: contact username
+    Get public static key (AUTH)
+        1 byte: 8
+        8 bytes: their username
 
 # Client to client
 
@@ -249,9 +239,9 @@ A message is a tarred Git repository.
 
 Then the message is sliced up into chunks, each chunk is encrypted, and is sent.
 
-Before encryption, a chunk must be exactly 15894 bytes long. A chunk is encoded like this:
+Before encryption, a chunk must be exactly 15942 bytes long. A chunk is encoded like this:
 
-15894 bytes
+15942 bytes
     either the whole message fits in one chunk
         1 byte: 0
         2 bytes: the length of the message
@@ -271,62 +261,48 @@ Before encryption, a chunk must be exactly 15894 bytes long. A chunk is encoded 
 
 ## Crypto
 
-The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have a public static key and some public temporary keys. Temporary keys are used once only and then deleted. The server will accept messages that are 15991 bytes long:
+The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have a public static key, and some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are 15991 bytes long:
 
 15991 bytes
     either some fresh first handshake messages
         1 byte: 0
-        15960 bytes: 285 56-byte messages
+        15984 bytes: 333 48-byte messages
             32 bytes: plain-text ephemeral key
-            16 + 8 bytes: encrypted session ID
-        30 bytes: padding
+            16 bytes: overhead of empty payload
+        6 bytes: padding
     or some fresh second handshake messages
         1 byte: 1
-        15984 bytes: 222 72-byte messages
+        1 byte: number of messages
+        the messages, 96 bytes each (max 166 will fit)
+            32 bytes: initial ephemeral key
+                used as the unique session reference
             16 + 32 bytes: encrypted ephemeral key
-            16 + 8 bytes: encrypted session ID
-        6 bytes: padding
+            16 bytes: overhead of empty payload
+        padding
     or a transport message
         1 byte: 2
-        15990 bytes: Noise transport message
+        32 bytes: initial ephemeral key
+            used as the unique session reference
+        15958 bytes: Noise transport message
             16 bytes: crypto overhead
-            encrypted
-                8 bytes: session ID
-                15966 bytes: plaintext
+            15942 bytes: plaintext
 
 # Client cache
 
+blobs/
+    A flat folder of binaries, named by their hash.
 messages/
     A flat folder of Git repositories, named by some unique ID. Each Git repository contains:
         subject.txt
         mainBox.txt
-        metadata
-        blobs/
-            A flat folder of blobs, named by hash.
-        program.wasm
-database
-	sent
-		message ID
-        commit hash
-		time
-		to
-        status
-	received
-		from
-		message ID
-        commit hash
-		time
-    temporary_keys
-        public
-        secret
-    static_keys
-        username
-        key
-    contacts
-        username
-        fingerprint
+        blobs.txt
+            The hashes and original file names of the blobs attached to the repository. Each line in the file is a 32-byte hash followed by a space, followed by a file name.
+        wasm.txt
+            Contains the 32-byte hash of the WASM code for this repository.
+        members.txt
+            The usernames of the members, one per line.
 crypto
-    A binary file containing all my keys and other crypto information.
+    A binary file containing all my keys, sessions, and other crypto information.
 log
 	A log of error messages, for debugging.
 
@@ -337,7 +313,7 @@ proofOfWorkDifficulty
 price
 	A file containing the price.
 messages/
-	a flat directory of messages, named by hash
+	A flat directory of messages, named by counter.
 database
 	uploads
 		sender username
@@ -350,7 +326,7 @@ database
 	users
 		username
 		hashed session key
-        static_key
+        static key
     contacts
         owner username
         contact username
@@ -358,7 +334,6 @@ database
         counter (to keep messages in order)
 		to username
 		from username
-		hash of message
 
 # Pricing
 
