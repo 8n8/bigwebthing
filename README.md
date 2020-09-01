@@ -153,12 +153,10 @@ Frontend to backend:
         1 byte: 10
     Get price
         1 byte: 11
-    Get messages summary
+    Get messages summaries
         1 byte: 12
     Get membership
         1 byte: 13
-
-
 
 ## HTTP API
 
@@ -330,6 +328,8 @@ proofOfWorkDifficulty
 	A file containing the proof of work difficulty.
 price
 	A file containing the price.
+usage limit
+    A file containing the maximum number of messages per month.
 messages/
 	A flat directory of messages, named by counter.
 database

@@ -22,7 +22,6 @@ dependencies:
 - base >= 4.7 && < 5
 - bytestring
 - text
-- time
 - stm
 - attoparsec
 - wai-websockets
@@ -40,9 +39,7 @@ dependencies:
 - process
 - containers
 - tar
-- cryptonite
 - network-simple
-- binary
 
 library:
   source-dirs: src

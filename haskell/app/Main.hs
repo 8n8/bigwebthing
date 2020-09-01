@@ -2,8 +2,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE DeriveGeneric #-}
 module Main (main) where
 
 import qualified Control.Concurrent.STM as Stm
@@ -11,15 +9,11 @@ import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.Wai.Handler.Warp (run)
 import qualified Control.Concurrent.STM.TQueue as Q
 import Crypto.Noise.DH.Curve25519 (Curve25519)
-import Crypto.Noise.Cipher.ChaChaPoly1305 (ChaChaPoly1305)
-import Crypto.Noise.Hash.BLAKE2s (BLAKE2s)
 import qualified Crypto.Noise.DH as Dh
 import qualified Crypto.Noise as Noise
-import Crypto.Noise.HandshakePatterns (noiseKX)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as Bl
 import qualified System.Directory as Dir
-import qualified Database.SQLite.Simple as Sql
 import Database.SQLite.Simple.ToField (ToField, toField)
 import qualified Data.Text as T
 import System.FilePath ((</>))
@@ -37,18 +31,10 @@ import Data.Word (Word8)
 import Control.Concurrent (forkIO, threadDelay)
 import qualified System.Process as Process
 import qualified Data.Set as Set
-import qualified Data.Time.Clock as Clock
 import qualified Codec.Archive.Tar as Tar
-import qualified Crypto.Random as CryptoRand
-import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
-import qualified Crypto.KDF.Argon2 as Argon2
 import qualified Network.Simple.TCP as Tcp
 import qualified Data.Bits as Bits
 import qualified Data.Map as Map
-import qualified Crypto.Noise.Internal.NoiseState as Nint
-import qualified Crypto.Noise.Internal.Handshake.State as Hint
-import qualified Data.Binary as Binary
-import GHC.Generics (Generic)
 
 
 main :: IO ()
@@ -92,21 +78,6 @@ io output =
         ReadFileO path -> do
             bytes <- Bl.readFile path
             return $ Just $ FileContentsM path bytes
-
-        DbExecute_O path query -> do
-            Sql.withConnection path $ \conn ->
-                Sql.execute_ conn query
-            return Nothing
-
-        DbExecuteO path (DbQuery query params) -> do
-            Sql.withConnection path $ \conn ->
-                Sql.execute conn query params
-            return Nothing
-
-        DbPublicKeyO path (DbQuery query params) -> do
-            rows <- Sql.withConnection path $ \conn ->
-                Sql.query conn query params
-            return $ Just $ DbPublicKeyM rows
 
         BatchO outputs -> do
             inputs <- mapM io outputs
@@ -174,18 +145,9 @@ io output =
             B.writeFile path contents
             return Nothing
 
-        GetTimesO -> do
-            times <- mapM
-                (\_ -> Clock.getCurrentTime) ([1..] :: [Integer])
-            return $ Just $ TimesM times 
-
         TarO base dirToTar -> do
             tarred <- Tar.pack base [dirToTar]
             return $ Just $ TarredM (base, dirToTar) tarred
-
-        MakeBlobIdsO -> do
-            drg <- CryptoRand.drgNew
-            return $ Just $ RandomGenM drg
 
         StartTcpClientO -> do
             tcpClient
@@ -198,7 +160,6 @@ io output =
         GenerateDhPairO -> do
             keys <- Dh.dhGenKey
             return $ Just $ NewDhKeysM keys
-            
 
 
 maxMessageLength =
@@ -350,20 +311,11 @@ clientUrl =
     "http://localhost:" <> T.pack (show clientPort)
 
 
-data DbQuery where
-    DbQuery :: Sql.ToRow q => Sql.Query -> q -> DbQuery
-
-
 data Output
     = GetAppDataDirO
-    | GetTimesO
-    | MakeBlobIdsO
     | MakeDirIfMissingO FilePath
     | DoNothingO
     | ReadFileO FilePath
-    | DbExecute_O FilePath Sql.Query
-    | DbExecuteO FilePath DbQuery
-    | DbPublicKeyO FilePath DbQuery
     | BatchO [Output]
     | StartUiO
     | StartUiServerO
@@ -398,10 +350,7 @@ data Msg
     | LazyFileContentsM FilePath Bl.ByteString
     | DirExistsM FilePath Bool
     | CommandResultM StdOut StdErr Process.CreateProcess
-    | TimesM [Clock.UTCTime]
     | TarredM (FilePath, FilePath) [Tar.Entry]
-    | DbPublicKeyM [(Integer, B.ByteString)]
-    | RandomGenM CryptoRand.ChaChaDRG
     | TcpMsgM Bl.ByteString
     | RestartingTcpM
     | FileExistenceM FilePath Bool
@@ -491,10 +440,8 @@ data State
 data Init
     = EmptyI
     | MakingRootDirI RootPath
-    | GettingTimesI RootPath
-    | GettingRandomGenI RootPath [Clock.UTCTime]
-    | DoKeysExistI RootPath [Clock.UTCTime] CryptoRand.ChaChaDRG
-    | GettingKeysFromFileI RootPath [Clock.UTCTime] CryptoRand.ChaChaDRG
+    | DoKeysExistI RootPath
+    | GettingKeysFromFileI RootPath
 
 
 data Ready = Ready
@@ -502,82 +449,84 @@ data Ready = Ready
     , blobsUp :: Jobs BlobUp BlobUpWait
     , getBlob :: Jobs GetBlob GetBlobWait
     , setMessage :: Jobs SetMessage SetMessageWait
-    , sendMessage :: Maybe SendMessage
     , messageLocks :: Set.Set MessageId
-    , drg :: CryptoRand.ChaChaDRG
-    , time :: [Clock.UTCTime]
     , sendingEphemeral :: Bool
     , authStatus :: AuthStatus
-    , sessions :: Map.Map Integer Session
+    , handshakes :: Map.Map HandshakeId Handshake
     }
 
 
-encodeUid :: UserId -> Bl.ByteString
-encodeUid (UserId uid) =
-    encodeUint64 uid 
+data HandshakeId
+    = HandshakeId UserId PublicEphemeral
 
 
-type HandshakeState 
-    = Hint.HandshakeState ChaChaPoly1305 Curve25519 BLAKE2s
+instance Ord HandshakeId where
+    compare (HandshakeId u1 p1) (HandshakeId u2 p2) =
+        case (compare u1 u2, compare p1 p2) of
+            (LT, LT) ->
+                LT
+
+            (LT, GT) ->
+                LT
+
+            (GT, LT) ->
+                GT
+
+            (GT, GT) ->
+                GT
+
+            (LT, EQ) ->
+                LT
+
+            (GT, EQ) ->
+                GT
+
+            (EQ, LT) ->
+                LT
+
+            (EQ, GT) ->
+                GT
+
+            (EQ, EQ) ->
+                EQ
 
 
-encodeHandshake :: HandshakeState -> Bl.ByteString
-encodeHandshake handshake =
-    undefined
+instance Eq PublicEphemeral where
+    (==) (PublicEphemeral p1) (PublicEphemeral p2) =
+        p1 == p2
 
 
-encodeNoise :: NoiseState -> Bl.ByteString
-encodeNoise noise =
-    mconcat
-        [ encodeHandshake $ Nint._nsHandshakeState noise        
-        ]
+instance Eq HandshakeId where
+    (==) (HandshakeId u1 p1) (HandshakeId u2 p2) =
+        u1 == u2 && p1 == p2
 
 
-encodeSent =
-    undefined
+newtype PublicEphemeral
+    = PublicEphemeral Bl.ByteString
 
 
-encodeRole =
-    undefined
+instance Ord PublicEphemeral where
+    compare (PublicEphemeral a) (PublicEphemeral b) =
+        compare a b
 
 
-encodeStart =
-    undefined
+data Handshake
+    = Initiator InitiatorHandshake
+    | Responder ResponderHandshake
 
 
-encodeSession :: Session -> Bl.ByteString
-encodeSession session =
-    mconcat
-        [ encodeUid $ with session
-        , encodeNoise $ noise session
-        , encodeSent $ sent session
-        , encodeRole $ role session
-        , encodeStart $ start session
-        ]
+data InitiatorHandshake
+    = SentPlainE
+    | ReceivedEncryptedE EncryptedEphemeral
 
 
-data Session
-    = Session
-        { with :: UserId
-        , noise :: NoiseState
-        , sent :: NoiseSent
-        , role :: NoiseRole
-        , start :: Clock.UTCTime
-        }
+data ResponderHandshake
+    = ReceivedPlainE
+    | SentEncryptedE EncryptedEphemeral
 
 
-data NoiseRole
-    = Initiator
-    | Responder
-
-
-data NoiseSent
-    = NothingS
-    | RightE00
-    | LeftEEeSEs21
-    | RightSSe25
-    | AllHandshake
-
+newtype EncryptedEphemeral
+    = EncryptedEphemeral Bl.ByteString
 
 
 data PowInfo
@@ -589,42 +538,6 @@ data AuthStatus
     | GeneratingStaticKeys PowInfo
     | AwaitingUsername (Dh.KeyPair Curve25519) SessionKey
     | LoggedIn StaticKeys
-
-
-data SendMessage
-    = SendMessage
-        { messageId :: MessageId
-        , userId :: UserId
-        , commit :: Commit
-        , status :: SendStatus
-        }
-
-
-data SendStatus
-    = BareCloning
-    | Reading
-    | SendingChunks PlainText NoiseState Hash32
-
-
-newtype TheirStatic
-    = TheirStatic (Dh.PublicKey Curve25519)
-
-
-
-newtype SomeNoise
-    = SomeNoise NoiseState
-    deriving (Generic)
-
-
-instance Binary.Binary SomeNoise
-
-
-type NoiseState
-    = Noise.NoiseState ChaChaPoly1305 Curve25519 BLAKE2s
-
-
-newtype PlainText
-    = PlainText Bl.ByteString
 
 
 data SetMessageWait
@@ -727,40 +640,6 @@ updateInit model f =
             (DoNothingO, model)
 
 
-updateOnNewTimes :: [Clock.UTCTime] -> Init -> (Output, State)
-updateOnNewTimes times init_ =
-    case init_ of
-        EmptyI ->
-            pass
-
-        MakingRootDirI _ ->
-            pass
-
-        GettingTimesI root ->
-            ( MakeBlobIdsO
-            , InitS $ GettingRandomGenI root times
-            )
-
-        GettingRandomGenI _ _ ->
-            pass
-
-        DoKeysExistI _ _ _ ->
-            pass
-
-        GettingKeysFromFileI _ _ _ ->
-            pass
-
-  where
-    pass = (DoNothingO, InitS init_)
-
-
-dbGetPublicKey :: UserId -> DbQuery
-dbGetPublicKey userId =
-    DbQuery
-        "SELECT username, public_key FROM public_keys WHERE username = ?;"
-        (Sql.Only userId)
-
-
 update :: State -> Msg -> (Output, State)
 update model msg =
     case msg of
@@ -782,9 +661,6 @@ update model msg =
 
         FileContentsM path contents ->
             updateInit model $ fileContentsUpdate path contents
-
-        TimesM times ->
-            updateInit model $ updateOnNewTimes times
 
         BatchM msgs ->
             let
@@ -836,12 +712,6 @@ update model msg =
             updateReady model $
                 tarUpdate paths tarred
 
-        DbPublicKeyM rows ->
-            updateReady model $ dbPublicKeyUpdate rows
-
-        RandomGenM gen ->
-            updateInit model $ randomGenUpdate gen
-
         TcpMsgM raw ->
             updateReady model $ tcpMessageUpdate raw
 
@@ -853,231 +723,10 @@ update model msg =
 
         NewDhKeysM _ ->
             undefined
-            -- updateReady model $ newDhKeysUpdate keys
-
-
-makeSignUp
-    :: PowInfo
-    -> SessionKey
-    -> Dh.PublicKey Curve25519
-    -> Either String Bl.ByteString
-makeSignUp powInfo (SessionKey sessionKey) pubkey =
-    case makePow powInfo of
-        Left err ->
-            Left err
-
-        Right pow ->
-            Right $ mconcat
-                [ Bl.singleton 2
-                , pow
-                , sessionKey
-                , Bl.fromStrict $ Noise.convert $
-                    Dh.dhPubToBytes pubkey
-                ]
-
-
-argonOptions :: Argon2.Options
-argonOptions =
-    Argon2.Options
-        { iterations = 1
-        , memory = 64 * 1024
-        , parallelism = 4
-        , variant = Argon2.Argon2id
-        , version = Argon2.Version13
-        }
-
-
-makePow :: PowInfo -> Either String Bl.ByteString
-makePow powInfo =
-    powInfoHelp powInfo 0
-
-
-encodeUint64 :: Integer -> Bl.ByteString
-encodeUint64 i =
-    Bl.pack $ map (encodeUint64Help i) (take 8 [0..])
-
-
-encodeUint64Help :: Integer -> Int -> Word8
-encodeUint64Help int counter =
-    fromIntegral $ (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
-
-
-powInfoHelp :: PowInfo -> Integer -> Either String Bl.ByteString
-powInfoHelp p@(PowInfo difficulty unique) counter =
-    let
-        candidate = encodeUint64 counter
-        hashE = Argon2.hash
-            argonOptions
-            (Bl.toStrict $ unique <> candidate)
-            (B.singleton 0)
-            32
-    in
-        case hashE of
-            CryptoPassed hash ->
-                if isDifficult hash difficulty then
-                    Right candidate
-        
-                else
-                    powInfoHelp p (counter + 1)
-
-            CryptoFailed err ->
-                Left $ show err
-
-
-
-isDifficult :: B.ByteString -> Word8 -> Bool
-isDifficult bytes difficulty =
-    let
-        unpacked = B.unpack bytes
-        difficult = filter (> difficulty) unpacked
-    in
-        length unpacked == length difficult
-
-
-uploadEphemeral :: Dh.PublicKey Curve25519 -> Bl.ByteString
-uploadEphemeral pubkey =
-    mconcat
-        [ Bl.singleton 9
-        , Bl.fromStrict $ Noise.convert $ Dh.dhPubToBytes pubkey
-        ]
-
-
-cacheEphemeral :: Dh.KeyPair Curve25519 -> DbQuery
-cacheEphemeral (secret, public) =
-    DbQuery
-        "INSERT INTO my_ephemeral_keys (public, secret) \
-        \VALUES (?, ?);"
-        (encodePub public, encodeSec secret)
-
-
-encodePub :: Dh.PublicKey Curve25519 -> B.ByteString
-encodePub =
-    Noise.convert . Dh.dhPubToBytes
-
-
-encodeSec :: Dh.SecretKey Curve25519 -> B.ByteString
-encodeSec =
-    Noise.convert . Dh.dhSecToBytes
-
-
--- newDhKeysUpdate :: Dh.KeyPair Curve25519 -> Ready -> (Output, State)
--- newDhKeysUpdate keys ready =
---     if sendingEphemeral ready then
---         ( BatchO
---             [ DbExecuteO (dbPath $ root ready) $ cacheEphemeral keys
---             , BytesInQO toServerQ $ uploadEphemeral (snd keys)
---             ]
---         , ReadyS $ ready { sendingEphemeral = False }
---         )
--- 
---     else case ephemeralForAuthUpdate keys ready of
---         Just used ->
---             used
--- 
---         Nothing ->
---             ephemeralForSend keys ready
-
-
-newtype MyEphemeral
-    = MyEphemeral (Dh.KeyPair Curve25519)
 
 
 newtype MyStatic
     = MyStatic (Dh.KeyPair Curve25519)
-
-
-makeInitNoise :: TheirStatic -> MyStatic -> MyEphemeral -> NoiseState
-makeInitNoise (TheirStatic theirStatic) (MyStatic myStatic) (MyEphemeral myEphemeral) =
-    let
-        options_ :: Noise.HandshakeOpts Curve25519
-        options_ = Noise.defaultHandshakeOpts
-            Noise.ResponderRole
-            ""
-        options =
-            Noise.setRemoteStatic (Just theirStatic) .
-            Noise.setLocalEphemeral (Just myEphemeral) .
-            Noise.setLocalStatic (Just myStatic) $ options_
-    in
-        Noise.noiseState options noiseKX
-
-
--- makePointer
---     :: TheirEphemeral
---     -> NoiseState
---     -> BlobId
---     -> Either T.Text (Bl.ByteString, NoiseState)
--- makePointer (TheirEphemeral theirEphemeral) noise0 (BlobId blobId) =
---     case Noise.readMessage theirEphemeral noise0 of
---         err@(Noise.NoiseResultNeedPSK _) ->
---             Left $ T.pack $ show err
--- 
---         err@(Noise.NoiseResultException _) ->
---             Left $ T.pack $ show err
--- 
---         Noise.NoiseResultMessage "" noise1 ->
---             case Noise.writeMessage "" noise1 of
---                 err@(Noise.NoiseResultNeedPSK _) ->
---                     Left $ T.pack $ show err
--- 
---                 err@(Noise.NoiseResultException _) ->
---                     Left $ T.pack $ show err
--- 
---                 Noise.NoiseResultMessage cipher2 noise2 ->
---                     case Noise.writeMessage blobId noise2 of
---                         err@(Noise.NoiseResultNeedPSK _) ->
---                             Left $ T.pack $ show err
--- 
---                         err@(Noise.NoiseResultException _) ->
---                             Left $ T.pack $ show err
--- 
---                         Noise.NoiseResultMessage cipher3 noise3 ->
---                             Right (cipher2 <> cipher3, noise3)
--- 
--- 
---         err@(Noise.NoiseResultMessage nonEmpty _) ->
---             Left $ mconcat
---                 [ "non-empty payload on ephemeral key"
---                 , T.pack $ show err
---                 ]
-
-
-ephemeralForAuthUpdate
-    :: Dh.KeyPair Curve25519
-    -> Ready
-    -> Maybe (Output, State)
-ephemeralForAuthUpdate keys ready =
-    case authStatus ready of
-        GettingPowInfoA ->
-            Nothing
-
-        GeneratingStaticKeys powInfo ->
-            let
-                (rawSessKey, newDrg) = CryptoRand.randomBytesGenerate
-                    sessionKeyLength
-                    (drg ready)
-                sessionKey = SessionKey $ Bl.fromStrict rawSessKey
-            in
-                case makeSignUp powInfo sessionKey (snd keys) of
-                    Left err -> Just
-                        ( ErrorO $
-                            "couldn't generate sign in: " ++ err
-                        , FailedS
-                        )
-
-                    Right signUp -> Just
-                        ( BytesInQO toServerQ signUp
-                        , ReadyS $ ready
-                            { authStatus =
-                                AwaitingUsername keys sessionKey
-                            , drg = newDrg
-                            }
-                        )
-
-        AwaitingUsername _ _ ->
-            Nothing
-
-        LoggedIn _ ->
-            Nothing
 
 
 fileExistenceUpdate :: FilePath -> Bool -> Init -> (Output, State)
@@ -1089,20 +738,14 @@ fileExistenceUpdate path exists init_ =
         MakingRootDirI _ ->
             pass
 
-        GettingTimesI _ ->
-            pass
-
-        GettingRandomGenI _ _ ->
-            pass
-
-        DoKeysExistI root time drg ->
+        DoKeysExistI root ->
             case (exists, path == keysPath root) of
                 (True, True) ->
                     ( ReadFileO $ keysPath root
-                    , InitS $ GettingKeysFromFileI root time drg
+                    , InitS $ GettingKeysFromFileI root
                     )
 
-                (True, False) -> 
+                (True, False) ->
                     pass
 
                 (False, True) ->
@@ -1112,24 +755,21 @@ fileExistenceUpdate path exists init_ =
                         , blobsUp = NoJobs
                         , getBlob = NoJobs
                         , setMessage = NoJobs
-                        , sendMessage = Nothing
                         , messageLocks = Set.empty
-                        , drg
-                        , time
                         , sendingEphemeral = False
                         , authStatus = GettingPowInfoA
+                        , handshakes = Map.empty
                         }
                     )
 
                 (False, False) ->
                     pass
 
-        GettingKeysFromFileI _ _ _ ->
+        GettingKeysFromFileI _ ->
             pass
 
   where
     pass = (DoNothingO, InitS init_)
-        
 
 
 restartingTcpUpdate :: Ready -> (Output, State)
@@ -1202,7 +842,8 @@ encodeUintHelp int remainder counter accum =
             (fromIntegral word : accum)
 
 
-tcpMessageUpdate raw ready =
+tcpMessageUpdate :: Bl.ByteString -> Ready -> (Output, State)
+tcpMessageUpdate raw _ =
     case P.eitherResult $ P.parse tcpP raw of
         Left err ->
             ( ErrorO $ "could not parse TCP message: " ++ err
@@ -1221,71 +862,13 @@ tcpMessageUpdate raw ready =
         Right (Price _) ->
             undefined
 
-
-
-randomGenUpdate
-    :: CryptoRand.ChaChaDRG
-    -> Init
-    -> (Output, State)
-randomGenUpdate gen init_ =
-    case init_ of
-        EmptyI ->
-            pass
-
-        MakingRootDirI _ ->
-            pass
-
-        GettingTimesI _ ->
-            pass
-
-        GettingRandomGenI root times ->
-            ( DoesFileExistO $ keysPath root
-            , InitS $ DoKeysExistI root times gen
-            )
-
-        DoKeysExistI _ _ _ ->
-            pass
-
-        GettingKeysFromFileI _ _ _ ->
-            pass
-
-  where
-    pass = (DoNothingO, InitS init_)
-
-
-dbPublicKeyUpdate :: [(Integer, B.ByteString)] -> Ready -> (Output, State)
-dbPublicKeyUpdate rows ready =
-    case sendMessage ready of
-        Nothing ->
-            pass
-
-        Just send ->
-            case status send of
-                BareCloning ->
-                    pass
-
-                Reading ->
-                    pass
-
-                SendingChunks _ _ _ ->
-                    pass
-
-  where
-    pass = (DoNothingO, ReadyS ready)
+        Right (TheirStaticKeyT _ _) ->
+            undefined
 
 
 toServerQ :: Q
 toServerQ =
     Q.newTQueue
-
-
-getEphemeral :: UserId -> Bl.ByteString
-getEphemeral userId =
-    Bl.singleton 8 <> encodeUserId userId
-
-
-newtype MyPublicEphemeral
-    = MyPublicEphemeral B.ByteString
 
 
 messageInLength =
@@ -1304,24 +887,26 @@ tcpP =
             P.endOfInput
             return $ NewMessageT userId messageIn
         , do
-            _ <- P.word8 2
+            _ <- P.word8 1
             userId <- userIdP
             return $ NewUserId userId
         , do
-            _ <- P.word8 3
+            _ <- P.word8 2
             difficulty <- uint8P
             unique <- P.take 16
-            return $ PowInfoT (fromIntegral difficulty) unique
+            return $ PowInfoT
+                (fromIntegral difficulty)
+                (Bl.fromStrict unique)
         , do
-            _ <- P.word8 4
+            _ <- P.word8 3
             price <- uint32P
             return $ Price price
+        , do
+            _ <- P.word8 4
+            owner <- userIdP
+            key <- fmap (TheirStaticKey . Bl.fromStrict) $ P.take 32
+            return $ TheirStaticKeyT owner key
         ]
-
-
-blobIdLen :: Int
-blobIdLen =
-    32
 
 
 instance Show UserId where
@@ -1334,41 +919,8 @@ tarUpdate
     -> [Tar.Entry]
     -> Ready
     -> (Output, State)
-tarUpdate _ _ _ = -- paths tar ready =
+tarUpdate _ _ _ =
     undefined
---     case sendMessage ready of
---         Nothing ->
---             pass
--- 
---         Just send ->
---             case status send of
---                 BareCloning ->
---                     pass
--- 
---                 Reading ->
---                     if paths ==
---                         ( tempPath $ root ready
---                         , clonedFilePath $ messageId send) then
--- 
---                         ( DbPublicKeyO
---                             (dbPath $ root ready)
---                             (dbGetPublicKey $ userId send)
---                         , ReadyS $ ready
---                             { sendMessage = Just $ send
---                                 { status = SendingChunks $
---                                     PlainText $ Tar.write tar
---                                 }
---                             }
---                         )
--- 
---                     else
---                         pass
--- 
---                 SendingChunks _ _ _ ->
---                     pass
--- 
---   where
---     pass = (DoNothingO, ReadyS ready)
 
 
 panicOnStdErr :: StdErr -> Process.CreateProcess -> (Output, State) -> (Output, State)
@@ -1460,69 +1012,7 @@ commandResultUpdate cmd out err ready =
             used
 
         Nothing ->
-            case sendMessageCommandCatcher cmd out ready of
-                Just used ->
-                    used
-
-                Nothing ->
-                    (DoNothingO, ReadyS ready)
-
-
-sendMessageCommandCatcher
-    :: Process.CreateProcess
-    -> StdOut
-    -> Ready
-    -> Maybe (Output, State)
-sendMessageCommandCatcher command _ ready =
-    case sendMessage ready of
-        Nothing ->
-            Nothing
-
-        Just send ->
-            sendMessageCatchHelp command send ready
-
-
-dontIfLocked :: SendMessage -> Ready -> Maybe (Output, State) -> Maybe (Output, State)
-dontIfLocked send ready ifNotLocked =
-    if Set.member (messageId send) (messageLocks ready) then
-        Nothing
-
-    else
-        ifNotLocked
-
-
-sendMessageCatchHelp
-    :: Process.CreateProcess
-    -> SendMessage
-    -> Ready
-    -> Maybe (Output, State)
-sendMessageCatchHelp command send ready =
-    let
-        clone = gitCloneBare (root ready) (messageId send)
-    in dontIfLocked send ready $ case status send of
-        BareCloning ->
-            if command == clone then
-                 Just
-                    ( TarO
-                        (tempPath $ root ready)
-                        (clonedFilePath $ messageId send)
-                    , ReadyS $ ready
-                        { sendMessage =
-                            Just $ send { status = Reading }
-                        , messageLocks =
-                            Set.delete
-                                (messageId send)
-                                (messageLocks ready)
-                        }
-                    )
-            else
-                Nothing
-
-        Reading ->
-            Nothing
-
-        SendingChunks _ _ _ ->
-            Nothing
+            (DoNothingO, ReadyS ready)
 
 
 promoteSetMessage
@@ -1540,23 +1030,6 @@ promoteSetMessage job =
             Jobs
                 (DoesItExist mId sub box meta)
                 aiting
-
-
-gitCloneBare :: RootPath -> MessageId -> Process.CreateProcess
-gitCloneBare root mId =
-    (Process.proc "git"
-        [ "clone"
-        , "--bare"
-        , "-o"
-        , clonedFilePath mId
-        , messagePath root mId
-        ])
-    { Process.cwd = Just $ tempPath root }
-
-
-clonedFilePath :: MessageId -> FilePath
-clonedFilePath mId =
-    show mId <> "clone"
 
 
 gitInit :: RootPath -> MessageId -> Process.CreateProcess
@@ -1630,31 +1103,16 @@ dirExistsUpdate path exists ready =
     pass = (DoNothingO, ReadyS ready)
 
 
-newtype Handshake
-    = Handshake B.ByteString
-
-
-newtype Pointer
-    = Pointer B.ByteString
-
-
-newtype TheirEphemeral
-    = TheirEphemeral Bl.ByteString
-
-
-newtype EncryptedBlob
-    = EncryptedBlob B.ByteString
-
-
-newtype BlobId
-    = BlobId B.ByteString
-
-
 data TcpMsg
     = NewMessageT UserId MessageIn
     | NewUserId UserId
-    | PowInfoT Word8 B.ByteString
+    | PowInfoT Word8 Bl.ByteString
     | Price Int
+    | TheirStaticKeyT UserId TheirStaticKey
+
+
+newtype TheirStaticKey
+    = TheirStaticKey Bl.ByteString
 
 
 newtype MessageIn
@@ -1696,6 +1154,11 @@ newtype UserId =
     UserId Integer
 
 
+instance Ord UserId where
+    compare (UserId u1) (UserId u2) =
+        compare u1 u2
+
+
 instance Eq UserId where
     (==) (UserId a) (UserId b) =
         a == b
@@ -1704,25 +1167,6 @@ instance Eq UserId where
 userIdP :: P.Parser UserId
 userIdP =
     fmap UserId uint64P
-
-
-decodeInt :: B.ByteString -> Integer
-decodeInt raw =
-    decodeIntHelp (B.unpack raw) 0 0
-
-
--- Little Endian
-decodeIntHelp :: [Word8] -> Integer -> Integer -> Integer
-decodeIntHelp raw counter accum =
-    case raw of
-        [] ->
-            accum
-
-        r : aw ->
-            decodeIntHelp
-                aw
-                (counter + 1)
-                (accum + (fromIntegral r) * (256 ^ counter))
 
 
 blobHashP :: P.Parser Hash32
@@ -1738,23 +1182,32 @@ hash32P = do
     return $ Hash32 hash
 
 
+data NewMessage
+    = NewMessage
+        { messageId :: Int
+        , subject :: Bl.ByteString
+        , mainBox :: Bl.ByteString
+        , blobs :: Bl.ByteString
+        , wasm :: Bl.ByteString
+        , members :: Bl.ByteString
+        }
+
+
 data ApiInput
-    = SetMessageA MessageId Subject MainBox Metadata
-    | SendMessageA MessageId UserId Commit
+    = SetMessageA NewMessage
     | AddToWhitelistA UserId
     | RemoveFromWhitelistA UserId
     | GetMessageA MessageId
     | GetWhitelistA
     | GetMyIdA
-    | GetDraftsSummaryA
-    | GetSentSummaryA
-    | GetInboxSummaryA
-    | GetMergeCandidatesA MessageId
-    | MergeA MessageId MessageId
     | GetHistoryA MessageId
     | RevertA MessageId Commit
     | GetCommitA MessageId Commit
     | GetUniqueA
+    | GetPaymentsA
+    | GetPriceA
+    | GetMessageSummariesA
+    | GetMembershipA
 
 
 newtype Subject
@@ -1809,19 +1262,6 @@ apiInputP :: P.Parser ApiInput
 apiInputP = do
     P.choice
         [ do
-            _ <- P.word8 0
-            messageId <- messageIdP
-            subject <- fmap Subject stringP
-            mainBox <- fmap MainBox stringP
-            metadata <- fmap Metadata stringP
-            return $ SetMessageA messageId subject mainBox metadata
-        , do
-            _ <- P.word8 1
-            messageId <- messageIdP
-            userId <- userIdP
-            commit <- commitP
-            return $ SendMessageA messageId userId commit
-        , do
             _ <- P.word8 2
             userId <- userIdP
             return $ AddToWhitelistA userId
@@ -1839,24 +1279,6 @@ apiInputP = do
         , do
             _ <- P.word8 6
             return GetMyIdA
-        , do
-            _ <- P.word8 7
-            return GetDraftsSummaryA
-        , do
-            _ <- P.word8 8
-            return GetSentSummaryA
-        , do
-            _ <- P.word8 9
-            return GetInboxSummaryA
-        , do
-            _ <- P.word8 10
-            messageId <- messageIdP
-            return $ GetMergeCandidatesA messageId
-        , do
-            _ <- P.word8 11
-            from <- messageIdP
-            to <- fmap MessageId uint32P
-            return $ MergeA from to
         , do
             _ <- P.word8 12
             messageId <- messageIdP
@@ -1961,64 +1383,11 @@ sendingToInt s =
             1
 
 
-dbInsertSend :: MessageId -> UserId -> Commit -> Clock.UTCTime -> SendingStatus -> DbQuery
-dbInsertSend mId uId commit t status =
-    DbQuery "INSERT INTO sent (message_id, commit_hash, time, to, status) VALUES (?, ?, ?, ?, ?);" (mId, uId, commit, t, status)
-
-
-sendMessageUpdate
-    :: MessageId
-    -> UserId
-    -> Commit
-    -> Ready
-    -> (Output, State)
-sendMessageUpdate messageId userId commit ready =
-    let
-        now = head $ time ready
-        sending = dbInsertSend messageId userId commit now Sending
-        waiting = dbInsertSend messageId userId commit now Waiting
-        clone = gitCloneBare (root ready) messageId
-        path = dbPath $ root ready
-        justRecordIt = ( DbExecuteO path waiting, ReadyS ready)
-        recordAndStart =
-            ( BatchO
-                [ DbExecuteO path sending
-                , RunCommandO clone
-                ]
-            , ReadyS $ ready
-                { sendMessage = Just $ SendMessage
-                    { messageId
-                    , userId
-                    , commit
-                    , status = BareCloning
-                    }
-                , messageLocks =
-                    Set.insert messageId $ messageLocks ready
-                }
-            )
-    in
-        case sendMessage ready of
-            Nothing ->
-                if Set.member messageId (messageLocks ready) then
-                    justRecordIt
-                else
-                    recordAndStart
-
-            Just _ ->
-                justRecordIt
-
-
 uiApiUpdate :: ApiInput -> State -> (Output, State)
 uiApiUpdate apiInput model =
     case apiInput of
-        SetMessageA messageId subject mainBox metadata ->
-            updateReady
-                model
-                (setMessageUpdate messageId subject mainBox metadata)
-
-        SendMessageA messageId userId commit ->
-            updateReady model $
-                sendMessageUpdate messageId userId commit
+        SetMessageA _ ->
+            undefined
 
         AddToWhitelistA _ ->
             undefined
@@ -2033,21 +1402,6 @@ uiApiUpdate apiInput model =
             undefined
 
         GetMyIdA ->
-            undefined
-
-        GetDraftsSummaryA ->
-            undefined
-
-        GetSentSummaryA ->
-            undefined
-
-        GetInboxSummaryA ->
-            undefined
-
-        GetMergeCandidatesA _ ->
-            undefined
-
-        MergeA _ _ ->
             undefined
 
         GetHistoryA _ ->
@@ -2247,39 +1601,104 @@ fileContentsUpdate path contents init_ =
         MakingRootDirI _ ->
             pass
 
-        GettingTimesI _ ->
+        DoKeysExistI _ ->
             pass
 
-        GettingRandomGenI _ _ ->
-            pass
-
-        DoKeysExistI _ _ _ ->
-            pass
-
-        GettingKeysFromFileI root times gen ->
+        GettingKeysFromFileI root ->
             if path == keysPath root then
-                rawKeysUpdate contents root times gen
+                rawKeysUpdate contents root
             else
                 pass
 
   where
     pass = (DoNothingO, InitS init_)
-        
 
 
-errToText :: Either String a -> Either T.Text a
-errToText e =
-    case e of
-        Left err ->
-            Left $ T.pack err
-
-        Right ok ->
-            Right ok
+type Handshakes
+    = Map.Map HandshakeId Handshake
 
 
-parseKeys :: Bl.ByteString -> Either T.Text StaticKeys
-parseKeys raw =
-    errToText $ P.eitherResult $ P.parse myKeysP raw
+parseCrypto :: Bl.ByteString -> Either String (StaticKeys, Handshakes)
+parseCrypto raw =
+    P.eitherResult $ P.parse cryptoP raw
+
+
+cryptoP :: P.Parser (StaticKeys, Handshakes)
+cryptoP = do
+    keys <- myKeysP
+    handshakes <- handshakesP
+    return (keys, handshakes)
+
+
+handshakesP :: P.Parser (Map.Map HandshakeId Handshake)
+handshakesP = do
+    asList <- handshakesHelpP []
+    return $ Map.fromList asList
+
+
+handshakesHelpP
+    :: [(HandshakeId, Handshake)]
+    -> P.Parser [(HandshakeId, Handshake)]
+handshakesHelpP accum =
+    P.choice
+        [ do
+            handshake <- handshakeP
+            handshakesHelpP (handshake : accum)
+        , do
+            P.endOfInput
+            return accum
+        ]
+
+
+handshakeP :: P.Parser (HandshakeId, Handshake)
+handshakeP = do
+    handshakeId <- handshakeIdP
+    handshake <- P.choice
+        [ fmap Initiator initiatorP
+        , fmap Responder responderP
+        ]
+    return (handshakeId, handshake)
+
+
+initiatorP :: P.Parser InitiatorHandshake
+initiatorP = do
+    _ <- P.word8 0
+    P.choice
+        [ do
+            _ <- P.word8 0
+            return SentPlainE
+        , do
+            _ <- P.word8 1
+            ephemeral <- encryptedEphemeralP
+            return $ ReceivedEncryptedE ephemeral
+        ]
+
+
+responderP :: P.Parser ResponderHandshake
+responderP = do
+    _ <- P.word8 1
+    P.choice
+        [ do
+            _ <- P.word8 0
+            return ReceivedPlainE
+        , do
+            _ <- P.word8 1
+            ephemeral <- encryptedEphemeralP
+            return $ SentEncryptedE ephemeral
+        ]
+
+
+encryptedEphemeralP :: P.Parser EncryptedEphemeral
+encryptedEphemeralP =
+    fmap EncryptedEphemeral $ fmap Bl.fromStrict $ P.take $ 16 + 32 + 16
+
+
+handshakeIdP :: P.Parser HandshakeId
+handshakeIdP = do
+    userId <- userIdP
+    publicEphemeral <- fmap PublicEphemeral $
+        fmap Bl.fromStrict $ P.take 32
+    return $ HandshakeId userId publicEphemeral
 
 
 uint16P :: P.Parser Int
@@ -2305,9 +1724,14 @@ uint32P = do
 
 uint64P :: P.Parser Integer
 uint64P = do
-    words <- mapM (\_ -> P.anyWord8) (take 8 [1..])
-    let powered = map (\(i, w) -> (fromIntegral w) * (256 ^ i)) (zip [0..] words)
+    bytes <- mapM (\_ -> P.anyWord8) (take 8 ([1..] :: [Int]))
+    let powered = map uint64Help (zip [0..] bytes)
     return $ sum powered
+
+
+uint64Help :: (Int, Word8) -> Integer
+uint64Help (i, w) =
+    (fromIntegral w) * (256 ^ i)
 
 
 uint8P :: P.Parser Int
@@ -2340,18 +1764,15 @@ myKeysP = do
 rawKeysUpdate
     :: Bl.ByteString
     -> RootPath
-    -> [Clock.UTCTime]
-    -> CryptoRand.ChaChaDRG
     -> (Output, State)
-rawKeysUpdate rawKeys root time drg =
-    case parseKeys rawKeys of
+rawKeysUpdate rawCrypto root =
+    case parseCrypto rawCrypto of
         Left err ->
-            ( ErrorO $ T.unpack $
-                "could not parse static keys: " <> err
+            ( ErrorO $ "could not parse static keys: " <> err
             , FailedS
             )
 
-        Right keys@(StaticKeys _ session uId) ->
+        Right (keys@(StaticKeys _ session uId), handshakes) ->
             ( BatchO
                 [ BytesInQO toWebsocketQ (Bl.singleton 11)
                 , BytesInQO toServerQ $ logIn session uId
@@ -2361,45 +1782,12 @@ rawKeysUpdate rawKeys root time drg =
                 , blobsUp = NoJobs
                 , getBlob = NoJobs
                 , setMessage = NoJobs
-                , sendMessage = Nothing
                 , messageLocks = Set.empty
-                , drg
-                , time
                 , sendingEphemeral = False
                 , authStatus = LoggedIn keys
+                , handshakes = handshakes
                 }
             )
-
-
-dbPath :: RootPath -> FilePath
-dbPath (RootPath root) =
-    root </> "database.sqlite"
-
-
-setupDatabase :: RootPath -> Output
-setupDatabase root =
-    BatchO $ map (DbExecute_O (dbPath root))
-        [ "CREATE TABLE IF NOT EXISTS sent (\n\
-          \    message_id INTEGER NOT NULL,\n\
-          \    time TEXT NOT NULL,\n\
-          \    to INTEGER NOT NULL,\n\
-          \    PRIMARY KEY (message_id, time, to)\n\
-          \);"
-        , "CREATE TABLE IF NOT EXISTS received (\n\
-          \    message_id BLOB NOT NULL,\n\
-          \    time TEXT NOT NULL,\n\
-          \    from INTEGER NOT NULL,\n\
-          \    PRIMARY KEY (message_id, time, from)\n\
-          \);"
-        , "CREATE TABLE IF NOT EXISTS fingerprints (\n\
-          \    username INTEGER NOT NULL PRIMARY KEY,\n\
-          \    fingerprint INTEGER NOT NULL,\n\
-          \);"
-        , "CREATE TABLE IF NOT EXISTS my_ephemeral_keys (\n\
-          \    public BLOB NOT NULL PRIMARY KEY,\n\
-          \    secret BLOB NOT NULL UNIQUE,\n\
-          \);"
-        ]
 
 
 dirCreatedUpdate :: FilePath -> Init -> (Output, State)
@@ -2408,29 +1796,22 @@ dirCreatedUpdate path initModel =
         EmptyI ->
             pass
 
-        GettingTimesI _ ->
-            pass
-
-        MakingRootDirI rootPath@(RootPath r) ->
+        MakingRootDirI root@(RootPath r) ->
             if path == r then
                 ( BatchO
-                    [ setupDatabase rootPath
-                    , StartUiServerO
+                    [ StartUiServerO
                     , StartUiO
-                    , GetTimesO
+                    , DoesFileExistO $ keysPath root
                     ]
-                , InitS $ GettingTimesI $ RootPath path
+                , InitS $ DoKeysExistI root
                 )
             else
                 pass
 
-        GettingRandomGenI _ _ ->
+        DoKeysExistI _ ->
             pass
 
-        DoKeysExistI _ _ _ ->
-            pass
-
-        GettingKeysFromFileI _ _ _ ->
+        GettingKeysFromFileI _ ->
             pass
 
   where
