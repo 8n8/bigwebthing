@@ -139,8 +139,8 @@ io output =
             exists <- Dir.doesFileExist path
             return $ Just $ FileExistenceM path exists
 
-        GenerateDhPairO -> do
-            keys <- Dh.dhGenKey
+        MakeDhKeysO -> do
+            keys <- mapM (\_ -> Dh.dhGenKey) ([1..] :: [Integer])
             return $ Just $ NewDhKeysM keys
 
 
@@ -280,7 +280,7 @@ data Output
     | ReadFileLazyO FilePath
     | WriteFileO FilePath B.ByteString
     | DoesFileExistO FilePath
-    | GenerateDhPairO
+    | MakeDhKeysO
 
 
 data Msg
@@ -299,7 +299,7 @@ data Msg
     | TcpMsgM Bl.ByteString
     | RestartingTcpM
     | FileExistenceM FilePath Bool
-    | NewDhKeysM (Dh.KeyPair Curve25519)
+    | NewDhKeysM [Dh.KeyPair Curve25519]
 
 
 websocket :: Ws.ServerApp
@@ -385,8 +385,9 @@ data State
 data Init
     = EmptyI
     | MakingRootDirI RootPath
-    | DoKeysExistI RootPath
-    | GettingKeysFromFileI RootPath
+    | MakingDhKeysI RootPath
+    | DoKeysExistI RootPath [Dh.KeyPair Curve25519]
+    | GettingKeysFromFileI RootPath [Dh.KeyPair Curve25519]
 
 
 data Ready = Ready
@@ -397,6 +398,7 @@ data Ready = Ready
     , sendingEphemeral :: Bool
     , authStatus :: AuthStatus
     , handshakes :: Map.Map HandshakeId Handshake
+    , newDhKeys :: [Dh.KeyPair Curve25519]
     }
 
 
@@ -640,8 +642,32 @@ update model msg =
         FileExistenceM path exists ->
             updateInit model $ fileExistenceUpdate path exists
 
-        NewDhKeysM _ ->
-            undefined
+        NewDhKeysM keys ->
+            updateInit model $ newDhKeysUpdate keys
+
+
+newDhKeysUpdate :: [Dh.KeyPair Curve25519] -> Init -> (Output, State)
+newDhKeysUpdate newKeys init_ =
+    case init_ of
+        EmptyI ->
+            pass
+
+        MakingRootDirI _ ->
+            pass
+
+        MakingDhKeysI root ->
+            ( DoesFileExistO $ keysPath root
+            , InitS $ DoKeysExistI root newKeys
+            )
+
+        DoKeysExistI _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ ->
+            pass
+
+  where
+    pass = (DoNothingO, InitS init_)
 
 
 newtype MyStatic
@@ -657,11 +683,14 @@ fileExistenceUpdate path exists init_ =
         MakingRootDirI _ ->
             pass
 
-        DoKeysExistI root ->
+        MakingDhKeysI _ ->
+            pass
+
+        DoKeysExistI root newKeys ->
             case (exists, path == keysPath root) of
                 (True, True) ->
                     ( ReadFileO $ keysPath root
-                    , InitS $ GettingKeysFromFileI root
+                    , InitS $ GettingKeysFromFileI root newKeys
                     )
 
                 (True, False) ->
@@ -677,13 +706,14 @@ fileExistenceUpdate path exists init_ =
                         , sendingEphemeral = False
                         , authStatus = GettingPowInfoA
                         , handshakes = Map.empty
+                        , newDhKeys = newKeys
                         }
                     )
 
                 (False, False) ->
                     pass
 
-        GettingKeysFromFileI _ ->
+        GettingKeysFromFileI _ _ ->
             pass
 
   where
@@ -833,7 +863,7 @@ onGetBlobUpdate body q ready =
 
 parseFromFrontend :: Bl.ByteString -> Either String FromFrontend
 parseFromFrontend raw =
-    P.eitherResult $ P.parse apiInputP raw
+    P.eitherResult $ P.parse fromFrontendP raw
 
 
 data UserId
@@ -984,8 +1014,8 @@ chainIdP = do
     return $ ChainId $ Bl.fromStrict chainId
 
 
-apiInputP :: P.Parser FromFrontend
-apiInputP = do
+fromFrontendP :: P.Parser FromFrontend
+fromFrontendP = do
     input <- P.choice
         [ do
             _ <- P.word8 0
@@ -1259,12 +1289,15 @@ fileContentsUpdate path contents init_ =
         MakingRootDirI _ ->
             pass
 
-        DoKeysExistI _ ->
+        MakingDhKeysI _ ->
             pass
 
-        GettingKeysFromFileI root ->
+        DoKeysExistI _ _ ->
+            pass
+
+        GettingKeysFromFileI root dhKeys ->
             if path == keysPath root then
-                rawKeysUpdate contents root
+                rawKeysUpdate contents root dhKeys
             else
                 pass
 
@@ -1416,8 +1449,9 @@ myKeysP = do
 rawKeysUpdate
     :: Bl.ByteString
     -> RootPath
+    -> [Dh.KeyPair Curve25519]
     -> (Output, State)
-rawKeysUpdate rawCrypto root =
+rawKeysUpdate rawCrypto root newKeys =
     case parseCrypto rawCrypto of
         Left err ->
             ( ErrorO $ "could not parse static keys: " <> err
@@ -1437,6 +1471,7 @@ rawKeysUpdate rawCrypto root =
                 , sendingEphemeral = False
                 , authStatus = LoggedIn keys
                 , handshakes = handshakes
+                , newDhKeys = newKeys
                 }
             )
 
@@ -1452,17 +1487,20 @@ dirCreatedUpdate path initModel =
                 ( BatchO
                     [ StartUiServerO
                     , StartUiO
-                    , DoesFileExistO $ keysPath root
+                    , MakeDhKeysO
                     ]
-                , InitS $ DoKeysExistI root
+                , InitS $ MakingDhKeysI root
                 )
             else
                 pass
 
-        DoKeysExistI _ ->
+        MakingDhKeysI _ ->
             pass
 
-        GettingKeysFromFileI _ ->
+        DoKeysExistI _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ ->
             pass
 
   where
