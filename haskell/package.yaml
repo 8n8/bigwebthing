@@ -32,13 +32,10 @@ dependencies:
 - directory
 - cacophony
 - filepath
-- sqlite-simple
 - webviewhs
 - blake2
 - base64-bytestring
-- process
 - containers
-- tar
 - network-simple
 
 library:
@@ -58,6 +55,7 @@ executables:
     - -Wno-missing-safe-haskell-mode
     - -Wno-implicit-prelude
     - -Wno-monomorphism-restriction
+    - -Wno-missing-deriving-strategies
     - -with-rtsopts=-N
 
 tests:

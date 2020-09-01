@@ -14,7 +14,6 @@ import qualified Crypto.Noise as Noise
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as Bl
 import qualified System.Directory as Dir
-import Database.SQLite.Simple.ToField (ToField, toField)
 import qualified Data.Text as T
 import System.FilePath ((</>))
 import qualified Data.Attoparsec.ByteString.Lazy as P
@@ -29,11 +28,8 @@ import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
 import Control.Concurrent (forkIO, threadDelay)
-import qualified System.Process as Process
 import qualified Data.Set as Set
-import qualified Codec.Archive.Tar as Tar
 import qualified Network.Simple.TCP as Tcp
-import qualified Data.Bits as Bits
 import qualified Data.Map as Map
 
 
@@ -131,23 +127,9 @@ io output =
             bytes <- Bl.readFile path
             return $ Just $ LazyFileContentsM path bytes
 
-        DoesDirExistO path -> do
-            exists <- Dir.doesDirectoryExist path
-            return $ Just $ DirExistsM path exists
-
-        RunCommandO process -> do
-            (out, err) <- Process.withCreateProcess
-                process
-                processProcess
-            return $ Just $ CommandResultM out err process
-
         WriteFileO path contents -> do
             B.writeFile path contents
             return Nothing
-
-        TarO base dirToTar -> do
-            tarred <- Tar.pack base [dirToTar]
-            return $ Just $ TarredM (base, dirToTar) tarred
 
         StartTcpClientO -> do
             tcpClient
@@ -232,39 +214,8 @@ serverPort =
     "11453"
 
 
-processProcess
-    :: Maybe Io.Handle
-    -> Maybe Io.Handle
-    -> Maybe Io.Handle
-    -> Process.ProcessHandle
-    -> IO (StdOut, StdErr)
-processProcess _ maybeStdoutH maybeStderrH _ = do
-    stdOut <- drainMaybeHandle maybeStdoutH
-    stdErr <- drainMaybeHandle maybeStderrH
-    return $ (StdOut stdOut, StdErr stdErr)
-
-
 instance Show MessageId where
     show (MessageId m) = show m
-
-
-drainMaybeHandle :: Maybe Io.Handle -> IO (Maybe String)
-drainMaybeHandle maybeHandle =
-    case maybeHandle of
-        Nothing ->
-            return Nothing
-
-        Just h -> do
-            contents <- Io.hGetContents h
-            return $ Just contents
-
-
-newtype StdOut
-    = StdOut (Maybe String)
-
-
-newtype StdErr
-    = StdErr (Maybe String)
 
 
 httpApi :: IO Wai.Application
@@ -327,10 +278,7 @@ data Output
     | BytesInQO Q Bl.ByteString
     | CloseFileO Io.Handle
     | ReadFileLazyO FilePath
-    | DoesDirExistO FilePath
-    | RunCommandO Process.CreateProcess
     | WriteFileO FilePath B.ByteString
-    | TarO FilePath FilePath
     | DoesFileExistO FilePath
     | GenerateDhPairO
 
@@ -348,9 +296,6 @@ data Msg
     | GetBlobM Bl.ByteString Q
     | FromWebsocketM Ws.DataMessage
     | LazyFileContentsM FilePath Bl.ByteString
-    | DirExistsM FilePath Bool
-    | CommandResultM StdOut StdErr Process.CreateProcess
-    | TarredM (FilePath, FilePath) [Tar.Entry]
     | TcpMsgM Bl.ByteString
     | RestartingTcpM
     | FileExistenceM FilePath Bool
@@ -448,7 +393,6 @@ data Ready = Ready
     { root :: RootPath
     , blobsUp :: Jobs BlobUp BlobUpWait
     , getBlob :: Jobs GetBlob GetBlobWait
-    , setMessage :: Jobs SetMessage SetMessageWait
     , messageLocks :: Set.Set MessageId
     , sendingEphemeral :: Bool
     , authStatus :: AuthStatus
@@ -457,7 +401,7 @@ data Ready = Ready
 
 
 data HandshakeId
-    = HandshakeId UserId PublicEphemeral
+    = HandshakeId Username PublicEphemeral
 
 
 instance Ord HandshakeId where
@@ -538,20 +482,6 @@ data AuthStatus
     | GeneratingStaticKeys PowInfo
     | AwaitingUsername (Dh.KeyPair Curve25519) SessionKey
     | LoggedIn StaticKeys
-
-
-data SetMessageWait
-    = SetMessageWait MessageId Subject MainBox Metadata
-
-
-data SetMessage
-    = DoesItExist MessageId Subject MainBox Metadata
-    | Initializing MessageId Subject MainBox Metadata
-    | SettingSubject MessageId Subject MainBox Metadata
-    | SettingMainBox MessageId MainBox Metadata
-    | SettingMetadata MessageId Metadata
-    | GitAdding MessageId
-    | GitCommitting MessageId
 
 
 data Jobs a b
@@ -701,17 +631,6 @@ update model msg =
         GetBlobM body q ->
             updateReady model $ onGetBlobUpdate body q
 
-        DirExistsM path exists ->
-            updateReady model $ dirExistsUpdate path exists
-
-        CommandResultM stdout stderr process ->
-            updateReady model $
-                commandResultUpdate process stdout stderr
-
-        TarredM paths tarred ->
-            updateReady model $
-                tarUpdate paths tarred
-
         TcpMsgM raw ->
             updateReady model $ tcpMessageUpdate raw
 
@@ -754,7 +673,6 @@ fileExistenceUpdate path exists init_ =
                         { root
                         , blobsUp = NoJobs
                         , getBlob = NoJobs
-                        , setMessage = NoJobs
                         , messageLocks = Set.empty
                         , sendingEphemeral = False
                         , authStatus = GettingPowInfoA
@@ -796,50 +714,12 @@ restartingTcpUpdate ready =
 
 
 logIn :: SessionKey -> UserId -> Bl.ByteString
-logIn (SessionKey sessionKey) userId =
+logIn (SessionKey sessionKey) (UserId (Username username) _) =
     mconcat
         [ Bl.singleton 1
         , sessionKey
-        , encodeUserId userId
+        , username
         ]
-
-
-encodeUserId :: UserId -> Bl.ByteString
-encodeUserId (UserId userId) =
-    let
-        unsized = encodeUint userId
-        size = Bl.length unsized
-    in
-        Bl.singleton (fromIntegral size) <> unsized
-
-
-encodeUint :: Integer -> Bl.ByteString
-encodeUint i =
-    encodeUintHelp i i 0 []
-
-
-encodeUintHelp
-    :: Integer
-    -> Integer
-    -> Int
-    -> [Word8]
-    -> Bl.ByteString
-encodeUintHelp int remainder counter accum =
-    if remainder == 0 then
-        Bl.pack $ reverse accum
-    else let
-        word :: Integer
-        word =
-            (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
-
-        value :: Integer
-        value = word `Bits.shiftL` (counter * 8)
-    in
-        encodeUintHelp
-            int
-            (remainder - value)
-            (counter + 1)
-            (fromIntegral word : accum)
 
 
 tcpMessageUpdate :: Bl.ByteString -> Ready -> (Output, State)
@@ -909,200 +789,6 @@ tcpP =
         ]
 
 
-instance Show UserId where
-    show (UserId uId) =
-        "UserId: " ++ show uId
-
-
-tarUpdate
-    :: (FilePath, FilePath)
-    -> [Tar.Entry]
-    -> Ready
-    -> (Output, State)
-tarUpdate _ _ _ =
-    undefined
-
-
-panicOnStdErr :: StdErr -> Process.CreateProcess -> (Output, State) -> (Output, State)
-panicOnStdErr (StdErr stdErr) process ok =
-    case stdErr of
-        Nothing ->
-            ok
-
-        Just err ->
-            (ErrorO $ mconcat
-                [ "failed external process:\n"
-                , show process
-                , ":\n"
-                , err
-                ]
-            , FailedS
-            )
-
-
-setMessageCommandCatcher
-    :: Process.CreateProcess
-    -> StdOut
-    -> Ready
-    -> Maybe (Output, State)
-setMessageCommandCatcher command _ ready =
-    case setMessage ready of
-        NoJobs ->
-            Nothing
-
-        Jobs (DoesItExist _ _ _ _) _ ->
-            Nothing
-
-        Jobs (Initializing mId sub@(Subject s) box meta) waiting ->
-            if command == gitInit (root ready) mId then Just
-                ( WriteFileO (subjectPath (root ready) mId) s
-                , ReadyS $ ready
-                    { setMessage =
-                        Jobs
-                            (SettingSubject mId sub box meta)
-                            waiting
-                    }
-                )
-            else
-                Nothing
-
-        Jobs (SettingSubject _ _ _ _) _ ->
-            Nothing
-
-        Jobs (SettingMainBox _ _ _) _ ->
-            Nothing
-
-        Jobs (SettingMetadata _ _) _ ->
-            Nothing
-
-        Jobs (GitAdding mId) _ ->
-            if command == gitAdd (root ready) mId then Just
-                ( RunCommandO $ gitCommit (root ready) mId
-                , ReadyS $ ready
-                    { setMessage =
-                        promoteSetMessage $ setMessage ready
-                    }
-                )
-            else
-                Nothing
-
-        Jobs (GitCommitting mId) _ ->
-            if command == gitCommit (root ready) mId then Just
-                ( DoNothingO
-                , ReadyS $ ready
-                    { setMessage =
-                        promoteSetMessage $ setMessage ready
-                    , messageLocks = Set.delete mId $ messageLocks ready
-                    }
-                )
-            else
-                Nothing
-
-
-commandResultUpdate
-    :: Process.CreateProcess
-    -> StdOut
-    -> StdErr
-    -> Ready
-    -> (Output, State)
-commandResultUpdate cmd out err ready =
-    panicOnStdErr err cmd $
-    case setMessageCommandCatcher cmd out ready of
-        Just used ->
-            used
-
-        Nothing ->
-            (DoNothingO, ReadyS ready)
-
-
-promoteSetMessage
-    :: Jobs SetMessage SetMessageWait
-    -> Jobs SetMessage SetMessageWait
-promoteSetMessage job =
-    case job of
-        NoJobs ->
-            NoJobs
-
-        Jobs _ [] ->
-            NoJobs
-
-        Jobs _ (SetMessageWait mId sub box meta:aiting) ->
-            Jobs
-                (DoesItExist mId sub box meta)
-                aiting
-
-
-gitInit :: RootPath -> MessageId -> Process.CreateProcess
-gitInit root mId =
-        (Process.proc "git" ["init", show mId])
-        { Process.cwd = Just $ messagesDirPath root }
-
-
-gitCommit :: RootPath -> MessageId -> Process.CreateProcess
-gitCommit root mId =
-        (Process.proc "git" ["commit", "-m", "x"])
-        {Process.cwd = Just $ messagePath root mId}
-
-
-gitAdd :: RootPath -> MessageId -> Process.CreateProcess
-gitAdd root mId =
-        (Process.proc "git" ["add", "."])
-        { Process.cwd = Just $ messagePath root mId }
-
-
-subjectPath :: RootPath -> MessageId -> FilePath
-subjectPath root mId =
-    messagePath root mId </> "subject.txt"
-
-
-dirExistsUpdate :: FilePath -> Bool -> Ready -> (Output, State)
-dirExistsUpdate path exists ready =
-    case setMessage ready of
-        NoJobs ->
-            pass
-
-        Jobs (DoesItExist mId sub@(Subject s) box meta) waiting ->
-            if exists && path == messagePath (root ready) mId then
-                ( WriteFileO (subjectPath (root ready) mId) s
-                , ReadyS $ ready
-                    { setMessage =
-                        Jobs
-                            (SettingSubject mId sub box meta)
-                            waiting
-                    }
-                )
-            else
-                ( RunCommandO $ gitInit (root ready) mId
-                , ReadyS $ ready
-                    { setMessage =
-                        Jobs
-                            (Initializing mId sub box meta)
-                            waiting
-                    }
-                )
-
-        Jobs (Initializing _ _ _ _) _ ->
-            pass
-
-        Jobs (SettingSubject _ _ _ _) _ ->
-            pass
-
-        Jobs (SettingMainBox _ _ _) _ ->
-            pass
-
-        Jobs (SettingMetadata _ _) _ ->
-            pass
-
-        Jobs (GitAdding _) _ ->
-            pass
-
-        Jobs (GitCommitting _) _ ->
-            pass
-
-  where
-    pass = (DoNothingO, ReadyS ready)
-
-
 data TcpMsg
     = NewMessageT UserId MessageIn
     | NewUserId UserId
@@ -1150,23 +836,84 @@ parseApiInput raw =
     P.eitherResult $ P.parse apiInputP raw
 
 
-newtype UserId =
-    UserId Integer
+data UserId
+    = UserId Username Fingerprint
+    deriving (Show)
 
 
 instance Ord UserId where
-    compare (UserId u1) (UserId u2) =
-        compare u1 u2
+    compare (UserId u1 f1) (UserId u2 f2) =
+        case (compare u1 u2, compare f1 f2) of
+            (LT, LT) ->
+                LT
+
+            (EQ, EQ) ->
+                EQ
+
+            (GT, GT) ->
+                GT
+
+            (GT, LT) ->
+                GT
+
+            (LT, GT) ->
+                LT
+
+            (LT, EQ) ->
+                LT
+
+            (GT, EQ) ->
+                GT
+
+            (EQ, GT) ->
+                GT
+
+            (EQ, LT) ->
+                LT
+
+
+newtype Fingerprint
+    = Fingerprint Bl.ByteString
+    deriving (Show)
+
+
+instance Ord Fingerprint where
+    compare (Fingerprint a) (Fingerprint b) =
+        compare a b
+
+
+newtype Username
+    = Username Bl.ByteString
+    deriving (Show)
+
+
+instance Ord Username where
+    compare (Username a) (Username b) =
+        compare a b
 
 
 instance Eq UserId where
-    (==) (UserId a) (UserId b) =
+    (==) (UserId u1 f1) (UserId u2 f2) =
+        u1 == u2 && f1 == f2
+
+
+instance Eq Fingerprint where
+    (==) (Fingerprint a) (Fingerprint b) =
+        a == b
+
+
+instance Eq Username where
+    (==) (Username a) (Username b) =
         a == b
 
 
 userIdP :: P.Parser UserId
-userIdP =
-    fmap UserId uint64P
+userIdP = do
+    username <- P.take 8
+    fingerprint <- P.take 8
+    return $ UserId
+        (Username $ Bl.fromStrict username)
+        (Fingerprint $ Bl.fromStrict fingerprint)
 
 
 blobHashP :: P.Parser Hash32
@@ -1182,44 +929,27 @@ hash32P = do
     return $ Hash32 hash
 
 
-data NewMessage
-    = NewMessage
-        { messageId :: Int
-        , subject :: Bl.ByteString
-        , mainBox :: Bl.ByteString
-        , blobs :: Bl.ByteString
-        , wasm :: Bl.ByteString
-        , members :: Bl.ByteString
-        }
+newtype Message
+    = Message Bl.ByteString
+
+
+newtype ChainId
+    = ChainId Bl.ByteString
 
 
 data ApiInput
-    = SetMessageA NewMessage
-    | AddToWhitelistA UserId
-    | RemoveFromWhitelistA UserId
-    | GetMessageA MessageId
-    | GetWhitelistA
-    | GetMyIdA
-    | GetHistoryA MessageId
-    | RevertA MessageId Commit
-    | GetCommitA MessageId Commit
-    | GetUniqueA
-    | GetPaymentsA
-    | GetPriceA
-    | GetMessageSummariesA
-    | GetMembershipA
-
-
-newtype Subject
-    = Subject B.ByteString
-
-
-newtype MainBox
-    = MainBox B.ByteString
-
-
-newtype Metadata
-    = Metadata B.ByteString
+    = NewMessageA MessageId Message
+    | WriteIndex Bl.ByteString
+    | GetIndex
+    | AddToWhitelist UserId
+    | RemoveFromWhitelist UserId
+    | GetMessage MessageId
+    | GetWhitelist
+    | GetMyId
+    | GetChainSummary ChainId
+    | GetPayments
+    | GetPrice
+    | GetMembership
 
 
 newtype MessageId
@@ -1236,22 +966,6 @@ instance Eq MessageId where
         a == b
 
 
-newtype Commit
-    = Commit B.ByteString
-
-
-stringP :: P.Parser B.ByteString
-stringP = do
-    size <- uint32P
-    P.take size
-
-
-commitP :: P.Parser Commit
-commitP = do
-    commit <- P.take 40
-    return $ Commit commit
-
-
 messageIdP :: P.Parser MessageId
 messageIdP = do
     id_ <- uint32P
@@ -1264,156 +978,61 @@ apiInputP = do
         [ do
             _ <- P.word8 2
             userId <- userIdP
-            return $ AddToWhitelistA userId
+            return $ AddToWhitelist userId
         , do
             _ <- P.word8 3
             userId <- userIdP
-            return $ RemoveFromWhitelistA userId
+            return $ RemoveFromWhitelist userId
         , do
             _ <- P.word8 4
             messageId <- messageIdP
-            return $ GetMessageA messageId
+            return $ GetMessage messageId
         , do
             _ <- P.word8 5
-            return GetWhitelistA
+            return GetWhitelist
         , do
             _ <- P.word8 6
-            return GetMyIdA
-        , do
-            _ <- P.word8 12
-            messageId <- messageIdP
-            return $ GetHistoryA messageId
-        , do
-            _ <- P.word8 13
-            messageId <- messageIdP
-            commit <- commitP
-            return $ RevertA messageId commit
-        , do
-            _ <- P.word8 14
-            messageId <- messageIdP
-            commit <- commitP
-            return $ GetCommitA messageId commit
-        , do
-            _ <- P.word8 15
-            return $ GetUniqueA
+            return GetMyId
         ]
 
 
-setMessageUpdate
-    :: MessageId
-    -> Subject
-    -> MainBox
-    -> Metadata
-    -> Ready
-    -> (Output, State)
-setMessageUpdate messageId subject mainBox metadata ready =
-    case setMessage ready of
-        NoJobs ->
-            if Set.member messageId (messageLocks ready) then
-                (DoNothingO, ReadyS ready)
-            else
-                ( DoesDirExistO $ messagePath (root ready) messageId
-                , ReadyS $ ready
-                    { setMessage = Jobs
-                        (DoesItExist messageId subject mainBox metadata)
-                        []
-                    , messageLocks = Set.insert
-                        messageId
-                        (messageLocks ready)
-                    }
-                )
-
-        Jobs current waiting ->
-            ( DoNothingO
-            , ReadyS $ ready { setMessage =
-                Jobs
-                    current
-                    (SetMessageWait
-                        messageId
-                        subject
-                        mainBox
-                        metadata
-                            : waiting)
-                }
-            )
-
-
-messagesDirPath :: RootPath -> FilePath
-messagesDirPath (RootPath root) =
-    root </> "messages"
-
-
-messagePath :: RootPath -> MessageId -> FilePath
-messagePath root (MessageId messageId) =
-    messagesDirPath root </> show messageId
-
-
-data SendingStatus
-    = Sending
-    | Waiting
-
-
-instance ToField MessageId where
-    toField (MessageId mId) =
-        toField mId
-
-
-instance ToField UserId where
-    toField (UserId uId) =
-        toField uId
-
-
-instance ToField Commit where
-    toField (Commit c) =
-        toField c
-
-
-instance ToField SendingStatus where
-    toField =
-        toField . sendingToInt
-
-
-sendingToInt :: SendingStatus -> Int
-sendingToInt s =
-    case s of
-        Sending ->
-            0
-
-        Waiting ->
-            1
-
-
 uiApiUpdate :: ApiInput -> State -> (Output, State)
-uiApiUpdate apiInput model =
+uiApiUpdate apiInput _ =
     case apiInput of
-        SetMessageA _ ->
+        NewMessageA _ _ ->
             undefined
 
-        AddToWhitelistA _ ->
+        AddToWhitelist _ ->
             undefined
 
-        RemoveFromWhitelistA _ ->
+        RemoveFromWhitelist _ ->
             undefined
 
-        GetMessageA _ ->
+        GetMessage _ ->
             undefined
 
-        GetWhitelistA ->
+        GetWhitelist ->
             undefined
 
-        GetMyIdA ->
+        GetMyId ->
             undefined
 
-        GetHistoryA _ ->
+        WriteIndex _ ->
             undefined
 
-        RevertA _ _ ->
+        GetIndex ->
             undefined
 
-        GetCommitA _ _ ->
+        GetChainSummary _ ->
             undefined
 
-        GetUniqueA ->
+        GetPayments ->
+            undefined
+
+        GetPrice ->
+            undefined
+
+        GetMembership ->
             undefined
 
 
@@ -1695,10 +1314,16 @@ encryptedEphemeralP =
 
 handshakeIdP :: P.Parser HandshakeId
 handshakeIdP = do
-    userId <- userIdP
+    username <- usernameP
     publicEphemeral <- fmap PublicEphemeral $
         fmap Bl.fromStrict $ P.take 32
-    return $ HandshakeId userId publicEphemeral
+    return $ HandshakeId username publicEphemeral
+
+
+usernameP :: P.Parser Username
+usernameP = do
+    username <- P.take 8
+    return $ Username $ Bl.fromStrict username
 
 
 uint16P :: P.Parser Int
@@ -1720,18 +1345,6 @@ uint32P = do
     b2 <- uint8P
     b3 <- uint8P
     return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
-
-
-uint64P :: P.Parser Integer
-uint64P = do
-    bytes <- mapM (\_ -> P.anyWord8) (take 8 ([1..] :: [Int]))
-    let powered = map uint64Help (zip [0..] bytes)
-    return $ sum powered
-
-
-uint64Help :: (Int, Word8) -> Integer
-uint64Help (i, w) =
-    (fromIntegral w) * (256 ^ i)
 
 
 uint8P :: P.Parser Int
@@ -1781,7 +1394,6 @@ rawKeysUpdate rawCrypto root =
                 { root
                 , blobsUp = NoJobs
                 , getBlob = NoJobs
-                , setMessage = NoJobs
                 , messageLocks = Set.empty
                 , sendingEphemeral = False
                 , authStatus = LoggedIn keys
