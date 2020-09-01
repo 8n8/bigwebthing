@@ -953,7 +953,7 @@ data ApiInput
 
 
 newtype MessageId
-    = MessageId Int
+    = MessageId Bl.ByteString
 
 
 instance Ord MessageId where
@@ -968,32 +968,71 @@ instance Eq MessageId where
 
 messageIdP :: P.Parser MessageId
 messageIdP = do
-    id_ <- uint32P
-    return $ MessageId id_
+    id_ <- P.take 24
+    return $ MessageId $ Bl.fromStrict id_
+
+
+messageP :: P.Parser Message
+messageP = do
+    message <- P.takeByteString
+    return $ Message $ Bl.fromStrict message
+
+
+chainIdP :: P.Parser ChainId
+chainIdP = do
+    chainId <- P.take 20
+    return $ ChainId $ Bl.fromStrict chainId
 
 
 apiInputP :: P.Parser ApiInput
 apiInputP = do
-    P.choice
+    input <- P.choice
         [ do
+            _ <- P.word8 0
+            messageId <- messageIdP
+            message <- messageP
+            return $ NewMessageA messageId message
+        , do
+            _ <- P.word8 1
+            index <- P.takeByteString
+            return $ WriteIndex $ Bl.fromStrict index
+        , do
             _ <- P.word8 2
-            userId <- userIdP
-            return $ AddToWhitelist userId
+            return GetIndex
         , do
             _ <- P.word8 3
             userId <- userIdP
-            return $ RemoveFromWhitelist userId
+            return $ AddToWhitelist userId
         , do
             _ <- P.word8 4
+            userId <- userIdP
+            return $ RemoveFromWhitelist userId
+        , do
+            _ <- P.word8 5
             messageId <- messageIdP
             return $ GetMessage messageId
         , do
-            _ <- P.word8 5
+            _ <- P.word8 6
             return GetWhitelist
         , do
-            _ <- P.word8 6
+            _ <- P.word8 7
             return GetMyId
+        , do
+            _ <- P.word8 8
+            chainId <- chainIdP
+            return $ GetChainSummary chainId
+        , do
+            _ <- P.word8 9
+            return GetPayments
+        , do
+            _ <- P.word8 10
+            return GetPrice
+        , do
+            _ <- P.word8 11
+            return GetMembership
         ]
+    P.endOfInput
+    return input
 
 
 uiApiUpdate :: ApiInput -> State -> (Output, State)
