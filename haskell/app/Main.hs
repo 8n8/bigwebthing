@@ -618,7 +618,7 @@ update model msg =
                     )
 
                 Ws.Binary bin ->
-                    case parseApiInput bin of
+                    case parseFromFrontend bin of
                         Left err ->
                             ( ErrorO $
                                 "couldn't parse API input: " <> err
@@ -831,8 +831,8 @@ onGetBlobUpdate body q ready =
                     )
 
 
-parseApiInput :: Bl.ByteString -> Either String ApiInput
-parseApiInput raw =
+parseFromFrontend :: Bl.ByteString -> Either String FromFrontend
+parseFromFrontend raw =
     P.eitherResult $ P.parse apiInputP raw
 
 
@@ -937,7 +937,7 @@ newtype ChainId
     = ChainId Bl.ByteString
 
 
-data ApiInput
+data FromFrontend
     = NewMessageA MessageId Message
     | WriteIndex Bl.ByteString
     | GetIndex
@@ -984,7 +984,7 @@ chainIdP = do
     return $ ChainId $ Bl.fromStrict chainId
 
 
-apiInputP :: P.Parser ApiInput
+apiInputP :: P.Parser FromFrontend
 apiInputP = do
     input <- P.choice
         [ do
@@ -1035,7 +1035,7 @@ apiInputP = do
     return input
 
 
-uiApiUpdate :: ApiInput -> State -> (Output, State)
+uiApiUpdate :: FromFrontend -> State -> (Output, State)
 uiApiUpdate apiInput _ =
     case apiInput of
         NewMessageA _ _ ->
