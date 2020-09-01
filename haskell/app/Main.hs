@@ -724,7 +724,7 @@ logIn (SessionKey sessionKey) (UserId (Username username) _) =
 
 tcpMessageUpdate :: Bl.ByteString -> Ready -> (Output, State)
 tcpMessageUpdate raw _ =
-    case P.eitherResult $ P.parse tcpP raw of
+    case P.eitherResult $ P.parse fromServerP raw of
         Left err ->
             ( ErrorO $ "could not parse TCP message: " ++ err
             , FailedS
@@ -755,8 +755,8 @@ messageInLength =
     15991
 
 
-tcpP :: P.Parser TcpMsg
-tcpP =
+fromServerP :: P.Parser FromServer
+fromServerP =
     P.choice
         [ do
             _ <- P.word8 0
@@ -789,7 +789,7 @@ tcpP =
         ]
 
 
-data TcpMsg
+data FromServer
     = NewMessageT UserId MessageIn
     | NewUserId UserId
     | PowInfoT Word8 Bl.ByteString
