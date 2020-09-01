@@ -197,7 +197,7 @@ tcpListen conn = do
                             Just message -> do
                                 Stm.atomically $ do
                                     q <- msgQ
-                                    Q.writeTQueue q $ TcpMsgM $ Bl.fromStrict message
+                                    Q.writeTQueue q $ FromServerM $ Bl.fromStrict message
                                 tcpListen conn
 
 
@@ -296,7 +296,7 @@ data Msg
     | GetBlobM Bl.ByteString Q
     | FromWebsocketM Ws.DataMessage
     | LazyFileContentsM FilePath Bl.ByteString
-    | TcpMsgM Bl.ByteString
+    | FromServerM Bl.ByteString
     | RestartingTcpM
     | FileExistenceM FilePath Bool
     | NewDhKeysM [Dh.KeyPair Curve25519]
@@ -633,8 +633,8 @@ update model msg =
         GetBlobM body q ->
             updateReady model $ onGetBlobUpdate body q
 
-        TcpMsgM raw ->
-            updateReady model $ tcpMessageUpdate raw
+        FromServerM raw ->
+            updateReady model $ fromServerUpdate raw
 
         RestartingTcpM ->
             updateReady model restartingTcpUpdate
@@ -752,8 +752,8 @@ logIn (SessionKey sessionKey) (UserId (Username username) _) =
         ]
 
 
-tcpMessageUpdate :: Bl.ByteString -> Ready -> (Output, State)
-tcpMessageUpdate raw _ =
+fromServerUpdate :: Bl.ByteString -> Ready -> (Output, State)
+fromServerUpdate raw _ =
     case P.eitherResult $ P.parse fromServerP raw of
         Left err ->
             ( ErrorO $ "could not parse TCP message: " ++ err
