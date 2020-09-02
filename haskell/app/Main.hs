@@ -366,11 +366,17 @@ toFrontendQ =
 newtype SessionKey
     = SessionKey Bl.ByteString
 
+
 newtype RootPath
     = RootPath FilePath
 
+
 data StaticKeys
-    = StaticKeys MyStatic SessionKey UserId
+    = StaticKeys
+        { staticDh :: MyStatic
+        , sessionKey :: SessionKey
+        , userId :: UserId
+        }
 
 
 newtype Hash32
@@ -434,6 +440,7 @@ data Ready = Ready
     , handshakes :: Map.Map HandshakeId Handshake
     , newDhKeys :: [Dh.KeyPair Curve25519]
     , theTime :: [Clock.UTCTime]
+    , whitelist :: Set.Set UserId
     }
 
 
@@ -734,7 +741,7 @@ signUpHelp difficulty unique raw ready =
                 Right signUp ->
                     ( BatchO
                         [ BytesInQO toServerQ signUp
-                        , cacheCrypto newReady
+                        , dumpCache newReady
                         ]
                     , ReadyS newReady
                     )
@@ -784,7 +791,7 @@ powHelp
     -> Either String Bl.ByteString
 powHelp difficulty unique counter =
     let
-        candidate = encodeUint8 counter
+        candidate = encodeUint64 counter
         hashE = Argon2.hash
             argonOptions
             (Bl.toStrict $ unique <> candidate)
@@ -802,14 +809,24 @@ powHelp difficulty unique counter =
             Left $ show err
 
 
-encodeUint8 :: Integer -> Bl.ByteString
-encodeUint8 i =
-    Bl.pack $ map (encodeUint8Help i) (take 8 [0..])
+encodeUint64 :: Integer -> Bl.ByteString
+encodeUint64 i =
+    Bl.pack $ map (encodeUint64Help i) (take 8 [0..])
 
 
-encodeUint8Help :: Integer -> Int -> Word8
-encodeUint8Help int counter =
+encodeUint64Help :: Integer -> Int -> Word8
+encodeUint64Help int counter =
     fromIntegral $ (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
+
+
+encodeUint32 :: Int -> Bl.ByteString
+encodeUint32 i =
+    Bl.pack $ map (encodeUint32Help i) (take 4 [0..])
+
+
+encodeUint32Help :: Int -> Int -> Word8
+encodeUint32Help int counter =
+    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
 
 
 powHashLength =
@@ -913,6 +930,7 @@ fileExistenceUpdate path exists init_ =
                         , handshakes = Map.empty
                         , newDhKeys = newKeys
                         , theTime = times
+                        , whitelist = Set.empty
                         }
                     )
 
@@ -1031,7 +1049,7 @@ newUserIdUpdate userId ready =
             in
                 ( BatchO
                     [ BytesInQO toServerQ (logIn sessionKey userId)
-                    , cacheCrypto newReady
+                    , dumpCache newReady
                     ]
                 , ReadyS newReady
                 )
@@ -1171,7 +1189,7 @@ firstHandshakesUpdate from ready msgs =
                     logErr newReady err
 
                 Right kk2s ->
-                    ( BatchO [kk2s, cacheCrypto ready]
+                    ( BatchO [kk2s, dumpCache ready]
                     , ReadyS newReady
                     )
 
@@ -1324,32 +1342,57 @@ noiseException err =
     T.pack (show err)
 
 
-cacheCrypto :: Ready -> Output
-cacheCrypto ready =
+dumpCache :: Ready -> Output
+dumpCache ready =
+    case getCache ready of
+        Nothing ->
+            DoNothingO
+
+        Just cache ->
+            WriteFileO (cachePath $ root ready) (encodeCache cache)
+
+
+cachePath :: RootPath -> FilePath
+cachePath (RootPath root) =
+    root </> "memCache"
+
+
+encodeCache :: MemCache -> Bl.ByteString
+encodeCache memCache =
+     mconcat
+        [ encodeCryptoKeys $ keys memCache
+        , encodeHandshakes $ handshakesM memCache
+        , encodeWhitelist $ whitelistM memCache
+        ]
+
+
+getCache :: Ready -> Maybe MemCache
+getCache ready =
     case authStatus ready of
         GettingPowInfoA ->
-            DoNothingO
+            Nothing
 
         GeneratingSessionKey _ _ ->
-            DoNothingO
+            Nothing
 
         AwaitingUsername _ _ ->
-            DoNothingO
+            Nothing
 
         LoggedIn keys ->
-            cacheCryptoHelp (root ready) keys (handshakes ready)
+            Just $ MemCache
+                { keys
+                , handshakesM = handshakes ready
+                , whitelistM = whitelist ready
+                }
 
 
-cacheCryptoHelp
-    :: RootPath
-    -> StaticKeys
-    -> Map.Map HandshakeId Handshake
-    -> Output
-cacheCryptoHelp rootPath keys handshakes =
-    WriteFileO (keysPath rootPath) $ mconcat
-        [ encodeCryptoKeys keys
-        , encodeHandshakes handshakes
-        ]
+encodeWhitelist :: Set.Set UserId -> Bl.ByteString
+encodeWhitelist whitelist =
+    let
+        asList = Set.toList whitelist
+    in
+        encodeUint32 (length asList) <>
+        mconcat (map encodeUserId asList)
 
 
 encodeCryptoKeys :: StaticKeys -> Bl.ByteString
@@ -1711,14 +1754,24 @@ fromFrontendP = do
     return input
 
 
+addToWhitelistUpdate :: UserId -> Ready -> (Output, State)
+addToWhitelistUpdate userId ready =
+    let
+        newReady :: Ready
+        newReady =
+            ready { whitelist = Set.insert userId (whitelist ready) }
+    in
+        (dumpCache newReady, ReadyS newReady)
+
+
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
-uiApiUpdate apiInput _ =
+uiApiUpdate apiInput model =
     case apiInput of
         NewMessageA _ _ ->
             undefined
 
-        AddToWhitelist _ ->
-            undefined
+        AddToWhitelist userId ->
+            updateReady model $ addToWhitelistUpdate userId
 
         RemoveFromWhitelist _ ->
             undefined
@@ -1955,42 +2008,51 @@ fileContentsUpdate path contents init_ =
     pass = (DoNothingO, InitS init_)
 
 
-type Handshakes
-    = Map.Map HandshakeId Handshake
-
-
 parseCrypto
     :: Bl.ByteString
-    -> Either String (StaticKeys, Handshakes)
+    -> Either String MemCache
 parseCrypto raw =
-    P.eitherResult $ P.parse cryptoP raw
+    P.eitherResult $ P.parse memCacheP raw
 
 
-cryptoP :: P.Parser (StaticKeys, Handshakes)
-cryptoP = do
+data MemCache
+    = MemCache
+        { keys :: StaticKeys
+        , handshakesM :: Map.Map HandshakeId Handshake
+        , whitelistM :: Set.Set UserId
+        }
+
+
+memCacheP :: P.Parser MemCache
+memCacheP = do
     keys <- myKeysP
-    handshakes <- handshakesP
-    return (keys, handshakes)
+    handshakesM <- handshakesP
+    whitelistM <- whitelistP
+    P.endOfInput
+    return $ MemCache {keys, handshakesM, whitelistM}
+
+
+whitelistP :: P.Parser (Set.Set UserId)
+whitelistP = do
+    numWhites <- uint32P
+    asList <- P.count numWhites userIdP
+    return $ Set.fromList asList
 
 
 handshakesP :: P.Parser (Map.Map HandshakeId Handshake)
 handshakesP = do
-    asList <- handshakesHelpP []
+    numshakes <- uint32P
+    asList <- P.count numshakes handshakeP
     return $ Map.fromList asList
 
 
-handshakesHelpP
-    :: [(HandshakeId, Handshake)]
-    -> P.Parser [(HandshakeId, Handshake)]
-handshakesHelpP accum =
-    P.choice
-        [ do
-            handshake <- handshakeP
-            handshakesHelpP (handshake : accum)
-        , do
-            P.endOfInput
-            return accum
-        ]
+uint32P :: P.Parser Int
+uint32P = do
+    b0 <- uint8P
+    b1 <- uint8P
+    b2 <- uint8P
+    b3 <- uint8P
+    return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
 
 
 handshakeP :: P.Parser (HandshakeId, Handshake)
@@ -2095,9 +2157,11 @@ myKeysP = do
         Just dhKeys ->
             return $
                 StaticKeys
-                    (MyStatic dhKeys)
-                    (SessionKey $ Bl.fromStrict sessionKey)
-                    userId
+                    { staticDh = MyStatic dhKeys
+                    , sessionKey =
+                        SessionKey $ Bl.fromStrict sessionKey
+                    , userId = userId
+                    }
 
 
 rawKeysUpdate
@@ -2113,19 +2177,23 @@ rawKeysUpdate rawCrypto root newDhKeys times =
             , FailedS
             )
 
-        Right (keys@(StaticKeys _ session uId), handshakes) ->
+        Right memCache ->
             ( BatchO
-                [ BytesInQO toServerQ $ logIn session uId
+                [ BytesInQO toServerQ $
+                  logIn (sessionKey $ keys memCache) $
+                  userId $
+                  keys memCache
                 ]
             , ReadyS $ Ready
                 { root
                 , blobsUp = NoJobs
                 , getBlob = NoJobs
                 , messageLocks = Set.empty
-                , authStatus = LoggedIn keys
-                , handshakes
+                , authStatus = LoggedIn $ keys memCache
+                , handshakes = handshakesM memCache
                 , newDhKeys
                 , theTime = times
+                , whitelist = whitelistM memCache
                 }
             )
 
