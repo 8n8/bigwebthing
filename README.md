@@ -314,8 +314,8 @@ index
         8 bytes: POSIX time of latest message
         24 bytes: message ID
         
-crypto
-    A binary file containing all my keys, sessions, and other crypto information.
+memCache
+    A binary file containing the in-memory cache.
 
 log
 	A log of error messages, for debugging.
