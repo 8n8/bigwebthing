@@ -343,7 +343,7 @@ websocket pending = do
 websocketSend :: Ws.Connection -> IO ()
 websocketSend conn = do
     out <- Stm.atomically $ do
-        q <- toWebsocketQ
+        q <- toFrontendQ
         Q.readTQueue q
     Ws.sendDataMessage conn $ Ws.Binary out
     websocketSend conn
@@ -358,8 +358,8 @@ websocketReceive conn = do
     websocketReceive conn
 
 
-toWebsocketQ :: Q
-toWebsocketQ =
+toFrontendQ :: Q
+toFrontendQ =
     Q.newTQueue
 
 
@@ -976,8 +976,10 @@ fromServerUpdate raw ready =
         Right (PowInfoT difficulty unique) ->
             newPowInfoUpdate difficulty unique ready
 
-        Right (Price _) ->
-            undefined
+        Right (Price price) ->
+            ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
+            , ReadyS ready
+            )
 
         Right (TheirStaticKeyT _ _) ->
             undefined
@@ -1439,8 +1441,8 @@ fromServerP =
                 (Bl.fromStrict unique)
         , do
             _ <- P.word8 3
-            price <- uint32P
-            return $ Price price
+            price <- P.take 4
+            return $ Price $ Bl.fromStrict price
         , do
             _ <- P.word8 4
             owner <- userIdP
@@ -1453,7 +1455,7 @@ data FromServer
     = NewMessageT Username ClientToClient
     | NewUserId UserId
     | PowInfoT Word8 Bl.ByteString
-    | Price Int
+    | Price Bl.ByteString
     | TheirStaticKeyT UserId TheirStaticKey
 
 
@@ -2069,15 +2071,6 @@ uint16P = do
 parseLength :: Bl.ByteString -> Either String Int
 parseLength bytes2 =
     P.eitherResult $ P.parse uint16P bytes2
-
-
-uint32P :: P.Parser Int
-uint32P = do
-    b0 <- uint8P
-    b1 <- uint8P
-    b2 <- uint8P
-    b3 <- uint8P
-    return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
 
 
 uint8P :: P.Parser Int
