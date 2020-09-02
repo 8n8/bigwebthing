@@ -9,6 +9,9 @@ import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.Wai.Handler.Warp (run)
 import qualified Control.Concurrent.STM.TQueue as Q
 import Crypto.Noise.DH.Curve25519 (Curve25519)
+import Crypto.Noise.Hash.BLAKE2s (BLAKE2s)
+import Crypto.Noise.Cipher.ChaChaPoly1305 (ChaChaPoly1305)
+import Crypto.Noise.HandshakePatterns (noiseKK)
 import qualified Crypto.Noise.DH as Dh
 import qualified Crypto.Noise as Noise
 import qualified Data.ByteString as B
@@ -31,6 +34,9 @@ import Control.Concurrent (forkIO, threadDelay)
 import qualified Data.Set as Set
 import qualified Network.Simple.TCP as Tcp
 import qualified Data.Map as Map
+import Control.Exception.Base (SomeException)
+import qualified Data.Time.Clock as Clock
+import Data.Text.Encoding (encodeUtf8)
 
 
 main :: IO ()
@@ -128,7 +134,7 @@ io output =
             return $ Just $ LazyFileContentsM path bytes
 
         WriteFileO path contents -> do
-            B.writeFile path contents
+            Bl.writeFile path contents
             return Nothing
 
         StartTcpClientO -> do
@@ -142,6 +148,17 @@ io output =
         MakeDhKeysO -> do
             keys <- mapM (\_ -> Dh.dhGenKey) ([1..] :: [Integer])
             return $ Just $ NewDhKeysM keys
+
+        GetTimesO -> do
+            times <-
+                mapM
+                    (\_ -> Clock.getCurrentTime)
+                    ([1..] :: [Integer])
+            return $ Just $ TimesM times
+
+        AppendFileO path toAppend -> do
+            _ <- Bl.appendFile path toAppend
+            return Nothing
 
 
 maxMessageLength =
@@ -197,7 +214,8 @@ tcpListen conn = do
                             Just message -> do
                                 Stm.atomically $ do
                                     q <- msgQ
-                                    Q.writeTQueue q $ FromServerM $ Bl.fromStrict message
+                                    Q.writeTQueue q $ FromServerM $
+                                        Bl.fromStrict message
                                 tcpListen conn
 
 
@@ -278,9 +296,11 @@ data Output
     | BytesInQO Q Bl.ByteString
     | CloseFileO Io.Handle
     | ReadFileLazyO FilePath
-    | WriteFileO FilePath B.ByteString
+    | WriteFileO FilePath Bl.ByteString
     | DoesFileExistO FilePath
     | MakeDhKeysO
+    | AppendFileO FilePath Bl.ByteString
+    | GetTimesO
 
 
 data Msg
@@ -300,6 +320,7 @@ data Msg
     | RestartingTcpM
     | FileExistenceM FilePath Bool
     | NewDhKeysM [Dh.KeyPair Curve25519]
+    | TimesM [Clock.UTCTime]
 
 
 websocket :: Ws.ServerApp
@@ -342,7 +363,8 @@ data StaticKeys
     = StaticKeys MyStatic SessionKey UserId
 
 
-newtype Hash32 = Hash32 B.ByteString
+newtype Hash32
+    = Hash32 B.ByteString
 
 
 data BlobUpWait
@@ -382,12 +404,15 @@ data State
     | InitS Init
     | FailedS
 
+
 data Init
     = EmptyI
     | MakingRootDirI RootPath
     | MakingDhKeysI RootPath
-    | DoKeysExistI RootPath [Dh.KeyPair Curve25519]
-    | GettingKeysFromFileI RootPath [Dh.KeyPair Curve25519]
+    | GettingTimes RootPath [Dh.KeyPair Curve25519]
+    | DoKeysExistI RootPath [Dh.KeyPair Curve25519] [Clock.UTCTime]
+    | GettingKeysFromFileI
+        RootPath [Dh.KeyPair Curve25519] [Clock.UTCTime]
 
 
 data Ready = Ready
@@ -395,10 +420,10 @@ data Ready = Ready
     , blobsUp :: Jobs BlobUp BlobUpWait
     , getBlob :: Jobs GetBlob GetBlobWait
     , messageLocks :: Set.Set MessageId
-    , sendingEphemeral :: Bool
     , authStatus :: AuthStatus
     , handshakes :: Map.Map HandshakeId Handshake
     , newDhKeys :: [Dh.KeyPair Curve25519]
+    , theTime :: [Clock.UTCTime]
     }
 
 
@@ -458,7 +483,7 @@ instance Ord PublicEphemeral where
 
 data Handshake
     = Initiator InitiatorHandshake
-    | Responder ResponderHandshake
+    | ResponderSentEncryptedE MyEphemeral
 
 
 data InitiatorHandshake
@@ -466,9 +491,8 @@ data InitiatorHandshake
     | ReceivedEncryptedE EncryptedEphemeral
 
 
-data ResponderHandshake
-    = ReceivedPlainE
-    | SentEncryptedE EncryptedEphemeral
+newtype MyEphemeral
+    = MyEphemeral (Dh.KeyPair Curve25519)
 
 
 newtype EncryptedEphemeral
@@ -533,7 +557,9 @@ updateOnLazyFileContents path bytes ready =
                 (DoNothingO, ReadyS ready)
 
 
-promoteGetBlob :: Jobs GetBlob GetBlobWait -> Jobs GetBlob GetBlobWait
+promoteGetBlob
+    :: Jobs GetBlob GetBlobWait
+    -> Jobs GetBlob GetBlobWait
 promoteGetBlob jobs =
     case jobs of
         NoJobs ->
@@ -645,6 +671,36 @@ update model msg =
         NewDhKeysM keys ->
             updateInit model $ newDhKeysUpdate keys
 
+        TimesM times ->
+            updateInit model $ updateOnTimes times
+
+
+updateOnTimes :: [Clock.UTCTime] -> Init -> (Output, State)
+updateOnTimes times init_ =
+    case init_ of
+        EmptyI ->
+            pass
+
+        MakingRootDirI _ ->
+            pass
+
+        MakingDhKeysI _ ->
+            pass
+
+        GettingTimes root dhKeys ->
+            ( DoesFileExistO $ keysPath root
+            , InitS $ DoKeysExistI root dhKeys times
+            )
+
+        DoKeysExistI _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ ->
+            pass
+
+  where
+    pass = (DoNothingO, InitS init_)
+
 
 newDhKeysUpdate :: [Dh.KeyPair Curve25519] -> Init -> (Output, State)
 newDhKeysUpdate newKeys init_ =
@@ -656,14 +712,15 @@ newDhKeysUpdate newKeys init_ =
             pass
 
         MakingDhKeysI root ->
-            ( DoesFileExistO $ keysPath root
-            , InitS $ DoKeysExistI root newKeys
-            )
+            (GetTimesO, InitS $ GettingTimes root newKeys)
 
-        DoKeysExistI _ _ ->
+        GettingTimes _ _ ->
             pass
 
-        GettingKeysFromFileI _ _ ->
+        DoKeysExistI _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ ->
             pass
 
   where
@@ -686,11 +743,14 @@ fileExistenceUpdate path exists init_ =
         MakingDhKeysI _ ->
             pass
 
-        DoKeysExistI root newKeys ->
+        GettingTimes _ _ ->
+            pass
+
+        DoKeysExistI root newKeys times ->
             case (exists, path == keysPath root) of
                 (True, True) ->
                     ( ReadFileO $ keysPath root
-                    , InitS $ GettingKeysFromFileI root newKeys
+                    , InitS $ GettingKeysFromFileI root newKeys times
                     )
 
                 (True, False) ->
@@ -703,17 +763,17 @@ fileExistenceUpdate path exists init_ =
                         , blobsUp = NoJobs
                         , getBlob = NoJobs
                         , messageLocks = Set.empty
-                        , sendingEphemeral = False
                         , authStatus = GettingPowInfoA
                         , handshakes = Map.empty
                         , newDhKeys = newKeys
+                        , theTime = times
                         }
                     )
 
                 (False, False) ->
                     pass
 
-        GettingKeysFromFileI _ _ ->
+        GettingKeysFromFileI _ _ _ ->
             pass
 
   where
@@ -753,15 +813,16 @@ logIn (SessionKey sessionKey) (UserId (Username username) _) =
 
 
 fromServerUpdate :: Bl.ByteString -> Ready -> (Output, State)
-fromServerUpdate raw _ =
+fromServerUpdate raw ready =
     case P.eitherResult $ P.parse fromServerP raw of
         Left err ->
-            ( ErrorO $ "could not parse TCP message: " ++ err
-            , FailedS
-            )
+            logErr ready $ T.concat
+                [ "could not parse server message: "
+                , T.pack err
+                ]
 
-        Right (NewMessageT _ _) ->
-            undefined
+        Right (NewMessageT username message) ->
+            messageInUpdate username message ready
 
         Right (NewUserId _) ->
             undefined
@@ -774,6 +835,370 @@ fromServerUpdate raw _ =
 
         Right (TheirStaticKeyT _ _) ->
             undefined
+
+
+num1stShakes =
+    333
+
+
+ciphertextP :: P.Parser Ciphertext
+ciphertextP = do
+    P.choice
+        [ fmap FirstHandshakes firstShakesP
+        , fmap SecondHandshakes secondShakesP
+        , fmap TransportC transportP
+        ]
+
+
+secondShakeLen =
+    64
+
+
+secondShakesP :: P.Parser [SecondHandshake]
+secondShakesP = do
+    _ <- P.word8 1
+    P.many1 secondShakeP
+
+
+secondShakeP :: P.Parser SecondHandshake
+secondShakeP = do
+    key <- publicEphemeralP
+    msg <- P.take secondShakeLen
+    return $ SecondHandshake key $ Bl.fromStrict msg
+
+
+noiseTransportLen =
+    15958
+
+
+transportP :: P.Parser Transport
+transportP = do
+    _ <- P.word8 2
+    key <- publicEphemeralP
+    noise <- P.take noiseTransportLen
+    return $ Transport key $ Bl.fromStrict noise
+
+
+firstShakesP :: P.Parser [PublicEphemeral]
+firstShakesP = do
+    _ <- P.word8 0
+    P.count num1stShakes publicEphemeralP
+
+
+publicKeyLen =
+    32
+
+
+publicEphemeralP :: P.Parser PublicEphemeral
+publicEphemeralP = do
+    fmap (PublicEphemeral . Bl.fromStrict) $ P.take publicKeyLen
+
+
+logErr :: Ready -> T.Text -> (Output, State)
+logErr ready err =
+    case theTime ready of
+        [] ->
+            ( ErrorO "no timestamps available", FailedS)
+
+        t : ime ->
+            ( AppendFileO (logPath $ root ready) .
+              Bl.fromStrict .
+              encodeUtf8 $
+              T.pack (show t) <> " " <> err <> "\n"
+            , ReadyS $ ready { theTime = ime }
+            )
+
+
+messageInUpdate
+    :: Username
+    -> ClientToClient
+    -> Ready
+    -> (Output, State)
+messageInUpdate from (ClientToClient raw) ready =
+    case P.eitherResult $ P.parse ciphertextP raw of
+        Left err ->
+            logErr ready $
+                "could not parse ciphertext: " <> T.pack err
+
+        Right (FirstHandshakes msgs) ->
+            firstHandshakesUpdate from ready msgs
+
+        Right (SecondHandshakes _) ->
+            undefined
+
+        Right (TransportC _) ->
+            undefined
+
+
+firstHandshakesUpdate
+    :: Username
+    -> Ready
+    -> [PublicEphemeral]
+    -> (Output, State)
+firstHandshakesUpdate from ready msgs =
+    let
+        myEphemerals = map MyEphemeral $
+            take num1stShakes $ newDhKeys ready
+        newHandshakes =
+            makeResponderShakes myEphemerals msgs from
+        dhKeys = drop num1stShakes $ newDhKeys ready
+        newReady = ready
+            { newDhKeys = dhKeys
+            , handshakes =
+                Map.union (handshakes ready) newHandshakes
+            } 
+            
+    in case authStatus ready of
+        GettingPowInfoA ->
+            pass
+
+        GeneratingStaticKeys _ ->
+            pass
+
+        AwaitingUsername _ _ ->
+            pass
+
+        LoggedIn (StaticKeys myStatic _ _) ->
+            case sendNoiseKK2s myEphemerals msgs myStatic from of
+                Left err ->
+                    logErr newReady err
+
+                Right kk2s ->
+                    ( BatchO [kk2s, cacheCrypto ready]
+                    , ReadyS newReady
+                    )
+
+  where
+    pass = (DoNothingO, ReadyS ready)
+
+
+logPath :: RootPath -> FilePath
+logPath (RootPath root) =
+    root </> "log"
+
+
+makeResponderShakes
+    :: [MyEphemeral]
+    -> [PublicEphemeral]
+    -> Username
+    -> Map.Map HandshakeId Handshake
+makeResponderShakes myNewEphemerals firstShakes from =
+    Map.fromList $ map (makeResponderShake from) $
+        zip myNewEphemerals firstShakes
+
+
+makeResponderShake
+    :: Username
+    -> (MyEphemeral, PublicEphemeral)
+    -> (HandshakeId, Handshake)
+makeResponderShake from (myEphemeral, theirEphemeral) =
+    ( HandshakeId from theirEphemeral
+    , ResponderSentEncryptedE myEphemeral
+    )
+
+
+sendNoiseKK2s
+    :: [MyEphemeral]
+    -> [PublicEphemeral]
+    -> MyStatic
+    -> Username
+    -> Either T.Text Output
+sendNoiseKK2s myEphemerals firsts myStatic from =
+    let
+        max2nd = 166
+        zipped = zip myEphemerals firsts
+        first166 = take max2nd zipped
+        second166 = take max2nd $ drop max2nd zipped
+        third = drop (2 * max2nd) zipped
+        eitherChunks =
+            map
+                (make2ndNoise from myStatic)
+                [first166, second166, third]
+    in case allRight eitherChunks of
+        Left err ->
+            Left err
+
+        Right chunks ->
+            Right $ BatchO $ map (BytesInQO toServerQ) chunks
+                
+
+make2ndNoise
+    :: Username
+    -> MyStatic
+    -> [(MyEphemeral, PublicEphemeral)]
+    -> Either T.Text Bl.ByteString
+make2ndNoise (Username username) myStatic noises1 =
+    let
+        eitherNoises = map (makeOne2ndNoise myStatic) noises1
+    in case allRight eitherNoises of
+        Left err ->
+            Left err
+
+        Right noises2 ->
+            Right $ mconcat
+                [ Bl.singleton 3
+                , username
+                , Bl.singleton 1
+                , mconcat noises2
+                ]
+
+
+allRight :: [Either a b] -> Either a [b]
+allRight eithers =
+    allRightHelp eithers []
+
+
+allRightHelp :: [Either a b] -> [b] -> Either a [b]
+allRightHelp eithers accum =
+    case eithers of
+        [] ->
+            Right $ reverse accum
+
+        Left l : _ ->
+            Left l
+
+        Right r : remains ->
+            allRightHelp remains (r : accum)
+
+
+responderOptions
+    :: MyStatic
+    -> MyEphemeral
+    -> Noise.HandshakeOpts Curve25519
+responderOptions (MyStatic myStatic) (MyEphemeral myEphemeral) =
+    Noise.setLocalStatic (Just myStatic) .
+    Noise.setLocalEphemeral (Just myEphemeral) $
+    Noise.defaultHandshakeOpts Noise.ResponderRole ""
+
+
+type NoiseState
+    = Noise.NoiseState ChaChaPoly1305 Curve25519 BLAKE2s
+
+
+makeOne2ndNoise
+    :: MyStatic
+    -> (MyEphemeral, PublicEphemeral)
+    -> Either T.Text Bl.ByteString
+makeOne2ndNoise
+    myStatic
+    (myEphemeral, PublicEphemeral refKey) =
+
+    let
+        options = responderOptions myStatic myEphemeral
+        noise0 = Noise.noiseState options noiseKK :: NoiseState
+        msg0 = Noise.convert $ Bl.toStrict refKey
+    in case Noise.readMessage msg0 noise0 of
+        Noise.NoiseResultMessage _ noise1 ->
+            case Noise.writeMessage "" noise1 of
+                Noise.NoiseResultMessage secondShake _ ->
+                    Right $ Bl.fromStrict $ Noise.convert secondShake
+
+                Noise.NoiseResultNeedPSK _ ->
+                    Left needPskErr
+
+                Noise.NoiseResultException err ->
+                    Left $ noiseException err
+
+        Noise.NoiseResultNeedPSK _ ->
+            Left needPskErr
+
+        Noise.NoiseResultException err ->
+            Left $ noiseException err
+                
+
+needPskErr =
+    "could not decrypt first handshake message: NoiseResultNeedPSK"
+
+
+noiseException :: SomeException -> T.Text
+noiseException err =
+    "could not decrypt first handshake message: " <>
+    "NoiseResultException: " <>
+    T.pack (show err)
+
+
+cacheCrypto :: Ready -> Output
+cacheCrypto ready =
+    case authStatus ready of
+        GettingPowInfoA ->
+            DoNothingO
+
+        GeneratingStaticKeys _ ->
+            DoNothingO
+
+        AwaitingUsername _ _ ->
+            DoNothingO
+
+        LoggedIn keys ->
+            cacheCryptoHelp (root ready) keys (handshakes ready)
+
+
+cacheCryptoHelp
+    :: RootPath
+    -> StaticKeys
+    -> Map.Map HandshakeId Handshake
+    -> Output
+cacheCryptoHelp rootPath keys handshakes =
+    WriteFileO (keysPath rootPath) $ mconcat
+        [ encodeCryptoKeys keys
+        , encodeHandshakes handshakes
+        ]
+
+
+encodeCryptoKeys :: StaticKeys -> Bl.ByteString
+encodeCryptoKeys
+    (StaticKeys
+        (MyStatic (secret, _))
+        (SessionKey sessionKey)
+        userId) =
+
+    mconcat
+        [ sessionKey
+        , encodeUserId userId
+        , Bl.fromStrict $ Noise.convert $ Dh.dhSecToBytes secret
+        ]
+
+
+encodeUserId :: UserId -> Bl.ByteString
+encodeUserId (UserId (Username u) (Fingerprint f)) =
+    u <> f
+
+
+encodeHandshakes :: Map.Map HandshakeId Handshake -> Bl.ByteString
+encodeHandshakes =
+    mconcat . map encodeHandshake . Map.toList
+
+
+encodeHandshake :: (HandshakeId, Handshake) -> Bl.ByteString
+encodeHandshake (id_, shake) =
+    encodeHandshakeId id_ <> encodeHandshakeShake shake
+
+
+encodeHandshakeId :: HandshakeId -> Bl.ByteString
+encodeHandshakeId (HandshakeId (Username u) (PublicEphemeral e)) =
+    u <> e
+
+
+encodeHandshakeShake :: Handshake -> Bl.ByteString
+encodeHandshakeShake h =
+    case h of
+        Initiator i ->
+            mconcat
+                [ Bl.singleton 0
+                , case i of
+                    SentPlainE ->
+                        Bl.singleton 0
+
+                    ReceivedEncryptedE (EncryptedEphemeral e) ->
+                        Bl.singleton 1 <> e
+                ]
+            
+        ResponderSentEncryptedE (MyEphemeral (secret, _)) ->
+            mconcat
+                [ Bl.singleton 1
+                , Bl.fromStrict $ Noise.convert $
+                    Dh.dhSecToBytes secret
+                ]
 
 
 toServerQ :: Q
@@ -790,12 +1215,12 @@ fromServerP =
     P.choice
         [ do
             _ <- P.word8 0
-            userId <- userIdP
+            username <- usernameP
             messageIn <- fmap
-                (MessageIn . Bl.fromStrict)
+                (ClientToClient . Bl.fromStrict)
                 (P.take messageInLength)
             P.endOfInput
-            return $ NewMessageT userId messageIn
+            return $ NewMessageT username messageIn
         , do
             _ <- P.word8 1
             userId <- userIdP
@@ -820,19 +1245,33 @@ fromServerP =
 
 
 data FromServer
-    = NewMessageT UserId MessageIn
+    = NewMessageT Username ClientToClient
     | NewUserId UserId
     | PowInfoT Word8 Bl.ByteString
     | Price Int
     | TheirStaticKeyT UserId TheirStaticKey
 
 
+data Ciphertext
+    = FirstHandshakes [PublicEphemeral]
+    | SecondHandshakes [SecondHandshake]
+    | TransportC Transport
+
+
+data SecondHandshake
+    = SecondHandshake PublicEphemeral Bl.ByteString
+
+
+data Transport
+    = Transport PublicEphemeral Bl.ByteString
+
+
 newtype TheirStaticKey
     = TheirStaticKey Bl.ByteString
 
 
-newtype MessageIn
-    = MessageIn Bl.ByteString
+newtype ClientToClient
+    = ClientToClient Bl.ByteString
 
 
 onGetBlobUpdate :: Bl.ByteString -> Q -> Ready -> (Output, State)
@@ -1128,7 +1567,8 @@ onMovedFile new ready =
                 let
                     (output, newModel) = update
                         (ReadyS $ ready
-                            { blobsUp = promoteBlobsUp $ blobsUp ready
+                            { blobsUp =
+                                promoteBlobsUp $ blobsUp ready
                             })
                         (SetBlobM blob newQ)
                 in
@@ -1292,12 +1732,15 @@ fileContentsUpdate path contents init_ =
         MakingDhKeysI _ ->
             pass
 
-        DoKeysExistI _ _ ->
+        GettingTimes _ _ ->
             pass
 
-        GettingKeysFromFileI root dhKeys ->
+        DoKeysExistI _ _ _ ->
+            pass
+
+        GettingKeysFromFileI root dhKeys times ->
             if path == keysPath root then
-                rawKeysUpdate contents root dhKeys
+                rawKeysUpdate contents root dhKeys times
             else
                 pass
 
@@ -1309,7 +1752,9 @@ type Handshakes
     = Map.Map HandshakeId Handshake
 
 
-parseCrypto :: Bl.ByteString -> Either String (StaticKeys, Handshakes)
+parseCrypto
+    :: Bl.ByteString
+    -> Either String (StaticKeys, Handshakes)
 parseCrypto raw =
     P.eitherResult $ P.parse cryptoP raw
 
@@ -1346,7 +1791,7 @@ handshakeP = do
     handshakeId <- handshakeIdP
     handshake <- P.choice
         [ fmap Initiator initiatorP
-        , fmap Responder responderP
+        , responderP
         ]
     return (handshakeId, handshake)
 
@@ -1365,23 +1810,34 @@ initiatorP = do
         ]
 
 
-responderP :: P.Parser ResponderHandshake
+responderP :: P.Parser Handshake
 responderP = do
     _ <- P.word8 1
-    P.choice
-        [ do
-            _ <- P.word8 0
-            return ReceivedPlainE
-        , do
-            _ <- P.word8 1
-            ephemeral <- encryptedEphemeralP
-            return $ SentEncryptedE ephemeral
-        ]
+    myEphemeral <- myEphemeralP
+    return $ ResponderSentEncryptedE myEphemeral
+
+
+secretKeyLen =
+    32
+
+
+myEphemeralP :: P.Parser MyEphemeral
+myEphemeralP = do
+    rawSecret <- P.take secretKeyLen
+    case Dh.dhBytesToPair $ Noise.convert rawSecret of
+        Nothing ->
+            fail "could not convert bytes to DH key pair"
+
+        Just keypair ->
+            return $ MyEphemeral keypair
 
 
 encryptedEphemeralP :: P.Parser EncryptedEphemeral
 encryptedEphemeralP =
-    fmap EncryptedEphemeral $ fmap Bl.fromStrict $ P.take $ 16 + 32 + 16
+    fmap EncryptedEphemeral $
+    fmap Bl.fromStrict $
+    P.take $
+    16 + 32 + 16
 
 
 handshakeIdP :: P.Parser HandshakeId
@@ -1433,7 +1889,7 @@ myKeysP :: P.Parser StaticKeys
 myKeysP = do
     sessionKey <- P.take sessionKeyLength
     userId <- userIdP
-    rawDhKey <- P.takeByteString
+    rawDhKey <- P.take secretKeyLen
     case Dh.dhBytesToPair $ Noise.convert rawDhKey of
         Nothing ->
             fail "could not parse secret key from file"
@@ -1450,8 +1906,9 @@ rawKeysUpdate
     :: Bl.ByteString
     -> RootPath
     -> [Dh.KeyPair Curve25519]
+    -> [Clock.UTCTime]
     -> (Output, State)
-rawKeysUpdate rawCrypto root newKeys =
+rawKeysUpdate rawCrypto root newDhKeys times =
     case parseCrypto rawCrypto of
         Left err ->
             ( ErrorO $ "could not parse static keys: " <> err
@@ -1460,18 +1917,17 @@ rawKeysUpdate rawCrypto root newKeys =
 
         Right (keys@(StaticKeys _ session uId), handshakes) ->
             ( BatchO
-                [ BytesInQO toWebsocketQ (Bl.singleton 11)
-                , BytesInQO toServerQ $ logIn session uId
+                [ BytesInQO toServerQ $ logIn session uId
                 ]
             , ReadyS $ Ready
                 { root
                 , blobsUp = NoJobs
                 , getBlob = NoJobs
                 , messageLocks = Set.empty
-                , sendingEphemeral = False
                 , authStatus = LoggedIn keys
-                , handshakes = handshakes
-                , newDhKeys = newKeys
+                , handshakes
+                , newDhKeys
+                , theTime = times
                 }
             )
 
@@ -1497,10 +1953,13 @@ dirCreatedUpdate path initModel =
         MakingDhKeysI _ ->
             pass
 
-        DoKeysExistI _ _ ->
+        GettingTimes _ _ ->
             pass
 
-        GettingKeysFromFileI _ _ ->
+        DoKeysExistI _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ ->
             pass
 
   where

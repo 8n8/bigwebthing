@@ -37,6 +37,7 @@ dependencies:
 - base64-bytestring
 - containers
 - network-simple
+- time
 
 library:
   source-dirs: src

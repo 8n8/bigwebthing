@@ -156,7 +156,7 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 	New message from another user (AUTH)
 		1 byte: 0
         8 bytes: sender username
-        15991 bytes: the message
+        <= 15991 bytes: the message
     New username (AUTH)
         1 byte: 1
         8 bytes: username
@@ -188,7 +188,7 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 	Send message (AUTH)
 		1 byte: 3
 		8 bytes: recipient username
-		15991 bytes: message
+		<= 15991 bytes: message
 	Delete message (AUTH)
 		1 byte: 4
 		32 bytes: message hash
@@ -208,9 +208,7 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 
 ## API
 
-A message is a tarred Git repository.
-
-Then the message is sliced up into chunks, each chunk is encrypted, and is sent.
+The message or blob is sliced up into chunks, each chunk is encrypted, and is sent.
 
 Before encryption, a chunk must be exactly 15942 bytes long. A chunk is encoded like this:
 
@@ -236,24 +234,20 @@ Before encryption, a chunk must be exactly 15942 bytes long. A chunk is encoded 
 
 ## Crypto
 
-The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have a public static key, and some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are 15991 bytes long:
+The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have a public static key, and some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are <= 15991 bytes long:
 
-15991 bytes
     either some fresh first handshake messages
         1 byte: 0
         15984 bytes: 333 48-byte messages
             32 bytes: plain-text ephemeral key
             16 bytes: overhead of empty payload
-        6 bytes: padding
     or some fresh second handshake messages
         1 byte: 1
-        1 byte: number of messages
         the messages, 96 bytes each (max 166 will fit)
             32 bytes: initial ephemeral key
                 used as the unique session reference
             16 + 32 bytes: encrypted ephemeral key
             16 bytes: overhead of empty payload
-        padding
     or a transport message
         1 byte: 2
         32 bytes: initial ephemeral key
@@ -311,7 +305,7 @@ blobs/
     A flat folder of binaries, named by their hash.
 
 messages
-    A ZPAQ archive containing all the messages, named by message ID.
+    A flat folder of ZPAQ archives, one per message chain, named by chain ID.
 
 index
     A file containing an index entry for each message chain
