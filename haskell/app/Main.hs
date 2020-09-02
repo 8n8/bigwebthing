@@ -506,7 +506,7 @@ data PowInfo
 data AuthStatus
     = GettingPowInfoA
     | GeneratingStaticKeys PowInfo
-    | AwaitingUsername (Dh.KeyPair Curve25519) SessionKey
+    | AwaitingUsername MyStatic SessionKey
     | LoggedIn StaticKeys
 
 
@@ -824,8 +824,8 @@ fromServerUpdate raw ready =
         Right (NewMessageT username message) ->
             messageInUpdate username message ready
 
-        Right (NewUserId _) ->
-            undefined
+        Right (NewUserId userId) ->
+            newUserIdUpdate userId ready
 
         Right (PowInfoT _ _) ->
             undefined
@@ -835,6 +835,41 @@ fromServerUpdate raw ready =
 
         Right (TheirStaticKeyT _ _) ->
             undefined
+
+
+newUserIdUpdate :: UserId -> Ready -> (Output, State)
+newUserIdUpdate userId ready =
+    case authStatus ready of
+        GettingPowInfoA ->
+            pass
+
+        GeneratingStaticKeys _ ->
+            pass
+
+        AwaitingUsername staticKeys sessionKey ->
+            let
+                newReady =
+                    ready
+                        { authStatus = LoggedIn $
+                            StaticKeys staticKeys sessionKey userId
+                        }
+            in
+                ( BatchO
+                    [ BytesInQO toServerQ (logIn sessionKey userId)
+                    , cacheCrypto newReady
+                    ]
+                , ReadyS newReady
+                )
+
+        LoggedIn _ ->
+            logErr
+                ready
+                "received new username but authstatus is LoggedIn"
+
+  where
+    pass = (DoNothingO, ReadyS ready)
+                    
+                
 
 
 num1stShakes =
