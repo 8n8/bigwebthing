@@ -37,6 +37,10 @@ import qualified Data.Map as Map
 import Control.Exception.Base (SomeException)
 import qualified Data.Time.Clock as Clock
 import Data.Text.Encoding (encodeUtf8)
+import System.Entropy (getEntropy)
+import qualified Data.Bits as Bits
+import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
+import qualified Crypto.KDF.Argon2 as Argon2
 
 
 main :: IO ()
@@ -160,6 +164,10 @@ io output =
             _ <- Bl.appendFile path toAppend
             return Nothing
 
+        MakeSessionKeyO -> do
+            key <- getEntropy sessionKeyLength
+            return $ Just $ NewSessionKeyM key
+
 
 maxMessageLength =
     16000
@@ -223,7 +231,7 @@ tcpListen conn = do
 tcpDelay =
     20 * 1000000
 
-        
+
 serverUrl =
     "http://localhost"
 
@@ -283,6 +291,7 @@ clientUrl =
 data Output
     = GetAppDataDirO
     | MakeDirIfMissingO FilePath
+    | MakeSessionKeyO
     | DoNothingO
     | ReadFileO FilePath
     | BatchO [Output]
@@ -321,6 +330,7 @@ data Msg
     | FileExistenceM FilePath Bool
     | NewDhKeysM [Dh.KeyPair Curve25519]
     | TimesM [Clock.UTCTime]
+    | NewSessionKeyM B.ByteString
 
 
 websocket :: Ws.ServerApp
@@ -499,13 +509,9 @@ newtype EncryptedEphemeral
     = EncryptedEphemeral Bl.ByteString
 
 
-data PowInfo
-    = PowInfo Word8 Bl.ByteString
-
-
 data AuthStatus
     = GettingPowInfoA
-    | GeneratingStaticKeys PowInfo
+    | GeneratingSessionKey Word8 Bl.ByteString
     | AwaitingUsername MyStatic SessionKey
     | LoggedIn StaticKeys
 
@@ -674,6 +680,146 @@ update model msg =
         TimesM times ->
             updateInit model $ updateOnTimes times
 
+        NewSessionKeyM rawKey ->
+            updateReady model $ updateOnNewSessionKey rawKey
+
+
+updateOnNewSessionKey :: B.ByteString -> Ready -> (Output, State)
+updateOnNewSessionKey raw ready =
+    case authStatus ready of
+        GettingPowInfoA ->
+            pass
+
+        GeneratingSessionKey difficulty unique ->
+            signUpHelp difficulty unique raw ready
+
+        AwaitingUsername _ _ ->
+            pass
+
+        LoggedIn _ ->
+            pass
+
+  where
+    pass = (DoNothingO, ReadyS ready)
+
+
+signUpHelp
+    :: Word8
+    -> Bl.ByteString
+    -> B.ByteString
+    -> Ready
+    -> (Output, State)
+signUpHelp difficulty unique raw ready =
+    case newDhKeys ready of
+        [] ->
+            (ErrorO "no DH keys", FailedS)
+
+        dh : keys ->
+            let
+                myStatic = MyStatic dh
+                session = SessionKey $ Bl.fromStrict raw
+                newReady = ready
+                    { authStatus =
+                        AwaitingUsername myStatic session
+                    , newDhKeys = keys
+                    }
+                eitherSignUp =
+                    makeSignUp difficulty unique session myStatic
+            in case eitherSignUp of
+                Left err ->
+                    ( ErrorO $ "could not sign up: " <> err
+                    , FailedS
+                    )
+
+                Right signUp ->
+                    ( BatchO
+                        [ BytesInQO toServerQ signUp
+                        , cacheCrypto newReady
+                        ]
+                    , ReadyS newReady
+                    )
+
+
+makeSignUp
+    :: Word8
+    -> Bl.ByteString
+    -> SessionKey
+    -> MyStatic
+    -> Either String Bl.ByteString
+makeSignUp
+    difficulty
+    unique
+    (SessionKey sessionKey)
+    (MyStatic (_, public)) = do
+
+    pow <- makePow difficulty unique
+    return $ mconcat
+        [ Bl.singleton 2
+        , pow
+        , sessionKey
+        , Bl.fromStrict $ Noise.convert $ Dh.dhPubToBytes public
+        ]
+
+
+makePow :: Word8 -> Bl.ByteString -> Either String Bl.ByteString
+makePow difficulty unique =
+    powHelp difficulty unique 0
+
+
+argonOptions :: Argon2.Options
+argonOptions =
+    Argon2.Options
+        { iterations = 1
+        , memory = 64 * 1024
+        , parallelism = 4
+        , variant = Argon2.Argon2id
+        , version = Argon2.Version13
+        }
+
+
+powHelp
+    :: Word8
+    -> Bl.ByteString
+    -> Integer
+    -> Either String Bl.ByteString
+powHelp difficulty unique counter =
+    let
+        candidate = encodeUint8 counter
+        hashE = Argon2.hash
+            argonOptions
+            (Bl.toStrict $ unique <> candidate)
+            (B.singleton 0)
+            powHashLength
+    in case hashE of
+        CryptoPassed hash ->
+            if isDifficult hash difficulty then
+                Right candidate
+
+            else
+                powHelp difficulty unique (counter + 1)
+
+        CryptoFailed err ->
+            Left $ show err
+
+
+encodeUint8 :: Integer -> Bl.ByteString
+encodeUint8 i =
+    Bl.pack $ map (encodeUint8Help i) (take 8 [0..])
+
+
+encodeUint8Help :: Integer -> Int -> Word8
+encodeUint8Help int counter =
+    fromIntegral $ (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
+
+
+powHashLength =
+    32
+
+
+isDifficult :: B.ByteString -> Word8 -> Bool
+isDifficult bytes difficulty =
+    B.all (> difficulty) bytes
+
 
 updateOnTimes :: [Clock.UTCTime] -> Init -> (Output, State)
 updateOnTimes times init_ =
@@ -791,7 +937,7 @@ restartingTcpUpdate ready =
         GettingPowInfoA ->
             startAuth
 
-        GeneratingStaticKeys _ ->
+        GeneratingSessionKey _ _ ->
             startAuth
 
         AwaitingUsername _ _ ->
@@ -827,8 +973,8 @@ fromServerUpdate raw ready =
         Right (NewUserId userId) ->
             newUserIdUpdate userId ready
 
-        Right (PowInfoT _ _) ->
-            undefined
+        Right (PowInfoT difficulty unique) ->
+            newPowInfoUpdate difficulty unique ready
 
         Right (Price _) ->
             undefined
@@ -837,13 +983,40 @@ fromServerUpdate raw ready =
             undefined
 
 
+newPowInfoUpdate
+    :: Word8
+    -> Bl.ByteString
+    -> Ready
+    -> (Output, State)
+newPowInfoUpdate difficulty unique ready =
+    case authStatus ready of
+        GettingPowInfoA ->
+            ( MakeSessionKeyO
+            , ReadyS $ ready
+                { authStatus = GeneratingSessionKey difficulty unique
+                }
+            )
+
+        GeneratingSessionKey _ _ ->
+            pass
+
+        AwaitingUsername _ _ ->
+            pass
+
+        LoggedIn _ ->
+            pass
+
+  where
+    pass = (DoNothingO, ReadyS ready)
+
+
 newUserIdUpdate :: UserId -> Ready -> (Output, State)
 newUserIdUpdate userId ready =
     case authStatus ready of
         GettingPowInfoA ->
             pass
 
-        GeneratingStaticKeys _ ->
+        GeneratingSessionKey _ _ ->
             pass
 
         AwaitingUsername staticKeys sessionKey ->
@@ -868,8 +1041,6 @@ newUserIdUpdate userId ready =
 
   where
     pass = (DoNothingO, ReadyS ready)
-                    
-                
 
 
 num1stShakes =
@@ -981,13 +1152,12 @@ firstHandshakesUpdate from ready msgs =
             { newDhKeys = dhKeys
             , handshakes =
                 Map.union (handshakes ready) newHandshakes
-            } 
-            
+            }
     in case authStatus ready of
         GettingPowInfoA ->
             pass
 
-        GeneratingStaticKeys _ ->
+        GeneratingSessionKey _ _ ->
             pass
 
         AwaitingUsername _ _ ->
@@ -1055,7 +1225,7 @@ sendNoiseKK2s myEphemerals firsts myStatic from =
 
         Right chunks ->
             Right $ BatchO $ map (BytesInQO toServerQ) chunks
-                
+
 
 make2ndNoise
     :: Username
@@ -1139,7 +1309,7 @@ makeOne2ndNoise
 
         Noise.NoiseResultException err ->
             Left $ noiseException err
-                
+
 
 needPskErr =
     "could not decrypt first handshake message: NoiseResultNeedPSK"
@@ -1158,7 +1328,7 @@ cacheCrypto ready =
         GettingPowInfoA ->
             DoNothingO
 
-        GeneratingStaticKeys _ ->
+        GeneratingSessionKey _ _ ->
             DoNothingO
 
         AwaitingUsername _ _ ->
@@ -1227,7 +1397,7 @@ encodeHandshakeShake h =
                     ReceivedEncryptedE (EncryptedEphemeral e) ->
                         Bl.singleton 1 <> e
                 ]
-            
+
         ResponderSentEncryptedE (MyEphemeral (secret, _)) ->
             mconcat
                 [ Bl.singleton 1
