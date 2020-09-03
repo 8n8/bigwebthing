@@ -1156,6 +1156,17 @@ messageInUpdate from (ClientToClient raw) ready =
             undefined
 
 
+secondHandshakesUpdate
+    :: Username
+    -> Ready
+    -> [SecondHandshake]
+    -> (Output, State)
+secondHandshakesUpdate from ready shakes =
+    ( DoNothingO
+    , ReadyS $ ready
+        { handshakes = Map.map 
+
+
 firstHandshakesUpdate
     :: Username
     -> Ready
