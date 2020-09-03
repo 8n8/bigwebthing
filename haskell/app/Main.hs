@@ -1149,8 +1149,8 @@ messageInUpdate from (ClientToClient raw) ready =
         Right (FirstHandshakes msgs) ->
             firstHandshakesUpdate from ready msgs
 
-        Right (SecondHandshakes _) ->
-            undefined
+        Right (SecondHandshakes secondShakes) ->
+            secondHandshakesUpdate from ready secondShakes
 
         Right (TransportC _) ->
             undefined
