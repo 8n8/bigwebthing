@@ -164,13 +164,16 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
         1 byte: 2
 		1 byte: difficulty
 		16 bytes: random
-    Price
+    Price (AUTH)
         1 byte: 3
         4 bytes: monthly price in GBP^(-2)
-    Public static key
+    Public static key (AUTH)
         1 byte: 4
         8 bytes: key owner
         32 bytes: their key
+    Blob (AUTH)
+        1 byte: 5
+        <= 15999 bytes: blob
 
 ### Client to server
 
@@ -203,6 +206,13 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
     Get public static key (AUTH)
         1 byte: 8
         8 bytes: their username
+    Upload blob (AUTH)
+        1 byte: 9
+        <= 15999 bytes: the blob
+    Download blob (AUTH)
+        1 byte: 10
+        32 bytes: hash of blob
+
 
 # Client to client
 
@@ -301,53 +311,25 @@ feminist polish fanfare front barber resume palpable
 
 # Client cache
 
-blobs/
-    A flat folder of binaries, named by their hash.
+blobs
+    A key-value store of binaries, named by 32-byte hash.
 
-messages
-    A flat folder of ZPAQ archives, one per message chain, named by chain ID.
-
-index
-    A file containing an index entry for each message chain
-        sized string: subject of latest message
-        16 bytes: author ID
-        8 bytes: POSIX time of latest message
-        24 bytes: message ID
-        
 memCache
-    A binary file containing the in-memory cache.
+    A binary file containing a dump of the in-memory cache.
 
-log
+log.txt
 	A log of error messages, for debugging.
 
 # Server cache
 
-proofOfWorkDifficulty
-	A file containing the proof of work difficulty.
-price
-	A file containing the price.
-usage limit
-    A file containing the maximum number of messages per month.
-messages/
-	A flat directory of messages, named by counter.
-database
-	message_counts
-		sender username
-        number of messages this month
-    payments
-        username
-        timestamp
-	users
-		username
-		hashed session key
-        static key
-    contacts
-        owner username
-        contact username
-	tofrom
-        counter (to keep messages in order)
-		to username
-		from username
+blobs
+    A key-value store of binaries, with 8-byte locally unique names.
+
+memCache
+    A binary file containing a dump of the in-memory cache.
+
+log.txt
+    Log messages for debugging.
 
 # Pricing
 
