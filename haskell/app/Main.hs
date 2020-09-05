@@ -447,7 +447,11 @@ data Ready = Ready
 
 
 data HandshakeId
-    = HandshakeId Username PublicEphemeral
+    = HandshakeId Username FirstMessage
+
+
+newtype FirstMessage
+    = FirstMessage Bl.ByteString
 
 
 instance Ord HandshakeId where
@@ -481,8 +485,8 @@ instance Ord HandshakeId where
                 EQ
 
 
-instance Eq PublicEphemeral where
-    (==) (PublicEphemeral p1) (PublicEphemeral p2) =
+instance Eq FirstMessage where
+    (==) (FirstMessage p1) (FirstMessage p2) =
         p1 == p2
 
 
@@ -491,12 +495,8 @@ instance Eq HandshakeId where
         u1 == u2 && p1 == p2
 
 
-newtype PublicEphemeral
-    = PublicEphemeral Bl.ByteString
-
-
-instance Ord PublicEphemeral where
-    compare (PublicEphemeral a) (PublicEphemeral b) =
+instance Ord FirstMessage where
+    compare (FirstMessage a) (FirstMessage b) =
         compare a b
 
 
@@ -1146,9 +1146,9 @@ secondShakesP = do
 
 secondShakeP :: P.Parser SecondHandshake
 secondShakeP = do
-    key <- publicEphemeralP
+    msg1 <- firstMessageP
     msg <- P.take secondShakeLen
-    return $ SecondHandshake key $ Bl.fromStrict msg
+    return $ SecondHandshake msg1 $ Bl.fromStrict msg
 
 
 noiseTransportLen =
@@ -1158,24 +1158,24 @@ noiseTransportLen =
 transportP :: P.Parser Transport
 transportP = do
     _ <- P.word8 2
-    key <- publicEphemeralP
+    key <- firstMessageP
     noise <- P.take noiseTransportLen
     return $ Transport key $ Bl.fromStrict noise
 
 
-firstShakesP :: P.Parser [PublicEphemeral]
+firstShakesP :: P.Parser [FirstMessage]
 firstShakesP = do
     _ <- P.word8 0
-    P.count num1stShakes publicEphemeralP
+    P.count num1stShakes firstMessageP
 
 
 publicKeyLen =
     32
 
 
-publicEphemeralP :: P.Parser PublicEphemeral
-publicEphemeralP = do
-    fmap (PublicEphemeral . Bl.fromStrict) $ P.take publicKeyLen
+firstMessageP :: P.Parser FirstMessage
+firstMessageP = do
+    fmap (FirstMessage . Bl.fromStrict) $ P.take publicKeyLen
 
 
 logErr :: Ready -> T.Text -> (Output, State)
@@ -1246,15 +1246,11 @@ add2ndShakes new2ndShakes id_ oldShake =
                     oldShake
 
                 Initiator SentPlainE ->
-                    add2ndShake id_ newMsg
+                    Initiator $ ReceivedEncryptedE $
+                        EncryptedEphemeral newMsg
 
                 Initiator (ReceivedEncryptedE _) ->
                     oldShake
-
-
-add2ndShake :: HandshakeId -> Bl.ByteString -> Handshake
-add2ndShake (HandshakeId username ephemeral) newMsg =
-    Initiator $ ReceivedEncryptedE (EncryptedEphemeral newMsg)
 
 
 make2ndShakeMap
@@ -1276,13 +1272,9 @@ make2ndShakeHelp username (SecondHandshake publicEphemeral msg) =
 firstHandshakesUpdate
     :: Username
     -> Ready
-    -> [PublicEphemeral]
+    -> [FirstMessage]
     -> (Output, State)
 firstHandshakesUpdate from ready msgs =
-    firstHandshakesUpdateHelp from ready msgs
-
-
-firstHandshakesUpdateHelp from ready msgs =
     let
         myEphemerals = map MyEphemeral $
             take num1stShakes $ newDhKeys ready
@@ -1325,7 +1317,7 @@ logPath (RootPath root) =
 
 makeResponderShakes
     :: [MyEphemeral]
-    -> [PublicEphemeral]
+    -> [FirstMessage]
     -> Username
     -> Map.Map HandshakeId Handshake
 makeResponderShakes myNewEphemerals firstShakes from =
@@ -1335,7 +1327,7 @@ makeResponderShakes myNewEphemerals firstShakes from =
 
 makeResponderShake
     :: Username
-    -> (MyEphemeral, PublicEphemeral)
+    -> (MyEphemeral, FirstMessage)
     -> (HandshakeId, Handshake)
 makeResponderShake from (myEphemeral, theirEphemeral) =
     ( HandshakeId from theirEphemeral
@@ -1345,7 +1337,7 @@ makeResponderShake from (myEphemeral, theirEphemeral) =
 
 sendNoiseXX2s
     :: [MyEphemeral]
-    -> [PublicEphemeral]
+    -> [FirstMessage]
     -> MyStatic
     -> Username
     -> Either T.Text Output
@@ -1371,7 +1363,7 @@ sendNoiseXX2s myEphemerals firsts myStatic from =
 make2ndNoise
     :: Username
     -> MyStatic
-    -> [(MyEphemeral, PublicEphemeral)]
+    -> [(MyEphemeral, FirstMessage)]
     -> Either T.Text Bl.ByteString
 make2ndNoise (Username username) myStatic noises1 =
     let
@@ -1420,33 +1412,15 @@ responderOptions
     Noise.defaultHandshakeOpts Noise.ResponderRole ""
 
 
-initiatorOptions
-    :: TheirStatic
-    -> MyStatic
-    -> MyEphemeral
-    -> Noise.HandshakeOpts Curve25519
-initiatorOptions
-    (TheirStatic theirStatic)
-    (MyStatic myStatic)
-    (MyEphemeral myEphemeral) =
-
-    Noise.setRemoteStatic (Just theirStatic) .
-    Noise.setLocalStatic (Just myStatic) .
-    Noise.setLocalEphemeral (Just myEphemeral) $
-    Noise.defaultHandshakeOpts Noise.InitiatorRole ""
-
-
 type NoiseState
     = Noise.NoiseState ChaChaPoly1305 Curve25519 BLAKE2s
 
 
 makeOne2ndNoise
     :: MyStatic
-    -> (MyEphemeral, PublicEphemeral)
+    -> (MyEphemeral, FirstMessage)
     -> Either T.Text Bl.ByteString
-makeOne2ndNoise
-    myStatic
-    (myEphemeral, PublicEphemeral refKey) =
+makeOne2ndNoise myStatic (myEphemeral, FirstMessage refKey) =
 
     let
         options = responderOptions myStatic myEphemeral
@@ -1584,7 +1558,7 @@ encodeHandshake (id_, shake) =
 
 
 encodeHandshakeId :: HandshakeId -> Bl.ByteString
-encodeHandshakeId (HandshakeId (Username u) (PublicEphemeral e)) =
+encodeHandshakeId (HandshakeId (Username u) (FirstMessage e)) =
     u <> e
 
 
@@ -1667,17 +1641,17 @@ data FromServer
 
 
 data Ciphertext
-    = FirstHandshakes [PublicEphemeral]
+    = FirstHandshakes [FirstMessage]
     | SecondHandshakes [SecondHandshake]
     | TransportC Transport
 
 
 data SecondHandshake
-    = SecondHandshake PublicEphemeral Bl.ByteString
+    = SecondHandshake FirstMessage Bl.ByteString
 
 
 data Transport
-    = Transport PublicEphemeral Bl.ByteString
+    = Transport FirstMessage Bl.ByteString
 
 
 newtype TheirStatic
@@ -2308,9 +2282,9 @@ encryptedEphemeralP =
 handshakeIdP :: P.Parser HandshakeId
 handshakeIdP = do
     username <- usernameP
-    publicEphemeral <- fmap PublicEphemeral $
+    firstMessage <- fmap FirstMessage $
         fmap Bl.fromStrict $ P.take 32
-    return $ HandshakeId username publicEphemeral
+    return $ HandshakeId username firstMessage
 
 
 usernameP :: P.Parser Username
