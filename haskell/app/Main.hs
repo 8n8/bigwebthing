@@ -11,7 +11,7 @@ import qualified Control.Concurrent.STM.TQueue as Q
 import Crypto.Noise.DH.Curve25519 (Curve25519)
 import Crypto.Noise.Hash.BLAKE2s (BLAKE2s)
 import Crypto.Noise.Cipher.ChaChaPoly1305 (ChaChaPoly1305)
-import Crypto.Noise.HandshakePatterns (noiseKK)
+import Crypto.Noise.HandshakePatterns (noiseXX)
 import qualified Crypto.Noise.DH as Dh
 import qualified Crypto.Noise as Noise
 import qualified Data.ByteString as B
@@ -440,7 +440,7 @@ data Ready = Ready
     , handshakes :: Map.Map HandshakeId Handshake
     , newDhKeys :: [Dh.KeyPair Curve25519]
     , theTime :: [Clock.UTCTime]
-    , whitelist :: Set.Set UserId
+    , whitelist :: Map.Map Username Fingerprint
     }
 
 
@@ -988,7 +988,7 @@ fromServerUpdate raw ready =
         Right (NewMessageT username message) ->
             messageInUpdate username message ready
 
-        Right (NewUserId userId) ->
+        Right (NewUsername userId) ->
             newUserIdUpdate userId ready
 
         Right (PowInfoT difficulty unique) ->
@@ -998,9 +998,6 @@ fromServerUpdate raw ready =
             ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
             , ReadyS ready
             )
-
-        Right (TheirStaticKeyT _ _) ->
-            undefined
 
 
 newPowInfoUpdate
@@ -1163,8 +1160,56 @@ secondHandshakesUpdate
     -> (Output, State)
 secondHandshakesUpdate from ready shakes =
     ( DoNothingO
-    , ReadyS $ ready
-        { handshakes = Map.map 
+    , let
+        shakeMap = make2ndShakeMap shakes from
+        newShakes = Map.mapWithKey
+            (add2ndShakes shakeMap)
+            (handshakes ready)
+      in ReadyS $ ready { handshakes = newShakes }
+    )
+
+
+add2ndShakes
+    :: Map.Map HandshakeId Bl.ByteString
+    -> HandshakeId
+    -> Handshake
+    -> Handshake
+add2ndShakes new2ndShakes id_ oldShake =
+    case Map.lookup id_ new2ndShakes of
+        Nothing ->
+            oldShake
+
+        Just newMsg ->
+            case oldShake of
+                ResponderSentEncryptedE _ ->
+                    oldShake
+
+                Initiator SentPlainE ->
+                    add2ndShake id_ newMsg
+
+                Initiator (ReceivedEncryptedE _) ->
+                    oldShake
+
+
+add2ndShake :: HandshakeId -> Bl.ByteString -> Handshake
+add2ndShake (HandshakeId username ephemeral) newMsg =
+    Initiator $ ReceivedEncryptedE (EncryptedEphemeral newMsg)
+
+
+make2ndShakeMap
+    :: [SecondHandshake]
+    -> Username
+    -> Map.Map HandshakeId Bl.ByteString
+make2ndShakeMap shakes username =
+    Map.fromList $ map (make2ndShakeHelp username) shakes
+
+
+make2ndShakeHelp
+    :: Username
+    -> SecondHandshake
+    -> (HandshakeId, Bl.ByteString)
+make2ndShakeHelp username (SecondHandshake publicEphemeral msg) =
+    (HandshakeId username publicEphemeral, msg)
 
 
 firstHandshakesUpdate
@@ -1173,6 +1218,18 @@ firstHandshakesUpdate
     -> [PublicEphemeral]
     -> (Output, State)
 firstHandshakesUpdate from ready msgs =
+    case Map.lookup from (whitelist ready) of
+        Nothing ->
+            (logErr ready $ "unsolicited first handshakes from " <>
+                T.pack (show from)
+            , DoNothingO
+            )
+
+        Just (theirStatic, _) ->
+            firstHandshakesUpdateHelp theirStatic from ready msgs
+
+
+firstHandshakesUpdateHelp theirStatic from ready msgs =
     let
         myEphemerals = map MyEphemeral $
             take num1stShakes $ newDhKeys ready
@@ -1195,7 +1252,7 @@ firstHandshakesUpdate from ready msgs =
             pass
 
         LoggedIn (StaticKeys myStatic _ _) ->
-            case sendNoiseKK2s myEphemerals msgs myStatic from of
+            case sendNoiseKK2s myEphemerals msgs myStatic theirStatic from of
                 Left err ->
                     logErr newReady err
 
@@ -1237,9 +1294,10 @@ sendNoiseKK2s
     :: [MyEphemeral]
     -> [PublicEphemeral]
     -> MyStatic
+    -> TheirStatic
     -> Username
     -> Either T.Text Output
-sendNoiseKK2s myEphemerals firsts myStatic from =
+sendNoiseKK2s myEphemerals firsts myStatic theirStatic from =
     let
         max2nd = 166
         zipped = zip myEphemerals firsts
@@ -1248,7 +1306,7 @@ sendNoiseKK2s myEphemerals firsts myStatic from =
         third = drop (2 * max2nd) zipped
         eitherChunks =
             map
-                (make2ndNoise from myStatic)
+                (make2ndNoise from theirStatic myStatic)
                 [first166, second166, third]
     in case allRight eitherChunks of
         Left err ->
@@ -1260,12 +1318,13 @@ sendNoiseKK2s myEphemerals firsts myStatic from =
 
 make2ndNoise
     :: Username
+    -> TheirStatic
     -> MyStatic
     -> [(MyEphemeral, PublicEphemeral)]
     -> Either T.Text Bl.ByteString
-make2ndNoise (Username username) myStatic noises1 =
+make2ndNoise (Username username) theirStatic myStatic noises1 =
     let
-        eitherNoises = map (makeOne2ndNoise myStatic) noises1
+        eitherNoises = map (makeOne2ndNoise theirStatic myStatic) noises1
     in case allRight eitherNoises of
         Left err ->
             Left err
@@ -1298,13 +1357,35 @@ allRightHelp eithers accum =
 
 
 responderOptions
-    :: MyStatic
+    :: TheirStatic
+    -> MyStatic
     -> MyEphemeral
     -> Noise.HandshakeOpts Curve25519
-responderOptions (MyStatic myStatic) (MyEphemeral myEphemeral) =
+responderOptions
+    (TheirStatic theirStatic)
+    (MyStatic myStatic)
+    (MyEphemeral myEphemeral) =
+
+    Noise.setRemoteStatic (Just theirStatic) .
     Noise.setLocalStatic (Just myStatic) .
     Noise.setLocalEphemeral (Just myEphemeral) $
     Noise.defaultHandshakeOpts Noise.ResponderRole ""
+
+
+initiatorOptions
+    :: TheirStatic
+    -> MyStatic
+    -> MyEphemeral
+    -> Noise.HandshakeOpts Curve25519
+initiatorOptions
+    (TheirStatic theirStatic)
+    (MyStatic myStatic)
+    (MyEphemeral myEphemeral) =
+
+    Noise.setRemoteStatic (Just theirStatic) .
+    Noise.setLocalStatic (Just myStatic) .
+    Noise.setLocalEphemeral (Just myEphemeral) $
+    Noise.defaultHandshakeOpts Noise.InitiatorRole ""
 
 
 type NoiseState
@@ -1312,15 +1393,17 @@ type NoiseState
 
 
 makeOne2ndNoise
-    :: MyStatic
+    :: TheirStatic
+    -> MyStatic
     -> (MyEphemeral, PublicEphemeral)
     -> Either T.Text Bl.ByteString
 makeOne2ndNoise
+    theirStatic
     myStatic
     (myEphemeral, PublicEphemeral refKey) =
 
     let
-        options = responderOptions myStatic myEphemeral
+        options = responderOptions theirStatic myStatic myEphemeral
         noise0 = Noise.noiseState options noiseKK :: NoiseState
         msg0 = Noise.convert $ Bl.toStrict refKey
     in case Noise.readMessage msg0 noise0 of
@@ -1484,8 +1567,8 @@ fromServerP =
             return $ NewMessageT username messageIn
         , do
             _ <- P.word8 1
-            userId <- userIdP
-            return $ NewUserId userId
+            username <- usernameP
+            return $ NewUsername username
         , do
             _ <- P.word8 2
             difficulty <- uint8P
@@ -1497,20 +1580,25 @@ fromServerP =
             _ <- P.word8 3
             price <- P.take 4
             return $ Price $ Bl.fromStrict price
-        , do
-            _ <- P.word8 4
-            owner <- userIdP
-            key <- fmap (TheirStaticKey . Bl.fromStrict) $ P.take 32
-            return $ TheirStaticKeyT owner key
         ]
+
+
+theirStaticP :: P.Parser TheirStatic
+theirStaticP = do
+    raw <- P.take 32
+    case Dh.dhBytesToPub $ Noise.convert raw of
+        Nothing ->
+            fail "could not parse their static key"
+
+        Just dhKey ->
+            return $ TheirStatic dhKey
 
 
 data FromServer
     = NewMessageT Username ClientToClient
-    | NewUserId UserId
+    | NewUsername Username
     | PowInfoT Word8 Bl.ByteString
     | Price Bl.ByteString
-    | TheirStaticKeyT UserId TheirStaticKey
 
 
 data Ciphertext
@@ -1527,8 +1615,8 @@ data Transport
     = Transport PublicEphemeral Bl.ByteString
 
 
-newtype TheirStaticKey
-    = TheirStaticKey Bl.ByteString
+newtype TheirStatic
+    = TheirStatic (Dh.PublicKey Curve25519)
 
 
 newtype ClientToClient
@@ -1766,11 +1854,14 @@ fromFrontendP = do
 
 
 addToWhitelistUpdate :: UserId -> Ready -> (Output, State)
-addToWhitelistUpdate userId ready =
+addToWhitelistUpdate (UserId username fingerprint) ready =
     let
         newReady :: Ready
         newReady =
-            ready { whitelist = Set.insert userId (whitelist ready) }
+            ready
+                { whitelist =
+                    Map.insert username fingerprint (whitelist ready)
+                }
     in
         (dumpCache newReady, ReadyS newReady)
 
@@ -2030,7 +2121,7 @@ data MemCache
     = MemCache
         { keys :: StaticKeys
         , handshakesM :: Map.Map HandshakeId Handshake
-        , whitelistM :: Set.Set UserId
+        , whitelistM :: Map.Map Username Fingerprint
         }
 
 
@@ -2043,11 +2134,24 @@ memCacheP = do
     return $ MemCache {keys, handshakesM, whitelistM}
 
 
-whitelistP :: P.Parser (Set.Set UserId)
+whitelistP :: P.Parser (Map.Map Username Fingerprint)
 whitelistP = do
     numWhites <- uint32P
-    asList <- P.count numWhites userIdP
-    return $ Set.fromList asList
+    asList <- P.count numWhites oneWhitelistP
+    return $ Map.fromList asList
+
+
+oneWhitelistP :: P.Parser (Username, Fingerprint)
+oneWhitelistP = do
+    username <- usernameP
+    fingerprint <- fingerprintP
+    return (username, fingerprint)
+
+
+fingerprintP :: P.Parser Fingerprint
+fingerprintP = do
+    raw <- P.take 8
+    return $ Fingerprint $ Bl.fromStrict raw
 
 
 handshakesP :: P.Parser (Map.Map HandshakeId Handshake)
