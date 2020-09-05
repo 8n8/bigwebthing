@@ -167,13 +167,6 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
     Price (AUTH)
         1 byte: 3
         4 bytes: monthly price in GBP^(-2)
-    Public static key (AUTH)
-        1 byte: 4
-        8 bytes: key owner
-        32 bytes: their key
-    Blob (AUTH)
-        1 byte: 5
-        <= 15999 bytes: blob
 
 ### Client to server
 
@@ -187,7 +180,6 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 		1 byte: 2
 		24 bytes: proof of work
 		16 bytes: random session key
-        32 bytes: public static encryption key
 	Send message (AUTH)
 		1 byte: 3
 		8 bytes: recipient username
@@ -197,22 +189,27 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 		32 bytes: message hash
 	Get price (AUTH)
 		1 byte: 5
-    Add contact (AUTH)
+    Upload contacts (AUTH)
         1 byte: 6
-        8 bytes: contact username
-    Remove contact (AUTH)
-        1 byte: 7
-        8 bytes: contact username
-    Get public static key (AUTH)
-        1 byte: 8
-        8 bytes: their username
-    Upload blob (AUTH)
-        1 byte: 9
-        <= 15999 bytes: the blob
-    Download blob (AUTH)
-        1 byte: 10
-        32 bytes: hash of blob
+        sequence of 8-byte usernames
 
+
+# Data synchronisation
+
+For synchronising sets of blobs between clients.
+
+Each side keeps these sets of blob hashes for each contact:
+
+1. the set of blobs they have
+2. the set of blobs I have
+
+The sets can only have elements inserted, never removed.
+
+Whenever either side changes either of these, they send them to the other side.
+
+When I receive a new blob set and I find that I have blobs that they don't, send them one of those blobs.
+
+When I create some new blobs, send one of them to the other side.
 
 # Client to client
 
@@ -220,11 +217,11 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 
 The message or blob is sliced up into chunks, each chunk is encrypted, and is sent.
 
-Before encryption, a chunk must be exactly 15942 bytes long. A chunk is encoded like this:
+Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded like this:
 
-15942 bytes
+15910 bytes
     1 byte: 0 if a message, 1 if a blob
-    15941 bytes
+    15909 bytes
         either the whole message fits in one chunk
             1 byte: 0
             2 bytes: the length of the message
@@ -244,25 +241,23 @@ Before encryption, a chunk must be exactly 15942 bytes long. A chunk is encoded 
 
 ## Crypto
 
-The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have a public static key, and some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are <= 15991 bytes long:
+The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are <= 15991 bytes long:
 
     either some fresh first handshake messages
         1 byte: 0
-        15984 bytes: 333 48-byte messages
-            32 bytes: plain-text ephemeral key
-            16 bytes: overhead of empty payload
+        15968 bytes: 499 32-byte messages
     or some fresh second handshake messages
         1 byte: 1
         the messages, 96 bytes each (max 166 will fit)
-            32 bytes: initial ephemeral key
-                used as the unique session reference
-            16 + 32 bytes: encrypted ephemeral key
+            32 bytes: first handshake message
+            16 + 32 bytes: encrypted static key
             16 bytes: overhead of empty payload
     or a transport message
         1 byte: 2
-        32 bytes: initial ephemeral key
+        32 bytes: first handshake message
             used as the unique session reference
-        15958 bytes: Noise transport message
+        48 bytes: encrypted static key
+        15910 bytes: Noise transport message
             16 bytes: crypto overhead
             15942 bytes: plaintext
 
