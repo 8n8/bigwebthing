@@ -375,7 +375,8 @@ data StaticKeys
     = StaticKeys
         { staticDh :: MyStatic
         , sessionKey :: SessionKey
-        , userId :: UserId
+        , username :: Username
+        , fingerprint :: Fingerprint
         }
 
 
@@ -441,6 +442,7 @@ data Ready = Ready
     , newDhKeys :: [Dh.KeyPair Curve25519]
     , theTime :: [Clock.UTCTime]
     , whitelist :: Map.Map Username Fingerprint
+    , staticKeysR :: Map.Map Username TheirStatic
     }
 
 
@@ -726,8 +728,7 @@ signUpHelp difficulty unique raw ready =
                 myStatic = MyStatic dh
                 session = SessionKey $ Bl.fromStrict raw
                 newReady = ready
-                    { authStatus =
-                        AwaitingUsername myStatic session
+                    { authStatus = AwaitingUsername myStatic session
                     , newDhKeys = keys
                     }
                 eitherSignUp =
@@ -745,6 +746,33 @@ signUpHelp difficulty unique raw ready =
                         ]
                     , ReadyS newReady
                     )
+
+
+fingerprintSalt =
+    B.pack
+        [121, 42, 53, 200, 120, 148, 151, 77, 190, 181, 194, 24, 139, 196, 215, 179]
+
+
+fingerprintLength =
+    8
+
+
+makeFingerprint :: Username -> Dh.PublicKey Curve25519 -> Either String Fingerprint
+makeFingerprint (Username usernameLazy) key =
+    let
+        asBytes = Noise.convert $ Dh.dhPubToBytes key
+        username = Bl.toStrict usernameLazy
+        hashE = Argon2.hash
+            argonFingerprint
+            (asBytes <> username)
+            fingerprintSalt
+            fingerprintLength
+    in case hashE of
+        CryptoPassed hash ->
+            Right $ Fingerprint $ Bl.fromStrict hash
+
+        CryptoFailed err ->
+            Left $ show err
 
 
 makeSignUp
@@ -784,6 +812,24 @@ argonOptions =
         }
 
 
+argonFingerprint :: Argon2.Options
+argonFingerprint =
+    Argon2.Options
+        { iterations = 1000
+        , memory = 256 * 1024
+        , parallelism = 4
+        , variant = Argon2.Argon2id
+        , version = Argon2.Version13
+        }
+
+
+
+powSalt =
+    B.pack
+        [220, 55, 235, 37, 39, 106, 232, 132, 98, 40, 144, 227, 96, 33, 238, 202]
+
+
+
 powHelp
     :: Word8
     -> Bl.ByteString
@@ -795,7 +841,7 @@ powHelp difficulty unique counter =
         hashE = Argon2.hash
             argonOptions
             (Bl.toStrict $ unique <> candidate)
-            (B.singleton 0)
+            powSalt
             powHashLength
     in case hashE of
         CryptoPassed hash ->
@@ -930,7 +976,8 @@ fileExistenceUpdate path exists init_ =
                         , handshakes = Map.empty
                         , newDhKeys = newKeys
                         , theTime = times
-                        , whitelist = Set.empty
+                        , whitelist = Map.empty
+                        , staticKeysR = Map.empty
                         }
                     )
 
@@ -961,14 +1008,14 @@ restartingTcpUpdate ready =
         AwaitingUsername _ _ ->
             startAuth
 
-        LoggedIn (StaticKeys _ sessionKey userId) ->
-            ( BytesInQO toServerQ $ logIn sessionKey userId
+        LoggedIn (StaticKeys _ sessionKey username _) ->
+            ( BytesInQO toServerQ $ logIn sessionKey username
             , ReadyS ready
             )
 
 
-logIn :: SessionKey -> UserId -> Bl.ByteString
-logIn (SessionKey sessionKey) (UserId (Username username) _) =
+logIn :: SessionKey -> Username -> Bl.ByteString
+logIn (SessionKey sessionKey) (Username username) =
     mconcat
         [ Bl.singleton 1
         , sessionKey
@@ -988,8 +1035,8 @@ fromServerUpdate raw ready =
         Right (NewMessageT username message) ->
             messageInUpdate username message ready
 
-        Right (NewUsername userId) ->
-            newUserIdUpdate userId ready
+        Right (NewUsername username) ->
+            newUserIdUpdate username ready
 
         Right (PowInfoT difficulty unique) ->
             newPowInfoUpdate difficulty unique ready
@@ -1027,8 +1074,8 @@ newPowInfoUpdate difficulty unique ready =
     pass = (DoNothingO, ReadyS ready)
 
 
-newUserIdUpdate :: UserId -> Ready -> (Output, State)
-newUserIdUpdate userId ready =
+newUserIdUpdate :: Username -> Ready -> (Output, State)
+newUserIdUpdate username ready =
     case authStatus ready of
         GettingPowInfoA ->
             pass
@@ -1036,20 +1083,34 @@ newUserIdUpdate userId ready =
         GeneratingSessionKey _ _ ->
             pass
 
-        AwaitingUsername staticKeys sessionKey ->
-            let
-                newReady =
-                    ready
-                        { authStatus = LoggedIn $
-                            StaticKeys staticKeys sessionKey userId
-                        }
-            in
-                ( BatchO
-                    [ BytesInQO toServerQ (logIn sessionKey userId)
-                    , dumpCache newReady
-                    ]
-                , ReadyS newReady
-                )
+        AwaitingUsername staticDh@(MyStatic (_, pub)) sessionKey ->
+            case makeFingerprint username pub of
+                Left err ->
+                    ( ErrorO $ "couldn't make fingerprint: " ++ err
+                    , FailedS
+                    )
+
+                Right fingerprint ->
+                    let
+                        newReady =
+                            ready
+                                { authStatus = LoggedIn $
+                                    StaticKeys
+                                        { staticDh
+                                        , sessionKey
+                                        , username
+                                        , fingerprint
+                                        }
+                                }
+                    in
+                        ( BatchO
+                            [ BytesInQO
+                                toServerQ
+                                (logIn sessionKey username)
+                            , dumpCache newReady
+                            ]
+                        , ReadyS newReady
+                        )
 
         LoggedIn _ ->
             logErr
@@ -1218,18 +1279,10 @@ firstHandshakesUpdate
     -> [PublicEphemeral]
     -> (Output, State)
 firstHandshakesUpdate from ready msgs =
-    case Map.lookup from (whitelist ready) of
-        Nothing ->
-            (logErr ready $ "unsolicited first handshakes from " <>
-                T.pack (show from)
-            , DoNothingO
-            )
-
-        Just (theirStatic, _) ->
-            firstHandshakesUpdateHelp theirStatic from ready msgs
+    firstHandshakesUpdateHelp from ready msgs
 
 
-firstHandshakesUpdateHelp theirStatic from ready msgs =
+firstHandshakesUpdateHelp from ready msgs =
     let
         myEphemerals = map MyEphemeral $
             take num1stShakes $ newDhKeys ready
@@ -1251,8 +1304,8 @@ firstHandshakesUpdateHelp theirStatic from ready msgs =
         AwaitingUsername _ _ ->
             pass
 
-        LoggedIn (StaticKeys myStatic _ _) ->
-            case sendNoiseKK2s myEphemerals msgs myStatic theirStatic from of
+        LoggedIn (StaticKeys myStatic _ _ _) ->
+            case sendNoiseXX2s myEphemerals msgs myStatic from of
                 Left err ->
                     logErr newReady err
 
@@ -1290,14 +1343,13 @@ makeResponderShake from (myEphemeral, theirEphemeral) =
     )
 
 
-sendNoiseKK2s
+sendNoiseXX2s
     :: [MyEphemeral]
     -> [PublicEphemeral]
     -> MyStatic
-    -> TheirStatic
     -> Username
     -> Either T.Text Output
-sendNoiseKK2s myEphemerals firsts myStatic theirStatic from =
+sendNoiseXX2s myEphemerals firsts myStatic from =
     let
         max2nd = 166
         zipped = zip myEphemerals firsts
@@ -1306,7 +1358,7 @@ sendNoiseKK2s myEphemerals firsts myStatic theirStatic from =
         third = drop (2 * max2nd) zipped
         eitherChunks =
             map
-                (make2ndNoise from theirStatic myStatic)
+                (make2ndNoise from myStatic)
                 [first166, second166, third]
     in case allRight eitherChunks of
         Left err ->
@@ -1318,13 +1370,12 @@ sendNoiseKK2s myEphemerals firsts myStatic theirStatic from =
 
 make2ndNoise
     :: Username
-    -> TheirStatic
     -> MyStatic
     -> [(MyEphemeral, PublicEphemeral)]
     -> Either T.Text Bl.ByteString
-make2ndNoise (Username username) theirStatic myStatic noises1 =
+make2ndNoise (Username username) myStatic noises1 =
     let
-        eitherNoises = map (makeOne2ndNoise theirStatic myStatic) noises1
+        eitherNoises = map (makeOne2ndNoise myStatic) noises1
     in case allRight eitherNoises of
         Left err ->
             Left err
@@ -1357,16 +1408,13 @@ allRightHelp eithers accum =
 
 
 responderOptions
-    :: TheirStatic
-    -> MyStatic
+    :: MyStatic
     -> MyEphemeral
     -> Noise.HandshakeOpts Curve25519
 responderOptions
-    (TheirStatic theirStatic)
     (MyStatic myStatic)
     (MyEphemeral myEphemeral) =
 
-    Noise.setRemoteStatic (Just theirStatic) .
     Noise.setLocalStatic (Just myStatic) .
     Noise.setLocalEphemeral (Just myEphemeral) $
     Noise.defaultHandshakeOpts Noise.ResponderRole ""
@@ -1393,18 +1441,16 @@ type NoiseState
 
 
 makeOne2ndNoise
-    :: TheirStatic
-    -> MyStatic
+    :: MyStatic
     -> (MyEphemeral, PublicEphemeral)
     -> Either T.Text Bl.ByteString
 makeOne2ndNoise
-    theirStatic
     myStatic
     (myEphemeral, PublicEphemeral refKey) =
 
     let
-        options = responderOptions theirStatic myStatic myEphemeral
-        noise0 = Noise.noiseState options noiseKK :: NoiseState
+        options = responderOptions myStatic myEphemeral
+        noise0 = Noise.noiseState options noiseXX :: NoiseState
         msg0 = Noise.convert $ Bl.toStrict refKey
     in case Noise.readMessage msg0 noise0 of
         Noise.NoiseResultMessage _ noise1 ->
@@ -1443,12 +1489,9 @@ dumpCache ready =
             DoNothingO
 
         Just cache ->
-            WriteFileO (cachePath $ root ready) (encodeCache cache)
-
-
-cachePath :: RootPath -> FilePath
-cachePath (RootPath root) =
-    root </> "memCache"
+            WriteFileO
+                (cachePath $ root ready)
+                (encodeCache cache)
 
 
 encodeCache :: MemCache -> Bl.ByteString
@@ -1458,6 +1501,50 @@ encodeCache memCache =
         , encodeHandshakes $ handshakesM memCache
         , encodeWhitelist $ whitelistM memCache
         ]
+
+
+encodeWhitelist :: Map.Map Username Fingerprint -> Bl.ByteString
+encodeWhitelist whitelist =
+    let
+        asList = Map.toList whitelist
+    in
+        encodeUint32 (length asList) <>
+        mconcat (map encodeUserId asList)
+
+
+encodeCryptoKeys :: StaticKeys -> Bl.ByteString
+encodeCryptoKeys keys =
+    mconcat
+        [ encodeKeyPair $ staticDh keys
+        , encodeSessionKey $ sessionKey keys
+        , encodeUsername $ username keys
+        , encodeFingerprint $ fingerprint keys
+        ]
+
+
+encodeFingerprint :: Fingerprint -> Bl.ByteString
+encodeFingerprint (Fingerprint fingerprint) =
+    fingerprint
+
+
+encodeUsername :: Username -> Bl.ByteString
+encodeUsername (Username username) =
+    username
+
+
+encodeSessionKey :: SessionKey -> Bl.ByteString
+encodeSessionKey (SessionKey key) =
+    key
+
+
+encodeKeyPair :: MyStatic -> Bl.ByteString
+encodeKeyPair (MyStatic (secret, _)) =
+    Bl.fromStrict $ Noise.convert $ Dh.dhSecToBytes secret
+
+
+cachePath :: RootPath -> FilePath
+cachePath (RootPath root) =
+    root </> "memCache"
 
 
 getCache :: Ready -> Maybe MemCache
@@ -1477,34 +1564,12 @@ getCache ready =
                 { keys
                 , handshakesM = handshakes ready
                 , whitelistM = whitelist ready
+                , staticKeys = staticKeysR ready
                 }
 
 
-encodeWhitelist :: Set.Set UserId -> Bl.ByteString
-encodeWhitelist whitelist =
-    let
-        asList = Set.toList whitelist
-    in
-        encodeUint32 (length asList) <>
-        mconcat (map encodeUserId asList)
-
-
-encodeCryptoKeys :: StaticKeys -> Bl.ByteString
-encodeCryptoKeys
-    (StaticKeys
-        (MyStatic (secret, _))
-        (SessionKey sessionKey)
-        userId) =
-
-    mconcat
-        [ sessionKey
-        , encodeUserId userId
-        , Bl.fromStrict $ Noise.convert $ Dh.dhSecToBytes secret
-        ]
-
-
-encodeUserId :: UserId -> Bl.ByteString
-encodeUserId (UserId (Username u) (Fingerprint f)) =
+encodeUserId :: (Username, Fingerprint) -> Bl.ByteString
+encodeUserId (Username u, Fingerprint f) =
     u <> f
 
 
@@ -2122,6 +2187,7 @@ data MemCache
         { keys :: StaticKeys
         , handshakesM :: Map.Map HandshakeId Handshake
         , whitelistM :: Map.Map Username Fingerprint
+        , staticKeys :: Map.Map Username TheirStatic
         }
 
 
@@ -2130,8 +2196,23 @@ memCacheP = do
     keys <- myKeysP
     handshakesM <- handshakesP
     whitelistM <- whitelistP
+    staticKeys <- staticKeysP
     P.endOfInput
-    return $ MemCache {keys, handshakesM, whitelistM}
+    return $ MemCache {keys, handshakesM, whitelistM, staticKeys}
+
+
+staticKeysP :: P.Parser (Map.Map Username TheirStatic)
+staticKeysP = do
+    numKeys <- uint32P
+    asList <- P.count numKeys userKeyP
+    return $ Map.fromList asList
+
+
+userKeyP :: P.Parser (Username, TheirStatic)
+userKeyP = do
+    username <- usernameP
+    theirKey <- theirStaticP
+    return (username, theirKey)
 
 
 whitelistP :: P.Parser (Map.Map Username Fingerprint)
@@ -2263,7 +2344,8 @@ sessionKeyLength =
 myKeysP :: P.Parser StaticKeys
 myKeysP = do
     sessionKey <- P.take sessionKeyLength
-    userId <- userIdP
+    username <- usernameP
+    fingerprint <- fingerprintP
     rawDhKey <- P.take secretKeyLen
     case Dh.dhBytesToPair $ Noise.convert rawDhKey of
         Nothing ->
@@ -2275,7 +2357,8 @@ myKeysP = do
                     { staticDh = MyStatic dhKeys
                     , sessionKey =
                         SessionKey $ Bl.fromStrict sessionKey
-                    , userId = userId
+                    , username
+                    , fingerprint
                     }
 
 
@@ -2295,9 +2378,9 @@ rawKeysUpdate rawCrypto root newDhKeys times =
         Right memCache ->
             ( BatchO
                 [ BytesInQO toServerQ $
-                  logIn (sessionKey $ keys memCache) $
-                  userId $
-                  keys memCache
+                  logIn
+                    (sessionKey $ keys memCache)
+                    (username $ keys $ memCache)
                 ]
             , ReadyS $ Ready
                 { root
@@ -2309,6 +2392,7 @@ rawKeysUpdate rawCrypto root newDhKeys times =
                 , newDhKeys
                 , theTime = times
                 , whitelist = whitelistM memCache
+                , staticKeysR = staticKeys memCache
                 }
             )
 
