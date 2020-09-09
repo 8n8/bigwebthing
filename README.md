@@ -205,7 +205,7 @@ Each side keeps these sets of blob hashes for each contact:
 
 The sets can only have elements inserted, never removed.
 
-Whenever either side changes either of these, they send them to the other side.
+Whenever either side changes either of these, they send the one containing the blobs they have to the other side.
 
 When I receive a new blob set and I find that I have blobs that they don't, send them one of those blobs.
 
@@ -215,29 +215,41 @@ When I create some new blobs, send one of them to the other side.
 
 ## API
 
-The message or blob is sliced up into chunks, each chunk is encrypted, and is sent.
+The message is sliced up into chunks, each chunk is encrypted, and is sent.
 
 Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded like this:
 
 15910 bytes
-    1 byte: 0 if a message, 1 if a blob
-    15909 bytes
-        either the whole message fits in one chunk
-            1 byte: 0
-            2 bytes: the length of the message
-            the message
-            padding
-        or this is a part of a sequence but not the last item
-            1 byte: 1
-            4 bytes: chunk counter, starting at 0
-            4 bytes: total number of chunks in the sequence
-            the chunk
-        or this is the final message in a sequence
-            1 byte: 2
-            32 bytes: the hash of the whole message before chunking
-            2 bytes: length of the chunk
-            the chunk
-            padding
+    either the whole message fits in one chunk
+        1 byte: 0
+        2 bytes: the length of the message
+        the message
+        padding
+    or this is a part of a sequence but not the last item
+        1 byte: 1
+        4 bytes: chunk counter, starting at 0
+        4 bytes: total number of chunks in the sequence
+        the chunk
+    or this is the final message in a sequence
+        1 byte: 2
+        32 bytes: the hash of the whole message before chunking
+        2 bytes: length of the chunk
+        the chunk
+        padding
+
+
+After assembling the message (or before chunking and sending it), there is another API inside it:
+
+    24 bytes: globally unique message ID
+    either a share set
+        1 byte: 0
+        sequence of 32-byte sender set hashes
+    or a header blob
+        1 byte: 1
+        the header blob
+    or a referenced blob
+        1 byte: 2
+        the referenced blob
 
 ## Crypto
 
@@ -257,7 +269,7 @@ The cryptography is done using Cacophony, a Noise implementation in Haskell. It 
         32 bytes: first handshake message
             used as the unique session reference
         48 bytes: encrypted static key
-        15910 bytes: Noise transport message
+        15910 bytes: Noise payload
             16 bytes: crypto overhead
             15942 bytes: plaintext
 
@@ -307,7 +319,7 @@ feminist polish fanfare front barber resume palpable
 # Client cache
 
 blobs
-    A key-value store of binaries, named by 32-byte hash.
+    A key-value store of binaries.
 
 memCache
     A binary file containing a dump of the in-memory cache.
@@ -318,7 +330,7 @@ log.txt
 # Server cache
 
 blobs
-    A key-value store of binaries, with 8-byte locally unique names.
+    A key-value store of binaries.
 
 memCache
     A binary file containing a dump of the in-memory cache.

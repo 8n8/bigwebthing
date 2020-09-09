@@ -36,11 +36,12 @@ import qualified Network.Simple.TCP as Tcp
 import qualified Data.Map as Map
 import Control.Exception.Base (SomeException)
 import qualified Data.Time.Clock as Clock
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding (encodeUtf8, decodeUtf8')
 import System.Entropy (getEntropy)
 import qualified Data.Bits as Bits
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.KDF.Argon2 as Argon2
+import qualified Crypto.Random as CryptoRand
 
 
 main :: IO ()
@@ -70,6 +71,10 @@ mainHelp oldState oldMsg = do
 io :: Output -> IO (Maybe Msg)
 io output =
     case output of
+        GetRandomGenO -> do
+            drg <- CryptoRand.drgNew
+            return $ Just $ RandomGenM drg
+
         DoNothingO ->
             return Nothing
 
@@ -290,6 +295,7 @@ clientUrl =
 
 data Output
     = GetAppDataDirO
+    | GetRandomGenO
     | MakeDirIfMissingO FilePath
     | MakeSessionKeyO
     | DoNothingO
@@ -331,6 +337,7 @@ data Msg
     | NewDhKeysM [Dh.KeyPair Curve25519]
     | TimesM [Clock.UTCTime]
     | NewSessionKeyM B.ByteString
+    | RandomGenM CryptoRand.ChaChaDRG
 
 
 websocket :: Ws.ServerApp
@@ -381,7 +388,8 @@ data StaticKeys
 
 
 newtype Hash32
-    = Hash32 B.ByteString
+    = Hash32 Bl.ByteString
+    deriving (Eq, Ord)
 
 
 data BlobUpWait
@@ -427,23 +435,77 @@ data Init
     | MakingRootDirI RootPath
     | MakingDhKeysI RootPath
     | GettingTimes RootPath [Dh.KeyPair Curve25519]
-    | DoKeysExistI RootPath [Dh.KeyPair Curve25519] [Clock.UTCTime]
+    | GettingRandomGen
+        RootPath
+        [Dh.KeyPair Curve25519]
+        [Clock.UTCTime]
+    | DoKeysExistI
+        RootPath
+        [Dh.KeyPair Curve25519]
+        [Clock.UTCTime]
+        CryptoRand.ChaChaDRG
     | GettingKeysFromFileI
-        RootPath [Dh.KeyPair Curve25519] [Clock.UTCTime]
+        RootPath
+        [Dh.KeyPair Curve25519]
+        [Clock.UTCTime]
+        CryptoRand.ChaChaDRG
 
 
-data Ready = Ready
-    { root :: RootPath
-    , blobsUp :: Jobs BlobUp BlobUpWait
-    , getBlob :: Jobs GetBlob GetBlobWait
-    , messageLocks :: Set.Set MessageId
-    , authStatus :: AuthStatus
-    , handshakes :: Map.Map HandshakeId Handshake
-    , newDhKeys :: [Dh.KeyPair Curve25519]
-    , theTime :: [Clock.UTCTime]
-    , whitelist :: Map.Map Username Fingerprint
-    , staticKeysR :: Map.Map Username TheirStatic
-    }
+data Ready =
+    Ready
+        { root :: RootPath
+        , blobsUp :: Jobs BlobUp BlobUpWait
+        , getBlob :: Jobs GetBlob GetBlobWait
+        , messageLocks :: Set.Set MessageId
+        , blobLocks :: Set.Set Hash32
+        , authStatus :: AuthStatus
+        , handshakes :: Map.Map HandshakeId Handshake
+        , newDhKeys :: [Dh.KeyPair Curve25519]
+        , theTime :: [Clock.UTCTime]
+        , whitelist ::
+            Map.Map Username (Fingerprint, Maybe TheirStatic)
+        , sharePairs :: Map.Map ShareName SharePair
+        , sendingBlob :: Jobs Sending SendWait
+        , summaries :: Map.Map MessageId Summary
+        , randomGen :: CryptoRand.ChaChaDRG
+        , counter :: Int
+        }
+
+
+data Summary
+    = Summary
+        { headerBlob :: Hash32
+        , referenced :: Set.Set Hash32
+        , subjectS :: T.Text
+        , sharersS :: Set.Set UserId
+        , lastEditS :: PosixMillis
+        , historyId :: Int
+        }
+
+
+data Sending
+    = ReadingS Hash32 ShareName
+
+
+data SendWait
+    = SendWait Hash32 ShareName
+
+
+data SharePair
+    = SharePair TheirSet MySet
+
+
+newtype MySet
+    = MySet (Set.Set Hash32)
+
+
+newtype TheirSet
+    = TheirSet (Set.Set Hash32)
+
+
+data ShareName
+    = ShareName MessageId Username
+    deriving (Eq, Ord)
 
 
 data HandshakeId
@@ -502,7 +564,7 @@ instance Ord FirstMessage where
 
 data Handshake
     = Initiator InitiatorHandshake
-    | ResponderSentEncryptedE MyEphemeral
+    | ResponderSentEncryptedES MyEphemeral
 
 
 data InitiatorHandshake
@@ -585,6 +647,66 @@ promoteGetBlob jobs =
 
         Jobs _ (GetBlobWait body q : aiting) ->
             Jobs (GetBlob q (hash32 body)) aiting
+
+
+cacheSummary :: RootPath -> Summary -> Output
+cacheSummary root summary =
+    AppendFileO
+        (makeHistoryPath root $ historyId summary)
+        (encodeSummary summary)
+
+
+makeHistoryPath :: RootPath -> Int -> FilePath
+makeHistoryPath root id_ =
+    blobsPath root </> show id_
+
+
+encodeSummary :: Summary -> Bl.ByteString
+encodeSummary summary =
+    mconcat
+        [ encodeHash $ headerBlob summary
+        , encodeString $ subjectS summary
+        , encodeSharers $ sharersS summary
+        , encodeTime $ lastEditS summary
+        ]
+
+
+encodeHash :: Hash32 -> Bl.ByteString
+encodeHash (Hash32 hash) =
+    hash
+
+
+encodeString :: T.Text -> Bl.ByteString
+encodeString s =
+    let
+        asBytes = Bl.fromStrict $ encodeUtf8 s
+        len = Bl.length asBytes
+    in
+        encodeUint32 (fromIntegral len) <> asBytes
+
+
+encodeSharers :: Set.Set UserId -> Bl.ByteString
+encodeSharers userIds =
+    let
+        asList = Set.toList userIds
+        num = length asList
+    in
+        encodeUint32 num <> mconcat (map encodeUserId asList)
+
+
+encodeUserId :: UserId -> Bl.ByteString
+encodeUserId (UserId username fingerprint) =
+    encodeUsername username <> encodeFingerprint fingerprint
+
+
+isSharer :: Username -> Set.Set (UserId) -> Bool
+isSharer candidate sharers =
+    Set.member candidate $ Set.map (\(UserId u _) -> u) sharers
+
+
+encodeTime :: PosixMillis -> Bl.ByteString
+encodeTime (PosixMillis t) =
+    encodeUint64 t
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -691,6 +813,39 @@ update model msg =
 
         NewSessionKeyM rawKey ->
             updateReady model $ updateOnNewSessionKey rawKey
+
+        RandomGenM gen ->
+            updateInit model $ updateOnRandomGen gen
+
+
+updateOnRandomGen :: CryptoRand.ChaChaDRG -> Init -> (Output, State)
+updateOnRandomGen gen init_ =
+    case init_ of
+        EmptyI ->
+            pass
+
+        MakingRootDirI _ ->
+            pass
+
+        MakingDhKeysI _ ->
+            pass
+
+        GettingTimes _ _ ->
+            pass
+
+        GettingRandomGen root dhKeys times ->
+            ( DoesFileExistO $ keysPath root
+            , InitS $ DoKeysExistI root dhKeys times gen
+            )
+
+        DoKeysExistI _ _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ _ ->
+            pass
+
+  where
+    pass = (DoNothingO, InitS init_)
 
 
 updateOnNewSessionKey :: B.ByteString -> Ready -> (Output, State)
@@ -897,14 +1052,17 @@ updateOnTimes times init_ =
             pass
 
         GettingTimes root dhKeys ->
-            ( DoesFileExistO $ keysPath root
-            , InitS $ DoKeysExistI root dhKeys times
+            ( GetRandomGenO
+            , InitS $ GettingRandomGen root dhKeys times
             )
 
-        DoKeysExistI _ _ _ ->
+        GettingRandomGen _ _ _ ->
             pass
 
-        GettingKeysFromFileI _ _ _ ->
+        DoKeysExistI _ _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ _ ->
             pass
 
   where
@@ -926,10 +1084,13 @@ newDhKeysUpdate newKeys init_ =
         GettingTimes _ _ ->
             pass
 
-        DoKeysExistI _ _ _ ->
+        GettingRandomGen _ _ _ ->
             pass
 
-        GettingKeysFromFileI _ _ _ ->
+        DoKeysExistI _ _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ _ ->
             pass
 
   where
@@ -955,36 +1116,52 @@ fileExistenceUpdate path exists init_ =
         GettingTimes _ _ ->
             pass
 
-        DoKeysExistI root newKeys times ->
+        GettingRandomGen _ _ _ ->
+            pass
+
+        DoKeysExistI root newKeys times gen ->
             case (exists, path == keysPath root) of
                 (True, True) ->
                     ( ReadFileO $ keysPath root
-                    , InitS $ GettingKeysFromFileI root newKeys times
+                    , InitS $
+                        GettingKeysFromFileI root newKeys times gen
                     )
 
                 (True, False) ->
                     pass
 
                 (False, True) ->
-                    ( BytesInQO toServerQ $ Bl.singleton 0
-                    , ReadyS $ Ready
-                        { root
-                        , blobsUp = NoJobs
-                        , getBlob = NoJobs
-                        , messageLocks = Set.empty
-                        , authStatus = GettingPowInfoA
-                        , handshakes = Map.empty
-                        , newDhKeys = newKeys
-                        , theTime = times
-                        , whitelist = Map.empty
-                        , staticKeysR = Map.empty
-                        }
+                    let
+                        ready =
+                            Ready
+                            { root
+                            , blobsUp = NoJobs
+                            , getBlob = NoJobs
+                            , messageLocks = Set.empty
+                            , authStatus = GettingPowInfoA
+                            , handshakes = Map.empty
+                            , newDhKeys = newKeys
+                            , theTime = times
+                            , whitelist = Map.empty
+                            , blobLocks = Set.empty
+                            , sharePairs = Map.empty
+                            , sendingBlob = NoJobs
+                            , summaries = Map.empty
+                            , randomGen = gen
+                            , counter = 0
+                            }
+                    in
+                    ( BatchO
+                        [ BytesInQO toServerQ $ Bl.singleton 0
+                        , dumpCache ready
+                        ]
+                    , ReadyS ready
                     )
 
                 (False, False) ->
                     pass
 
-        GettingKeysFromFileI _ _ _ ->
+        GettingKeysFromFileI _ _ _ _ ->
             pass
 
   where
@@ -1130,7 +1307,7 @@ ciphertextP = do
     P.choice
         [ fmap FirstHandshakes firstShakesP
         , fmap SecondHandshakes secondShakesP
-        , fmap TransportC transportP
+        , transportP
         ]
 
 
@@ -1155,12 +1332,12 @@ noiseTransportLen =
     15958
 
 
-transportP :: P.Parser Transport
+transportP :: P.Parser Ciphertext
 transportP = do
     _ <- P.word8 2
     key <- firstMessageP
     noise <- P.take noiseTransportLen
-    return $ Transport key $ Bl.fromStrict noise
+    return $ TransportC key (Bl.fromStrict noise)
 
 
 firstShakesP :: P.Parser [FirstMessage]
@@ -1176,6 +1353,12 @@ publicKeyLen =
 firstMessageP :: P.Parser FirstMessage
 firstMessageP = do
     fmap (FirstMessage . Bl.fromStrict) $ P.take publicKeyLen
+
+
+data Plaintext
+    = AllInOne Bl.ByteString
+    | NotLastInSequence Counter Total Bl.ByteString
+    | FinalChunk Hash32 Bl.ByteString
 
 
 logErr :: Ready -> T.Text -> (Output, State)
@@ -1210,8 +1393,630 @@ messageInUpdate from (ClientToClient raw) ready =
         Right (SecondHandshakes secondShakes) ->
             secondHandshakesUpdate from ready secondShakes
 
-        Right (TransportC _) ->
+        Right (TransportC firstMessage thisMessage) ->
+            transportUpdate from ready firstMessage thisMessage
+
+
+transportUpdate
+    :: Username
+    -> Ready
+    -> FirstMessage
+    -> Bl.ByteString
+    -> (Output, State)
+transportUpdate from ready firstMessage thisMessage =
+    let
+        handshake = HandshakeId from firstMessage
+    in case Map.lookup handshake (handshakes ready) of
+        Nothing ->
             undefined
+
+        Just (Initiator _ ) ->
+            undefined
+
+        Just (ResponderSentEncryptedES myEphemeral) ->
+            case authStatus ready of
+                GettingPowInfoA ->
+                    undefined
+
+                GeneratingSessionKey _ _ ->
+                    undefined
+
+                AwaitingUsername _ _ ->
+                    undefined
+
+                LoggedIn staticKeys ->
+                    transportUpdateHelp
+                        from
+                        ready
+                        firstMessage
+                        thisMessage
+                        myEphemeral
+                        staticKeys
+
+
+transportUpdateHelp
+    :: Username
+    -> Ready
+    -> FirstMessage
+    -> Bl.ByteString
+    -> MyEphemeral
+    -> StaticKeys
+    -> (Output, State)
+transportUpdateHelp
+    from
+    ready
+    (FirstMessage first)
+    encrypted
+    myEphemeral
+    myStatic =
+
+    let
+        options = responderOptions (staticDh myStatic) myEphemeral
+        noise0 = Noise.noiseState options noiseXX :: NoiseState
+    in
+    case
+        Noise.readMessage
+        (Noise.convert $ Bl.toStrict first)
+        noise0
+    of
+        Noise.NoiseResultNeedPSK _ ->
+            undefined
+
+        Noise.NoiseResultException _ ->
+            undefined
+
+        Noise.NoiseResultMessage _ noise1 ->
+            case Noise.writeMessage "" noise1 of
+                Noise.NoiseResultNeedPSK _ ->
+                    undefined
+
+                Noise.NoiseResultException _ ->
+                    undefined
+
+                Noise.NoiseResultMessage _ noise2 ->
+                    case Noise.readMessage
+                            (Noise.convert $ Bl.toStrict encrypted)
+                            noise2
+                    of
+                        Noise.NoiseResultNeedPSK _ ->
+                            undefined
+
+                        Noise.NoiseResultException _ ->
+                            undefined
+
+                        Noise.NoiseResultMessage plain noise3 ->
+                            untrustedPlain
+                                (Bl.fromStrict $ Noise.convert plain)
+                                noise3
+                                from
+                                ready
+
+
+
+untrustedPlain
+    :: Bl.ByteString
+    -> NoiseState
+    -> Username
+    -> Ready
+    -> (Output, State)
+untrustedPlain plain noise from ready =
+    case
+        ( Noise.remoteStaticKey noise
+        , Map.lookup from (whitelist ready)) of
+
+        (Just _, Nothing) ->
+            undefined
+
+        (Nothing, Nothing) ->
+            undefined
+
+        (Nothing, (Just _)) ->
+            undefined
+
+        (Just untrusted, Just (fingerprint, Nothing)) ->
+            case makeFingerprint from untrusted of
+                Left err ->
+                    logErr
+                        ready
+                        (mconcat
+                            [ "could not make fingerprint for "
+                            , T.pack $ show from
+                            , ": "
+                            , T.pack err
+                            ])
+
+                Right untrustedFingerprint ->
+                    if fingerprint == untrustedFingerprint then
+                        gotValidPlaintextUpdate from plain $
+                            ready
+                                { whitelist =
+                                    Map.insert
+                                        from
+                                        ( fingerprint
+                                        , Just $
+                                            TheirStatic untrusted)
+                                        (whitelist ready)
+                                }
+
+                    else
+                        logErr
+                            ready
+                            (mconcat
+                                [ "received untrusted message from "
+                                , T.pack $ show from
+                                ])
+
+        ( Just untrusted, Just (_, Just (TheirStatic trusted))) ->
+            if untrusted == trusted then
+                gotValidPlaintextUpdate from plain ready
+
+            else
+                logErr
+                    ready
+                    (mconcat
+                        [ "received untrusted message from "
+                        , T.pack $ show from
+                        ])
+
+
+newtype Total
+    = Total Int
+
+
+newtype Counter
+    = Counter Int
+
+
+plainLen =
+    15910
+
+
+plainP :: P.Parser Plaintext
+plainP = do
+    P.choice
+        [ do
+            _ <- P.word8 0
+            len <- uint16P
+            msg <- P.take len
+            _ <- P.take (plainLen - 1 - 2 - len) -- padding
+            P.endOfInput
+            return $ AllInOne $ Bl.fromStrict msg
+
+        , do
+            _ <- P.word8 1
+            counter <- counterP
+            total <- totalP
+            chunk <- P.take (plainLen - 1 - 4 - 4)
+            P.endOfInput
+            return $
+                NotLastInSequence counter total $ Bl.fromStrict chunk
+
+        , do
+            _ <- P.word8 2
+            hash <- hash32P
+            len <- uint16P
+            chunk <- P.take len
+            _ <- P.take (plainLen - 1 - 32 - 2 - len) -- padding
+            return $ FinalChunk hash $ Bl.fromStrict chunk
+        ]
+
+
+counterP :: P.Parser Counter
+counterP = do
+    counter <- uint32P
+    return $ Counter counter
+
+
+totalP :: P.Parser Total
+totalP = do
+    total <- uint32P
+    return $ Total total
+
+
+gotValidPlaintextUpdate
+    :: Username
+    -> Bl.ByteString
+    -> Ready
+    -> (Output, State)
+gotValidPlaintextUpdate from plain ready =
+    case P.eitherResult $ P.parse plainP plain of
+        Left err ->
+            logErr ready $ mconcat
+                [ "could not parse plaintext from "
+                , T.pack $ show from
+                , ": "
+                , T.pack err
+                ]
+
+        Right parsed ->
+            parsedPlainUpdate from parsed ready
+
+
+parsedPlainUpdate :: Username -> Plaintext -> Ready -> (Output, State)
+parsedPlainUpdate from plain ready =
+    case plain of
+        AllInOne p ->
+            assembledUpdate from p ready
+
+        NotLastInSequence _ _ _ ->
+            undefined
+
+        FinalChunk _ _ ->
+            undefined
+
+
+data Assembled
+    = ShareSetA MessageId TheirSet
+    | HeaderA MessageId Bl.ByteString
+    | Referenced MessageId Bl.ByteString
+
+
+assembledP :: P.Parser Assembled
+assembledP = do
+    messageId <- messageIdP
+    P.choice
+        [ do
+            _ <- P.word8 0
+            hashes <- P.many1 hash32P
+            P.endOfInput
+            return $
+                ShareSetA
+                    messageId
+                    (TheirSet (Set.fromList hashes))
+        , do
+            _ <- P.word8 1
+            header <- P.takeLazyByteString
+            return $ HeaderA messageId header
+        , do
+            _ <- P.word8 2
+            referenced <- P.takeLazyByteString
+            return $ Referenced messageId referenced
+        ]
+
+
+assembledUpdate
+    :: Username
+    -> Bl.ByteString
+    -> Ready
+    -> (Output, State)
+assembledUpdate from assembled ready =
+    case P.eitherResult $ P.parse assembledP assembled of
+        Right (ShareSetA messageId theirs) ->
+            sharePairUpdate from messageId theirs ready
+
+        Right (HeaderA messageId header) ->
+            newHeaderUpdate from messageId header ready
+
+        Right (Referenced messageId body) ->
+            referencedUpdate from messageId body ready
+
+        Left err ->
+            logErr
+                ready
+                (mconcat
+                    [ "couldn't parse assembled blob from "
+                    , T.pack $ show from
+                    , ": "
+                    , T.pack err
+                    ])
+
+
+referencedUpdate
+    :: Username
+    -> MessageId
+    -> Bl.ByteString
+    -> Ready
+    -> (Output, State)
+referencedUpdate from messageId body ready =
+    let
+        hash = hash32 body
+        writeBlob =
+            WriteFileO
+                (makeBlobPath (root ready) hash)
+                body
+        shareName = ShareName messageId from
+    in
+    case Map.lookup messageId (summaries ready) of
+        Nothing ->
+            unsolicitedBlob ready from hash
+
+        Just summary ->
+            case Map.lookup shareName (sharePairs ready) of
+                Nothing ->
+                    unsolicitedBlob ready from hash
+
+                Just (SharePair theirs (MySet mine)) ->
+                    if Set.member hash (referenced summary) then
+                        ( BatchO [writeBlob, dumpCache ready]
+                        , ReadyS $
+                            ready
+                                { sharePairs =
+                                    Map.insert
+                                        shareName
+                                        (SharePair
+                                            theirs
+                                            (MySet $
+                                                Set.insert hash mine
+                                            ))
+                                        (sharePairs ready)
+                                }
+                        )
+
+                    else
+                        unsolicitedBlob ready from hash
+
+
+unsolicitedBlob :: Ready -> Username -> Hash32 -> (Output, State)
+unsolicitedBlob ready from hash =
+     logErr
+         ready
+         (mconcat
+             [ "received unsolicited blob from "
+             , T.pack $ show from
+             , " with hash "
+             , T.pack $ showHash hash
+             ])
+
+
+badHeaderErr :: Ready -> Username -> String -> (Output, State)
+badHeaderErr ready from err =
+    logErr
+        ready
+        (mconcat
+            [ "could not parse new header from "
+            , T.pack $ show from
+            , ": "
+            , T.pack $ show err
+            ])
+
+
+newHeaderUpdate from messageId header ready =
+    case
+        ( Map.lookup messageId (summaries ready)
+        , P.eitherResult $ P.parse headerP header
+        )
+    of
+        (Nothing, Left err) ->
+            badHeaderErr ready from err
+
+        (Just _, Left err) ->
+            badHeaderErr ready from err
+
+        (Just summary, Right parsed) ->
+            let
+                hash = hash32 header
+
+                newSummary =
+                    Summary
+                        { headerBlob = hash
+                        , subjectS = subject parsed
+                        , sharersS = sharersS summary
+                        , lastEditS = lastEdit parsed
+                        , historyId = historyId summary
+                        , referenced = makeRefs parsed
+                        }
+
+                newSummaries =
+                    Map.insert messageId newSummary (summaries ready)
+
+                newReady = ready { summaries = newSummaries }
+
+                headerPath = makeBlobPath (root ready) hash
+            in
+                if isSharer from (sharersS summary) then
+                    ( BatchO
+                        [ cacheSummary (root ready) summary
+                        , WriteFileO headerPath header
+                        , dumpCache newReady
+                        ]
+                    , ReadyS newReady
+                    )
+
+                else
+                    (DoNothingO, ReadyS ready)
+
+        (Nothing, Right parsed) ->
+            let
+                hash = hash32 header
+                newSummary =
+                    Summary
+                        { headerBlob = hash
+                        , subjectS = subject parsed
+                        , sharersS = sharers parsed
+                        , lastEditS = lastEdit parsed
+                        , historyId = counter ready
+                        , referenced = makeRefs parsed
+                        }
+
+                newReady = ready
+                    { summaries =
+                        Map.insert
+                            messageId
+                            newSummary
+                            (summaries ready)
+                    , counter = (counter ready) + 1
+                    }
+            in
+                ( BatchO
+                    [ WriteFileO
+                        (makeBlobPath (root ready) hash)
+                        header
+                    , cacheSummary (root ready) newSummary
+                    , dumpCache newReady
+                    ]
+                , ReadyS ready
+                )
+
+
+messageIdLen =
+    24
+
+
+headerP :: P.Parser Header
+headerP = do
+    mainBox <- sizedStringP
+    subject <- sizedStringP
+    sharers <- sharersP
+    lastEdit <- timeP
+    blobs <- blobsP
+    wasm <- hash32P
+    return $
+        Header {mainBox, subject, sharers, lastEdit, blobs, wasm}
+
+
+sharersP :: P.Parser (Set.Set UserId)
+sharersP = do
+    size <- uint32P
+    sharers <- P.count size userIdP
+    return $ Set.fromList sharers
+
+
+timeP :: P.Parser PosixMillis
+timeP = do
+    t <- uint64P
+    return $ PosixMillis t
+
+
+newtype PosixMillis
+    = PosixMillis Integer
+
+
+blobsP :: P.Parser (Set.Set Blob)
+blobsP = do
+    size <- uint32P
+    blobs <- P.count size blobP
+    return $ Set.fromList blobs
+
+
+blobP :: P.Parser Blob
+blobP = do
+    hash <- hash32P
+    filename <- sizedStringP
+    size <- uint64P
+    mime <- sizedStringP
+    return $ Blob{hash, filename, size, mime}
+
+
+
+sizedStringP :: P.Parser T.Text
+sizedStringP = do
+    size <- uint32P
+    raw <- P.take size
+    case decodeUtf8' raw of
+        Left err ->
+            fail $ "error parsing UTF-8: " <> show err
+
+        Right str ->
+            return str
+
+
+makeRefs :: Header -> Set.Set Hash32
+makeRefs header =
+    let
+        blobRefs = Set.map hash $ blobs header
+    in
+        Set.insert (wasm header) blobRefs
+
+
+data Header
+    = Header
+        { mainBox :: T.Text
+        , subject :: T.Text
+        , sharers :: Set.Set UserId
+        , lastEdit :: PosixMillis
+        , blobs :: Set.Set Blob
+        , wasm :: Hash32
+        }
+
+
+data Blob
+    = Blob
+        { hash :: Hash32
+        , filename :: T.Text
+        , size :: Integer
+        , mime :: T.Text
+        }
+        deriving (Eq, Ord)
+
+
+sharePairUpdate
+    :: Username
+    -> MessageId
+    -> TheirSet
+    -> Ready
+    -> (Output, State)
+sharePairUpdate from messageId theirs@(TheirSet theirSet) ready =
+    let
+        name = ShareName messageId from
+        oldPairs = sharePairs ready
+    in
+    case Map.lookup name oldPairs of
+        Nothing ->
+            let
+                pair = SharePair theirs (MySet Set.empty)
+                pairs = Map.insert name pair oldPairs
+                newReady = ready { sharePairs = pairs }
+            in
+                bumpShare name newReady
+
+        Just (SharePair (TheirSet theirOld) m) ->
+            let
+                newTheirs = TheirSet $ Set.union theirSet theirOld
+                pair = SharePair newTheirs m
+                pairs = Map.insert name pair oldPairs
+                newReady = ready {sharePairs = pairs}
+            in
+                bumpShare name newReady
+
+
+bumpShare :: ShareName -> Ready -> (Output, State)
+bumpShare name ready =
+    case Map.lookup name $ sharePairs ready of
+        Nothing ->
+            (DoNothingO, ReadyS ready)
+
+        Just (SharePair (TheirSet theirs) (MySet mine)) ->
+            case Set.toList $ Set.difference mine theirs of
+                [] ->
+                    (dumpCache ready, ReadyS ready)
+
+                d : _ ->
+                    sendBlob name d ready
+
+
+sendBlob :: ShareName -> Hash32 -> Ready -> (Output, State)
+sendBlob name hash ready =
+    case sendingBlob ready of
+        NoJobs ->
+            ( BatchO
+                [ dumpCache ready
+                , ReadFileO $ makeBlobPath (root ready) hash
+                ]
+            , ReadyS $ ready
+                { sendingBlob = Jobs (ReadingS hash name) [] }
+            )
+
+        Jobs current pending ->
+            ( dumpCache ready
+            , ReadyS $ ready
+                { sendingBlob =
+                    Jobs current $ append (SendWait hash name) pending
+                }
+            )
+
+makeBlobPath :: RootPath -> Hash32 -> FilePath
+makeBlobPath root hash =
+    blobsPath root </> showHash hash
+
+
+blobsPath :: RootPath -> FilePath
+blobsPath (RootPath root) =
+    root </> "blobs"
+
+
+append :: a -> [a] -> [a]
+append item to =
+    reverse $ item : (reverse to)
 
 
 secondHandshakesUpdate
@@ -1242,7 +2047,7 @@ add2ndShakes new2ndShakes id_ oldShake =
 
         Just newMsg ->
             case oldShake of
-                ResponderSentEncryptedE _ ->
+                ResponderSentEncryptedES _ ->
                     oldShake
 
                 Initiator SentPlainE ->
@@ -1331,7 +2136,7 @@ makeResponderShake
     -> (HandshakeId, Handshake)
 makeResponderShake from (myEphemeral, theirEphemeral) =
     ( HandshakeId from theirEphemeral
-    , ResponderSentEncryptedE myEphemeral
+    , ResponderSentEncryptedES myEphemeral
     )
 
 
@@ -1477,13 +2282,36 @@ encodeCache memCache =
         ]
 
 
-encodeWhitelist :: Map.Map Username Fingerprint -> Bl.ByteString
+encodeWhitelist
+    :: Map.Map Username (Fingerprint, Maybe TheirStatic)
+    -> Bl.ByteString
 encodeWhitelist whitelist =
     let
         asList = Map.toList whitelist
     in
         encodeUint32 (length asList) <>
-        mconcat (map encodeUserId asList)
+        mconcat (map encodeOneWhite asList)
+
+
+encodeOneWhite
+    :: (Username, (Fingerprint, Maybe TheirStatic))
+    -> Bl.ByteString
+encodeOneWhite (username, (fingerprint, maybeKey)) =
+    mconcat
+        [ encodeUsername username
+        , encodeFingerprint fingerprint
+        , encodeMaybe maybeKey encodeTheirStatic
+        ]
+
+
+encodeMaybe :: Maybe a -> (a -> Bl.ByteString) -> Bl.ByteString
+encodeMaybe a encoder =
+    case a of
+        Nothing ->
+            Bl.singleton 0
+
+        Just justa ->
+            Bl.singleton 1 <> encoder justa
 
 
 encodeCryptoKeys :: StaticKeys -> Bl.ByteString
@@ -1538,13 +2366,10 @@ getCache ready =
                 { keys
                 , handshakesM = handshakes ready
                 , whitelistM = whitelist ready
-                , staticKeys = staticKeysR ready
+                , sharePairsM = sharePairs ready
+                , summariesM = summaries ready
+                , counterM = counter ready
                 }
-
-
-encodeUserId :: (Username, Fingerprint) -> Bl.ByteString
-encodeUserId (Username u, Fingerprint f) =
-    u <> f
 
 
 encodeHandshakes :: Map.Map HandshakeId Handshake -> Bl.ByteString
@@ -1576,7 +2401,7 @@ encodeHandshakeShake h =
                         Bl.singleton 1 <> e
                 ]
 
-        ResponderSentEncryptedE (MyEphemeral (secret, _)) ->
+        ResponderSentEncryptedES (MyEphemeral (secret, _)) ->
             mconcat
                 [ Bl.singleton 1
                 , Bl.fromStrict $ Noise.convert $
@@ -1643,15 +2468,11 @@ data FromServer
 data Ciphertext
     = FirstHandshakes [FirstMessage]
     | SecondHandshakes [SecondHandshake]
-    | TransportC Transport
+    | TransportC FirstMessage Bl.ByteString
 
 
 data SecondHandshake
     = SecondHandshake FirstMessage Bl.ByteString
-
-
-data Transport
-    = Transport FirstMessage Bl.ByteString
 
 
 newtype TheirStatic
@@ -1660,6 +2481,11 @@ newtype TheirStatic
 
 newtype ClientToClient
     = ClientToClient Bl.ByteString
+
+
+encodeTheirStatic :: TheirStatic -> Bl.ByteString
+encodeTheirStatic (TheirStatic key) =
+    Bl.fromStrict $ Noise.convert $ Dh.dhPubToBytes key
 
 
 onGetBlobUpdate :: Bl.ByteString -> Q -> Ready -> (Output, State)
@@ -1783,7 +2609,7 @@ blobHashP = do
 hash32P :: P.Parser Hash32
 hash32P = do
     hash <- P.take 32
-    return $ Hash32 hash
+    return $ Hash32 $ Bl.fromStrict hash
 
 
 newtype Message
@@ -1825,7 +2651,7 @@ instance Eq MessageId where
 
 messageIdP :: P.Parser MessageId
 messageIdP = do
-    id_ <- P.take 24
+    id_ <- P.take messageIdLen
     return $ MessageId $ Bl.fromStrict id_
 
 
@@ -1899,7 +2725,10 @@ addToWhitelistUpdate (UserId username fingerprint) ready =
         newReady =
             ready
                 { whitelist =
-                    Map.insert username fingerprint (whitelist ready)
+                    Map.insert
+                        username
+                        (fingerprint, Nothing)
+                        (whitelist ready)
                 }
     in
         (dumpCache newReady, ReadyS newReady)
@@ -1953,7 +2782,7 @@ onMovedFile new ready =
 
         Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
             if toPath == new then
-                ( BytesInQO q (Bl.singleton 1 <> Bl.fromStrict hash)
+                ( BytesInQO q (Bl.singleton 1 <> hash)
                 , ReadyS $ ready { blobsUp = NoJobs }
                 )
 
@@ -1974,10 +2803,7 @@ onMovedFile new ready =
                         (SetBlobM blob newQ)
                 in
                     ( BatchO
-                        [ BytesInQO
-                            q
-                            (Bl.singleton 1 <>
-                                Bl.fromStrict hash)
+                        [ BytesInQO q (Bl.singleton 1 <> hash)
                         , output
                         ]
                     , newModel
@@ -2031,14 +2857,9 @@ onWrittenToTmp writtenPath handle ready =
         pass = (DoNothingO, ReadyS ready)
 
 
-encodeHash :: Hash32 -> String
-encodeHash (Hash32 hash) =
-    Bc.unpack $ B64.encodeUnpadded hash
-
-
-makeBlobPath :: RootPath -> Hash32 -> FilePath
-makeBlobPath (RootPath rootPath) hash =
-    rootPath </> encodeHash hash
+showHash :: Hash32 -> String
+showHash (Hash32 hash) =
+    Bc.unpack $ B64.encodeUnpadded $ Bl.toStrict hash
 
 
 onTmpFileHandleUpdate
@@ -2092,6 +2913,7 @@ setBlobUpdate blob q ready =
 hash32 :: Bl.ByteString -> Hash32
 hash32 =
     Hash32 .
+    Bl.fromStrict .
     Blake.finalize 32 .
     Bl.foldrChunks Blake.update (Blake.initialize 32)
 
@@ -2136,12 +2958,15 @@ fileContentsUpdate path contents init_ =
         GettingTimes _ _ ->
             pass
 
-        DoKeysExistI _ _ _ ->
+        GettingRandomGen _ _ _ ->
             pass
 
-        GettingKeysFromFileI root dhKeys times ->
+        DoKeysExistI _ _ _ _ ->
+            pass
+
+        GettingKeysFromFileI root dhKeys times gen ->
             if path == keysPath root then
-                rawKeysUpdate contents root dhKeys times
+                rawKeysUpdate contents root dhKeys times gen
             else
                 pass
 
@@ -2160,8 +2985,10 @@ data MemCache
     = MemCache
         { keys :: StaticKeys
         , handshakesM :: Map.Map HandshakeId Handshake
-        , whitelistM :: Map.Map Username Fingerprint
-        , staticKeys :: Map.Map Username TheirStatic
+        , whitelistM :: Map.Map Username (Fingerprint, Maybe TheirStatic)
+        , sharePairsM :: Map.Map ShareName SharePair
+        , summariesM :: Map.Map MessageId Summary
+        , counterM :: Int
         }
 
 
@@ -2170,37 +2997,127 @@ memCacheP = do
     keys <- myKeysP
     handshakesM <- handshakesP
     whitelistM <- whitelistP
-    staticKeys <- staticKeysP
+    sharePairsM <- sharePairsP
+    summariesM <- summariesP
+    counterM <- uint32P
     P.endOfInput
-    return $ MemCache {keys, handshakesM, whitelistM, staticKeys}
+    return $
+        MemCache
+            { keys
+            , handshakesM
+            , whitelistM
+            , sharePairsM
+            , summariesM
+            , counterM
+            }
 
 
-staticKeysP :: P.Parser (Map.Map Username TheirStatic)
-staticKeysP = do
-    numKeys <- uint32P
-    asList <- P.count numKeys userKeyP
+summariesP :: P.Parser (Map.Map MessageId Summary)
+summariesP = do
+    numSums <- uint32P
+    asList <- P.count numSums summaryP
     return $ Map.fromList asList
 
 
-userKeyP :: P.Parser (Username, TheirStatic)
-userKeyP = do
+summaryP :: P.Parser (MessageId, Summary)
+summaryP = do
+    messageId <- messageIdP
+    headerBlob <- hash32P
+    subjectS <- sizedStringP
+    sharersS <- sharersP
+    lastEditS <- timeP
+    historyId <- uint32P
+    referenced <- referencedP
+    return
+        ( messageId
+        , Summary
+            { headerBlob
+            , subjectS
+            , sharersS
+            , lastEditS
+            , historyId
+            , referenced
+            }
+        )
+
+
+referencedP :: P.Parser (Set.Set Hash32)
+referencedP = do
+    num <- uint32P
+    asList <- P.count num hash32P
+    return $ Set.fromList asList
+
+
+sharePairsP :: P.Parser (Map.Map ShareName SharePair)
+sharePairsP = do
+    numShares <- uint32P
+    asList <- P.count numShares oneShareP
+    return $ Map.fromList asList
+
+
+oneShareP :: P.Parser (ShareName, SharePair)
+oneShareP = do
+    shareName <- shareNameP
+    sharePair <- sharePairP
+    return (shareName, sharePair)
+
+
+shareNameP :: P.Parser ShareName
+shareNameP = do
+    messageId <- messageIdP
     username <- usernameP
-    theirKey <- theirStaticP
-    return (username, theirKey)
+    return $ ShareName messageId username
 
 
-whitelistP :: P.Parser (Map.Map Username Fingerprint)
+sharePairP :: P.Parser SharePair
+sharePairP = do
+    theirSet <- theirSetP
+    mySet <- mySetP
+    return $ SharePair theirSet mySet
+
+
+theirSetP :: P.Parser TheirSet
+theirSetP = do
+    len <- uint32P
+    asList <- P.count len hash32P
+    return $ TheirSet $ Set.fromList asList
+
+
+mySetP :: P.Parser MySet
+mySetP = do
+    len <- uint32P
+    asList <- P.count len hash32P
+    return $ MySet $ Set.fromList asList
+
+
+whitelistP
+    :: P.Parser (Map.Map Username (Fingerprint, Maybe TheirStatic))
 whitelistP = do
     numWhites <- uint32P
     asList <- P.count numWhites oneWhitelistP
     return $ Map.fromList asList
 
 
-oneWhitelistP :: P.Parser (Username, Fingerprint)
+oneWhitelistP :: P.Parser (Username, (Fingerprint, Maybe TheirStatic))
 oneWhitelistP = do
     username <- usernameP
     fingerprint <- fingerprintP
-    return (username, fingerprint)
+    maybeStatic <- maybeP theirStaticP
+    return (username, (fingerprint, maybeStatic))
+
+
+maybeP :: P.Parser a -> P.Parser (Maybe a)
+maybeP parser =
+    P.choice
+        [ do
+            _ <- P.word8 0
+            return Nothing
+
+        , do
+            _ <- P.word8 1
+            parsed <- parser
+            return $ Just parsed
+        ]
 
 
 fingerprintP :: P.Parser Fingerprint
@@ -2223,6 +3140,23 @@ uint32P = do
     b2 <- uint8P
     b3 <- uint8P
     return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
+
+
+uint64P :: P.Parser Integer
+uint64P =
+    uint64HelpP 0 0
+
+
+uint64HelpP :: Integer -> Integer -> P.Parser Integer
+uint64HelpP sofar counter =
+    if counter == 8 then
+        return sofar
+
+    else do
+        word <- P.anyWord8
+        uint64HelpP
+            (sofar + (fromIntegral word) * (256 ^ counter))
+            (counter + 1)
 
 
 handshakeP :: P.Parser (HandshakeId, Handshake)
@@ -2253,7 +3187,7 @@ responderP :: P.Parser Handshake
 responderP = do
     _ <- P.word8 1
     myEphemeral <- myEphemeralP
-    return $ ResponderSentEncryptedE myEphemeral
+    return $ ResponderSentEncryptedES myEphemeral
 
 
 secretKeyLen =
@@ -2341,8 +3275,9 @@ rawKeysUpdate
     -> RootPath
     -> [Dh.KeyPair Curve25519]
     -> [Clock.UTCTime]
+    -> CryptoRand.ChaChaDRG
     -> (Output, State)
-rawKeysUpdate rawCrypto root newDhKeys times =
+rawKeysUpdate rawCrypto root newDhKeys times gen =
     case parseCrypto rawCrypto of
         Left err ->
             ( ErrorO $ "could not parse static keys: " <> err
@@ -2366,7 +3301,12 @@ rawKeysUpdate rawCrypto root newDhKeys times =
                 , newDhKeys
                 , theTime = times
                 , whitelist = whitelistM memCache
-                , staticKeysR = staticKeys memCache
+                , blobLocks = Set.empty
+                , sharePairs = sharePairsM memCache
+                , sendingBlob = NoJobs
+                , randomGen = gen
+                , summaries = summariesM memCache
+                , counter = counterM memCache
                 }
             )
 
@@ -2395,10 +3335,13 @@ dirCreatedUpdate path initModel =
         GettingTimes _ _ ->
             pass
 
-        DoKeysExistI _ _ _ ->
+        GettingRandomGen _ _ _ ->
             pass
 
-        GettingKeysFromFileI _ _ _ ->
+        DoKeysExistI _ _ _ _ ->
+            pass
+
+        GettingKeysFromFileI _ _ _ _ ->
             pass
 
   where
