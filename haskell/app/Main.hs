@@ -1356,9 +1356,9 @@ firstMessageP = do
 
 
 data Plaintext
-    = AllInOne MessageId Bl.ByteString
-    | NotLastInSequence MessageId Bl.ByteString
-    | FinalChunk MessageId Hash32 Bl.ByteString
+    = AllInOne Bl.ByteString
+    | NotLastInSequence Counter Total Bl.ByteString
+    | FinalChunk Hash32 Bl.ByteString
 
 
 logErr :: Ready -> T.Text -> (Output, State)
@@ -1570,6 +1570,14 @@ unsolicitedMessage ready from =
             ])
 
 
+newtype Total
+    = Total Int
+
+
+newtype Counter
+    = Counter Int
+
+
 plainLen =
     15910
 
@@ -1579,32 +1587,41 @@ plainP = do
     P.choice
         [ do
             _ <- P.word8 0
-            messageId <- messageIdP
             len <- uint16P
             msg <- P.take len
-            _ <- P.take (plainLen - 1 - messageIdLen - 2 - len)
+            _ <- P.take (plainLen - 1 - 2 - len) -- padding
             P.endOfInput
-            return $ AllInOne messageId (Bl.fromStrict msg)
+            return $ AllInOne $ Bl.fromStrict msg
 
         , do
             _ <- P.word8 1
-            messageId <- messageIdP
-            chunk <- P.take (plainLen - 1 - messageIdLen)
+            counter <- counterP
+            total <- totalP
+            chunk <- P.take (plainLen - 1 - 4 - 4)
             P.endOfInput
             return $
-                NotLastInSequence messageId (Bl.fromStrict chunk)
+                NotLastInSequence counter total $ Bl.fromStrict chunk
 
         , do
             _ <- P.word8 2
-            messageId <- messageIdP
             hash <- hash32P
             len <- uint16P
             chunk <- P.take len
-            _ <- P.take $ 
-                    plainLen - 1 - messageIdLen - 32 - 2 - len
-            P.endOfInput
-            return $ FinalChunk messageId hash (Bl.fromStrict chunk)
+            _ <- P.take (plainLen - 1 - 32 - 2 - len) -- padding
+            return $ FinalChunk hash $ Bl.fromStrict chunk
         ]
+
+
+counterP :: P.Parser Counter
+counterP = do
+    counter <- uint32P
+    return $ Counter counter
+
+
+totalP :: P.Parser Total
+totalP = do
+    total <- uint32P
+    return $ Total total
 
 
 gotValidPlaintextUpdate
@@ -1629,56 +1646,59 @@ gotValidPlaintextUpdate from plain ready =
 parsedPlainUpdate :: Username -> Plaintext -> Ready -> (Output, State)
 parsedPlainUpdate from plain ready =
     case plain of
-        AllInOne messageId p ->
-            assembledUpdate from p messageId ready
+        AllInOne p ->
+            assembledUpdate from p ready
 
-        NotLastInSequence _ _ ->
+        NotLastInSequence _ _ _ ->
             undefined
 
-        FinalChunk _ _ _ ->
+        FinalChunk _ _ ->
             undefined
 
 
 data Assembled
-    = ShareSetA TheirSet
-    | HeaderA Bl.ByteString
-    | Referenced Bl.ByteString
+    = ShareSetA MessageId TheirSet
+    | HeaderA MessageId Bl.ByteString
+    | Referenced MessageId Bl.ByteString
 
 
 assembledP :: P.Parser Assembled
 assembledP = do
+    messageId <- messageIdP
     P.choice
         [ do
             _ <- P.word8 0
             hashes <- P.many1 hash32P
             P.endOfInput
-            return $ ShareSetA (TheirSet (Set.fromList hashes))
+            return $
+                ShareSetA
+                    messageId
+                    (TheirSet (Set.fromList hashes))
         , do
             _ <- P.word8 1
             header <- P.takeLazyByteString
-            return $ HeaderA header
+            return $ HeaderA messageId header
         , do
             _ <- P.word8 2
             referenced <- P.takeLazyByteString
-            return $ Referenced referenced
+            return $ Referenced messageId referenced
         ]
 
 
 assembledUpdate
     :: Username
     -> Bl.ByteString
-    -> MessageId
     -> Ready
     -> (Output, State)
-assembledUpdate from assembled messageId ready =
+assembledUpdate from assembled ready =
     case P.eitherResult $ P.parse assembledP assembled of
-        Right (ShareSetA theirs) ->
+        Right (ShareSetA messageId theirs) ->
             sharePairUpdate from messageId theirs ready
 
-        Right (HeaderA header) ->
+        Right (HeaderA messageId header) ->
             newHeaderUpdate from messageId header ready
 
-        Right (Referenced body) ->
+        Right (Referenced messageId body) ->
             referencedUpdate from messageId body ready
 
         Left err ->
