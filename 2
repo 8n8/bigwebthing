@@ -1550,7 +1550,7 @@ untrustedPlain plain noise from ready =
                                 }
 
                     else
-                        unsolicitedMessage ready from
+                        unsolictedMessage ready from
 
         ( Just untrusted, Just (_, Just (TheirStatic trusted))) ->
             if untrusted == trusted then
@@ -1560,7 +1560,7 @@ untrustedPlain plain noise from ready =
                 unsolicitedMessage ready from
 
 
-unsolicitedMessage :: Ready -> Username -> (Output, State)
+
 unsolicitedMessage ready from =
     logErr
         ready
