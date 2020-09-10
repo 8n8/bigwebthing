@@ -222,16 +222,17 @@ Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded 
 15910 bytes
     either the whole message fits in one chunk
         1 byte: 0
+        24 bytes: message ID
         2 bytes: the length of the message
         the message
         padding
     or this is a part of a sequence but not the last item
         1 byte: 1
-        4 bytes: chunk counter, starting at 0
-        4 bytes: total number of chunks in the sequence
+        24 bytes: message ID
         the chunk
     or this is the final message in a sequence
         1 byte: 2
+        24 bytes: message ID
         32 bytes: the hash of the whole message before chunking
         2 bytes: length of the chunk
         the chunk
@@ -240,7 +241,6 @@ Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded 
 
 After assembling the message (or before chunking and sending it), there is another API inside it:
 
-    24 bytes: globally unique message ID
     either a share set
         1 byte: 0
         sequence of 32-byte sender set hashes
