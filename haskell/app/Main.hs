@@ -1724,12 +1724,12 @@ referencedUpdate from messageId body ready =
     in
     case Map.lookup messageId (summaries ready) of
         Nothing ->
-            unsolicitedBlob ready from hash
+            unsolicitedMessage ready from hash
 
         Just summary ->
             case Map.lookup shareName (sharePairs ready) of
                 Nothing ->
-                    unsolicitedBlob ready from hash
+                    unsolicitedMessage ready from hash
 
                 Just (SharePair theirs (MySet mine)) ->
                     if Set.member hash (referenced summary) then
@@ -1749,11 +1749,11 @@ referencedUpdate from messageId body ready =
                         )
 
                     else
-                        unsolicitedBlob ready from hash
+                        unsolicitedMessage ready from hash
 
 
-unsolicitedBlob :: Ready -> Username -> Hash32 -> (Output, State)
-unsolicitedBlob ready from hash =
+unsolicitedMessage :: Ready -> Username -> Hash32 -> (Output, State)
+unsolicitedMessage ready from hash =
      logErr
          ready
          (mconcat
