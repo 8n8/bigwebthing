@@ -1357,7 +1357,7 @@ firstMessageP = do
 
 data Plaintext
     = AllInOne Bl.ByteString
-    | NotLastInSequence Counter Total Bl.ByteString
+    | NotLastInSequence Bl.ByteString
     | FinalChunk Hash32 Bl.ByteString
 
 
@@ -1570,14 +1570,6 @@ unsolicitedMessage ready from =
             ])
 
 
-newtype Total
-    = Total Int
-
-
-newtype Counter
-    = Counter Int
-
-
 plainLen =
     15910
 
@@ -1595,12 +1587,10 @@ plainP = do
 
         , do
             _ <- P.word8 1
-            counter <- counterP
-            total <- totalP
-            chunk <- P.take (plainLen - 1 - 4 - 4)
+            chunk <- P.take (plainLen - 1)
             P.endOfInput
             return $
-                NotLastInSequence counter total $ Bl.fromStrict chunk
+                NotLastInSequence $ Bl.fromStrict chunk
 
         , do
             _ <- P.word8 2
@@ -1610,18 +1600,6 @@ plainP = do
             _ <- P.take (plainLen - 1 - 32 - 2 - len) -- padding
             return $ FinalChunk hash $ Bl.fromStrict chunk
         ]
-
-
-counterP :: P.Parser Counter
-counterP = do
-    counter <- uint32P
-    return $ Counter counter
-
-
-totalP :: P.Parser Total
-totalP = do
-    total <- uint32P
-    return $ Total total
 
 
 gotValidPlaintextUpdate
@@ -1649,7 +1627,7 @@ parsedPlainUpdate from plain ready =
         AllInOne p ->
             assembledUpdate from p ready
 
-        NotLastInSequence _ _ _ ->
+        NotLastInSequence _ ->
             undefined
 
         FinalChunk _ _ ->

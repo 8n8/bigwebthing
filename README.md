@@ -227,8 +227,6 @@ Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded 
         padding
     or this is a part of a sequence but not the last item
         1 byte: 1
-        4 bytes: chunk counter, starting at 0
-        4 bytes: total number of chunks in the sequence
         the chunk
     or this is the final message in a sequence
         1 byte: 2
@@ -236,7 +234,6 @@ Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded 
         2 bytes: length of the chunk
         the chunk
         padding
-
 
 After assembling the message (or before chunking and sending it), there is another API inside it:
 
