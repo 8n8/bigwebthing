@@ -1408,21 +1408,21 @@ transportUpdate from ready firstMessage thisMessage =
         handshake = HandshakeId from firstMessage
     in case Map.lookup handshake (handshakes ready) of
         Nothing ->
-            undefined
+            (DoNothingO, ReadyS ready)
 
         Just (Initiator _ ) ->
-            undefined
+            (DoNothingO, ReadyS ready)
 
         Just (ResponderSentEncryptedES myEphemeral) ->
             case authStatus ready of
                 GettingPowInfoA ->
-                    undefined
+                    (DoNothingO, ReadyS ready)
 
                 GeneratingSessionKey _ _ ->
-                    undefined
+                    (DoNothingO, ReadyS ready)
 
                 AwaitingUsername _ _ ->
-                    undefined
+                    (DoNothingO, ReadyS ready)
 
                 LoggedIn staticKeys ->
                     transportUpdateHelp
