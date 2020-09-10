@@ -1460,18 +1460,22 @@ transportUpdateHelp
         noise0
     of
         Noise.NoiseResultNeedPSK _ ->
-            undefined
+            (DoNothingO, ReadyS ready) -- shouldn't happen with XX
 
-        Noise.NoiseResultException _ ->
-            undefined
+        Noise.NoiseResultException err ->
+            logErr
+                ready
+                (noiseException err)
 
         Noise.NoiseResultMessage _ noise1 ->
             case Noise.writeMessage "" noise1 of
                 Noise.NoiseResultNeedPSK _ ->
-                    undefined
+                    (DoNothingO, ReadyS ready)
 
-                Noise.NoiseResultException _ ->
-                    undefined
+                Noise.NoiseResultException err ->
+                    logErr
+                        ready
+                        (noiseException err)
 
                 Noise.NoiseResultMessage _ noise2 ->
                     case Noise.readMessage
@@ -1479,10 +1483,12 @@ transportUpdateHelp
                             noise2
                     of
                         Noise.NoiseResultNeedPSK _ ->
-                            undefined
+                            (DoNothingO, ReadyS ready)
 
-                        Noise.NoiseResultException _ ->
-                            undefined
+                        Noise.NoiseResultException err ->
+                            logErr
+                                ready
+                                (noiseException err)
 
                         Noise.NoiseResultMessage plain noise3 ->
                             untrustedPlain
