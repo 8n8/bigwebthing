@@ -1627,11 +1627,18 @@ parsedPlainUpdate from plain ready =
         AllInOne p ->
             assembledUpdate from p ready
 
-        NotLastInSequence _ ->
-            undefined
+        NotLastInSequence chunk ->
+            ( AppendFileO (assemblingPath $ root ready) chunk
+            , ReadyS ready
+            )
 
         FinalChunk _ _ ->
             undefined
+
+
+assemblingPath :: RootPath -> FilePath
+assemblingPath root =
+    tempPath root </> "assembling"
 
 
 data Assembled
