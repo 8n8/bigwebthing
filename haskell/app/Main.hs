@@ -478,9 +478,34 @@ data Ready =
         }
 
 
-summarize :: Header -> Maybe Summary -> Int -> Summary
-summarize =
-    undefined
+summarize :: Header -> Maybe Summary -> Int -> Hash32 -> Summary
+summarize header old unique hash =
+    case old of
+    Nothing ->
+        Summary
+            { headerBlob = hash
+            , referenced =
+                Set.insert
+                    (wasm header)
+                    (Set.map hashB $ blobs header)
+            , subjectS = subject header
+            , sharersS = sharers header
+            , lastEditS = lastEdit header
+            , historyId = unique
+            }
+
+    Just oldSummary ->
+        Summary
+            { headerBlob = hash
+            , referenced =
+                Set.insert
+                    (wasm header)
+                    (Set.map hashB $ blobs header)
+            , subjectS = subject header
+            , sharersS = sharers header
+            , lastEditS = lastEdit header
+            , historyId = historyId oldSummary
+            }
 
 
 data AssemblingFile
@@ -2003,11 +2028,11 @@ blobsP = do
 
 blobP :: P.Parser Blob
 blobP = do
-    hash <- hash32P
+    hashB <- hash32P
     filename <- sizedStringP
     size <- uint64P
     mime <- sizedStringP
-    return $ Blob{hash, filename, size, mime}
+    return $ Blob{hashB, filename, size, mime}
 
 
 
@@ -2026,7 +2051,7 @@ sizedStringP = do
 makeRefs :: Header -> Set.Set Hash32
 makeRefs header =
     let
-    blobRefs = Set.map hash $ blobs header
+    blobRefs = Set.map hashB $ blobs header
     in
     Set.insert (wasm header) blobRefs
 
@@ -2044,7 +2069,7 @@ data Header
 
 data Blob
     = Blob
-        { hash :: Hash32
+        { hashB :: Hash32
         , filename :: T.Text
         , size :: Integer
         , mime :: T.Text
@@ -2912,6 +2937,7 @@ newMessageUpdate messageId header ready =
             header
             (Map.lookup messageId $ summaries ready)
             (counter ready)
+            hash
     historyPath =
         makeHistoryPath (root ready) (historyId summary)
     newReady =
@@ -3009,7 +3035,7 @@ encodeBlobs blobs =
 encodeBlob :: Blob -> Bl.ByteString
 encodeBlob blob =
     mconcat
-        [ encodeHash $ hash blob
+        [ encodeHash $ hashB blob
         , encodeString $ filename blob
         , encodeUint64 $ size blob
         , encodeString $ mime blob
