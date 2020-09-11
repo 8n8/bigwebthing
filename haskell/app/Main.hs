@@ -2874,17 +2874,14 @@ fromFrontendP = do
 addToWhitelistUpdate :: UserId -> Ready -> (Output, State)
 addToWhitelistUpdate (UserId username fingerprint) ready =
     let
-    newReady :: Ready
-    newReady =
-        ready
-            { whitelist =
-                Map.insert
-                    username
-                    (fingerprint, Nothing)
-                    (whitelist ready)
-            }
+    newWhitelist =
+        Map.insert username (fingerprint, Nothing) (whitelist ready)
+    newReady = ready { whitelist = newWhitelist }
+    encoded = encodeUsernames (Map.keys newWhitelist)
     in
-    (dumpCache newReady, ReadyS newReady)
+    ( BatchO [BytesInQO toServerQ encoded, dumpCache newReady]
+    , ReadyS newReady
+    )
 
 
 encodeUsernames :: [Username] -> Bl.ByteString
@@ -2896,10 +2893,7 @@ removeFromWhitelistUpdate :: UserId -> Ready -> (Output, State)
 removeFromWhitelistUpdate (UserId username fingerprint) ready =
     let
     newWhitelist =
-        Map.insert
-            username
-            (fingerprint, Nothing) 
-            (whitelist ready)
+        Map.insert username (fingerprint, Nothing) (whitelist ready)
     newReady = ready { whitelist = newWhitelist }
     encoded = encodeUsernames (Map.keys newWhitelist)
     in
