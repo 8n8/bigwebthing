@@ -169,6 +169,10 @@ io output =
             _ <- Bl.appendFile path toAppend
             return Nothing
 
+        AppendFileStrictO path toAppend -> do
+            _ <- B.appendFile path toAppend
+            return $ Just AppendedStrictM
+
         MakeSessionKeyO -> do
             key <- getEntropy sessionKeyLength
             return $ Just $ NewSessionKeyM key
@@ -316,6 +320,7 @@ data Output
     | MakeDhKeysO
     | AppendFileO FilePath Bl.ByteString
     | GetTimesO
+    | AppendFileStrictO FilePath B.ByteString
 
 
 data Msg
@@ -338,6 +343,7 @@ data Msg
     | TimesM [Clock.UTCTime]
     | NewSessionKeyM B.ByteString
     | RandomGenM CryptoRand.ChaChaDRG
+    | AppendedStrictM
 
 
 websocket :: Ws.ServerApp
@@ -469,7 +475,18 @@ data Ready =
         , summaries :: Map.Map MessageId Summary
         , randomGen :: CryptoRand.ChaChaDRG
         , counter :: Int
+        , assemblingFile :: Maybe AssemblingFile
         }
+
+
+data AssemblingFile
+    = Assembling TmpBase Blake.BLAKE2bState
+    | AddingFinal TmpBase Hash32
+    | Moving TmpBase Hash32
+
+
+type TmpBase
+    = Int
 
 
 data Summary
@@ -817,6 +834,40 @@ update model msg =
         RandomGenM gen ->
             updateInit model $ updateOnRandomGen gen
 
+        AppendedStrictM ->
+            updateReady model $ fileAssembledUpdate
+
+
+fileAssembledUpdate :: Ready -> (Output, State)
+fileAssembledUpdate ready =
+    case assemblingFile ready of
+        Nothing ->
+            (DoNothingO, ReadyS ready)
+
+        Just (Assembling pathBase hashState) ->
+            let
+                hash =
+                    Hash32 $ Bl.fromStrict $
+                    Blake.finalize 32 hashState
+                newReady =
+                    ready
+                        { assemblingFile =
+                            Just $ Moving pathBase hash
+                        }
+                finalPath = makeBlobPath (root ready) hash
+            in
+                ( MoveFileO
+                    (tempFile (root ready) pathBase)
+                    finalPath
+                , ReadyS newReady
+                )
+
+        Just (AddingFinal _ _) ->
+            (DoNothingO, ReadyS ready)
+
+        Just (Moving _ _) ->
+            (DoNothingO, ReadyS ready)
+
 
 updateOnRandomGen :: CryptoRand.ChaChaDRG -> Init -> (Output, State)
 updateOnRandomGen gen init_ =
@@ -1134,22 +1185,23 @@ fileExistenceUpdate path exists init_ =
                     let
                         ready =
                             Ready
-                            { root
-                            , blobsUp = NoJobs
-                            , getBlob = NoJobs
-                            , messageLocks = Set.empty
-                            , authStatus = GettingPowInfoA
-                            , handshakes = Map.empty
-                            , newDhKeys = newKeys
-                            , theTime = times
-                            , whitelist = Map.empty
-                            , blobLocks = Set.empty
-                            , sharePairs = Map.empty
-                            , sendingBlob = NoJobs
-                            , summaries = Map.empty
-                            , randomGen = gen
-                            , counter = 0
-                            }
+                                { root
+                                , blobsUp = NoJobs
+                                , getBlob = NoJobs
+                                , messageLocks = Set.empty
+                                , authStatus = GettingPowInfoA
+                                , handshakes = Map.empty
+                                , newDhKeys = newKeys
+                                , theTime = times
+                                , whitelist = Map.empty
+                                , blobLocks = Set.empty
+                                , sharePairs = Map.empty
+                                , sendingBlob = NoJobs
+                                , summaries = Map.empty
+                                , randomGen = gen
+                                , counter = 0
+                                , assemblingFile = Nothing
+                                }
                     in
                     ( BatchO
                         [ BytesInQO toServerQ $ Bl.singleton 0
@@ -1628,17 +1680,73 @@ parsedPlainUpdate from plain ready =
             assembledUpdate from p ready
 
         NotLastInSequence chunk ->
-            ( AppendFileO (assemblingPath $ root ready) chunk
-            , ReadyS ready
-            )
+            case assemblingFile ready of
+                Nothing ->
+                    let
+                        unique = counter ready
+                        hashState =
+                            Blake.update
+                                (Bl.toStrict chunk)
+                                (Blake.initialize 32)
+                        temp = tempFile (root ready) unique
+                        assemble = Assembling unique hashState
+                        newReady =
+                            ready
+                                { assemblingFile = Just assemble
+                                , counter = (counter ready) + 1
+                                }
+                    in
+                        (AppendFileO temp chunk, ReadyS newReady)
 
-        FinalChunk _ _ ->
-            undefined
+                Just (Assembling tmpBase oldHashState) ->
+                    let
+                        hashState =
+                            Blake.update
+                            (Bl.toStrict chunk)
+                            oldHashState
+                        temp = tempFile (root ready) tmpBase
+                        assemble = Assembling tmpBase hashState
+                        newReady =
+                            ready { assemblingFile = Just assemble }
+                    in
+                        (AppendFileO temp chunk, ReadyS newReady)
 
+                Just (AddingFinal _ _) ->
+                    (DoNothingO, ReadyS ready)
 
-assemblingPath :: RootPath -> FilePath
-assemblingPath root =
-    tempPath root </> "assembling"
+                Just (Moving _ _) ->
+                    (DoNothingO, ReadyS ready)
+
+        FinalChunk expectedHash chunk ->
+            case assemblingFile ready of
+                Nothing ->
+                    (DoNothingO, ReadyS ready)
+
+                Just (Assembling tmpBase oldHashState) ->
+                    let
+                        hash =
+                            Hash32 $
+                            Bl.fromStrict $
+                            Blake.finalize 32 $
+                            Blake.update
+                                (Bl.toStrict chunk)
+                                oldHashState
+                        temp = tempFile (root ready) tmpBase
+                        assemble = AddingFinal tmpBase hash
+                        newReady =
+                            ready { assemblingFile = Just assemble }
+                    in
+                        if expectedHash == hash then
+                            (AppendFileO temp chunk, ReadyS newReady)
+
+                        else
+                            (DoNothingO, ReadyS newReady)
+
+                Just (AddingFinal _ _) ->
+                    (DoNothingO, ReadyS ready)
+
+                Just (Moving _ _) ->
+                    (DoNothingO, ReadyS ready)
 
 
 data Assembled
@@ -1996,7 +2104,8 @@ sendBlob name hash ready =
             ( dumpCache ready
             , ReadyS $ ready
                 { sendingBlob =
-                    Jobs current $ append (SendWait hash name) pending
+                    Jobs current $
+                    append (SendWait hash name) pending
                 }
             )
 
@@ -2914,6 +3023,11 @@ hash32 =
     Bl.foldrChunks Blake.update (Blake.initialize 32)
 
 
+tempFile :: RootPath -> Int -> FilePath
+tempFile root unique =
+    tempPath root </> show unique
+
+
 tempPath :: RootPath -> FilePath
 tempPath (RootPath root) =
     root </> "temporary"
@@ -3303,6 +3417,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
                 , randomGen = gen
                 , summaries = summariesM memCache
                 , counter = counterM memCache
+                , assemblingFile = Nothing
                 }
             )
 
