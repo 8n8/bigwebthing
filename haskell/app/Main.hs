@@ -71,111 +71,111 @@ mainHelp oldState oldMsg = do
 io :: Output -> IO (Maybe Msg)
 io output =
     case output of
-        GetRandomGenO -> do
-            drg <- CryptoRand.drgNew
-            return $ Just $ RandomGenM drg
+    GetRandomGenO -> do
+        drg <- CryptoRand.drgNew
+        return $ Just $ RandomGenM drg
 
-        DoNothingO ->
-            return Nothing
+    DoNothingO ->
+        return Nothing
 
-        GetAppDataDirO -> do
-            dir <- Dir.getXdgDirectory Dir.XdgData ""
-            return $ Just $ AppDataDirM dir
+    GetAppDataDirO -> do
+        dir <- Dir.getXdgDirectory Dir.XdgData ""
+        return $ Just $ AppDataDirM dir
 
-        MakeDirIfMissingO path -> do
-            Dir.createDirectoryIfMissing False path
-            return $ Just $ DirCreatedIfMissingM path
+    MakeDirIfMissingO path -> do
+        Dir.createDirectoryIfMissing False path
+        return $ Just $ DirCreatedIfMissingM path
 
-        ReadFileO path -> do
-            bytes <- Bl.readFile path
-            return $ Just $ FileContentsM path bytes
+    ReadFileO path -> do
+        bytes <- Bl.readFile path
+        return $ Just $ FileContentsM path bytes
 
-        BatchO outputs -> do
-            inputs <- mapM io outputs
-            return $ Just $ BatchM inputs
+    BatchO outputs -> do
+        inputs <- mapM io outputs
+        return $ Just $ BatchM inputs
 
-        StartUiO -> do
-            Wv.createWindowAndBlock
-                Wv.WindowParams
-                    { Wv.windowParamsTitle = "BigWebThing"
-                    , Wv.windowParamsUri = clientUrl <> "/static"
-                    , Wv.windowParamsWidth = 800
-                    , Wv.windowParamsHeight = 600
-                    , Wv.windowParamsResizable = True
-                    , Wv.windowParamsDebuggable = True
-                    }
-            return Nothing
+    StartUiO -> do
+        Wv.createWindowAndBlock
+            Wv.WindowParams
+                { Wv.windowParamsTitle = "BigWebThing"
+                , Wv.windowParamsUri = clientUrl <> "/static"
+                , Wv.windowParamsWidth = 800
+                , Wv.windowParamsHeight = 600
+                , Wv.windowParamsResizable = True
+                , Wv.windowParamsDebuggable = True
+                }
+        return Nothing
 
-        StartUiServerO -> do
-            app <- httpApi
-            run clientPort $ websocketsOr
-                Ws.defaultConnectionOptions websocket app
-            return Nothing
+    StartUiServerO -> do
+        app <- httpApi
+        run clientPort $ websocketsOr
+            Ws.defaultConnectionOptions websocket app
+        return Nothing
 
-        ErrorO err ->
-            error err
+    ErrorO err ->
+        error err
 
-        GetTmpFileHandleO path -> do
-            (filePath, handle) <-
-                Io.openBinaryTempFileWithDefaultPermissions path ""
-            return $ Just $ TmpFileHandleM filePath handle
+    GetTmpFileHandleO path -> do
+        (filePath, handle) <-
+            Io.openBinaryTempFileWithDefaultPermissions path ""
+        return $ Just $ TmpFileHandleM filePath handle
 
-        WriteToHandleO handle bytes path -> do
-            Bl.hPut handle bytes
-            return $ Just $ WrittenToHandleM path handle
+    WriteToHandleO handle bytes path -> do
+        Bl.hPut handle bytes
+        return $ Just $ WrittenToHandleM path handle
 
-        MoveFileO oldPath newPath -> do
-            Dir.renameFile oldPath newPath
-            return $ Just $ MovedFileM newPath
+    MoveFileO oldPath newPath -> do
+        Dir.renameFile oldPath newPath
+        return $ Just $ MovedFileM newPath
 
-        BytesInQO q bytes -> do
-            Stm.atomically $ do
-                q_ <- q
-                Q.writeTQueue q_ bytes
-            return Nothing
+    BytesInQO q bytes -> do
+        Stm.atomically $ do
+            q_ <- q
+            Q.writeTQueue q_ bytes
+        return Nothing
 
-        CloseFileO handle -> do
-            Io.hClose handle
-            return Nothing
+    CloseFileO handle -> do
+        Io.hClose handle
+        return Nothing
 
-        ReadFileLazyO path -> do
-            bytes <- Bl.readFile path
-            return $ Just $ LazyFileContentsM path bytes
+    ReadFileLazyO path -> do
+        bytes <- Bl.readFile path
+        return $ Just $ LazyFileContentsM path bytes
 
-        WriteFileO path contents -> do
-            Bl.writeFile path contents
-            return Nothing
+    WriteFileO path contents -> do
+        Bl.writeFile path contents
+        return Nothing
 
-        StartTcpClientO -> do
-            tcpClient
-            return Nothing
+    StartTcpClientO -> do
+        tcpClient
+        return Nothing
 
-        DoesFileExistO path -> do
-            exists <- Dir.doesFileExist path
-            return $ Just $ FileExistenceM path exists
+    DoesFileExistO path -> do
+        exists <- Dir.doesFileExist path
+        return $ Just $ FileExistenceM path exists
 
-        MakeDhKeysO -> do
-            keys <- mapM (\_ -> Dh.dhGenKey) ([1..] :: [Integer])
-            return $ Just $ NewDhKeysM keys
+    MakeDhKeysO -> do
+        keys <- mapM (\_ -> Dh.dhGenKey) ([1..] :: [Integer])
+        return $ Just $ NewDhKeysM keys
 
-        GetTimesO -> do
-            times <-
-                mapM
-                    (\_ -> Clock.getCurrentTime)
-                    ([1..] :: [Integer])
-            return $ Just $ TimesM times
+    GetTimesO -> do
+        times <-
+            mapM
+                (\_ -> Clock.getCurrentTime)
+                ([1..] :: [Integer])
+        return $ Just $ TimesM times
 
-        AppendFileO path toAppend -> do
-            _ <- Bl.appendFile path toAppend
-            return Nothing
+    AppendFileO path toAppend -> do
+        _ <- Bl.appendFile path toAppend
+        return Nothing
 
-        AppendFileStrictO path toAppend -> do
-            _ <- B.appendFile path toAppend
-            return $ Just AppendedStrictM
+    AppendFileStrictO path toAppend -> do
+        _ <- B.appendFile path toAppend
+        return $ Just AppendedStrictM
 
-        MakeSessionKeyO -> do
-            key <- getEntropy sessionKeyLength
-            return $ Just $ NewSessionKeyM key
+    MakeSessionKeyO -> do
+        key <- getEntropy sessionKeyLength
+        return $ Just $ NewSessionKeyM key
 
 
 maxMessageLength =
@@ -210,31 +210,30 @@ tcpListen :: Tcp.Socket -> IO ()
 tcpListen conn = do
     maybeRawLength <- Tcp.recv conn 2
     case maybeRawLength of
-        Nothing -> do
+        Nothing ->
             restartTcp
 
         Just rawLength ->
             case parseLength $ Bl.fromStrict rawLength of
-                Left err ->
-                    error err
+            Left err ->
+                error err
 
-                Right len ->
-                    if len > maxMessageLength then
-                        error $
-                            "TCP too long: " ++ show len
-                    else do
-                        maybeMessage <- Tcp.recv conn len
-                        case maybeMessage of
-                            Nothing -> do
-                                restartTcp
+            Right len ->
+                if len > maxMessageLength then
+                error $
+                    "TCP too long: " ++ show len
+                else do
+                    maybeMessage <- Tcp.recv conn len
+                    case maybeMessage of
+                        Nothing ->
+                            restartTcp
 
-                            Just message -> do
-                                Stm.atomically $ do
-                                    q <- msgQ
-                                    Q.writeTQueue q $ FromServerM $
-                                        Bl.fromStrict message
-                                tcpListen conn
-
+                        Just message -> do
+                            Stm.atomically $ do
+                                q <- msgQ
+                                Q.writeTQueue q $ FromServerM $
+                                    Bl.fromStrict message
+                            tcpListen conn
 
 
 tcpDelay =
@@ -273,9 +272,9 @@ httpPost
     -> Sc.ActionM ()
 httpPost msg =
     let
-        responseQ :: Q
-        responseQ =
-            Q.newTQueue
+    responseQ :: Q
+    responseQ =
+        Q.newTQueue
     in do
         body <- Sc.body
         liftIO $ Stm.atomically $ do
@@ -420,14 +419,14 @@ data BlobUp
 promoteBlobsUp :: Jobs BlobUp BlobUpWait -> Jobs BlobUp BlobUpWait
 promoteBlobsUp jobs =
     case jobs of
-        NoJobs ->
-            NoJobs
+    NoJobs ->
+        NoJobs
 
-        Jobs _ [] ->
-            NoJobs
+    Jobs _ [] ->
+        NoJobs
 
-        Jobs _ (BlobUpWait body q : aiting) ->
-            Jobs (AwaitingHandleB q body (hash32 body)) aiting
+    Jobs _ (BlobUpWait body q : aiting) ->
+        Jobs (AwaitingHandleB q body (hash32 body)) aiting
 
 
 data State
@@ -541,32 +540,32 @@ newtype FirstMessage
 instance Ord HandshakeId where
     compare (HandshakeId u1 p1) (HandshakeId u2 p2) =
         case (compare u1 u2, compare p1 p2) of
-            (LT, LT) ->
-                LT
+        (LT, LT) ->
+            LT
 
-            (LT, GT) ->
-                LT
+        (LT, GT) ->
+            LT
 
-            (GT, LT) ->
-                GT
+        (GT, LT) ->
+            GT
 
-            (GT, GT) ->
-                GT
+        (GT, GT) ->
+            GT
 
-            (LT, EQ) ->
-                LT
+        (LT, EQ) ->
+            LT
 
-            (GT, EQ) ->
-                GT
+        (GT, EQ) ->
+            GT
 
-            (EQ, LT) ->
-                LT
+        (EQ, LT) ->
+            LT
 
-            (EQ, GT) ->
-                GT
+        (EQ, GT) ->
+            GT
 
-            (EQ, EQ) ->
-                EQ
+        (EQ, EQ) ->
+            EQ
 
 
 instance Eq FirstMessage where
@@ -643,17 +642,17 @@ updateOnLazyFileContents
     -> (Output, State)
 updateOnLazyFileContents path bytes ready =
     case getBlob ready of
-        NoJobs ->
-            (DoNothingO, ReadyS ready)
+    NoJobs ->
+        (DoNothingO, ReadyS ready)
 
-        jobs@(Jobs (GetBlob q hash) _) ->
-            if path == makeBlobPath (root ready) hash then
-                ( BytesInQO q bytes
-                , ReadyS $ ready { getBlob = promoteGetBlob jobs }
-                )
+    jobs@(Jobs (GetBlob q hash) _) ->
+        if path == makeBlobPath (root ready) hash then
+        ( BytesInQO q bytes
+        , ReadyS $ ready { getBlob = promoteGetBlob jobs }
+        )
 
-            else
-                (DoNothingO, ReadyS ready)
+        else
+        (DoNothingO, ReadyS ready)
 
 
 promoteGetBlob
@@ -661,14 +660,14 @@ promoteGetBlob
     -> Jobs GetBlob GetBlobWait
 promoteGetBlob jobs =
     case jobs of
-        NoJobs ->
-            NoJobs
+    NoJobs ->
+        NoJobs
 
-        Jobs _ [] ->
-            NoJobs
+    Jobs _ [] ->
+        NoJobs
 
-        Jobs _ (GetBlobWait body q : aiting) ->
-            Jobs (GetBlob q (hash32 body)) aiting
+    Jobs _ (GetBlobWait body q : aiting) ->
+        Jobs (GetBlob q (hash32 body)) aiting
 
 
 cacheSummary :: RootPath -> Summary -> Output
@@ -734,171 +733,171 @@ encodeTime (PosixMillis t) =
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
 updateReady model f =
     case model of
-        InitS _ ->
-            (DoNothingO, model)
+    InitS _ ->
+        (DoNothingO, model)
 
-        FailedS ->
-            (DoNothingO, model)
+    FailedS ->
+        (DoNothingO, model)
 
-        ReadyS ready ->
-            f ready
+    ReadyS ready ->
+        f ready
 
 
 updateInit :: State -> (Init -> (Output, State)) -> (Output, State)
 updateInit model f =
     case model of
-        InitS init_ ->
-            f init_
+    InitS init_ ->
+        f init_
 
-        FailedS ->
-            (DoNothingO, model)
+    FailedS ->
+        (DoNothingO, model)
 
-        ReadyS _ ->
-            (DoNothingO, model)
+    ReadyS _ ->
+        (DoNothingO, model)
 
 
 update :: State -> Msg -> (Output, State)
 update model msg =
     case msg of
-        StartM ->
-            ( BatchO [GetAppDataDirO, StartTcpClientO]
-            , InitS EmptyI
+    StartM ->
+        ( BatchO [GetAppDataDirO, StartTcpClientO]
+        , InitS EmptyI
+        )
+
+    LazyFileContentsM path bytes ->
+        updateReady model $ updateOnLazyFileContents path bytes
+
+    AppDataDirM path ->
+        ( MakeDirIfMissingO $ makeRootPath path
+        , InitS $ MakingRootDirI $ RootPath $ makeRootPath path
+        )
+
+    DirCreatedIfMissingM path ->
+        updateInit model $ dirCreatedUpdate path
+
+    FileContentsM path contents ->
+        updateInit model $ fileContentsUpdate path contents
+
+    BatchM msgs ->
+        let
+        (outputs, newModel) = batchUpdate model msgs []
+        in
+        (BatchO outputs, newModel)
+
+    SetBlobM blob responseQ ->
+        updateReady model $ setBlobUpdate blob responseQ
+
+    TmpFileHandleM path handle ->
+        updateReady model $ onTmpFileHandleUpdate path handle
+
+    WrittenToHandleM path handle ->
+        updateReady model $ onWrittenToTmp path handle
+
+    MovedFileM new ->
+        updateReady model $ onMovedFile new
+
+    FromWebsocketM raw ->
+        case raw of
+        Ws.Text _ _ ->
+            ( ErrorO "received text message from websocket"
+            , FailedS
             )
 
-        LazyFileContentsM path bytes ->
-            updateReady model $ updateOnLazyFileContents path bytes
+        Ws.Binary bin ->
+            case parseFromFrontend bin of
+            Left err ->
+                ( ErrorO $
+                    "couldn't parse API input: " <> err
+                , FailedS
+                )
 
-        AppDataDirM path ->
-            ( MakeDirIfMissingO $ makeRootPath path
-            , InitS $ MakingRootDirI $ RootPath $ makeRootPath path
-            )
+            Right apiInput ->
+                uiApiUpdate apiInput model
 
-        DirCreatedIfMissingM path ->
-            updateInit model $ dirCreatedUpdate path
+    GetBlobM body q ->
+        updateReady model $ onGetBlobUpdate body q
 
-        FileContentsM path contents ->
-            updateInit model $ fileContentsUpdate path contents
+    FromServerM raw ->
+        updateReady model $ fromServerUpdate raw
 
-        BatchM msgs ->
-            let
-                (outputs, newModel) = batchUpdate model msgs []
-            in
-                (BatchO outputs, newModel)
+    RestartingTcpM ->
+        updateReady model restartingTcpUpdate
 
-        SetBlobM blob responseQ ->
-            updateReady model $ setBlobUpdate blob responseQ
+    FileExistenceM path exists ->
+        updateInit model $ fileExistenceUpdate path exists
 
-        TmpFileHandleM path handle ->
-            updateReady model $ onTmpFileHandleUpdate path handle
+    NewDhKeysM keys ->
+        updateInit model $ newDhKeysUpdate keys
 
-        WrittenToHandleM path handle ->
-            updateReady model $ onWrittenToTmp path handle
+    TimesM times ->
+        updateInit model $ updateOnTimes times
 
-        MovedFileM new ->
-            updateReady model $ onMovedFile new
+    NewSessionKeyM rawKey ->
+        updateReady model $ updateOnNewSessionKey rawKey
 
-        FromWebsocketM raw ->
-            case raw of
-                Ws.Text _ _ ->
-                    ( ErrorO "received text message from websocket"
-                    , FailedS
-                    )
+    RandomGenM gen ->
+        updateInit model $ updateOnRandomGen gen
 
-                Ws.Binary bin ->
-                    case parseFromFrontend bin of
-                        Left err ->
-                            ( ErrorO $
-                                "couldn't parse API input: " <> err
-                            , FailedS
-                            )
-
-                        Right apiInput ->
-                            uiApiUpdate apiInput model
-
-        GetBlobM body q ->
-            updateReady model $ onGetBlobUpdate body q
-
-        FromServerM raw ->
-            updateReady model $ fromServerUpdate raw
-
-        RestartingTcpM ->
-            updateReady model restartingTcpUpdate
-
-        FileExistenceM path exists ->
-            updateInit model $ fileExistenceUpdate path exists
-
-        NewDhKeysM keys ->
-            updateInit model $ newDhKeysUpdate keys
-
-        TimesM times ->
-            updateInit model $ updateOnTimes times
-
-        NewSessionKeyM rawKey ->
-            updateReady model $ updateOnNewSessionKey rawKey
-
-        RandomGenM gen ->
-            updateInit model $ updateOnRandomGen gen
-
-        AppendedStrictM ->
-            updateReady model $ fileAssembledUpdate
+    AppendedStrictM ->
+        updateReady model $ fileAssembledUpdate
 
 
 fileAssembledUpdate :: Ready -> (Output, State)
 fileAssembledUpdate ready =
     case assemblingFile ready of
-        Nothing ->
-            (DoNothingO, ReadyS ready)
+    Nothing ->
+        (DoNothingO, ReadyS ready)
 
-        Just (Assembling pathBase hashState) ->
-            let
-                hash =
-                    Hash32 $ Bl.fromStrict $
-                    Blake.finalize 32 hashState
-                newReady =
-                    ready
-                        { assemblingFile =
-                            Just $ Moving pathBase hash
-                        }
-                finalPath = makeBlobPath (root ready) hash
-            in
-                ( MoveFileO
-                    (tempFile (root ready) pathBase)
-                    finalPath
-                , ReadyS newReady
-                )
+    Just (Assembling pathBase hashState) ->
+        let
+            hash =
+                Hash32 $ Bl.fromStrict $
+                Blake.finalize 32 hashState
+            newReady =
+                ready
+                    { assemblingFile =
+                        Just $ Moving pathBase hash
+                    }
+            finalPath = makeBlobPath (root ready) hash
+        in
+            ( MoveFileO
+                (tempFile (root ready) pathBase)
+                finalPath
+            , ReadyS newReady
+            )
 
-        Just (AddingFinal _ _) ->
-            (DoNothingO, ReadyS ready)
+    Just (AddingFinal _ _) ->
+        (DoNothingO, ReadyS ready)
 
-        Just (Moving _ _) ->
-            (DoNothingO, ReadyS ready)
+    Just (Moving _ _) ->
+        (DoNothingO, ReadyS ready)
 
 
 updateOnRandomGen :: CryptoRand.ChaChaDRG -> Init -> (Output, State)
 updateOnRandomGen gen init_ =
     case init_ of
-        EmptyI ->
-            pass
+    EmptyI ->
+        pass
 
-        MakingRootDirI _ ->
-            pass
+    MakingRootDirI _ ->
+        pass
 
-        MakingDhKeysI _ ->
-            pass
+    MakingDhKeysI _ ->
+        pass
 
-        GettingTimes _ _ ->
-            pass
+    GettingTimes _ _ ->
+        pass
 
-        GettingRandomGen root dhKeys times ->
-            ( DoesFileExistO $ keysPath root
-            , InitS $ DoKeysExistI root dhKeys times gen
-            )
+    GettingRandomGen root dhKeys times ->
+        ( DoesFileExistO $ keysPath root
+        , InitS $ DoKeysExistI root dhKeys times gen
+        )
 
-        DoKeysExistI _ _ _ _ ->
-            pass
+    DoKeysExistI _ _ _ _ ->
+        pass
 
-        GettingKeysFromFileI _ _ _ _ ->
-            pass
+    GettingKeysFromFileI _ _ _ _ ->
+        pass
 
   where
     pass = (DoNothingO, InitS init_)
@@ -907,17 +906,17 @@ updateOnRandomGen gen init_ =
 updateOnNewSessionKey :: B.ByteString -> Ready -> (Output, State)
 updateOnNewSessionKey raw ready =
     case authStatus ready of
-        GettingPowInfoA ->
-            pass
+    GettingPowInfoA ->
+        pass
 
-        GeneratingSessionKey difficulty unique ->
-            signUpHelp difficulty unique raw ready
+    GeneratingSessionKey difficulty unique ->
+        signUpHelp difficulty unique raw ready
 
-        AwaitingUsername _ _ ->
-            pass
+    AwaitingUsername _ _ ->
+        pass
 
-        LoggedIn _ ->
-            pass
+    LoggedIn _ ->
+        pass
 
   where
     pass = (DoNothingO, ReadyS ready)
@@ -931,32 +930,33 @@ signUpHelp
     -> (Output, State)
 signUpHelp difficulty unique raw ready =
     case newDhKeys ready of
-        [] ->
-            (ErrorO "no DH keys", FailedS)
+    [] ->
+        (ErrorO "no DH keys", FailedS)
 
-        dh : keys ->
-            let
-                myStatic = MyStatic dh
-                session = SessionKey $ Bl.fromStrict raw
-                newReady = ready
-                    { authStatus = AwaitingUsername myStatic session
-                    , newDhKeys = keys
-                    }
-                eitherSignUp =
-                    makeSignUp difficulty unique session myStatic
-            in case eitherSignUp of
-                Left err ->
-                    ( ErrorO $ "could not sign up: " <> err
-                    , FailedS
-                    )
+    dh : keys ->
+        let
+            myStatic = MyStatic dh
+            session = SessionKey $ Bl.fromStrict raw
+            newReady = ready
+                { authStatus = AwaitingUsername myStatic session
+                , newDhKeys = keys
+                }
+            eitherSignUp =
+                makeSignUp difficulty unique session myStatic
+        in
+        case eitherSignUp of
+        Left err ->
+            ( ErrorO $ "could not sign up: " <> err
+            , FailedS
+            )
 
-                Right signUp ->
-                    ( BatchO
-                        [ BytesInQO toServerQ signUp
-                        , dumpCache newReady
-                        ]
-                    , ReadyS newReady
-                    )
+        Right signUp ->
+            ( BatchO
+                [ BytesInQO toServerQ signUp
+                , dumpCache newReady
+                ]
+            , ReadyS newReady
+            )
 
 
 fingerprintSalt =
@@ -978,12 +978,13 @@ makeFingerprint (Username usernameLazy) key =
             (asBytes <> username)
             fingerprintSalt
             fingerprintLength
-    in case hashE of
-        CryptoPassed hash ->
-            Right $ Fingerprint $ Bl.fromStrict hash
+    in
+    case hashE of
+    CryptoPassed hash ->
+        Right $ Fingerprint $ Bl.fromStrict hash
 
-        CryptoFailed err ->
-            Left $ show err
+    CryptoFailed err ->
+        Left $ show err
 
 
 makeSignUp
@@ -1054,16 +1055,17 @@ powHelp difficulty unique counter =
             (Bl.toStrict $ unique <> candidate)
             powSalt
             powHashLength
-    in case hashE of
-        CryptoPassed hash ->
-            if isDifficult hash difficulty then
-                Right candidate
+    in
+    case hashE of
+    CryptoPassed hash ->
+        if isDifficult hash difficulty then
+            Right candidate
 
-            else
-                powHelp difficulty unique (counter + 1)
+        else
+            powHelp difficulty unique (counter + 1)
 
-        CryptoFailed err ->
-            Left $ show err
+    CryptoFailed err ->
+        Left $ show err
 
 
 encodeUint64 :: Integer -> Bl.ByteString
@@ -1098,28 +1100,28 @@ isDifficult bytes difficulty =
 updateOnTimes :: [Clock.UTCTime] -> Init -> (Output, State)
 updateOnTimes times init_ =
     case init_ of
-        EmptyI ->
-            pass
+    EmptyI ->
+        pass
 
-        MakingRootDirI _ ->
-            pass
+    MakingRootDirI _ ->
+        pass
 
-        MakingDhKeysI _ ->
-            pass
+    MakingDhKeysI _ ->
+        pass
 
-        GettingTimes root dhKeys ->
-            ( GetRandomGenO
-            , InitS $ GettingRandomGen root dhKeys times
-            )
+    GettingTimes root dhKeys ->
+        ( GetRandomGenO
+        , InitS $ GettingRandomGen root dhKeys times
+        )
 
-        GettingRandomGen _ _ _ ->
-            pass
+    GettingRandomGen _ _ _ ->
+        pass
 
-        DoKeysExistI _ _ _ _ ->
-            pass
+    DoKeysExistI _ _ _ _ ->
+        pass
 
-        GettingKeysFromFileI _ _ _ _ ->
-            pass
+    GettingKeysFromFileI _ _ _ _ ->
+        pass
 
   where
     pass = (DoNothingO, InitS init_)
@@ -1128,26 +1130,26 @@ updateOnTimes times init_ =
 newDhKeysUpdate :: [Dh.KeyPair Curve25519] -> Init -> (Output, State)
 newDhKeysUpdate newKeys init_ =
     case init_ of
-        EmptyI ->
-            pass
+    EmptyI ->
+        pass
 
-        MakingRootDirI _ ->
-            pass
+    MakingRootDirI _ ->
+        pass
 
-        MakingDhKeysI root ->
-            (GetTimesO, InitS $ GettingTimes root newKeys)
+    MakingDhKeysI root ->
+        (GetTimesO, InitS $ GettingTimes root newKeys)
 
-        GettingTimes _ _ ->
-            pass
+    GettingTimes _ _ ->
+        pass
 
-        GettingRandomGen _ _ _ ->
-            pass
+    GettingRandomGen _ _ _ ->
+        pass
 
-        DoKeysExistI _ _ _ _ ->
-            pass
+    DoKeysExistI _ _ _ _ ->
+        pass
 
-        GettingKeysFromFileI _ _ _ _ ->
-            pass
+    GettingKeysFromFileI _ _ _ _ ->
+        pass
 
   where
     pass = (DoNothingO, InitS init_)
@@ -1160,66 +1162,66 @@ newtype MyStatic
 fileExistenceUpdate :: FilePath -> Bool -> Init -> (Output, State)
 fileExistenceUpdate path exists init_ =
     case init_ of
-        EmptyI ->
+    EmptyI ->
+        pass
+
+    MakingRootDirI _ ->
+        pass
+
+    MakingDhKeysI _ ->
+        pass
+
+    GettingTimes _ _ ->
+        pass
+
+    GettingRandomGen _ _ _ ->
+        pass
+
+    DoKeysExistI root newKeys times gen ->
+        case (exists, path == keysPath root) of
+        (True, True) ->
+            ( ReadFileO $ keysPath root
+            , InitS $
+                GettingKeysFromFileI root newKeys times gen
+            )
+
+        (True, False) ->
             pass
 
-        MakingRootDirI _ ->
+        (False, True) ->
+            let
+                ready =
+                    Ready
+                        { root
+                        , blobsUp = NoJobs
+                        , getBlob = NoJobs
+                        , messageLocks = Set.empty
+                        , authStatus = GettingPowInfoA
+                        , handshakes = Map.empty
+                        , newDhKeys = newKeys
+                        , theTime = times
+                        , whitelist = Map.empty
+                        , blobLocks = Set.empty
+                        , sharePairs = Map.empty
+                        , sendingBlob = NoJobs
+                        , summaries = Map.empty
+                        , randomGen = gen
+                        , counter = 0
+                        , assemblingFile = Nothing
+                        }
+            in
+            ( BatchO
+                [ BytesInQO toServerQ $ Bl.singleton 0
+                , dumpCache ready
+                ]
+            , ReadyS ready
+            )
+
+        (False, False) ->
             pass
 
-        MakingDhKeysI _ ->
-            pass
-
-        GettingTimes _ _ ->
-            pass
-
-        GettingRandomGen _ _ _ ->
-            pass
-
-        DoKeysExistI root newKeys times gen ->
-            case (exists, path == keysPath root) of
-                (True, True) ->
-                    ( ReadFileO $ keysPath root
-                    , InitS $
-                        GettingKeysFromFileI root newKeys times gen
-                    )
-
-                (True, False) ->
-                    pass
-
-                (False, True) ->
-                    let
-                        ready =
-                            Ready
-                                { root
-                                , blobsUp = NoJobs
-                                , getBlob = NoJobs
-                                , messageLocks = Set.empty
-                                , authStatus = GettingPowInfoA
-                                , handshakes = Map.empty
-                                , newDhKeys = newKeys
-                                , theTime = times
-                                , whitelist = Map.empty
-                                , blobLocks = Set.empty
-                                , sharePairs = Map.empty
-                                , sendingBlob = NoJobs
-                                , summaries = Map.empty
-                                , randomGen = gen
-                                , counter = 0
-                                , assemblingFile = Nothing
-                                }
-                    in
-                    ( BatchO
-                        [ BytesInQO toServerQ $ Bl.singleton 0
-                        , dumpCache ready
-                        ]
-                    , ReadyS ready
-                    )
-
-                (False, False) ->
-                    pass
-
-        GettingKeysFromFileI _ _ _ _ ->
-            pass
+    GettingKeysFromFileI _ _ _ _ ->
+        pass
 
   where
     pass = (DoNothingO, InitS init_)
@@ -1232,20 +1234,21 @@ restartingTcpUpdate ready =
             ( BytesInQO toServerQ $ Bl.singleton 0
             , ReadyS $ ready { authStatus = GettingPowInfoA }
             )
-    in case authStatus ready of
-        GettingPowInfoA ->
-            startAuth
+    in
+    case authStatus ready of
+    GettingPowInfoA ->
+        startAuth
 
-        GeneratingSessionKey _ _ ->
-            startAuth
+    GeneratingSessionKey _ _ ->
+        startAuth
 
-        AwaitingUsername _ _ ->
-            startAuth
+    AwaitingUsername _ _ ->
+        startAuth
 
-        LoggedIn (StaticKeys _ sessionKey username _) ->
-            ( BytesInQO toServerQ $ logIn sessionKey username
-            , ReadyS ready
-            )
+    LoggedIn (StaticKeys _ sessionKey username _) ->
+        ( BytesInQO toServerQ $ logIn sessionKey username
+        , ReadyS ready
+        )
 
 
 logIn :: SessionKey -> Username -> Bl.ByteString
@@ -1260,25 +1263,25 @@ logIn (SessionKey sessionKey) (Username username) =
 fromServerUpdate :: Bl.ByteString -> Ready -> (Output, State)
 fromServerUpdate raw ready =
     case P.eitherResult $ P.parse fromServerP raw of
-        Left err ->
-            logErr ready $ T.concat
-                [ "could not parse server message: "
-                , T.pack err
-                ]
+    Left err ->
+        logErr ready $ T.concat
+            [ "could not parse server message: "
+            , T.pack err
+            ]
 
-        Right (NewMessageT username message) ->
-            messageInUpdate username message ready
+    Right (NewMessageT username message) ->
+        messageInUpdate username message ready
 
-        Right (NewUsername username) ->
-            newUserIdUpdate username ready
+    Right (NewUsername username) ->
+        newUserIdUpdate username ready
 
-        Right (PowInfoT difficulty unique) ->
-            newPowInfoUpdate difficulty unique ready
+    Right (PowInfoT difficulty unique) ->
+        newPowInfoUpdate difficulty unique ready
 
-        Right (Price price) ->
-            ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
-            , ReadyS ready
-            )
+    Right (Price price) ->
+        ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
+        , ReadyS ready
+        )
 
 
 newPowInfoUpdate
@@ -1288,21 +1291,21 @@ newPowInfoUpdate
     -> (Output, State)
 newPowInfoUpdate difficulty unique ready =
     case authStatus ready of
-        GettingPowInfoA ->
-            ( MakeSessionKeyO
-            , ReadyS $ ready
-                { authStatus = GeneratingSessionKey difficulty unique
-                }
-            )
+    GettingPowInfoA ->
+        ( MakeSessionKeyO
+        , ReadyS $ ready
+            { authStatus = GeneratingSessionKey difficulty unique
+            }
+        )
 
-        GeneratingSessionKey _ _ ->
-            pass
+    GeneratingSessionKey _ _ ->
+        pass
 
-        AwaitingUsername _ _ ->
-            pass
+    AwaitingUsername _ _ ->
+        pass
 
-        LoggedIn _ ->
-            pass
+    LoggedIn _ ->
+        pass
 
   where
     pass = (DoNothingO, ReadyS ready)
@@ -1311,45 +1314,45 @@ newPowInfoUpdate difficulty unique ready =
 newUserIdUpdate :: Username -> Ready -> (Output, State)
 newUserIdUpdate username ready =
     case authStatus ready of
-        GettingPowInfoA ->
-            pass
+    GettingPowInfoA ->
+        pass
 
-        GeneratingSessionKey _ _ ->
-            pass
+    GeneratingSessionKey _ _ ->
+        pass
 
-        AwaitingUsername staticDh@(MyStatic (_, pub)) sessionKey ->
-            case makeFingerprint username pub of
-                Left err ->
-                    ( ErrorO $ "couldn't make fingerprint: " ++ err
-                    , FailedS
-                    )
+    AwaitingUsername staticDh@(MyStatic (_, pub)) sessionKey ->
+        case makeFingerprint username pub of
+        Left err ->
+            ( ErrorO $ "couldn't make fingerprint: " ++ err
+            , FailedS
+            )
 
-                Right fingerprint ->
-                    let
-                        newReady =
-                            ready
-                                { authStatus = LoggedIn $
-                                    StaticKeys
-                                        { staticDh
-                                        , sessionKey
-                                        , username
-                                        , fingerprint
-                                        }
+        Right fingerprint ->
+            let
+                newReady =
+                    ready
+                        { authStatus = LoggedIn $
+                            StaticKeys
+                                { staticDh
+                                , sessionKey
+                                , username
+                                , fingerprint
                                 }
-                    in
-                        ( BatchO
-                            [ BytesInQO
-                                toServerQ
-                                (logIn sessionKey username)
-                            , dumpCache newReady
-                            ]
-                        , ReadyS newReady
-                        )
+                        }
+            in
+                ( BatchO
+                    [ BytesInQO
+                        toServerQ
+                        (logIn sessionKey username)
+                    , dumpCache newReady
+                    ]
+                , ReadyS newReady
+                )
 
-        LoggedIn _ ->
-            logErr
-                ready
-                "received new username but authstatus is LoggedIn"
+    LoggedIn _ ->
+        logErr
+            ready
+            "received new username but authstatus is LoggedIn"
 
   where
     pass = (DoNothingO, ReadyS ready)
@@ -1421,16 +1424,16 @@ data Plaintext
 logErr :: Ready -> T.Text -> (Output, State)
 logErr ready err =
     case theTime ready of
-        [] ->
-            ( ErrorO "no timestamps available", FailedS)
+    [] ->
+        ( ErrorO "no timestamps available", FailedS)
 
-        t : ime ->
-            ( AppendFileO (logPath $ root ready) .
-              Bl.fromStrict .
-              encodeUtf8 $
-              T.pack (show t) <> " " <> err <> "\n"
-            , ReadyS $ ready { theTime = ime }
-            )
+    t : ime ->
+        ( AppendFileO (logPath $ root ready) .
+          Bl.fromStrict .
+          encodeUtf8 $
+          T.pack (show t) <> " " <> err <> "\n"
+        , ReadyS $ ready { theTime = ime }
+        )
 
 
 messageInUpdate
@@ -1440,18 +1443,18 @@ messageInUpdate
     -> (Output, State)
 messageInUpdate from (ClientToClient raw) ready =
     case P.eitherResult $ P.parse ciphertextP raw of
-        Left err ->
-            logErr ready $
-                "could not parse ciphertext: " <> T.pack err
+    Left err ->
+        logErr ready $
+            "could not parse ciphertext: " <> T.pack err
 
-        Right (FirstHandshakes msgs) ->
-            firstHandshakesUpdate from ready msgs
+    Right (FirstHandshakes msgs) ->
+        firstHandshakesUpdate from ready msgs
 
-        Right (SecondHandshakes secondShakes) ->
-            secondHandshakesUpdate from ready secondShakes
+    Right (SecondHandshakes secondShakes) ->
+        secondHandshakesUpdate from ready secondShakes
 
-        Right (TransportC firstMessage thisMessage) ->
-            transportUpdate from ready firstMessage thisMessage
+    Right (TransportC firstMessage thisMessage) ->
+        transportUpdate from ready firstMessage thisMessage
 
 
 transportUpdate
@@ -1463,32 +1466,33 @@ transportUpdate
 transportUpdate from ready firstMessage thisMessage =
     let
         handshake = HandshakeId from firstMessage
-    in case Map.lookup handshake (handshakes ready) of
-        Nothing ->
+    in
+    case Map.lookup handshake (handshakes ready) of
+    Nothing ->
+        (DoNothingO, ReadyS ready)
+
+    Just (Initiator _ ) ->
+        (DoNothingO, ReadyS ready)
+
+    Just (ResponderSentEncryptedES myEphemeral) ->
+        case authStatus ready of
+        GettingPowInfoA ->
             (DoNothingO, ReadyS ready)
 
-        Just (Initiator _ ) ->
+        GeneratingSessionKey _ _ ->
             (DoNothingO, ReadyS ready)
 
-        Just (ResponderSentEncryptedES myEphemeral) ->
-            case authStatus ready of
-                GettingPowInfoA ->
-                    (DoNothingO, ReadyS ready)
+        AwaitingUsername _ _ ->
+            (DoNothingO, ReadyS ready)
 
-                GeneratingSessionKey _ _ ->
-                    (DoNothingO, ReadyS ready)
-
-                AwaitingUsername _ _ ->
-                    (DoNothingO, ReadyS ready)
-
-                LoggedIn staticKeys ->
-                    transportUpdateHelp
-                        from
-                        ready
-                        firstMessage
-                        thisMessage
-                        myEphemeral
-                        staticKeys
+        LoggedIn staticKeys ->
+            transportUpdateHelp
+                from
+                ready
+                firstMessage
+                thisMessage
+                myEphemeral
+                staticKeys
 
 
 transportUpdateHelp
@@ -1516,43 +1520,43 @@ transportUpdateHelp
         (Noise.convert $ Bl.toStrict first)
         noise0
     of
+    Noise.NoiseResultNeedPSK _ ->
+        (DoNothingO, ReadyS ready) -- shouldn't happen with XX
+
+    Noise.NoiseResultException err ->
+        logErr
+            ready
+            (noiseException err)
+
+    Noise.NoiseResultMessage _ noise1 ->
+        case Noise.writeMessage "" noise1 of
         Noise.NoiseResultNeedPSK _ ->
-            (DoNothingO, ReadyS ready) -- shouldn't happen with XX
+            (DoNothingO, ReadyS ready)
 
         Noise.NoiseResultException err ->
             logErr
                 ready
                 (noiseException err)
 
-        Noise.NoiseResultMessage _ noise1 ->
-            case Noise.writeMessage "" noise1 of
-                Noise.NoiseResultNeedPSK _ ->
-                    (DoNothingO, ReadyS ready)
+        Noise.NoiseResultMessage _ noise2 ->
+            case Noise.readMessage
+                    (Noise.convert $ Bl.toStrict encrypted)
+                    noise2
+            of
+            Noise.NoiseResultNeedPSK _ ->
+                (DoNothingO, ReadyS ready)
 
-                Noise.NoiseResultException err ->
-                    logErr
-                        ready
-                        (noiseException err)
+            Noise.NoiseResultException err ->
+                logErr
+                    ready
+                    (noiseException err)
 
-                Noise.NoiseResultMessage _ noise2 ->
-                    case Noise.readMessage
-                            (Noise.convert $ Bl.toStrict encrypted)
-                            noise2
-                    of
-                        Noise.NoiseResultNeedPSK _ ->
-                            (DoNothingO, ReadyS ready)
-
-                        Noise.NoiseResultException err ->
-                            logErr
-                                ready
-                                (noiseException err)
-
-                        Noise.NoiseResultMessage plain noise3 ->
-                            untrustedPlain
-                                (Bl.fromStrict $ Noise.convert plain)
-                                noise3
-                                from
-                                ready
+            Noise.NoiseResultMessage plain noise3 ->
+                untrustedPlain
+                    (Bl.fromStrict $ Noise.convert plain)
+                    noise3
+                    from
+                    ready
 
 
 
@@ -1564,57 +1568,57 @@ untrustedPlain
     -> (Output, State)
 untrustedPlain plain noise from ready =
     case
-        ( Noise.remoteStaticKey noise
-        , Map.lookup from (whitelist ready)) of
+    ( Noise.remoteStaticKey noise
+    , Map.lookup from (whitelist ready)) of
 
-        (Just _, Nothing) ->
-            unsolicitedMessage ready from
+    (Just _, Nothing) ->
+        unsolicitedMessage ready from
 
-        (Nothing, Nothing) ->
-            unsolicitedMessage ready from
+    (Nothing, Nothing) ->
+        unsolicitedMessage ready from
 
-        (Nothing, (Just _)) ->
+    (Nothing, (Just _)) ->
+        logErr
+            ready
+            (mconcat
+                [ "could not get static key for message from "
+                , T.pack $ show from
+                ])
+
+    (Just untrusted, Just (fingerprint, Nothing)) ->
+        case makeFingerprint from untrusted of
+        Left err ->
             logErr
                 ready
                 (mconcat
-                    [ "could not get static key for message from "
+                    [ "could not make fingerprint for "
                     , T.pack $ show from
+                    , ": "
+                    , T.pack err
                     ])
 
-        (Just untrusted, Just (fingerprint, Nothing)) ->
-            case makeFingerprint from untrusted of
-                Left err ->
-                    logErr
-                        ready
-                        (mconcat
-                            [ "could not make fingerprint for "
-                            , T.pack $ show from
-                            , ": "
-                            , T.pack err
-                            ])
-
-                Right untrustedFingerprint ->
-                    if fingerprint == untrustedFingerprint then
-                        gotValidPlaintextUpdate from plain $
-                            ready
-                                { whitelist =
-                                    Map.insert
-                                        from
-                                        ( fingerprint
-                                        , Just $
-                                            TheirStatic untrusted)
-                                        (whitelist ready)
-                                }
-
-                    else
-                        unsolicitedMessage ready from
-
-        ( Just untrusted, Just (_, Just (TheirStatic trusted))) ->
-            if untrusted == trusted then
-                gotValidPlaintextUpdate from plain ready
+        Right untrustedFingerprint ->
+            if fingerprint == untrustedFingerprint then
+                gotValidPlaintextUpdate from plain $
+                    ready
+                        { whitelist =
+                            Map.insert
+                                from
+                                ( fingerprint
+                                , Just $
+                                    TheirStatic untrusted)
+                                (whitelist ready)
+                        }
 
             else
                 unsolicitedMessage ready from
+
+    ( Just untrusted, Just (_, Just (TheirStatic trusted))) ->
+        if untrusted == trusted then
+            gotValidPlaintextUpdate from plain ready
+
+        else
+            unsolicitedMessage ready from
 
 
 unsolicitedMessage :: Ready -> Username -> (Output, State)
@@ -1666,92 +1670,92 @@ gotValidPlaintextUpdate
     -> (Output, State)
 gotValidPlaintextUpdate from plain ready =
     case P.eitherResult $ P.parse plainP plain of
-        Left err ->
-            logErr ready $ mconcat
-                [ "could not parse plaintext from "
-                , T.pack $ show from
-                , ": "
-                , T.pack err
-                ]
+    Left err ->
+        logErr ready $ mconcat
+            [ "could not parse plaintext from "
+            , T.pack $ show from
+            , ": "
+            , T.pack err
+            ]
 
-        Right parsed ->
-            parsedPlainUpdate from parsed ready
+    Right parsed ->
+        parsedPlainUpdate from parsed ready
 
 
 parsedPlainUpdate :: Username -> Plaintext -> Ready -> (Output, State)
 parsedPlainUpdate from plain ready =
     case plain of
-        AllInOne p ->
-            assembledUpdate from p ready
+    AllInOne p ->
+        assembledUpdate from p ready
 
-        NotLastInSequence chunk ->
-            case assemblingFile ready of
-                Nothing ->
-                    let
-                        unique = counter ready
-                        hashState =
-                            Blake.update
-                                (Bl.toStrict chunk)
-                                (Blake.initialize 32)
-                        temp = tempFile (root ready) unique
-                        assemble = Assembling unique hashState
-                        newReady =
-                            ready
-                                { assemblingFile = Just assemble
-                                , counter = (counter ready) + 1
-                                }
-                    in
-                        (AppendFileO temp chunk, ReadyS newReady)
+    NotLastInSequence chunk ->
+        case assemblingFile ready of
+        Nothing ->
+            let
+                unique = counter ready
+                hashState =
+                    Blake.update
+                        (Bl.toStrict chunk)
+                        (Blake.initialize 32)
+                temp = tempFile (root ready) unique
+                assemble = Assembling unique hashState
+                newReady =
+                    ready
+                        { assemblingFile = Just assemble
+                        , counter = (counter ready) + 1
+                        }
+            in
+                (AppendFileO temp chunk, ReadyS newReady)
 
-                Just (Assembling tmpBase oldHashState) ->
-                    let
-                        hashState =
-                            Blake.update
-                            (Bl.toStrict chunk)
-                            oldHashState
-                        temp = tempFile (root ready) tmpBase
-                        assemble = Assembling tmpBase hashState
-                        newReady =
-                            ready { assemblingFile = Just assemble }
-                    in
-                        (AppendFileO temp chunk, ReadyS newReady)
+        Just (Assembling tmpBase oldHashState) ->
+            let
+                hashState =
+                    Blake.update
+                    (Bl.toStrict chunk)
+                    oldHashState
+                temp = tempFile (root ready) tmpBase
+                assemble = Assembling tmpBase hashState
+                newReady =
+                    ready { assemblingFile = Just assemble }
+            in
+                (AppendFileO temp chunk, ReadyS newReady)
 
-                Just (AddingFinal _ _) ->
-                    (DoNothingO, ReadyS ready)
+        Just (AddingFinal _ _) ->
+            (DoNothingO, ReadyS ready)
 
-                Just (Moving _ _) ->
-                    (DoNothingO, ReadyS ready)
+        Just (Moving _ _) ->
+            (DoNothingO, ReadyS ready)
 
-        FinalChunk expectedHash chunk ->
-            case assemblingFile ready of
-                Nothing ->
-                    (DoNothingO, ReadyS ready)
+    FinalChunk expectedHash chunk ->
+        case assemblingFile ready of
+        Nothing ->
+            (DoNothingO, ReadyS ready)
 
-                Just (Assembling tmpBase oldHashState) ->
-                    let
-                        hash =
-                            Hash32 $
-                            Bl.fromStrict $
-                            Blake.finalize 32 $
-                            Blake.update
-                                (Bl.toStrict chunk)
-                                oldHashState
-                        temp = tempFile (root ready) tmpBase
-                        assemble = AddingFinal tmpBase hash
-                        newReady =
-                            ready { assemblingFile = Just assemble }
-                    in
-                        if expectedHash == hash then
-                            (AppendFileO temp chunk, ReadyS newReady)
+        Just (Assembling tmpBase oldHashState) ->
+            let
+                hash =
+                    Hash32 $
+                    Bl.fromStrict $
+                    Blake.finalize 32 $
+                    Blake.update
+                        (Bl.toStrict chunk)
+                        oldHashState
+                temp = tempFile (root ready) tmpBase
+                assemble = AddingFinal tmpBase hash
+                newReady =
+                    ready { assemblingFile = Just assemble }
+            in
+                if expectedHash == hash then
+                    (AppendFileO temp chunk, ReadyS newReady)
 
-                        else
-                            (DoNothingO, ReadyS newReady)
+                else
+                    (DoNothingO, ReadyS newReady)
 
-                Just (AddingFinal _ _) ->
-                    (DoNothingO, ReadyS ready)
+        Just (AddingFinal _ _) ->
+            (DoNothingO, ReadyS ready)
 
-                Just (Moving _ _) ->
-                    (DoNothingO, ReadyS ready)
+        Just (Moving _ _) ->
+            (DoNothingO, ReadyS ready)
 
 
 data Assembled
@@ -1790,24 +1794,24 @@ assembledUpdate
     -> (Output, State)
 assembledUpdate from assembled ready =
     case P.eitherResult $ P.parse assembledP assembled of
-        Right (ShareSetA messageId theirs) ->
-            sharePairUpdate from messageId theirs ready
+    Right (ShareSetA messageId theirs) ->
+        sharePairUpdate from messageId theirs ready
 
-        Right (HeaderA messageId header) ->
-            newHeaderUpdate from messageId header ready
+    Right (HeaderA messageId header) ->
+        newHeaderUpdate from messageId header ready
 
-        Right (Referenced messageId body) ->
-            referencedUpdate from messageId body ready
+    Right (Referenced messageId body) ->
+        referencedUpdate from messageId body ready
 
-        Left err ->
-            logErr
-                ready
-                (mconcat
-                    [ "couldn't parse assembled blob from "
-                    , T.pack $ show from
-                    , ": "
-                    , T.pack err
-                    ])
+    Left err ->
+        logErr
+            ready
+            (mconcat
+                [ "couldn't parse assembled blob from "
+                , T.pack $ show from
+                , ": "
+                , T.pack err
+                ])
 
 
 referencedUpdate
@@ -1826,33 +1830,33 @@ referencedUpdate from messageId body ready =
         shareName = ShareName messageId from
     in
     case Map.lookup messageId (summaries ready) of
+    Nothing ->
+        unsolicitedBlob ready from hash
+
+    Just summary ->
+        case Map.lookup shareName (sharePairs ready) of
         Nothing ->
             unsolicitedBlob ready from hash
 
-        Just summary ->
-            case Map.lookup shareName (sharePairs ready) of
-                Nothing ->
-                    unsolicitedBlob ready from hash
+        Just (SharePair theirs (MySet mine)) ->
+            if Set.member hash (referenced summary) then
+                ( BatchO [writeBlob, dumpCache ready]
+                , ReadyS $
+                    ready
+                        { sharePairs =
+                            Map.insert
+                                shareName
+                                (SharePair
+                                    theirs
+                                    (MySet $
+                                        Set.insert hash mine
+                                    ))
+                                (sharePairs ready)
+                        }
+                )
 
-                Just (SharePair theirs (MySet mine)) ->
-                    if Set.member hash (referenced summary) then
-                        ( BatchO [writeBlob, dumpCache ready]
-                        , ReadyS $
-                            ready
-                                { sharePairs =
-                                    Map.insert
-                                        shareName
-                                        (SharePair
-                                            theirs
-                                            (MySet $
-                                                Set.insert hash mine
-                                            ))
-                                        (sharePairs ready)
-                                }
-                        )
-
-                    else
-                        unsolicitedBlob ready from hash
+            else
+                unsolicitedBlob ready from hash
 
 
 unsolicitedBlob :: Ready -> Username -> Hash32 -> (Output, State)
@@ -1885,76 +1889,76 @@ newHeaderUpdate from messageId header ready =
         , P.eitherResult $ P.parse headerP header
         )
     of
-        (Nothing, Left err) ->
-            badHeaderErr ready from err
+    (Nothing, Left err) ->
+        badHeaderErr ready from err
 
-        (Just _, Left err) ->
-            badHeaderErr ready from err
+    (Just _, Left err) ->
+        badHeaderErr ready from err
 
-        (Just summary, Right parsed) ->
-            let
-                hash = hash32 header
+    (Just summary, Right parsed) ->
+        let
+            hash = hash32 header
 
-                newSummary =
-                    Summary
-                        { headerBlob = hash
-                        , subjectS = subject parsed
-                        , sharersS = sharersS summary
-                        , lastEditS = lastEdit parsed
-                        , historyId = historyId summary
-                        , referenced = makeRefs parsed
-                        }
-
-                newSummaries =
-                    Map.insert messageId newSummary (summaries ready)
-
-                newReady = ready { summaries = newSummaries }
-
-                headerPath = makeBlobPath (root ready) hash
-            in
-                if isSharer from (sharersS summary) then
-                    ( BatchO
-                        [ cacheSummary (root ready) summary
-                        , WriteFileO headerPath header
-                        , dumpCache newReady
-                        ]
-                    , ReadyS newReady
-                    )
-
-                else
-                    (DoNothingO, ReadyS ready)
-
-        (Nothing, Right parsed) ->
-            let
-                hash = hash32 header
-                newSummary =
-                    Summary
-                        { headerBlob = hash
-                        , subjectS = subject parsed
-                        , sharersS = sharers parsed
-                        , lastEditS = lastEdit parsed
-                        , historyId = counter ready
-                        , referenced = makeRefs parsed
-                        }
-
-                newReady = ready
-                    { summaries =
-                        Map.insert
-                            messageId
-                            newSummary
-                            (summaries ready)
-                    , counter = (counter ready) + 1
+            newSummary =
+                Summary
+                    { headerBlob = hash
+                    , subjectS = subject parsed
+                    , sharersS = sharersS summary
+                    , lastEditS = lastEdit parsed
+                    , historyId = historyId summary
+                    , referenced = makeRefs parsed
                     }
-            in
+
+            newSummaries =
+                Map.insert messageId newSummary (summaries ready)
+
+            newReady = ready { summaries = newSummaries }
+
+            headerPath = makeBlobPath (root ready) hash
+        in
+            if isSharer from (sharersS summary) then
                 ( BatchO
-                    [ WriteFileO
-                        (makeBlobPath (root ready) hash)
-                        header
-                    , cacheSummary (root ready) newSummary
+                    [ cacheSummary (root ready) summary
+                    , WriteFileO headerPath header
                     , dumpCache newReady
                     ]
-                , ReadyS ready
+                , ReadyS newReady
                 )
+
+            else
+                (DoNothingO, ReadyS ready)
+
+    (Nothing, Right parsed) ->
+        let
+            hash = hash32 header
+            newSummary =
+                Summary
+                    { headerBlob = hash
+                    , subjectS = subject parsed
+                    , sharersS = sharers parsed
+                    , lastEditS = lastEdit parsed
+                    , historyId = counter ready
+                    , referenced = makeRefs parsed
+                    }
+
+            newReady = ready
+                { summaries =
+                    Map.insert
+                        messageId
+                        newSummary
+                        (summaries ready)
+                , counter = (counter ready) + 1
+                }
+        in
+            ( BatchO
+                [ WriteFileO
+                    (makeBlobPath (root ready) hash)
+                    header
+                , cacheSummary (root ready) newSummary
+                , dumpCache newReady
+                ]
+            , ReadyS ready
+            )
 
 
 messageIdLen =
@@ -2060,22 +2064,22 @@ sharePairUpdate from messageId theirs@(TheirSet theirSet) ready =
         oldPairs = sharePairs ready
     in
     case Map.lookup name oldPairs of
-        Nothing ->
-            let
-                pair = SharePair theirs (MySet Set.empty)
-                pairs = Map.insert name pair oldPairs
-                newReady = ready { sharePairs = pairs }
-            in
-                wrapReady $ bumpShare name newReady
+    Nothing ->
+        let
+            pair = SharePair theirs (MySet Set.empty)
+            pairs = Map.insert name pair oldPairs
+            newReady = ready { sharePairs = pairs }
+        in
+            wrapReady $ bumpShare name newReady
 
-        Just (SharePair (TheirSet theirOld) m) ->
-            let
-                newTheirs = TheirSet $ Set.union theirSet theirOld
-                pair = SharePair newTheirs m
-                pairs = Map.insert name pair oldPairs
-                newReady = ready {sharePairs = pairs}
-            in
-                wrapReady $ bumpShare name newReady
+    Just (SharePair (TheirSet theirOld) m) ->
+        let
+            newTheirs = TheirSet $ Set.union theirSet theirOld
+            pair = SharePair newTheirs m
+            pairs = Map.insert name pair oldPairs
+            newReady = ready {sharePairs = pairs}
+        in
+            wrapReady $ bumpShare name newReady
 
 
 wrapReady :: (Output, Ready) -> (Output, State)
@@ -2103,37 +2107,37 @@ bumpHelp name (oldOutputs, oldReady) =
 bumpShare :: ShareName -> Ready -> (Output, Ready)
 bumpShare name ready =
     case Map.lookup name $ sharePairs ready of
-        Nothing ->
-            (DoNothingO, ready)
+    Nothing ->
+        (DoNothingO, ready)
 
-        Just (SharePair (TheirSet theirs) (MySet mine)) ->
-            case Set.toList $ Set.difference mine theirs of
-                [] ->
-                    (dumpCache ready, ready)
+    Just (SharePair (TheirSet theirs) (MySet mine)) ->
+        case Set.toList $ Set.difference mine theirs of
+        [] ->
+            (dumpCache ready, ready)
 
-                d : _ ->
-                    sendBlob name d ready
+        d : _ ->
+            sendBlob name d ready
 
 
 sendBlob :: ShareName -> Hash32 -> Ready -> (Output, Ready)
 sendBlob name hash ready =
     case sendingBlob ready of
-        NoJobs ->
-            ( BatchO
-                [ dumpCache ready
-                , ReadFileO $ makeBlobPath (root ready) hash
-                ]
-            , ready { sendingBlob = Jobs (ReadingS hash name) [] }
-            )
+    NoJobs ->
+        ( BatchO
+            [ dumpCache ready
+            , ReadFileO $ makeBlobPath (root ready) hash
+            ]
+        , ready { sendingBlob = Jobs (ReadingS hash name) [] }
+        )
 
-        Jobs current pending ->
-            ( dumpCache ready
-            , ready
-                { sendingBlob =
-                    Jobs current $
-                    append (SendWait hash name) pending
-                }
-            )
+    Jobs current pending ->
+        ( dumpCache ready
+        , ready
+            { sendingBlob =
+                Jobs current $
+                append (SendWait hash name) pending
+            }
+        )
 
 makeBlobPath :: RootPath -> Hash32 -> FilePath
 makeBlobPath root hash =
@@ -2173,20 +2177,20 @@ add2ndShakes
     -> Handshake
 add2ndShakes new2ndShakes id_ oldShake =
     case Map.lookup id_ new2ndShakes of
-        Nothing ->
+    Nothing ->
+        oldShake
+
+    Just newMsg ->
+        case oldShake of
+        ResponderSentEncryptedES _ ->
             oldShake
 
-        Just newMsg ->
-            case oldShake of
-                ResponderSentEncryptedES _ ->
-                    oldShake
+        Initiator SentPlainE ->
+            Initiator $ ReceivedEncryptedE $
+                EncryptedEphemeral newMsg
 
-                Initiator SentPlainE ->
-                    Initiator $ ReceivedEncryptedE $
-                        EncryptedEphemeral newMsg
-
-                Initiator (ReceivedEncryptedE _) ->
-                    oldShake
+        Initiator (ReceivedEncryptedE _) ->
+            oldShake
 
 
 make2ndShakeMap
@@ -2222,25 +2226,26 @@ firstHandshakesUpdate from ready msgs =
             , handshakes =
                 Map.union (handshakes ready) newHandshakes
             }
-    in case authStatus ready of
-        GettingPowInfoA ->
-            pass
+    in
+    case authStatus ready of
+    GettingPowInfoA ->
+        pass
 
-        GeneratingSessionKey _ _ ->
-            pass
+    GeneratingSessionKey _ _ ->
+        pass
 
-        AwaitingUsername _ _ ->
-            pass
+    AwaitingUsername _ _ ->
+        pass
 
-        LoggedIn (StaticKeys myStatic _ _ _) ->
-            case sendNoiseXX2s myEphemerals msgs myStatic from of
-                Left err ->
-                    logErr newReady err
+    LoggedIn (StaticKeys myStatic _ _ _) ->
+        case sendNoiseXX2s myEphemerals msgs myStatic from of
+        Left err ->
+            logErr newReady err
 
-                Right kk2s ->
-                    ( BatchO [kk2s, dumpCache ready]
-                    , ReadyS newReady
-                    )
+        Right kk2s ->
+            ( BatchO [kk2s, dumpCache ready]
+            , ReadyS newReady
+            )
 
   where
     pass = (DoNothingO, ReadyS ready)
@@ -2288,12 +2293,13 @@ sendNoiseXX2s myEphemerals firsts myStatic from =
             map
                 (make2ndNoise from myStatic)
                 [first166, second166, third]
-    in case allRight eitherChunks of
-        Left err ->
-            Left err
+    in
+    case allRight eitherChunks of
+    Left err ->
+        Left err
 
-        Right chunks ->
-            Right $ BatchO $ map (BytesInQO toServerQ) chunks
+    Right chunks ->
+        Right $ BatchO $ map (BytesInQO toServerQ) chunks
 
 
 make2ndNoise
@@ -2304,17 +2310,18 @@ make2ndNoise
 make2ndNoise (Username username) myStatic noises1 =
     let
         eitherNoises = map (makeOne2ndNoise myStatic) noises1
-    in case allRight eitherNoises of
-        Left err ->
-            Left err
+    in
+    case allRight eitherNoises of
+    Left err ->
+        Left err
 
-        Right noises2 ->
-            Right $ mconcat
-                [ Bl.singleton 3
-                , username
-                , Bl.singleton 1
-                , mconcat noises2
-                ]
+    Right noises2 ->
+        Right $ mconcat
+            [ Bl.singleton 3
+            , username
+            , Bl.singleton 1
+            , mconcat noises2
+            ]
 
 
 allRight :: [Either a b] -> Either a [b]
@@ -2325,14 +2332,14 @@ allRight eithers =
 allRightHelp :: [Either a b] -> [b] -> Either a [b]
 allRightHelp eithers accum =
     case eithers of
-        [] ->
-            Right $ reverse accum
+    [] ->
+        Right $ reverse accum
 
-        Left l : _ ->
-            Left l
+    Left l : _ ->
+        Left l
 
-        Right r : remains ->
-            allRightHelp remains (r : accum)
+    Right r : remains ->
+        allRightHelp remains (r : accum)
 
 
 responderOptions
@@ -2362,23 +2369,24 @@ makeOne2ndNoise myStatic (myEphemeral, FirstMessage refKey) =
         options = responderOptions myStatic myEphemeral
         noise0 = Noise.noiseState options noiseXX :: NoiseState
         msg0 = Noise.convert $ Bl.toStrict refKey
-    in case Noise.readMessage msg0 noise0 of
-        Noise.NoiseResultMessage _ noise1 ->
-            case Noise.writeMessage "" noise1 of
-                Noise.NoiseResultMessage secondShake _ ->
-                    Right $ Bl.fromStrict $ Noise.convert secondShake
-
-                Noise.NoiseResultNeedPSK _ ->
-                    Left needPskErr
-
-                Noise.NoiseResultException err ->
-                    Left $ noiseException err
+    in
+    case Noise.readMessage msg0 noise0 of
+    Noise.NoiseResultMessage _ noise1 ->
+        case Noise.writeMessage "" noise1 of
+        Noise.NoiseResultMessage secondShake _ ->
+            Right $ Bl.fromStrict $ Noise.convert secondShake
 
         Noise.NoiseResultNeedPSK _ ->
             Left needPskErr
 
         Noise.NoiseResultException err ->
             Left $ noiseException err
+
+    Noise.NoiseResultNeedPSK _ ->
+        Left needPskErr
+
+    Noise.NoiseResultException err ->
+        Left $ noiseException err
 
 
 needPskErr =
@@ -2395,13 +2403,13 @@ noiseException err =
 dumpCache :: Ready -> Output
 dumpCache ready =
     case getCache ready of
-        Nothing ->
-            DoNothingO
+    Nothing ->
+        DoNothingO
 
-        Just cache ->
-            WriteFileO
-                (cachePath $ root ready)
-                (encodeCache cache)
+    Just cache ->
+        WriteFileO
+            (cachePath $ root ready)
+            (encodeCache cache)
 
 
 encodeCache :: MemCache -> Bl.ByteString
@@ -2438,11 +2446,11 @@ encodeOneWhite (username, (fingerprint, maybeKey)) =
 encodeMaybe :: Maybe a -> (a -> Bl.ByteString) -> Bl.ByteString
 encodeMaybe a encoder =
     case a of
-        Nothing ->
-            Bl.singleton 0
+    Nothing ->
+        Bl.singleton 0
 
-        Just justa ->
-            Bl.singleton 1 <> encoder justa
+    Just justa ->
+        Bl.singleton 1 <> encoder justa
 
 
 encodeCryptoKeys :: StaticKeys -> Bl.ByteString
@@ -2483,24 +2491,24 @@ cachePath (RootPath root) =
 getCache :: Ready -> Maybe MemCache
 getCache ready =
     case authStatus ready of
-        GettingPowInfoA ->
-            Nothing
+    GettingPowInfoA ->
+        Nothing
 
-        GeneratingSessionKey _ _ ->
-            Nothing
+    GeneratingSessionKey _ _ ->
+        Nothing
 
-        AwaitingUsername _ _ ->
-            Nothing
+    AwaitingUsername _ _ ->
+        Nothing
 
-        LoggedIn keys ->
-            Just $ MemCache
-                { keys
-                , handshakesM = handshakes ready
-                , whitelistM = whitelist ready
-                , sharePairsM = sharePairs ready
-                , summariesM = summaries ready
-                , counterM = counter ready
-                }
+    LoggedIn keys ->
+        Just $ MemCache
+            { keys
+            , handshakesM = handshakes ready
+            , whitelistM = whitelist ready
+            , sharePairsM = sharePairs ready
+            , summariesM = summaries ready
+            , counterM = counter ready
+            }
 
 
 encodeHandshakes :: Map.Map HandshakeId Handshake -> Bl.ByteString
@@ -2521,23 +2529,23 @@ encodeHandshakeId (HandshakeId (Username u) (FirstMessage e)) =
 encodeHandshakeShake :: Handshake -> Bl.ByteString
 encodeHandshakeShake h =
     case h of
-        Initiator i ->
-            mconcat
-                [ Bl.singleton 0
-                , case i of
-                    SentPlainE ->
-                        Bl.singleton 0
+    Initiator i ->
+        mconcat
+            [ Bl.singleton 0
+            , case i of
+                SentPlainE ->
+                    Bl.singleton 0
 
-                    ReceivedEncryptedE (EncryptedEphemeral e) ->
-                        Bl.singleton 1 <> e
-                ]
+                ReceivedEncryptedE (EncryptedEphemeral e) ->
+                    Bl.singleton 1 <> e
+            ]
 
-        ResponderSentEncryptedES (MyEphemeral (secret, _)) ->
-            mconcat
-                [ Bl.singleton 1
-                , Bl.fromStrict $ Noise.convert $
-                    Dh.dhSecToBytes secret
-                ]
+    ResponderSentEncryptedES (MyEphemeral (secret, _)) ->
+        mconcat
+            [ Bl.singleton 1
+            , Bl.fromStrict $ Noise.convert $
+                Dh.dhSecToBytes secret
+            ]
 
 
 toServerQ :: Q
@@ -2622,27 +2630,27 @@ encodeTheirStatic (TheirStatic key) =
 onGetBlobUpdate :: Bl.ByteString -> Q -> Ready -> (Output, State)
 onGetBlobUpdate body q ready =
     case P.eitherResult $ P.parse blobHashP body of
-        Left err ->
-            ( ErrorO $ "could not parse GetBlob: " <> err
-            , FailedS
+    Left err ->
+        ( ErrorO $ "could not parse GetBlob: " <> err
+        , FailedS
+        )
+
+    Right hash ->
+        case getBlob ready of
+        NoJobs ->
+            ( ReadFileLazyO $ makeBlobPath (root ready) hash
+            , ReadyS $ ready
+                { getBlob = Jobs (GetBlob q hash) [] }
             )
 
-        Right hash ->
-            case getBlob ready of
-                NoJobs ->
-                    ( ReadFileLazyO $ makeBlobPath (root ready) hash
-                    , ReadyS $ ready
-                        { getBlob = Jobs (GetBlob q hash) [] }
-                    )
-
-                Jobs current waiting ->
-                    ( DoNothingO
-                    , ReadyS $ ready
-                        { getBlob = Jobs
-                            current
-                            (GetBlobWait body q : waiting)
-                        }
-                    )
+        Jobs current waiting ->
+            ( DoNothingO
+            , ReadyS $ ready
+                { getBlob = Jobs
+                    current
+                    (GetBlobWait body q : waiting)
+                }
+            )
 
 
 parseFromFrontend :: Bl.ByteString -> Either String FromFrontend
@@ -2658,32 +2666,32 @@ data UserId
 instance Ord UserId where
     compare (UserId u1 f1) (UserId u2 f2) =
         case (compare u1 u2, compare f1 f2) of
-            (LT, LT) ->
-                LT
+        (LT, LT) ->
+            LT
 
-            (EQ, EQ) ->
-                EQ
+        (EQ, EQ) ->
+            EQ
 
-            (GT, GT) ->
-                GT
+        (GT, GT) ->
+            GT
 
-            (GT, LT) ->
-                GT
+        (GT, LT) ->
+            GT
 
-            (LT, GT) ->
-                LT
+        (LT, GT) ->
+            LT
 
-            (LT, EQ) ->
-                LT
+        (LT, EQ) ->
+            LT
 
-            (GT, EQ) ->
-                GT
+        (GT, EQ) ->
+            GT
 
-            (EQ, GT) ->
-                GT
+        (EQ, GT) ->
+            GT
 
-            (EQ, LT) ->
-                LT
+        (EQ, LT) ->
+            LT
 
 
 newtype Fingerprint
@@ -2858,41 +2866,41 @@ addToWhitelistUpdate (UserId username fingerprint) ready =
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
 uiApiUpdate apiInput model =
     case apiInput of
-        NewMessageA messageId header ->
-            updateReady model $ newMessageUpdate messageId header
+    NewMessageA messageId header ->
+        updateReady model $ newMessageUpdate messageId header
 
-        AddToWhitelist userId ->
-            updateReady model $ addToWhitelistUpdate userId
+    AddToWhitelist userId ->
+        updateReady model $ addToWhitelistUpdate userId
 
-        RemoveFromWhitelist _ ->
-            undefined
+    RemoveFromWhitelist _ ->
+        undefined
 
-        GetMessage _ ->
-            undefined
+    GetMessage _ ->
+        undefined
 
-        GetWhitelist ->
-            undefined
+    GetWhitelist ->
+        undefined
 
-        GetMyId ->
-            undefined
+    GetMyId ->
+        undefined
 
-        WriteIndex _ ->
-            undefined
+    WriteIndex _ ->
+        undefined
 
-        GetIndex ->
-            undefined
+    GetIndex ->
+        undefined
 
-        GetChainSummary _ ->
-            undefined
+    GetChainSummary _ ->
+        undefined
 
-        GetPayments ->
-            undefined
+    GetPayments ->
+        undefined
 
-        GetPrice ->
-            undefined
+    GetPrice ->
+        undefined
 
-        GetMembership ->
-            undefined
+    GetMembership ->
+        undefined
 
 
 newMessageUpdate :: MessageId -> Header -> Ready -> (Output, State)
@@ -2959,23 +2967,23 @@ newSharePairsHelp messageId hash summary from oldShares =
     name = ShareName messageId from
     in
     case Map.lookup name oldShares of
-        Nothing ->
-            Map.insert
-                name
-                (SharePair
-                    (TheirSet Set.empty)
-                    (MySet $ Set.union
-                        (Set.fromList [hash])
-                        (referenced summary)))
-                oldShares
+    Nothing ->
+        Map.insert
+            name
+            (SharePair
+                (TheirSet Set.empty)
+                (MySet $ Set.union
+                    (Set.fromList [hash])
+                    (referenced summary)))
+            oldShares
 
-        Just (SharePair (TheirSet theirs) (MySet mine)) ->
-            Map.insert
-                name
-                (SharePair
-                    (TheirSet theirs)
-                    (MySet $ Set.insert hash mine))
-                oldShares
+    Just (SharePair (TheirSet theirs) (MySet mine)) ->
+        Map.insert
+            name
+            (SharePair
+                (TheirSet theirs)
+                (MySet $ Set.insert hash mine))
+            oldShares
 
 
 encodeHeader :: Header -> Bl.ByteString
@@ -3012,45 +3020,45 @@ encodeBlob blob =
 onMovedFile :: FilePath -> Ready -> (Output, State)
 onMovedFile new ready =
     case blobsUp ready of
-        NoJobs ->
+    NoJobs ->
+        pass
+
+    Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
+        if toPath == new then
+            ( BytesInQO q (Bl.singleton 1 <> hash)
+            , ReadyS $ ready { blobsUp = NoJobs }
+            )
+
+        else
             pass
 
-        Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
-            if toPath == new then
-                ( BytesInQO q (Bl.singleton 1 <> hash)
-                , ReadyS $ ready { blobsUp = NoJobs }
+    Jobs
+        (AwaitingMoveB q (Hash32 hash) toPath)
+        (BlobUpWait blob newQ : _) ->
+
+        if toPath == new then
+            let
+                (output, newModel) = update
+                    (ReadyS $ ready
+                        { blobsUp =
+                            promoteBlobsUp $ blobsUp ready
+                        })
+                    (SetBlobM blob newQ)
+            in
+                ( BatchO
+                    [ BytesInQO q (Bl.singleton 1 <> hash)
+                    , output
+                    ]
+                , newModel
                 )
-
-            else
-                pass
-
-        Jobs
-            (AwaitingMoveB q (Hash32 hash) toPath)
-            (BlobUpWait blob newQ : _) ->
-
-            if toPath == new then
-                let
-                    (output, newModel) = update
-                        (ReadyS $ ready
-                            { blobsUp =
-                                promoteBlobsUp $ blobsUp ready
-                            })
-                        (SetBlobM blob newQ)
-                in
-                    ( BatchO
-                        [ BytesInQO q (Bl.singleton 1 <> hash)
-                        , output
-                        ]
-                    , newModel
-                    )
-            else
-                pass
-
-        Jobs (AwaitingTmpWriteB _ _ _) _ ->
+        else
             pass
 
-        Jobs (AwaitingHandleB _ _ _) _ ->
-            pass
+    Jobs (AwaitingTmpWriteB _ _ _) _ ->
+        pass
+
+    Jobs (AwaitingHandleB _ _ _) _ ->
+        pass
 
   where
     pass = (DoNothingO, ReadyS ready)
@@ -3059,34 +3067,34 @@ onMovedFile new ready =
 onWrittenToTmp :: FilePath -> Io.Handle -> Ready -> (Output, State)
 onWrittenToTmp writtenPath handle ready =
     case blobsUp ready of
-        NoJobs ->
+    NoJobs ->
+        pass
+
+    Jobs (AwaitingTmpWriteB q hash expectPath) waiting ->
+        if writtenPath == expectPath then
+            let
+                blobPath = makeBlobPath (root ready) hash
+            in
+                ( BatchO
+                    [ MoveFileO writtenPath blobPath
+                    , CloseFileO handle
+                    ]
+                , ReadyS $ ready
+                    { blobsUp =
+                        Jobs
+                            (AwaitingMoveB q hash blobPath)
+                            waiting
+                    }
+                )
+
+        else
             pass
 
-        Jobs (AwaitingTmpWriteB q hash expectPath) waiting ->
-            if writtenPath == expectPath then
-                let
-                    blobPath = makeBlobPath (root ready) hash
-                in
-                    ( BatchO
-                        [ MoveFileO writtenPath blobPath
-                        , CloseFileO handle
-                        ]
-                    , ReadyS $ ready
-                        { blobsUp =
-                            Jobs
-                                (AwaitingMoveB q hash blobPath)
-                                waiting
-                        }
-                    )
+    Jobs (AwaitingHandleB _ _ _) _ ->
+        pass
 
-            else
-                pass
-
-        Jobs (AwaitingHandleB _ _ _) _ ->
-            pass
-
-        Jobs (AwaitingMoveB _ _ _) _ ->
-            pass
+    Jobs (AwaitingMoveB _ _ _) _ ->
+        pass
 
     where
         pass = (DoNothingO, ReadyS ready)
@@ -3104,20 +3112,20 @@ onTmpFileHandleUpdate
     -> (Output, State)
 onTmpFileHandleUpdate path handle ready =
     case blobsUp ready of
-        NoJobs ->
-            (DoNothingO, ReadyS ready)
+    NoJobs ->
+        (DoNothingO, ReadyS ready)
 
-        Jobs (AwaitingHandleB q blob hash) waiting ->
-            ( WriteToHandleO handle blob path
-            , ReadyS $ ready {
-                blobsUp = Jobs
-                    (AwaitingTmpWriteB q hash path)
-                    waiting
-                }
-            )
+    Jobs (AwaitingHandleB q blob hash) waiting ->
+        ( WriteToHandleO handle blob path
+        , ReadyS $ ready {
+            blobsUp = Jobs
+                (AwaitingTmpWriteB q hash path)
+                waiting
+            }
+        )
 
-        Jobs _ _ ->
-            (DoNothingO, ReadyS ready)
+    Jobs _ _ ->
+        (DoNothingO, ReadyS ready)
 
 
 setBlobUpdate ::
@@ -3127,22 +3135,22 @@ setBlobUpdate ::
     (Output, State)
 setBlobUpdate blob q ready =
     case blobsUp ready of
-        NoJobs ->
-            ( GetTmpFileHandleO $ tempPath $ root ready
-            , ReadyS $ ready
-                { blobsUp =
-                    Jobs (AwaitingHandleB q blob (hash32 blob)) []
-                }
-            )
+    NoJobs ->
+        ( GetTmpFileHandleO $ tempPath $ root ready
+        , ReadyS $ ready
+            { blobsUp =
+                Jobs (AwaitingHandleB q blob (hash32 blob)) []
+            }
+        )
 
-        Jobs current waiting ->
-            ( DoNothingO
-            , ReadyS $
-                ready
-                    { blobsUp =
-                        Jobs current (BlobUpWait blob q : waiting)
-                    }
-            )
+    Jobs current waiting ->
+        ( DoNothingO
+        , ReadyS $
+            ready
+                { blobsUp =
+                    Jobs current (BlobUpWait blob q : waiting)
+                }
+        )
 
 
 hash32 :: Bl.ByteString -> Hash32
@@ -3166,17 +3174,17 @@ tempPath (RootPath root) =
 batchUpdate :: State -> [Maybe Msg] -> [Output] -> ([Output], State)
 batchUpdate model msgs outputs =
     case msgs of
-        [] ->
-            (outputs, model)
+    [] ->
+        (outputs, model)
 
-        Nothing : sgs ->
-            batchUpdate model sgs outputs
+    Nothing : sgs ->
+        batchUpdate model sgs outputs
 
-        Just m : sgs ->
-            let
-                (output, newModel) = update model m
-            in
-                batchUpdate newModel sgs (output : outputs)
+    Just m : sgs ->
+        let
+            (output, newModel) = update model m
+        in
+            batchUpdate newModel sgs (output : outputs)
 
 
 fileContentsUpdate
@@ -3186,29 +3194,29 @@ fileContentsUpdate
     -> (Output, State)
 fileContentsUpdate path contents init_ =
     case init_ of
-        EmptyI ->
-            pass
+    EmptyI ->
+        pass
 
-        MakingRootDirI _ ->
-            pass
+    MakingRootDirI _ ->
+        pass
 
-        MakingDhKeysI _ ->
-            pass
+    MakingDhKeysI _ ->
+        pass
 
-        GettingTimes _ _ ->
-            pass
+    GettingTimes _ _ ->
+        pass
 
-        GettingRandomGen _ _ _ ->
-            pass
+    GettingRandomGen _ _ _ ->
+        pass
 
-        DoKeysExistI _ _ _ _ ->
-            pass
+    DoKeysExistI _ _ _ _ ->
+        pass
 
-        GettingKeysFromFileI root dhKeys times gen ->
-            if path == keysPath root then
-                rawKeysUpdate contents root dhKeys times gen
-            else
-                pass
+    GettingKeysFromFileI root dhKeys times gen ->
+        if path == keysPath root then
+            rawKeysUpdate contents root dhKeys times gen
+        else
+            pass
 
   where
     pass = (DoNothingO, InitS init_)
@@ -3519,71 +3527,71 @@ rawKeysUpdate
     -> (Output, State)
 rawKeysUpdate rawCrypto root newDhKeys times gen =
     case parseCrypto rawCrypto of
-        Left err ->
-            ( ErrorO $ "could not parse static keys: " <> err
-            , FailedS
-            )
+    Left err ->
+        ( ErrorO $ "could not parse static keys: " <> err
+        , FailedS
+        )
 
-        Right memCache ->
-            ( BatchO
-                [ BytesInQO toServerQ $
-                  logIn
-                    (sessionKey $ keys memCache)
-                    (username $ keys $ memCache)
-                ]
-            , ReadyS $ Ready
-                { root
-                , blobsUp = NoJobs
-                , getBlob = NoJobs
-                , messageLocks = Set.empty
-                , authStatus = LoggedIn $ keys memCache
-                , handshakes = handshakesM memCache
-                , newDhKeys
-                , theTime = times
-                , whitelist = whitelistM memCache
-                , blobLocks = Set.empty
-                , sharePairs = sharePairsM memCache
-                , sendingBlob = NoJobs
-                , randomGen = gen
-                , summaries = summariesM memCache
-                , counter = counterM memCache
-                , assemblingFile = Nothing
-                }
-            )
+    Right memCache ->
+        ( BatchO
+            [ BytesInQO toServerQ $
+              logIn
+                (sessionKey $ keys memCache)
+                (username $ keys $ memCache)
+            ]
+        , ReadyS $ Ready
+            { root
+            , blobsUp = NoJobs
+            , getBlob = NoJobs
+            , messageLocks = Set.empty
+            , authStatus = LoggedIn $ keys memCache
+            , handshakes = handshakesM memCache
+            , newDhKeys
+            , theTime = times
+            , whitelist = whitelistM memCache
+            , blobLocks = Set.empty
+            , sharePairs = sharePairsM memCache
+            , sendingBlob = NoJobs
+            , randomGen = gen
+            , summaries = summariesM memCache
+            , counter = counterM memCache
+            , assemblingFile = Nothing
+            }
+        )
 
 
 dirCreatedUpdate :: FilePath -> Init -> (Output, State)
 dirCreatedUpdate path initModel =
     case initModel of
-        EmptyI ->
+    EmptyI ->
+        pass
+
+    MakingRootDirI root@(RootPath r) ->
+        if path == r then
+            ( BatchO
+                [ StartUiServerO
+                , StartUiO
+                , MakeDhKeysO
+                ]
+            , InitS $ MakingDhKeysI root
+            )
+        else
             pass
 
-        MakingRootDirI root@(RootPath r) ->
-            if path == r then
-                ( BatchO
-                    [ StartUiServerO
-                    , StartUiO
-                    , MakeDhKeysO
-                    ]
-                , InitS $ MakingDhKeysI root
-                )
-            else
-                pass
+    MakingDhKeysI _ ->
+        pass
 
-        MakingDhKeysI _ ->
-            pass
+    GettingTimes _ _ ->
+        pass
 
-        GettingTimes _ _ ->
-            pass
+    GettingRandomGen _ _ _ ->
+        pass
 
-        GettingRandomGen _ _ _ ->
-            pass
+    DoKeysExistI _ _ _ _ ->
+        pass
 
-        DoKeysExistI _ _ _ _ ->
-            pass
-
-        GettingKeysFromFileI _ _ _ _ ->
-            pass
+    GettingKeysFromFileI _ _ _ _ ->
+        pass
 
   where
     pass = (DoNothingO, InitS initModel)
