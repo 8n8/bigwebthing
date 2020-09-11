@@ -1059,10 +1059,10 @@ powHelp difficulty unique counter =
     case hashE of
     CryptoPassed hash ->
         if isDifficult hash difficulty then
-            Right candidate
+        Right candidate
 
         else
-            powHelp difficulty unique (counter + 1)
+        powHelp difficulty unique (counter + 1)
 
     CryptoFailed err ->
         Left $ show err
@@ -1599,26 +1599,26 @@ untrustedPlain plain noise from ready =
 
         Right untrustedFingerprint ->
             if fingerprint == untrustedFingerprint then
-                gotValidPlaintextUpdate from plain $
-                    ready
-                        { whitelist =
-                            Map.insert
-                                from
-                                ( fingerprint
-                                , Just $
-                                    TheirStatic untrusted)
-                                (whitelist ready)
-                        }
+            gotValidPlaintextUpdate from plain $
+                ready
+                    { whitelist =
+                        Map.insert
+                            from
+                            ( fingerprint
+                            , Just $
+                                TheirStatic untrusted)
+                            (whitelist ready)
+                    }
 
             else
-                unsolicitedMessage ready from
+            unsolicitedMessage ready from
 
     ( Just untrusted, Just (_, Just (TheirStatic trusted))) ->
         if untrusted == trusted then
-            gotValidPlaintextUpdate from plain ready
+        gotValidPlaintextUpdate from plain ready
 
         else
-            unsolicitedMessage ready from
+        unsolicitedMessage ready from
 
 
 unsolicitedMessage :: Ready -> Username -> (Output, State)
@@ -1746,10 +1746,10 @@ parsedPlainUpdate from plain ready =
                 ready { assemblingFile = Just assemble }
             in
             if expectedHash == hash then
-                (AppendFileO temp chunk, ReadyS newReady)
+            (AppendFileO temp chunk, ReadyS newReady)
 
             else
-                (DoNothingO, ReadyS newReady)
+            (DoNothingO, ReadyS newReady)
 
         Just (AddingFinal _ _) ->
             (DoNothingO, ReadyS ready)
@@ -1840,23 +1840,23 @@ referencedUpdate from messageId body ready =
 
         Just (SharePair theirs (MySet mine)) ->
             if Set.member hash (referenced summary) then
-                ( BatchO [writeBlob, dumpCache ready]
-                , ReadyS $
-                    ready
-                        { sharePairs =
-                            Map.insert
-                                shareName
-                                (SharePair
-                                    theirs
-                                    (MySet $
-                                        Set.insert hash mine
-                                    ))
-                                (sharePairs ready)
-                        }
-                )
+            ( BatchO [writeBlob, dumpCache ready]
+            , ReadyS $
+                ready
+                    { sharePairs =
+                        Map.insert
+                            shareName
+                            (SharePair
+                                theirs
+                                (MySet $
+                                    Set.insert hash mine
+                                ))
+                            (sharePairs ready)
+                    }
+            )
 
             else
-                unsolicitedBlob ready from hash
+            unsolicitedBlob ready from hash
 
 
 unsolicitedBlob :: Ready -> Username -> Hash32 -> (Output, State)
@@ -1917,16 +1917,16 @@ newHeaderUpdate from messageId header ready =
         headerPath = makeBlobPath (root ready) hash
         in
         if isSharer from (sharersS summary) then
-            ( BatchO
-                [ cacheSummary (root ready) summary
-                , WriteFileO headerPath header
-                , dumpCache newReady
-                ]
-            , ReadyS newReady
-            )
+        ( BatchO
+            [ cacheSummary (root ready) summary
+            , WriteFileO headerPath header
+            , dumpCache newReady
+            ]
+        , ReadyS newReady
+        )
 
         else
-            (DoNothingO, ReadyS ready)
+        (DoNothingO, ReadyS ready)
 
     (Nothing, Right parsed) ->
         let
@@ -3026,34 +3026,34 @@ onMovedFile new ready =
 
     Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
         if toPath == new then
-            ( BytesInQO q (Bl.singleton 1 <> hash)
-            , ReadyS $ ready { blobsUp = NoJobs }
-            )
+        ( BytesInQO q (Bl.singleton 1 <> hash)
+        , ReadyS $ ready { blobsUp = NoJobs }
+        )
 
         else
-            pass
+        pass
 
     Jobs
         (AwaitingMoveB q (Hash32 hash) toPath)
         (BlobUpWait blob newQ : _) ->
 
         if toPath == new then
-            let
-            (output, newModel) = update
-                (ReadyS $ ready
-                    { blobsUp =
-                        promoteBlobsUp $ blobsUp ready
-                    })
-                (SetBlobM blob newQ)
-            in
-            ( BatchO
-                [ BytesInQO q (Bl.singleton 1 <> hash)
-                , output
-                ]
-            , newModel
-            )
+        let
+        (output, newModel) = update
+            (ReadyS $ ready
+                { blobsUp =
+                    promoteBlobsUp $ blobsUp ready
+                })
+            (SetBlobM blob newQ)
+        in
+        ( BatchO
+            [ BytesInQO q (Bl.singleton 1 <> hash)
+            , output
+            ]
+        , newModel
+        )
         else
-            pass
+        pass
 
     Jobs (AwaitingTmpWriteB _ _ _) _ ->
         pass
@@ -3073,23 +3073,23 @@ onWrittenToTmp writtenPath handle ready =
 
     Jobs (AwaitingTmpWriteB q hash expectPath) waiting ->
         if writtenPath == expectPath then
-            let
-            blobPath = makeBlobPath (root ready) hash
-            in
-            ( BatchO
-                [ MoveFileO writtenPath blobPath
-                , CloseFileO handle
-                ]
-            , ReadyS $ ready
-                { blobsUp =
-                    Jobs
-                        (AwaitingMoveB q hash blobPath)
-                        waiting
-                }
-            )
+        let
+        blobPath = makeBlobPath (root ready) hash
+        in
+        ( BatchO
+            [ MoveFileO writtenPath blobPath
+            , CloseFileO handle
+            ]
+        , ReadyS $ ready
+            { blobsUp =
+                Jobs
+                    (AwaitingMoveB q hash blobPath)
+                    waiting
+            }
+        )
 
         else
-            pass
+        pass
 
     Jobs (AwaitingHandleB _ _ _) _ ->
         pass
@@ -3215,9 +3215,9 @@ fileContentsUpdate path contents init_ =
 
     GettingKeysFromFileI root dhKeys times gen ->
         if path == keysPath root then
-            rawKeysUpdate contents root dhKeys times gen
+        rawKeysUpdate contents root dhKeys times gen
         else
-            pass
+        pass
 
   where
     pass = (DoNothingO, InitS init_)
@@ -3399,7 +3399,7 @@ uint64P =
 uint64HelpP :: Integer -> Integer -> P.Parser Integer
 uint64HelpP sofar counter =
     if counter == 8 then
-        return sofar
+    return sofar
 
     else do
         word <- P.anyWord8
@@ -3563,21 +3563,24 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
 
 dirCreatedUpdate :: FilePath -> Init -> (Output, State)
 dirCreatedUpdate path initModel =
+    let
+    pass = (DoNothingO, InitS initModel)
+    in
     case initModel of
     EmptyI ->
         pass
 
     MakingRootDirI root@(RootPath r) ->
         if path == r then
-            ( BatchO
-                [ StartUiServerO
-                , StartUiO
-                , MakeDhKeysO
-                ]
-            , InitS $ MakingDhKeysI root
-            )
+        ( BatchO
+            [ StartUiServerO
+            , StartUiO
+            , MakeDhKeysO
+            ]
+        , InitS $ MakingDhKeysI root
+        )
         else
-            pass
+        pass
 
     MakingDhKeysI _ ->
         pass
@@ -3593,6 +3596,3 @@ dirCreatedUpdate path initModel =
 
     GettingKeysFromFileI _ _ _ _ ->
         pass
-
-  where
-    pass = (DoNothingO, InitS initModel)
