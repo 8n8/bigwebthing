@@ -2887,6 +2887,27 @@ addToWhitelistUpdate (UserId username fingerprint) ready =
     (dumpCache newReady, ReadyS newReady)
 
 
+encodeUsernames :: [Username] -> Bl.ByteString
+encodeUsernames =
+    mconcat . map (\(Username u) -> u)
+
+
+removeFromWhitelistUpdate :: UserId -> Ready -> (Output, State)
+removeFromWhitelistUpdate (UserId username fingerprint) ready =
+    let
+    newWhitelist =
+        Map.insert
+            username
+            (fingerprint, Nothing) 
+            (whitelist ready)
+    newReady = ready { whitelist = newWhitelist }
+    encoded = encodeUsernames (Map.keys newWhitelist)
+    in
+    ( BatchO [BytesInQO toServerQ encoded, dumpCache newReady]
+    , ReadyS newReady
+    )
+
+
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
 uiApiUpdate apiInput model =
     case apiInput of
@@ -2896,8 +2917,8 @@ uiApiUpdate apiInput model =
     AddToWhitelist userId ->
         updateReady model $ addToWhitelistUpdate userId
 
-    RemoveFromWhitelist _ ->
-        undefined
+    RemoveFromWhitelist userId ->
+        updateReady model $ removeFromWhitelistUpdate userId
 
     GetMessage _ ->
         undefined
