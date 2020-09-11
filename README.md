@@ -42,9 +42,9 @@ The client backend provides a server on port 11833. It provides a static file se
 		1 byte: 0
 	Good network connection
 		1 byte: 1
-    Index
+    Summary
         1 byte: 2
-        contents of index file
+        summaries of all the messages
     Message
         1 byte: 3
         24 bytes: message ID
@@ -57,9 +57,9 @@ The client backend provides a server on port 11833. It provides a static file se
         16 bytes: user ID
     Backend ready
         1 byte: 6
-    Message chain summary
+    Message history
         1 byte: 7
-        20 bytes: chain ID
+        24 bytes: message ID
         sequence of message summaries, where each summary is
             8 bytes: POSIX time
             16 bytes: author ID
@@ -87,33 +87,30 @@ The client backend provides a server on port 11833. It provides a static file se
         1 byte: 0
         24 bytes: message ID
         message
-    Write index
+    Get summary
         1 byte: 1
-        index
-    Get index
-        1 byte: 2
 	Add to whitelist
-		1 byte: 3
+		1 byte: 2
         16 bytes: user ID
 	Remove from whitelist
-		1 byte: 4
+		1 byte: 3
         16 bytes: user ID
 	Get message
-		1 byte: 5
-        24 bytes: message ID
+		1 byte: 4
+        32 bytes: message hash
 	Get whitelist
-		1 byte: 6
+		1 byte: 5
 	Get my ID
-		1 byte: 7
-    Get message chain summary
-        1 byte: 8
-        20 bytes: chain ID
+		1 byte: 6
+    Get message history
+        1 byte: 7
+        24 bytes: message ID
     Get payments
-        1 byte: 9
+        1 byte: 8
     Get price
-        1 byte: 10
+        1 byte: 9
     Get membership status
-        1 byte: 11
+        1 byte: 10
 
 ## HTTP API
 

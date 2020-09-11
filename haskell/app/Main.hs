@@ -479,6 +479,11 @@ data Ready =
         }
 
 
+summarize :: Header -> Maybe Summary -> Int -> Summary
+summarize =
+    undefined
+
+
 data AssemblingFile
     = Assembling TmpBase Blake.BLAKE2bState
     | AddingFinal TmpBase Hash32
@@ -2061,7 +2066,7 @@ sharePairUpdate from messageId theirs@(TheirSet theirSet) ready =
                 pairs = Map.insert name pair oldPairs
                 newReady = ready { sharePairs = pairs }
             in
-                bumpShare name newReady
+                wrapReady $ bumpShare name newReady
 
         Just (SharePair (TheirSet theirOld) m) ->
             let
@@ -2070,25 +2075,47 @@ sharePairUpdate from messageId theirs@(TheirSet theirSet) ready =
                 pairs = Map.insert name pair oldPairs
                 newReady = ready {sharePairs = pairs}
             in
-                bumpShare name newReady
+                wrapReady $ bumpShare name newReady
 
 
-bumpShare :: ShareName -> Ready -> (Output, State)
+wrapReady :: (Output, Ready) -> (Output, State)
+wrapReady (output, ready) =
+    (output, ReadyS ready)
+
+
+bumpShares :: Ready -> (Output, Ready)
+bumpShares ready =
+    let
+        names = Map.keys $ sharePairs ready
+        (outputs, newReady) = foldr bumpHelp ([], ready) names
+    in
+        (BatchO outputs, newReady)
+
+
+bumpHelp :: ShareName -> ([Output], Ready) -> ([Output], Ready)
+bumpHelp name (oldOutputs, oldReady) =
+    let
+        (newOutput, newReady) = bumpShare name oldReady
+    in
+        (newOutput : oldOutputs, newReady)
+
+
+bumpShare :: ShareName -> Ready -> (Output, Ready)
 bumpShare name ready =
     case Map.lookup name $ sharePairs ready of
         Nothing ->
-            (DoNothingO, ReadyS ready)
+            (DoNothingO, ready)
 
         Just (SharePair (TheirSet theirs) (MySet mine)) ->
             case Set.toList $ Set.difference mine theirs of
                 [] ->
-                    (dumpCache ready, ReadyS ready)
+                    (dumpCache ready, ready)
 
                 d : _ ->
                     sendBlob name d ready
 
 
-sendBlob :: ShareName -> Hash32 -> Ready -> (Output, State)
+sendBlob :: ShareName -> Hash32 -> Ready -> (Output, Ready)
 sendBlob name hash ready =
     case sendingBlob ready of
         NoJobs ->
@@ -2096,13 +2123,12 @@ sendBlob name hash ready =
                 [ dumpCache ready
                 , ReadFileO $ makeBlobPath (root ready) hash
                 ]
-            , ReadyS $ ready
-                { sendingBlob = Jobs (ReadingS hash name) [] }
+            , ready { sendingBlob = Jobs (ReadingS hash name) [] }
             )
 
         Jobs current pending ->
             ( dumpCache ready
-            , ReadyS $ ready
+            , ready
                 { sendingBlob =
                     Jobs current $
                     append (SendWait hash name) pending
@@ -2717,16 +2743,12 @@ hash32P = do
     return $ Hash32 $ Bl.fromStrict hash
 
 
-newtype Message
-    = Message Bl.ByteString
-
-
 newtype ChainId
     = ChainId Bl.ByteString
 
 
 data FromFrontend
-    = NewMessageA MessageId Message
+    = NewMessageA MessageId Header
     | WriteIndex Bl.ByteString
     | GetIndex
     | AddToWhitelist UserId
@@ -2760,12 +2782,6 @@ messageIdP = do
     return $ MessageId $ Bl.fromStrict id_
 
 
-messageP :: P.Parser Message
-messageP = do
-    message <- P.takeByteString
-    return $ Message $ Bl.fromStrict message
-
-
 chainIdP :: P.Parser ChainId
 chainIdP = do
     chainId <- P.take 20
@@ -2778,8 +2794,8 @@ fromFrontendP = do
         [ do
             _ <- P.word8 0
             messageId <- messageIdP
-            message <- messageP
-            return $ NewMessageA messageId message
+            header <- headerP
+            return $ NewMessageA messageId header
         , do
             _ <- P.word8 1
             index <- P.takeByteString
@@ -2842,8 +2858,8 @@ addToWhitelistUpdate (UserId username fingerprint) ready =
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
 uiApiUpdate apiInput model =
     case apiInput of
-        NewMessageA _ _ ->
-            undefined
+        NewMessageA messageId header ->
+            updateReady model $ newMessageUpdate messageId header
 
         AddToWhitelist userId ->
             updateReady model $ addToWhitelistUpdate userId
@@ -2877,6 +2893,120 @@ uiApiUpdate apiInput model =
 
         GetMembership ->
             undefined
+
+
+newMessageUpdate :: MessageId -> Header -> Ready -> (Output, State)
+newMessageUpdate messageId header ready =
+    let
+    encoded = encodeHeader header
+    hash = hash32 encoded
+    summary =
+        summarize
+            header
+            (Map.lookup messageId $ summaries ready)
+            (counter ready)
+    historyPath =
+        makeHistoryPath (root ready) (historyId summary)
+    newReady =
+        ready
+            { summaries =
+                Map.insert
+                    messageId
+                    summary
+                    (summaries ready)
+            , counter = (counter ready) + 1
+            , sharePairs =
+                newSharePairs
+                    (sharePairs ready)
+                    messageId
+                    summary
+                    hash
+            }
+    (bumpedOut, bumpedReady) = bumpShares newReady
+    in
+    ( BatchO
+        [ bumpedOut
+        , dumpCache bumpedReady
+        , WriteFileO
+            (makeBlobPath (root ready) hash)
+            encoded
+        , AppendFileO historyPath (encodeSummary summary)
+        ]
+    , ReadyS bumpedReady
+    )
+
+
+newSharePairs
+    :: Map.Map ShareName SharePair
+    -> MessageId
+    -> Summary
+    -> Hash32
+    -> Map.Map ShareName SharePair
+newSharePairs oldShares messageId summary hash =
+    Set.foldr (newSharePairsHelp messageId hash summary) oldShares $
+    Set.map (\(UserId u _) -> u) $ sharersS summary
+
+
+newSharePairsHelp
+    :: MessageId
+    -> Hash32
+    -> Summary
+    -> Username
+    -> Map.Map ShareName SharePair
+    -> Map.Map ShareName SharePair
+newSharePairsHelp messageId hash summary from oldShares =
+    let
+    name = ShareName messageId from
+    in
+    case Map.lookup name oldShares of
+        Nothing ->
+            Map.insert
+                name
+                (SharePair
+                    (TheirSet Set.empty)
+                    (MySet $ Set.union
+                        (Set.fromList [hash])
+                        (referenced summary)))
+                oldShares
+
+        Just (SharePair (TheirSet theirs) (MySet mine)) ->
+            Map.insert
+                name
+                (SharePair
+                    (TheirSet theirs)
+                    (MySet $ Set.insert hash mine))
+                oldShares
+
+
+encodeHeader :: Header -> Bl.ByteString
+encodeHeader header =
+    mconcat
+        [ encodeString $ mainBox header
+        , encodeString $ subject header
+        , encodeSharers $ sharers header
+        , encodeTime $ lastEdit header
+        , encodeBlobs $ blobs header
+        , encodeHash $ wasm header
+        ]
+
+
+encodeBlobs :: Set.Set Blob -> Bl.ByteString
+encodeBlobs blobs =
+    let
+        asList = Set.toList blobs
+        len = length asList
+    in
+    encodeUint32 len <> mconcat (map encodeBlob asList)
+
+
+encodeBlob :: Blob -> Bl.ByteString
+encodeBlob blob =
+    mconcat
+        [ encodeHash $ hash blob
+        , encodeString $ filename blob
+        , encodeUint64 $ size blob
+        , encodeString $ mime blob
+        ]
 
 
 onMovedFile :: FilePath -> Ready -> (Output, State)
