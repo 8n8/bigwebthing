@@ -875,6 +875,9 @@ fileAssembledUpdate ready =
 
 updateOnRandomGen :: CryptoRand.ChaChaDRG -> Init -> (Output, State)
 updateOnRandomGen gen init_ =
+    let
+    pass = (DoNothingO, InitS init_)
+    in
     case init_ of
     EmptyI ->
         pass
@@ -899,12 +902,12 @@ updateOnRandomGen gen init_ =
     GettingKeysFromFileI _ _ _ _ ->
         pass
 
-  where
-    pass = (DoNothingO, InitS init_)
-
 
 updateOnNewSessionKey :: B.ByteString -> Ready -> (Output, State)
 updateOnNewSessionKey raw ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
     case authStatus ready of
     GettingPowInfoA ->
         pass
@@ -917,9 +920,6 @@ updateOnNewSessionKey raw ready =
 
     LoggedIn _ ->
         pass
-
-  where
-    pass = (DoNothingO, ReadyS ready)
 
 
 signUpHelp
@@ -1099,6 +1099,9 @@ isDifficult bytes difficulty =
 
 updateOnTimes :: [Clock.UTCTime] -> Init -> (Output, State)
 updateOnTimes times init_ =
+    let
+    pass = (DoNothingO, InitS init_)
+    in
     case init_ of
     EmptyI ->
         pass
@@ -1123,12 +1126,12 @@ updateOnTimes times init_ =
     GettingKeysFromFileI _ _ _ _ ->
         pass
 
-  where
-    pass = (DoNothingO, InitS init_)
-
 
 newDhKeysUpdate :: [Dh.KeyPair Curve25519] -> Init -> (Output, State)
 newDhKeysUpdate newKeys init_ =
+    let
+    pass = (DoNothingO, InitS init_)
+    in
     case init_ of
     EmptyI ->
         pass
@@ -1151,9 +1154,6 @@ newDhKeysUpdate newKeys init_ =
     GettingKeysFromFileI _ _ _ _ ->
         pass
 
-  where
-    pass = (DoNothingO, InitS init_)
-
 
 newtype MyStatic
     = MyStatic (Dh.KeyPair Curve25519)
@@ -1161,6 +1161,9 @@ newtype MyStatic
 
 fileExistenceUpdate :: FilePath -> Bool -> Init -> (Output, State)
 fileExistenceUpdate path exists init_ =
+    let
+    pass = (DoNothingO, InitS init_)
+    in
     case init_ of
     EmptyI ->
         pass
@@ -1222,9 +1225,6 @@ fileExistenceUpdate path exists init_ =
 
     GettingKeysFromFileI _ _ _ _ ->
         pass
-
-  where
-    pass = (DoNothingO, InitS init_)
 
 
 restartingTcpUpdate :: Ready -> (Output, State)
@@ -1290,6 +1290,9 @@ newPowInfoUpdate
     -> Ready
     -> (Output, State)
 newPowInfoUpdate difficulty unique ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
     case authStatus ready of
     GettingPowInfoA ->
         ( MakeSessionKeyO
@@ -1307,12 +1310,12 @@ newPowInfoUpdate difficulty unique ready =
     LoggedIn _ ->
         pass
 
-  where
-    pass = (DoNothingO, ReadyS ready)
-
 
 newUserIdUpdate :: Username -> Ready -> (Output, State)
 newUserIdUpdate username ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
     case authStatus ready of
     GettingPowInfoA ->
         pass
@@ -1353,9 +1356,6 @@ newUserIdUpdate username ready =
         logErr
             ready
             "received new username but authstatus is LoggedIn"
-
-  where
-    pass = (DoNothingO, ReadyS ready)
 
 
 num1stShakes =
@@ -2218,6 +2218,7 @@ firstHandshakesUpdate
     -> (Output, State)
 firstHandshakesUpdate from ready msgs =
     let
+    pass = (DoNothingO, ReadyS ready)
     myEphemerals = map MyEphemeral $
         take num1stShakes $ newDhKeys ready
     newHandshakes =
@@ -2248,9 +2249,6 @@ firstHandshakesUpdate from ready msgs =
             ( BatchO [kk2s, dumpCache ready]
             , ReadyS newReady
             )
-
-  where
-    pass = (DoNothingO, ReadyS ready)
 
 
 logPath :: RootPath -> FilePath
@@ -3020,6 +3018,9 @@ encodeBlob blob =
 
 onMovedFile :: FilePath -> Ready -> (Output, State)
 onMovedFile new ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
     case blobsUp ready of
     NoJobs ->
         pass
@@ -3061,12 +3062,12 @@ onMovedFile new ready =
     Jobs (AwaitingHandleB _ _ _) _ ->
         pass
 
-  where
-    pass = (DoNothingO, ReadyS ready)
-
 
 onWrittenToTmp :: FilePath -> Io.Handle -> Ready -> (Output, State)
 onWrittenToTmp writtenPath handle ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
     case blobsUp ready of
     NoJobs ->
         pass
@@ -3096,9 +3097,6 @@ onWrittenToTmp writtenPath handle ready =
 
     Jobs (AwaitingMoveB _ _ _) _ ->
         pass
-
-    where
-        pass = (DoNothingO, ReadyS ready)
 
 
 showHash :: Hash32 -> String
@@ -3194,6 +3192,9 @@ fileContentsUpdate
     -> Init
     -> (Output, State)
 fileContentsUpdate path contents init_ =
+    let
+    pass = (DoNothingO, InitS init_)
+    in
     case init_ of
     EmptyI ->
         pass
@@ -3218,9 +3219,6 @@ fileContentsUpdate path contents init_ =
         rawKeysUpdate contents root dhKeys times gen
         else
         pass
-
-  where
-    pass = (DoNothingO, InitS init_)
 
 
 parseCrypto
