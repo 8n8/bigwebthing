@@ -475,6 +475,7 @@ data Ready =
         , randomGen :: CryptoRand.ChaChaDRG
         , counter :: Int
         , assemblingFile :: Maybe AssemblingFile
+        , gettingMessage :: Maybe Hash32
         }
 
 
@@ -801,7 +802,7 @@ update model msg =
         updateInit model $ dirCreatedUpdate path
 
     FileContentsM path contents ->
-        updateInit model $ fileContentsUpdate path contents
+        fileContentsUpdate path contents model
 
     BatchM msgs ->
         let
@@ -1236,6 +1237,7 @@ fileExistenceUpdate path exists init_ =
                     , randomGen = gen
                     , counter = 0
                     , assemblingFile = Nothing
+                    , gettingMessage = Nothing
                     }
             in
             ( BatchO
@@ -2785,7 +2787,7 @@ data FromFrontend
     | GetIndex
     | AddToWhitelist UserId
     | RemoveFromWhitelist UserId
-    | GetMessage MessageId
+    | GetMessage Hash32
     | GetWhitelist
     | GetMyId
     | GetChainSummary ChainId
@@ -2845,8 +2847,8 @@ fromFrontendP = do
             return $ RemoveFromWhitelist userId
         , do
             _ <- P.word8 5
-            messageId <- messageIdP
-            return $ GetMessage messageId
+            hash <- hashP
+            return $ GetMessage hash
         , do
             _ <- P.word8 6
             return GetWhitelist
@@ -2869,6 +2871,12 @@ fromFrontendP = do
         ]
     P.endOfInput
     return input
+
+
+hashP :: P.Parser Hash32
+hashP = do
+    hash <- P.take 32
+    return $ Hash32 $ Bl.fromStrict hash
 
 
 addToWhitelistUpdate :: UserId -> Ready -> (Output, State)
@@ -2902,6 +2910,13 @@ removeFromWhitelistUpdate (UserId username fingerprint) ready =
     )
 
 
+getMessageUpdate :: Hash32 -> Ready -> (Output, State)
+getMessageUpdate hash ready =
+    ( ReadFileO (makeBlobPath (root ready) hash) 
+    , ReadyS $ ready { gettingMessage = Just hash }
+    )
+
+
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
 uiApiUpdate apiInput model =
     case apiInput of
@@ -2914,8 +2929,8 @@ uiApiUpdate apiInput model =
     RemoveFromWhitelist userId ->
         updateReady model $ removeFromWhitelistUpdate userId
 
-    GetMessage _ ->
-        undefined
+    GetMessage hash ->
+        updateReady model $ getMessageUpdate hash
 
     GetWhitelist ->
         undefined
@@ -3230,36 +3245,52 @@ batchUpdate model msgs outputs =
 fileContentsUpdate
     :: FilePath
     -> Bl.ByteString
-    -> Init
+    -> State
     -> (Output, State)
-fileContentsUpdate path contents init_ =
+fileContentsUpdate path contents model =
     let
-    pass = (DoNothingO, InitS init_)
+    pass = (DoNothingO, model)
     in
-    case init_ of
-    EmptyI ->
+    case model of
+    FailedS ->
         pass
 
-    MakingRootDirI _ ->
+    InitS EmptyI ->
         pass
 
-    MakingDhKeysI _ ->
+    InitS (MakingRootDirI _) ->
         pass
 
-    GettingTimes _ _ ->
+    InitS (MakingDhKeysI _) ->
         pass
 
-    GettingRandomGen _ _ _ ->
+    InitS (GettingTimes _ _) ->
         pass
 
-    DoKeysExistI _ _ _ _ ->
+    InitS (GettingRandomGen _ _ _) ->
         pass
 
-    GettingKeysFromFileI root dhKeys times gen ->
+    InitS (DoKeysExistI _ _ _ _) ->
+        pass
+
+    InitS (GettingKeysFromFileI root dhKeys times gen) ->
         if path == keysPath root then
         rawKeysUpdate contents root dhKeys times gen
         else
         pass
+
+    ReadyS ready ->
+        case gettingMessage ready of
+        Nothing ->
+            pass
+
+        Just expectingHash ->
+            if (makeBlobPath (root ready) expectingHash) == path then
+            ( BytesInQO toFrontendQ contents
+            , ReadyS $ ready { gettingMessage = Nothing }
+            )
+            else
+            pass
 
 
 parseCrypto
@@ -3596,6 +3627,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , summaries = summariesM memCache
             , counter = counterM memCache
             , assemblingFile = Nothing
+            , gettingMessage = Nothing
             }
         )
 
