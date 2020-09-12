@@ -2912,9 +2912,23 @@ removeFromWhitelistUpdate (UserId username fingerprint) ready =
 
 getMessageUpdate :: Hash32 -> Ready -> (Output, State)
 getMessageUpdate hash ready =
-    ( ReadFileO (makeBlobPath (root ready) hash) 
+    ( ReadFileO (makeBlobPath (root ready) hash)
     , ReadyS $ ready { gettingMessage = Just hash }
     )
+
+
+getWhitelistUpdate :: Ready -> (Output, State)
+getWhitelistUpdate ready =
+    let
+    userIds = map makeUserId $ Map.toList $ whitelist ready
+    encoded = mconcat $ map encodeUserId userIds
+    in
+    ( BytesInQO toFrontendQ encoded, ReadyS ready)
+
+
+makeUserId :: (Username, (Fingerprint, Maybe TheirStatic)) -> UserId
+makeUserId (username, (fingerprint, _)) =
+    UserId username fingerprint
 
 
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
@@ -2933,7 +2947,7 @@ uiApiUpdate apiInput model =
         updateReady model $ getMessageUpdate hash
 
     GetWhitelist ->
-        undefined
+        updateReady model $ getWhitelistUpdate
 
     GetMyId ->
         undefined
@@ -3304,7 +3318,8 @@ data MemCache
     = MemCache
         { keys :: StaticKeys
         , handshakesM :: Map.Map HandshakeId Handshake
-        , whitelistM :: Map.Map Username (Fingerprint, Maybe TheirStatic)
+        , whitelistM ::
+            Map.Map Username (Fingerprint, Maybe TheirStatic)
         , sharePairsM :: Map.Map ShareName SharePair
         , summariesM :: Map.Map MessageId Summary
         , counterM :: Int
