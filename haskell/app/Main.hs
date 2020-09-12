@@ -2931,6 +2931,29 @@ makeUserId (username, (fingerprint, _)) =
     UserId username fingerprint
 
 
+getMyIdUpdate :: Ready -> (Output, State)
+getMyIdUpdate ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case authStatus ready of
+    GettingPowInfoA ->
+        pass
+
+    GeneratingSessionKey _ _ ->
+        pass
+
+    AwaitingUsername _ _ ->
+        pass
+
+    LoggedIn (StaticKeys _ _ username fingerprint) ->
+        let
+        userId = UserId username fingerprint
+        encoded = Bl.singleton 5 <> encodeUserId userId
+        in
+        (BytesInQO toFrontendQ encoded, ReadyS ready)
+
+
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
 uiApiUpdate apiInput model =
     case apiInput of
@@ -2950,7 +2973,7 @@ uiApiUpdate apiInput model =
         updateReady model $ getWhitelistUpdate
 
     GetMyId ->
-        undefined
+        updateReady model $ getMyIdUpdate
 
     WriteIndex _ ->
         undefined
