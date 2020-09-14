@@ -2777,20 +2777,15 @@ hash32P = do
     return $ Hash32 $ Bl.fromStrict hash
 
 
-newtype ChainId
-    = ChainId Bl.ByteString
-
-
 data FromFrontend
     = NewMessageA MessageId Header
-    | WriteIndex Bl.ByteString
-    | GetIndex
+    | GetSummary
     | AddToWhitelist UserId
     | RemoveFromWhitelist UserId
     | GetMessage Hash32
     | GetWhitelist
     | GetMyId
-    | GetChainSummary ChainId
+    | GetMessageHistory MessageId
     | GetPayments
     | GetPrice
     | GetMembership
@@ -2816,12 +2811,6 @@ messageIdP = do
     return $ MessageId $ Bl.fromStrict id_
 
 
-chainIdP :: P.Parser ChainId
-chainIdP = do
-    chainId <- P.take 20
-    return $ ChainId $ Bl.fromStrict chainId
-
-
 fromFrontendP :: P.Parser FromFrontend
 fromFrontendP = do
     input <- P.choice
@@ -2832,41 +2821,37 @@ fromFrontendP = do
             return $ NewMessageA messageId header
         , do
             _ <- P.word8 1
-            index <- P.takeByteString
-            return $ WriteIndex $ Bl.fromStrict index
+            return GetSummary
         , do
             _ <- P.word8 2
-            return GetIndex
-        , do
-            _ <- P.word8 3
             userId <- userIdP
             return $ AddToWhitelist userId
         , do
-            _ <- P.word8 4
+            _ <- P.word8 3
             userId <- userIdP
             return $ RemoveFromWhitelist userId
         , do
-            _ <- P.word8 5
+            _ <- P.word8 4
             hash <- hashP
             return $ GetMessage hash
         , do
-            _ <- P.word8 6
+            _ <- P.word8 5
             return GetWhitelist
         , do
-            _ <- P.word8 7
+            _ <- P.word8 6
             return GetMyId
         , do
-            _ <- P.word8 8
-            chainId <- chainIdP
-            return $ GetChainSummary chainId
+            _ <- P.word8 7
+            messageId <- messageIdP
+            return $ GetMessageHistory messageId
         , do
-            _ <- P.word8 9
+            _ <- P.word8 8
             return GetPayments
         , do
-            _ <- P.word8 10
+            _ <- P.word8 9
             return GetPrice
         , do
-            _ <- P.word8 11
+            _ <- P.word8 10
             return GetMembership
         ]
     P.endOfInput
@@ -2975,13 +2960,10 @@ uiApiUpdate apiInput model =
     GetMyId ->
         updateReady model $ getMyIdUpdate
 
-    WriteIndex _ ->
+    GetSummary ->
         undefined
 
-    GetIndex ->
-        undefined
-
-    GetChainSummary _ ->
+    GetMessageHistory _ ->
         undefined
 
     GetPayments ->
