@@ -461,7 +461,6 @@ data Ready =
         { root :: RootPath
         , blobsUp :: Jobs BlobUp BlobUpWait
         , getBlob :: Jobs GetBlob GetBlobWait
-        , messageLocks :: Set.Set MessageId
         , authStatus :: AuthStatus
         , handshakes :: Map.Map HandshakeId Handshake
         , newDhKeys :: [Dh.KeyPair Curve25519]
@@ -1223,7 +1222,6 @@ fileExistenceUpdate path exists init_ =
                     { root
                     , blobsUp = NoJobs
                     , getBlob = NoJobs
-                    , messageLocks = Set.empty
                     , authStatus = GettingPowInfoA
                     , handshakes = Map.empty
                     , newDhKeys = newKeys
@@ -3632,7 +3630,6 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             { root
             , blobsUp = NoJobs
             , getBlob = NoJobs
-            , messageLocks = Set.empty
             , authStatus = LoggedIn $ keys memCache
             , handshakes = handshakesM memCache
             , newDhKeys
