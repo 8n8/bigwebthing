@@ -16,7 +16,7 @@ It operates on a strict whitelist-only policy, so you only receive messages from
 
 These are the different parts of the program:
 
-1. (Go) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
+1. (Haskell) The client backend. This runs on the client's computer and does most of the work, such as caching, crypto, and communicating with the server and the GUI.
 
 2. (Elm) The GUI. This runs in a stripped-down web browser via webview.
 
@@ -24,7 +24,7 @@ These are the different parts of the program:
 
 4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produce a DOM-like structure from a user input text box and user-uploaded binary blobs.
 
-6. (Go) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
+6. (Go) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys. Users need to inform the server of their whitelists so that it can reject spam for them.
 
 # Calculating fingerprint
 
@@ -38,90 +38,17 @@ The client backend provides a server on port 11833. It provides a static file se
 
 ### Backend to frontend:
 
-	Bad network connection
-		1 byte: 0
-	Good network connection
-		1 byte: 1
-    Summary
-        1 byte: 2
-        summaries of all the messages
-    Message
-        1 byte: 3
-        24 bytes: message ID
-        message
-    Whitelist
-        1 byte: 4
-		sequence of 16-byte user IDs
-    My user ID
-        1 byte: 5
-        16 bytes: user ID
-    Backend ready
-        1 byte: 6
-    Message history
-        1 byte: 7
-        24 bytes: message ID
-        sequence of message summaries, where each summary is
-            8 bytes: POSIX time
-            16 bytes: author ID
-            sized string: subject
-    Payments
-        1 byte: 8
-        sequence of payments, where a payment is
-            8 bytes: Unix time of payment date
-            4 bytes: amount paid in pence
-    Price
-        1 byte: 9
-        4 bytes: price in pence
-    Membership status
-        1 byte: 10
-        either in free period
-            1 byte: 0
-            8 bytes: start time
-        or lapsed due to missing payments
-            1 byte: 1
-        or paid up
-            1 byte: 2
+A description of the view presented to the user.
 
 ### Frontend to backend:
-    New message version
-        1 byte: 0
-        24 bytes: message ID
-        message
-    Get summary
-        1 byte: 1
-	Add to whitelist
-		1 byte: 2
-        16 bytes: user ID
-	Remove from whitelist
-		1 byte: 3
-        16 bytes: user ID
-	Get message
-		1 byte: 4
-        32 bytes: message hash
-	Get whitelist
-		1 byte: 5
-	Get my ID
-		1 byte: 6
-    Get message history
-        1 byte: 7
-        24 bytes: message ID
-    Get payments
-        1 byte: 8
-    Get price
-        1 byte: 9
-    Get membership status
-        1 byte: 10
+
+Events triggered by the user, like clicking buttons and typing in the text boxes.
 
 ## HTTP API
 
 /setblob
 	Request
 		binary blob
-	Response
-		32 bytes: hash of blob
-        4 bytes: size of blob
-        sized string: file name of blob
-        string: mime of blob
 /getblob
 	Request
         4 bytes: message ID
@@ -135,7 +62,7 @@ The server provides a TCP server on port 11453.
 
 ## Proof of work
 
-Some APIs are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create a 32-byte slow hash with all the bytes greater than the difficulty. The 'slow' hash should not be that slow. It should be slow enough that any implementation details apart from hashing are amortised. So a proof of work token is like this:
+Some API routes are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create a 32-byte slow hash with all the bytes greater than the difficulty. The 'slow' hash should not be that slow. It should be slow enough that any implementation details apart from hashing are amortised. So a proof of work token is like this:
 
 + 16 bytes: unique from the server
 + 8 bytes: calculated by the client
@@ -189,24 +116,6 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
     Upload contacts (AUTH)
         1 byte: 6
         sequence of 8-byte usernames
-
-
-# Data synchronisation
-
-For synchronising sets of blobs between clients.
-
-Each side keeps these sets of blob hashes for each contact:
-
-1. the set of blobs they have
-2. the set of blobs I have
-
-The sets can only have elements inserted, never removed.
-
-Whenever either side changes either of these, they send the one containing the blobs they have to the other side.
-
-When I receive a new blob set and I find that I have blobs that they don't, send them one of those blobs.
-
-When I create some new blobs, send one of them to the other side.
 
 # Client to client
 
@@ -306,7 +215,7 @@ feminist polish fanfare front barber resume palpable
 
 ## Message ID encoding
 
-24 bytes
+16 bytes
     20 bytes: globally unique random message chaining ID
     4 bytes: version counter within the chain
 
@@ -314,6 +223,16 @@ feminist polish fanfare front barber resume palpable
 
 blobs
     A key-value store of binaries.
+
+messages
+    a flat folder of message files (sets of edits), named by locally unique message IDs, where each is an SQLITE database with this table:
+
+        edits
+            row ID (int)
+            start position (int)
+            end position (int)
+            insert (blob)
+            8-byte integrity check (blob)
 
 memCache
     A binary file containing a dump of the in-memory cache.
