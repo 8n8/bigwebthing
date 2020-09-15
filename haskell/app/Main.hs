@@ -467,7 +467,7 @@ data Ready =
         , theTime :: [Clock.UTCTime]
         , whitelist ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
-        , sharePairs :: Map.Map ShareName SharePair
+        , userShares :: Map.Map Username UserShare
         , sendingBlob :: Jobs Sending SendWait
         , summaries :: Map.Map MessageId Summary
         , randomGen :: CryptoRand.ChaChaDRG
@@ -475,36 +475,6 @@ data Ready =
         , assemblingFile :: Maybe AssemblingFile
         , gettingMessage :: Maybe Hash32
         }
-
-
-summarize :: Header -> Maybe Summary -> Int -> Hash32 -> Summary
-summarize header old unique hash =
-    case old of
-    Nothing ->
-        Summary
-            { headerBlob = hash
-            , referenced =
-                Set.insert
-                    (wasm header)
-                    (Set.map hashB $ blobs header)
-            , subjectS = subject header
-            , sharersS = sharers header
-            , lastEditS = lastEdit header
-            , historyId = unique
-            }
-
-    Just oldSummary ->
-        Summary
-            { headerBlob = hash
-            , referenced =
-                Set.insert
-                    (wasm header)
-                    (Set.map hashB $ blobs header)
-            , subjectS = subject header
-            , sharersS = sharers header
-            , lastEditS = lastEdit header
-            , historyId = historyId oldSummary
-            }
 
 
 data AssemblingFile
@@ -536,12 +506,25 @@ data SendWait
     = SendWait Hash32 ShareName
 
 
-data SharePair
-    = SharePair TheirSet MySet
+data UserShare
+    = UserShare
+        { unacknowledged :: Maybe Unacknowledged
+        , toSend :: Set.Set SnapshotId
+        }
 
 
-newtype MySet
-    = MySet (Set.Set Hash32)
+data Unacknowledged
+    = Unacknowledged
+        { hash :: Hash32
+        , snapshotId :: SnapshotId
+        }
+
+
+data SnapshotId
+    = SnapshotId
+        { messageId :: Int
+        , editId :: Int
+        }
 
 
 newtype TheirSet
@@ -692,66 +675,6 @@ promoteGetBlob jobs =
 
     Jobs _ (GetBlobWait body q : aiting) ->
         Jobs (GetBlob q (hash32 body)) aiting
-
-
-cacheSummary :: RootPath -> Summary -> Output
-cacheSummary root summary =
-    AppendFileO
-        (makeHistoryPath root $ historyId summary)
-        (encodeSummary summary)
-
-
-makeHistoryPath :: RootPath -> Int -> FilePath
-makeHistoryPath root id_ =
-    blobsPath root </> show id_
-
-
-encodeSummary :: Summary -> Bl.ByteString
-encodeSummary summary =
-    mconcat
-        [ encodeHash $ headerBlob summary
-        , encodeString $ subjectS summary
-        , encodeSharers $ sharersS summary
-        , encodeTime $ lastEditS summary
-        ]
-
-
-encodeHash :: Hash32 -> Bl.ByteString
-encodeHash (Hash32 hash) =
-    hash
-
-
-encodeString :: T.Text -> Bl.ByteString
-encodeString s =
-    let
-    asBytes = Bl.fromStrict $ encodeUtf8 s
-    len = Bl.length asBytes
-    in
-    encodeUint32 (fromIntegral len) <> asBytes
-
-
-encodeSharers :: Set.Set UserId -> Bl.ByteString
-encodeSharers userIds =
-    let
-    asList = Set.toList userIds
-    num = length asList
-    in
-    encodeUint32 num <> mconcat (map encodeUserId asList)
-
-
-encodeUserId :: UserId -> Bl.ByteString
-encodeUserId (UserId username fingerprint) =
-    encodeUsername username <> encodeFingerprint fingerprint
-
-
-isSharer :: Username -> Set.Set (UserId) -> Bool
-isSharer candidate sharers =
-    Set.member candidate $ Set.map (\(UserId u _) -> u) sharers
-
-
-encodeTime :: PosixMillis -> Bl.ByteString
-encodeTime (PosixMillis t) =
-    encodeUint64 t
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -1227,13 +1150,13 @@ fileExistenceUpdate path exists init_ =
                     , newDhKeys = newKeys
                     , theTime = times
                     , whitelist = Map.empty
-                    , sharePairs = Map.empty
                     , sendingBlob = NoJobs
                     , summaries = Map.empty
                     , randomGen = gen
                     , counter = 0
                     , assemblingFile = Nothing
                     , gettingMessage = Nothing
+                    , userShares = Map.empty
                     }
             in
             ( BatchO
@@ -1782,29 +1705,27 @@ parsedPlainUpdate from plain ready =
 
 
 data Assembled
-    = ShareSetA MessageId TheirSet
+    = ShareSetA TheirSet
     | HeaderA MessageId Bl.ByteString
     | Referenced MessageId Bl.ByteString
 
 
 assembledP :: P.Parser Assembled
 assembledP = do
-    messageId <- messageIdP
     P.choice
         [ do
             _ <- P.word8 0
             hashes <- P.many1 hash32P
             P.endOfInput
-            return $
-                ShareSetA
-                    messageId
-                    (TheirSet (Set.fromList hashes))
+            return $ ShareSetA (TheirSet (Set.fromList hashes))
         , do
             _ <- P.word8 1
+            messageId <- messageIdP
             header <- P.takeLazyByteString
             return $ HeaderA messageId header
         , do
             _ <- P.word8 2
+            messageId <- messageIdP
             referenced <- P.takeLazyByteString
             return $ Referenced messageId referenced
         ]
@@ -1817,14 +1738,14 @@ assembledUpdate
     -> (Output, State)
 assembledUpdate from assembled ready =
     case P.eitherResult $ P.parse assembledP assembled of
-    Right (ShareSetA messageId theirs) ->
-        sharePairUpdate from messageId theirs ready
+    Right (ShareSetA _) ->
+        undefined
 
-    Right (HeaderA messageId header) ->
-        newHeaderUpdate from messageId header ready
+    Right (HeaderA _ _) ->
+        undefined
 
-    Right (Referenced messageId body) ->
-        referencedUpdate from messageId body ready
+    Right (Referenced _ _) ->
+        undefined
 
     Left err ->
         logErr
@@ -1837,167 +1758,8 @@ assembledUpdate from assembled ready =
                 ])
 
 
-referencedUpdate
-    :: Username
-    -> MessageId
-    -> Bl.ByteString
-    -> Ready
-    -> (Output, State)
-referencedUpdate from messageId body ready =
-    let
-    hash = hash32 body
-    writeBlob =
-        WriteFileO
-            (makeBlobPath (root ready) hash)
-            body
-    shareName = ShareName messageId from
-    in
-    case Map.lookup messageId (summaries ready) of
-    Nothing ->
-        unsolicitedBlob ready from hash
-
-    Just summary ->
-        case Map.lookup shareName (sharePairs ready) of
-        Nothing ->
-            unsolicitedBlob ready from hash
-
-        Just (SharePair theirs (MySet mine)) ->
-            if Set.member hash (referenced summary) then
-            ( BatchO [writeBlob, dumpCache ready]
-            , ReadyS $
-                ready
-                    { sharePairs =
-                        Map.insert
-                            shareName
-                            (SharePair
-                                theirs
-                                (MySet $
-                                    Set.insert hash mine
-                                ))
-                            (sharePairs ready)
-                    }
-            )
-
-            else
-            unsolicitedBlob ready from hash
-
-
-unsolicitedBlob :: Ready -> Username -> Hash32 -> (Output, State)
-unsolicitedBlob ready from hash =
-     logErr
-         ready
-         (mconcat
-             [ "received unsolicited blob from "
-             , T.pack $ show from
-             , " with hash "
-             , T.pack $ showHash hash
-             ])
-
-
-badHeaderErr :: Ready -> Username -> String -> (Output, State)
-badHeaderErr ready from err =
-    logErr
-        ready
-        (mconcat
-            [ "could not parse new header from "
-            , T.pack $ show from
-            , ": "
-            , T.pack $ show err
-            ])
-
-
-newHeaderUpdate from messageId header ready =
-    case
-        ( Map.lookup messageId (summaries ready)
-        , P.eitherResult $ P.parse headerP header
-        )
-    of
-    (Nothing, Left err) ->
-        badHeaderErr ready from err
-
-    (Just _, Left err) ->
-        badHeaderErr ready from err
-
-    (Just summary, Right parsed) ->
-        let
-        hash = hash32 header
-
-        newSummary =
-            Summary
-                { headerBlob = hash
-                , subjectS = subject parsed
-                , sharersS = sharersS summary
-                , lastEditS = lastEdit parsed
-                , historyId = historyId summary
-                , referenced = makeRefs parsed
-                }
-
-        newSummaries =
-            Map.insert messageId newSummary (summaries ready)
-
-        newReady = ready { summaries = newSummaries }
-
-        headerPath = makeBlobPath (root ready) hash
-        in
-        if isSharer from (sharersS summary) then
-        ( BatchO
-            [ cacheSummary (root ready) summary
-            , WriteFileO headerPath header
-            , dumpCache newReady
-            ]
-        , ReadyS newReady
-        )
-
-        else
-        (DoNothingO, ReadyS ready)
-
-    (Nothing, Right parsed) ->
-        let
-        hash = hash32 header
-        newSummary =
-            Summary
-                { headerBlob = hash
-                , subjectS = subject parsed
-                , sharersS = sharers parsed
-                , lastEditS = lastEdit parsed
-                , historyId = counter ready
-                , referenced = makeRefs parsed
-                }
-
-        newReady = ready
-            { summaries =
-                Map.insert
-                    messageId
-                    newSummary
-                    (summaries ready)
-            , counter = (counter ready) + 1
-            }
-        in
-        ( BatchO
-            [ WriteFileO
-                (makeBlobPath (root ready) hash)
-                header
-            , cacheSummary (root ready) newSummary
-            , dumpCache newReady
-            ]
-        , ReadyS ready
-        )
-
-
 messageIdLen =
     24
-
-
-headerP :: P.Parser Header
-headerP = do
-    mainBox <- sizedStringP
-    subject <- sizedStringP
-    sharers <- sharersP
-    lastEdit <- timeP
-    blobs <- blobsP
-    wasm <- hash32P
-    return $
-        Header {mainBox, subject, sharers, lastEdit, blobs, wasm}
 
 
 sharersP :: P.Parser (Set.Set UserId)
@@ -2015,13 +1777,6 @@ timeP = do
 
 newtype PosixMillis
     = PosixMillis Integer
-
-
-blobsP :: P.Parser (Set.Set Blob)
-blobsP = do
-    size <- uint32P
-    blobs <- P.count size blobP
-    return $ Set.fromList blobs
 
 
 blobP :: P.Parser Blob
@@ -2046,23 +1801,15 @@ sizedStringP = do
             return str
 
 
-makeRefs :: Header -> Set.Set Hash32
-makeRefs header =
-    let
-    blobRefs = Set.map hashB $ blobs header
-    in
-    Set.insert (wasm header) blobRefs
+stringP :: P.Parser T.Text
+stringP = do
+    raw <- P.takeByteString
+    case decodeUtf8' raw of
+        Left err ->
+            fail $ "error parsing UTF-8: " <> show err
 
-
-data Header
-    = Header
-        { mainBox :: T.Text
-        , subject :: T.Text
-        , sharers :: Set.Set UserId
-        , lastEdit :: PosixMillis
-        , blobs :: Set.Set Blob
-        , wasm :: Hash32
-        }
+        Right s ->
+            return s
 
 
 data Blob
@@ -2075,93 +1822,6 @@ data Blob
         deriving (Eq, Ord)
 
 
-sharePairUpdate
-    :: Username
-    -> MessageId
-    -> TheirSet
-    -> Ready
-    -> (Output, State)
-sharePairUpdate from messageId theirs@(TheirSet theirSet) ready =
-    let
-    name = ShareName messageId from
-    oldPairs = sharePairs ready
-    in
-    case Map.lookup name oldPairs of
-    Nothing ->
-        let
-        pair = SharePair theirs (MySet Set.empty)
-        pairs = Map.insert name pair oldPairs
-        newReady = ready { sharePairs = pairs }
-        in
-        wrapReady $ bumpShare name newReady
-
-    Just (SharePair (TheirSet theirOld) m) ->
-        let
-        newTheirs = TheirSet $ Set.union theirSet theirOld
-        pair = SharePair newTheirs m
-        pairs = Map.insert name pair oldPairs
-        newReady = ready {sharePairs = pairs}
-        in
-        wrapReady $ bumpShare name newReady
-
-
-wrapReady :: (Output, Ready) -> (Output, State)
-wrapReady (output, ready) =
-    (output, ReadyS ready)
-
-
-bumpShares :: Ready -> (Output, Ready)
-bumpShares ready =
-    let
-    names = Map.keys $ sharePairs ready
-    (outputs, newReady) = foldr bumpHelp ([], ready) names
-    in
-    (BatchO outputs, newReady)
-
-
-bumpHelp :: ShareName -> ([Output], Ready) -> ([Output], Ready)
-bumpHelp name (oldOutputs, oldReady) =
-    let
-    (newOutput, newReady) = bumpShare name oldReady
-    in
-    (newOutput : oldOutputs, newReady)
-
-
-bumpShare :: ShareName -> Ready -> (Output, Ready)
-bumpShare name ready =
-    case Map.lookup name $ sharePairs ready of
-    Nothing ->
-        (DoNothingO, ready)
-
-    Just (SharePair (TheirSet theirs) (MySet mine)) ->
-        case Set.toList $ Set.difference mine theirs of
-        [] ->
-            (dumpCache ready, ready)
-
-        d : _ ->
-            sendBlob name d ready
-
-
-sendBlob :: ShareName -> Hash32 -> Ready -> (Output, Ready)
-sendBlob name hash ready =
-    case sendingBlob ready of
-    NoJobs ->
-        ( BatchO
-            [ dumpCache ready
-            , ReadFileO $ makeBlobPath (root ready) hash
-            ]
-        , ready { sendingBlob = Jobs (ReadingS hash name) [] }
-        )
-
-    Jobs current pending ->
-        ( dumpCache ready
-        , ready
-            { sendingBlob =
-                Jobs current $
-                append (SendWait hash name) pending
-            }
-        )
-
 makeBlobPath :: RootPath -> Hash32 -> FilePath
 makeBlobPath root hash =
     blobsPath root </> showHash hash
@@ -2170,11 +1830,6 @@ makeBlobPath root hash =
 blobsPath :: RootPath -> FilePath
 blobsPath (RootPath root) =
     root </> "blobs"
-
-
-append :: a -> [a] -> [a]
-append item to =
-    reverse $ item : (reverse to)
 
 
 secondHandshakesUpdate
@@ -2527,9 +2182,9 @@ getCache ready =
             { keys
             , handshakesM = handshakes ready
             , whitelistM = whitelist ready
-            , sharePairsM = sharePairs ready
             , summariesM = summaries ready
             , counterM = counter ready
+            , userSharesM = userShares ready
             }
 
 
@@ -2774,17 +2429,16 @@ hash32P = do
 
 
 data FromFrontend
-    = NewMessageA MessageId Header
-    | GetSummary
-    | AddToWhitelist UserId
-    | RemoveFromWhitelist UserId
-    | GetMessage Hash32
-    | GetWhitelist
-    | GetMyId
-    | GetMessageHistory MessageId
-    | GetPayments
-    | GetPrice
-    | GetMembership
+    = InboxClick
+    | DraftsClick
+    | WriterClick
+    | ContactsClick
+    | AccountClick
+    | NewMain T.Text
+    | NewSubject T.Text
+    | NewShares [UserId]
+    | NewWasm Hash32
+    | NewBlobs [Blob]
 
 
 newtype MessageId
@@ -2810,281 +2464,68 @@ messageIdP = do
 fromFrontendP :: P.Parser FromFrontend
 fromFrontendP = do
     input <- P.choice
-        [ do
-            _ <- P.word8 0
-            messageId <- messageIdP
-            header <- headerP
-            return $ NewMessageA messageId header
-        , do
-            _ <- P.word8 1
-            return GetSummary
-        , do
-            _ <- P.word8 2
-            userId <- userIdP
-            return $ AddToWhitelist userId
-        , do
-            _ <- P.word8 3
-            userId <- userIdP
-            return $ RemoveFromWhitelist userId
-        , do
-            _ <- P.word8 4
-            hash <- hashP
-            return $ GetMessage hash
+        [ P.word8 0 >> return InboxClick
+        , P.word8 1 >> return DraftsClick
+        , P.word8 2 >> return WriterClick
+        , P.word8 3 >> return ContactsClick
+        , P.word8 4 >> return AccountClick
         , do
             _ <- P.word8 5
-            return GetWhitelist
+            newMain <- stringP
+            return $ NewMain newMain
         , do
             _ <- P.word8 6
-            return GetMyId
+            newSubject <- stringP
+            return $ NewSubject newSubject
         , do
             _ <- P.word8 7
-            messageId <- messageIdP
-            return $ GetMessageHistory messageId
+            newShares <- P.many1 userIdP
+            return $ NewShares newShares
         , do
             _ <- P.word8 8
-            return GetPayments
+            hash <- hash32P
+            return $ NewWasm hash
         , do
             _ <- P.word8 9
-            return GetPrice
-        , do
-            _ <- P.word8 10
-            return GetMembership
+            blobs <- P.many1 blobP
+            return $ NewBlobs blobs
         ]
     P.endOfInput
     return input
 
 
-hashP :: P.Parser Hash32
-hashP = do
-    hash <- P.take 32
-    return $ Hash32 $ Bl.fromStrict hash
-
-
-addToWhitelistUpdate :: UserId -> Ready -> (Output, State)
-addToWhitelistUpdate (UserId username fingerprint) ready =
-    let
-    newWhitelist =
-        Map.insert username (fingerprint, Nothing) (whitelist ready)
-    newReady = ready { whitelist = newWhitelist }
-    encoded = encodeUsernames (Map.keys newWhitelist)
-    in
-    ( BatchO [BytesInQO toServerQ encoded, dumpCache newReady]
-    , ReadyS newReady
-    )
-
-
-encodeUsernames :: [Username] -> Bl.ByteString
-encodeUsernames =
-    mconcat . map (\(Username u) -> u)
-
-
-removeFromWhitelistUpdate :: UserId -> Ready -> (Output, State)
-removeFromWhitelistUpdate (UserId username fingerprint) ready =
-    let
-    newWhitelist =
-        Map.insert username (fingerprint, Nothing) (whitelist ready)
-    newReady = ready { whitelist = newWhitelist }
-    encoded = encodeUsernames (Map.keys newWhitelist)
-    in
-    ( BatchO [BytesInQO toServerQ encoded, dumpCache newReady]
-    , ReadyS newReady
-    )
-
-
-getMessageUpdate :: Hash32 -> Ready -> (Output, State)
-getMessageUpdate hash ready =
-    ( ReadFileO (makeBlobPath (root ready) hash)
-    , ReadyS $ ready { gettingMessage = Just hash }
-    )
-
-
-getWhitelistUpdate :: Ready -> (Output, State)
-getWhitelistUpdate ready =
-    let
-    userIds = map makeUserId $ Map.toList $ whitelist ready
-    encoded = mconcat $ map encodeUserId userIds
-    in
-    ( BytesInQO toFrontendQ encoded, ReadyS ready)
-
-
-makeUserId :: (Username, (Fingerprint, Maybe TheirStatic)) -> UserId
-makeUserId (username, (fingerprint, _)) =
-    UserId username fingerprint
-
-
-getMyIdUpdate :: Ready -> (Output, State)
-getMyIdUpdate ready =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
-    case authStatus ready of
-    GettingPowInfoA ->
-        pass
-
-    GeneratingSessionKey _ _ ->
-        pass
-
-    AwaitingUsername _ _ ->
-        pass
-
-    LoggedIn (StaticKeys _ _ username fingerprint) ->
-        let
-        userId = UserId username fingerprint
-        encoded = Bl.singleton 5 <> encodeUserId userId
-        in
-        (BytesInQO toFrontendQ encoded, ReadyS ready)
-
-
 uiApiUpdate :: FromFrontend -> State -> (Output, State)
-uiApiUpdate apiInput model =
-    case apiInput of
-    NewMessageA messageId header ->
-        updateReady model $ newMessageUpdate messageId header
+uiApiUpdate fromFrontend _ =
+    case fromFrontend of
+        InboxClick ->
+            undefined
 
-    AddToWhitelist userId ->
-        updateReady model $ addToWhitelistUpdate userId
+        DraftsClick ->
+            undefined
 
-    RemoveFromWhitelist userId ->
-        updateReady model $ removeFromWhitelistUpdate userId
+        WriterClick ->
+            undefined
 
-    GetMessage hash ->
-        updateReady model $ getMessageUpdate hash
+        ContactsClick ->
+            undefined
 
-    GetWhitelist ->
-        updateReady model $ getWhitelistUpdate
+        AccountClick ->
+            undefined
 
-    GetMyId ->
-        updateReady model $ getMyIdUpdate
+        NewMain _ ->
+            undefined
 
-    GetSummary ->
-        undefined
+        NewSubject _ ->
+            undefined
 
-    GetMessageHistory _ ->
-        undefined
+        NewShares _ ->
+            undefined
 
-    GetPayments ->
-        undefined
+        NewWasm _ ->
+            undefined
 
-    GetPrice ->
-        undefined
-
-    GetMembership ->
-        undefined
-
-
-newMessageUpdate :: MessageId -> Header -> Ready -> (Output, State)
-newMessageUpdate messageId header ready =
-    let
-    encoded = encodeHeader header
-    hash = hash32 encoded
-    summary =
-        summarize
-            header
-            (Map.lookup messageId $ summaries ready)
-            (counter ready)
-            hash
-    historyPath =
-        makeHistoryPath (root ready) (historyId summary)
-    newReady =
-        ready
-            { summaries =
-                Map.insert
-                    messageId
-                    summary
-                    (summaries ready)
-            , counter = (counter ready) + 1
-            , sharePairs =
-                newSharePairs
-                    (sharePairs ready)
-                    messageId
-                    summary
-                    hash
-            }
-    (bumpedOut, bumpedReady) = bumpShares newReady
-    in
-    ( BatchO
-        [ bumpedOut
-        , dumpCache bumpedReady
-        , WriteFileO
-            (makeBlobPath (root ready) hash)
-            encoded
-        , AppendFileO historyPath (encodeSummary summary)
-        ]
-    , ReadyS bumpedReady
-    )
-
-
-newSharePairs
-    :: Map.Map ShareName SharePair
-    -> MessageId
-    -> Summary
-    -> Hash32
-    -> Map.Map ShareName SharePair
-newSharePairs oldShares messageId summary hash =
-    Set.foldr (newSharePairsHelp messageId hash summary) oldShares $
-    Set.map (\(UserId u _) -> u) $ sharersS summary
-
-
-newSharePairsHelp
-    :: MessageId
-    -> Hash32
-    -> Summary
-    -> Username
-    -> Map.Map ShareName SharePair
-    -> Map.Map ShareName SharePair
-newSharePairsHelp messageId hash summary from oldShares =
-    let
-    name = ShareName messageId from
-    in
-    case Map.lookup name oldShares of
-    Nothing ->
-        Map.insert
-            name
-            (SharePair
-                (TheirSet Set.empty)
-                (MySet $ Set.union
-                    (Set.fromList [hash])
-                    (referenced summary)))
-            oldShares
-
-    Just (SharePair (TheirSet theirs) (MySet mine)) ->
-        Map.insert
-            name
-            (SharePair
-                (TheirSet theirs)
-                (MySet $ Set.insert hash mine))
-            oldShares
-
-
-encodeHeader :: Header -> Bl.ByteString
-encodeHeader header =
-    mconcat
-        [ encodeString $ mainBox header
-        , encodeString $ subject header
-        , encodeSharers $ sharers header
-        , encodeTime $ lastEdit header
-        , encodeBlobs $ blobs header
-        , encodeHash $ wasm header
-        ]
-
-
-encodeBlobs :: Set.Set Blob -> Bl.ByteString
-encodeBlobs blobs =
-    let
-    asList = Set.toList blobs
-    len = length asList
-    in
-    encodeUint32 len <> mconcat (map encodeBlob asList)
-
-
-encodeBlob :: Blob -> Bl.ByteString
-encodeBlob blob =
-    mconcat
-        [ encodeHash $ hashB blob
-        , encodeString $ filename blob
-        , encodeUint64 $ size blob
-        , encodeString $ mime blob
-        ]
+        NewBlobs _ ->
+            undefined
 
 
 onMovedFile :: FilePath -> Ready -> (Output, State)
@@ -3321,7 +2762,7 @@ data MemCache
         , handshakesM :: Map.Map HandshakeId Handshake
         , whitelistM ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
-        , sharePairsM :: Map.Map ShareName SharePair
+        , userSharesM :: Map.Map Username UserShare
         , summariesM :: Map.Map MessageId Summary
         , counterM :: Int
         }
@@ -3332,7 +2773,7 @@ memCacheP = do
     keys <- myKeysP
     handshakesM <- handshakesP
     whitelistM <- whitelistP
-    sharePairsM <- sharePairsP
+    userSharesM <- userSharesP
     summariesM <- summariesP
     counterM <- uint32P
     P.endOfInput
@@ -3341,10 +2782,15 @@ memCacheP = do
             { keys
             , handshakesM
             , whitelistM
-            , sharePairsM
+            , userSharesM
             , summariesM
             , counterM
             }
+
+
+userSharesP :: P.Parser (Map.Map Username UserShare)
+userSharesP =
+    undefined
 
 
 summariesP :: P.Parser (Map.Map MessageId Summary)
@@ -3381,48 +2827,6 @@ referencedP = do
     num <- uint32P
     asList <- P.count num hash32P
     return $ Set.fromList asList
-
-
-sharePairsP :: P.Parser (Map.Map ShareName SharePair)
-sharePairsP = do
-    numShares <- uint32P
-    asList <- P.count numShares oneShareP
-    return $ Map.fromList asList
-
-
-oneShareP :: P.Parser (ShareName, SharePair)
-oneShareP = do
-    shareName <- shareNameP
-    sharePair <- sharePairP
-    return (shareName, sharePair)
-
-
-shareNameP :: P.Parser ShareName
-shareNameP = do
-    messageId <- messageIdP
-    username <- usernameP
-    return $ ShareName messageId username
-
-
-sharePairP :: P.Parser SharePair
-sharePairP = do
-    theirSet <- theirSetP
-    mySet <- mySetP
-    return $ SharePair theirSet mySet
-
-
-theirSetP :: P.Parser TheirSet
-theirSetP = do
-    len <- uint32P
-    asList <- P.count len hash32P
-    return $ TheirSet $ Set.fromList asList
-
-
-mySetP :: P.Parser MySet
-mySetP = do
-    len <- uint32P
-    asList <- P.count len hash32P
-    return $ MySet $ Set.fromList asList
 
 
 whitelistP
@@ -3635,7 +3039,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , newDhKeys
             , theTime = times
             , whitelist = whitelistM memCache
-            , sharePairs = sharePairsM memCache
+            , userShares = userSharesM memCache
             , sendingBlob = NoJobs
             , randomGen = gen
             , summaries = summariesM memCache

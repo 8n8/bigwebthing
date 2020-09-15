@@ -1,0 +1,3 @@
++ sharePairs
++ do server shares
++ store messages as edit sequences in SQLITE
