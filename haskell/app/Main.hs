@@ -462,7 +462,6 @@ data Ready =
         , blobsUp :: Jobs BlobUp BlobUpWait
         , getBlob :: Jobs GetBlob GetBlobWait
         , messageLocks :: Set.Set MessageId
-        , blobLocks :: Set.Set Hash32
         , authStatus :: AuthStatus
         , handshakes :: Map.Map HandshakeId Handshake
         , newDhKeys :: [Dh.KeyPair Curve25519]
@@ -1230,7 +1229,6 @@ fileExistenceUpdate path exists init_ =
                     , newDhKeys = newKeys
                     , theTime = times
                     , whitelist = Map.empty
-                    , blobLocks = Set.empty
                     , sharePairs = Map.empty
                     , sendingBlob = NoJobs
                     , summaries = Map.empty
@@ -3640,7 +3638,6 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , newDhKeys
             , theTime = times
             , whitelist = whitelistM memCache
-            , blobLocks = Set.empty
             , sharePairs = sharePairsM memCache
             , sendingBlob = NoJobs
             , randomGen = gen
