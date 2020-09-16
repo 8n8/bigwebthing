@@ -80,7 +80,7 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 	New message from another user (AUTH)
 		1 byte: 0
         8 bytes: sender username
-        <= 15991 bytes: the message
+        <= 15987 bytes: the message
     New username (AUTH)
         1 byte: 1
         8 bytes: username
@@ -91,6 +91,9 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
     Price (AUTH)
         1 byte: 3
         4 bytes: monthly price in GBP^(-2)
+    Acknowledgement
+        1 byte: 4
+        4 bytes: acknowledgement code
 
 ### Client to server
 
@@ -106,8 +109,9 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 		16 bytes: random session key
 	Send message (AUTH)
 		1 byte: 3
+        4 bytes: acknowledgement code
 		8 bytes: recipient username
-		<= 15991 bytes: message
+		<= 15987 bytes: message
 	Delete message (AUTH)
 		1 byte: 4
 		32 bytes: message hash
@@ -123,9 +127,9 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 
 The message is sliced up into chunks, each chunk is encrypted, and is sent.
 
-Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded like this:
+Before encryption, a chunk must be a fixed length. A chunk is encoded like this:
 
-15910 bytes
+15890 bytes
     either the whole message fits in one chunk
         1 byte: 0
         2 bytes: the length of the message
@@ -143,27 +147,24 @@ Before encryption, a chunk must be exactly 15910 bytes long. A chunk is encoded 
 
 After assembling the message (or before chunking and sending it), there is another API inside it:
 
-    24 bytes: globally unique message ID
-    either a share set
+    16 bytes: globally unique message ID
+    either a header blob
         1 byte: 0
-        sequence of 32-byte sender set hashes
-    or a header blob
-        1 byte: 1
         the header blob
     or a referenced blob
-        1 byte: 2
+        1 byte: 1
         the referenced blob
 
 ## Crypto
 
-The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are <= 15991 bytes long:
+The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are <= 15987 bytes long:
 
     either some fresh first handshake messages
         1 byte: 0
         15968 bytes: 499 32-byte messages
     or some fresh second handshake messages
         1 byte: 1
-        the messages, 96 bytes each (max 166 will fit)
+        15936 bytes: 166 96-byte messages
             32 bytes: first handshake message
             16 + 32 bytes: encrypted static key
             16 bytes: overhead of empty payload
@@ -172,9 +173,9 @@ The cryptography is done using Cacophony, a Noise implementation in Haskell. It 
         32 bytes: first handshake message
             used as the unique session reference
         48 bytes: encrypted static key
-        15910 bytes: Noise payload
+        15906 bytes: Noise payload
             16 bytes: crypto overhead
-            15942 bytes: plaintext
+            15890 bytes: plaintext
 
 # Encodings
 

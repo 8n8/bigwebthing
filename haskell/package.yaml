@@ -40,6 +40,7 @@ dependencies:
 - time
 - entropy
 - cryptonite
+- sqlite-simple
 
 library:
   source-dirs: src

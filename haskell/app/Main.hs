@@ -2,6 +2,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE GADTs #-}
 module Main (main) where
 
 import qualified Control.Concurrent.STM as Stm
@@ -42,6 +43,7 @@ import qualified Data.Bits as Bits
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.KDF.Argon2 as Argon2
 import qualified Crypto.Random as CryptoRand
+import qualified Database.SQLite.Simple as Sql
 
 
 main :: IO ()
@@ -176,6 +178,16 @@ io output =
     MakeSessionKeyO -> do
         key <- getEntropy sessionKeyLength
         return $ Just $ NewSessionKeyM key
+
+    ReadMessageO dbPath query -> do
+        result <- Sql.withConnection
+            dbPath
+            (\conn -> Sql.query_ conn query)
+        return $ Just $ MessageFromDb dbPath result
+
+    ReadFileStrictO path -> do
+        contents <- B.readFile path
+        return $ Just $ StrictFileContentsM path contents
 
 
 maxMessageLength =
@@ -320,6 +332,8 @@ data Output
     | AppendFileO FilePath Bl.ByteString
     | GetTimesO
     | AppendFileStrictO FilePath B.ByteString
+    | ReadMessageO FilePath Sql.Query
+    | ReadFileStrictO FilePath
 
 
 data Msg
@@ -335,6 +349,7 @@ data Msg
     | GetBlobM Bl.ByteString Q
     | FromWebsocketM Ws.DataMessage
     | LazyFileContentsM FilePath Bl.ByteString
+    | StrictFileContentsM FilePath B.ByteString
     | FromServerM Bl.ByteString
     | RestartingTcpM
     | FileExistenceM FilePath Bool
@@ -343,6 +358,7 @@ data Msg
     | NewSessionKeyM B.ByteString
     | RandomGenM CryptoRand.ChaChaDRG
     | AppendedStrictM
+    | MessageFromDb FilePath [MessageDbRow]
 
 
 websocket :: Ws.ServerApp
@@ -394,7 +410,7 @@ data StaticKeys
 
 newtype Hash32
     = Hash32 Bl.ByteString
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Show)
 
 
 data BlobUpWait
@@ -467,13 +483,14 @@ data Ready =
         , theTime :: [Clock.UTCTime]
         , whitelist ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
-        , userShares :: Map.Map Username UserShare
-        , sendingBlob :: Jobs Sending SendWait
+        , waitForAcknowledge :: [AcknowledgementCode]
         , summaries :: Map.Map MessageId Summary
         , randomGen :: CryptoRand.ChaChaDRG
         , counter :: Int
         , assemblingFile :: Maybe AssemblingFile
         , gettingMessage :: Maybe Hash32
+        , extractingMessage :: Maybe MessageId
+        , readingToSendToServer :: Maybe AcknowledgementCode
         }
 
 
@@ -498,37 +515,9 @@ data Summary
         }
 
 
-data Sending
-    = ReadingS Hash32 ShareName
-
-
-data SendWait
-    = SendWait Hash32 ShareName
-
-
-data UserShare
-    = UserShare
-        { unacknowledged :: Maybe Unacknowledged
-        , toSend :: Set.Set SnapshotId
-        }
-
-
-data Unacknowledged
-    = Unacknowledged
-        { hash :: Hash32
-        , snapshotId :: SnapshotId
-        }
-
-
-data SnapshotId
-    = SnapshotId
-        { messageId :: Int
-        , editId :: Int
-        }
-
-
-newtype TheirSet
-    = TheirSet (Set.Set Hash32)
+newtype EditId
+    = EditId Int
+    deriving (Eq, Ord)
 
 
 data ShareName
@@ -787,6 +776,65 @@ update model msg =
 
     AppendedStrictM ->
         updateReady model $ fileAssembledUpdate
+
+    MessageFromDb path rows ->
+        updateReady model $ messageFromDbUpdate path rows
+
+    StrictFileContentsM path contents ->
+        updateReady model $ strictFileContentsUpdate path contents
+
+
+strictFileContentsUpdate
+    :: FilePath
+    -> B.ByteString
+    -> Ready
+    -> (Output, State)
+strictFileContentsUpdate path contents ready =
+    case readingToSendToServer ready of
+    Nothing ->
+        (DoNothingO, ReadyS ready)
+
+    Just code ->
+        if path == makeChunkPath (root ready) code then
+        let
+        newReady = ready { readingToSendToServer = Nothing }
+        in
+        ( BytesInQO toServerQ $ Bl.fromStrict contents
+        , ReadyS newReady
+        )
+        else
+        (DoNothingO, ReadyS ready)
+
+
+type MessageDbRow
+    = (Int, Int, Int, B.ByteString, B.ByteString)
+
+
+messageFromDbUpdate
+    :: FilePath
+    -> [MessageDbRow]
+    -> Ready
+    -> (Output, State)
+messageFromDbUpdate path _ ready =
+    case extractingMessage ready of
+    Nothing ->
+        (DoNothingO, ReadyS ready)
+
+    Just messageId ->
+        if path == makeMessagePath (root ready) messageId then
+        undefined
+        else
+        (DoNothingO, ReadyS ready)
+
+
+makeMessagePath :: RootPath -> MessageId -> FilePath
+makeMessagePath root (MessageId messageId) =
+    makeMessagesPath root </> show messageId
+
+
+makeMessagesPath :: RootPath -> FilePath
+makeMessagesPath (RootPath root) =
+    root </> "messages"
 
 
 fileAssembledUpdate :: Ready -> (Output, State)
@@ -1150,13 +1198,14 @@ fileExistenceUpdate path exists init_ =
                     , newDhKeys = newKeys
                     , theTime = times
                     , whitelist = Map.empty
-                    , sendingBlob = NoJobs
                     , summaries = Map.empty
                     , randomGen = gen
                     , counter = 0
                     , assemblingFile = Nothing
                     , gettingMessage = Nothing
-                    , userShares = Map.empty
+                    , waitForAcknowledge = []
+                    , extractingMessage = Nothing
+                    , readingToSendToServer = Nothing
                     }
             in
             ( BatchO
@@ -1215,6 +1264,35 @@ fromServerUpdate raw ready =
             , T.pack err
             ]
 
+    Right (Acknowledgement code) ->
+        case waitForAcknowledge ready of
+        [] ->
+            (DoNothingO, ReadyS ready)
+
+        [waiting] ->
+            if code == waiting then
+            let
+            newReady = ready { waitForAcknowledge = [] }
+            in
+            (dumpCache ready, ReadyS newReady)
+            else
+            (DoNothingO, ReadyS ready)
+
+        w:a:iting ->
+            if code == w then
+            let
+            newReady =
+                ready
+                    { waitForAcknowledge = a:iting
+                    , readingToSendToServer = Just a
+                    }
+            in
+            ( ReadFileStrictO $ makeChunkPath (root ready) a
+            , ReadyS newReady
+            )
+            else
+            (DoNothingO, ReadyS ready)
+
     Right (NewMessageT username message) ->
         messageInUpdate username message ready
 
@@ -1228,6 +1306,16 @@ fromServerUpdate raw ready =
         ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
         , ReadyS ready
         )
+
+
+makeChunkPath :: RootPath -> AcknowledgementCode -> FilePath
+makeChunkPath root (AcknowledgementCode code) =
+    makeChunksPath root </> show code
+
+
+makeChunksPath :: RootPath -> FilePath
+makeChunksPath (RootPath root) =
+    root </> "chunks"
 
 
 newPowInfoUpdate
@@ -1705,8 +1793,7 @@ parsedPlainUpdate from plain ready =
 
 
 data Assembled
-    = ShareSetA TheirSet
-    | HeaderA MessageId Bl.ByteString
+    = HeaderA MessageId Bl.ByteString
     | Referenced MessageId Bl.ByteString
 
 
@@ -1714,11 +1801,6 @@ assembledP :: P.Parser Assembled
 assembledP = do
     P.choice
         [ do
-            _ <- P.word8 0
-            hashes <- P.many1 hash32P
-            P.endOfInput
-            return $ ShareSetA (TheirSet (Set.fromList hashes))
-        , do
             _ <- P.word8 1
             messageId <- messageIdP
             header <- P.takeLazyByteString
@@ -1736,26 +1818,17 @@ assembledUpdate
     -> Bl.ByteString
     -> Ready
     -> (Output, State)
-assembledUpdate from assembled ready =
+assembledUpdate _ assembled _ =
     case P.eitherResult $ P.parse assembledP assembled of
-    Right (ShareSetA _) ->
-        undefined
-
     Right (HeaderA _ _) ->
         undefined
 
     Right (Referenced _ _) ->
         undefined
 
-    Left err ->
-        logErr
-            ready
-            (mconcat
-                [ "couldn't parse assembled blob from "
-                , T.pack $ show from
-                , ": "
-                , T.pack err
-                ])
+    Left _ ->
+        undefined
+
 
 
 messageIdLen =
@@ -2184,7 +2257,7 @@ getCache ready =
             , whitelistM = whitelist ready
             , summariesM = summaries ready
             , counterM = counter ready
-            , userSharesM = userShares ready
+            , waitForAcknowledgeM = waitForAcknowledge ready
             }
 
 
@@ -2260,6 +2333,10 @@ fromServerP =
             _ <- P.word8 3
             price <- P.take 4
             return $ Price $ Bl.fromStrict price
+        , do
+            _ <- P.word8 4
+            code <- acknowledgementP
+            return $ Acknowledgement code
         ]
 
 
@@ -2279,6 +2356,12 @@ data FromServer
     | NewUsername Username
     | PowInfoT Word8 Bl.ByteString
     | Price Bl.ByteString
+    | Acknowledgement AcknowledgementCode
+
+
+newtype AcknowledgementCode
+    = AcknowledgementCode Int
+    deriving (Eq, Ord)
 
 
 data Ciphertext
@@ -2762,9 +2845,9 @@ data MemCache
         , handshakesM :: Map.Map HandshakeId Handshake
         , whitelistM ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
-        , userSharesM :: Map.Map Username UserShare
         , summariesM :: Map.Map MessageId Summary
         , counterM :: Int
+        , waitForAcknowledgeM :: [AcknowledgementCode]
         }
 
 
@@ -2773,24 +2856,32 @@ memCacheP = do
     keys <- myKeysP
     handshakesM <- handshakesP
     whitelistM <- whitelistP
-    userSharesM <- userSharesP
     summariesM <- summariesP
     counterM <- uint32P
+    waitForAcknowledgeM <- listP acknowledgementP
     P.endOfInput
     return $
         MemCache
             { keys
             , handshakesM
             , whitelistM
-            , userSharesM
             , summariesM
             , counterM
+            , waitForAcknowledgeM
             }
 
 
-userSharesP :: P.Parser (Map.Map Username UserShare)
-userSharesP =
-    undefined
+acknowledgementP :: P.Parser AcknowledgementCode
+acknowledgementP = do
+    code <- uint32P
+    return $ AcknowledgementCode code
+
+
+listP :: P.Parser a -> P.Parser [a]
+listP parser = do
+    num <- uint32P
+    elements <- P.count num parser
+    return elements
 
 
 summariesP :: P.Parser (Map.Map MessageId Summary)
@@ -3039,13 +3130,14 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , newDhKeys
             , theTime = times
             , whitelist = whitelistM memCache
-            , userShares = userSharesM memCache
-            , sendingBlob = NoJobs
             , randomGen = gen
             , summaries = summariesM memCache
             , counter = counterM memCache
             , assemblingFile = Nothing
             , gettingMessage = Nothing
+            , extractingMessage = Nothing
+            , waitForAcknowledge = waitForAcknowledgeM memCache
+            , readingToSendToServer = Nothing
             }
         )
 
