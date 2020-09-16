@@ -194,6 +194,32 @@ A message version is encoded as follows:
         sized string: original file name of blob
     32 bytes: hash of WASM
 
+## Message edit encoding
+
+The difference between two encoded messages is encoded as follows:
+
+    start (int) 
+        The position of the first character in the string that is different to the other. Examples are:
+
+        ("", "a") => 0
+        ("ab", "ac") => 1
+
+    end (int)
+        If the strings are both reversed, this is the position of the first character that is different. Examples are:
+
+        ("", "a") => 0
+        ("ab", "ac") => 0
+        ("ab", "b") => 1
+
+    insert (blob)
+        the piece of the new string that lies between start and end
+
+    integrity (blob)
+        an 8-byte BLAKE2b hash of the new string
+
+This should lead to efficient storage of diffs because most changes are going to be character inserts and deletions.
+
+
 ## User ID encoding
 
 ### Internal
