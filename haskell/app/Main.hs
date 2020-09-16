@@ -513,7 +513,7 @@ data Ready =
         , assemblingFile :: Maybe AssemblingFile
         , gettingMessage :: Maybe Hash32
         , extractingMessage :: Maybe (MessageId, Username, Header)
-        , extractingReferences :: Maybe (MessageId, Username, Hash32)
+        , extractingReferences :: Maybe (MessageId, Hash32)
 
         , readingToSendToServer :: Maybe AcknowledgementCode
         }
@@ -865,7 +865,7 @@ extractingReferencesHelp path rows ready =
     Nothing ->
         Nothing
 
-    Just (messageId, _, _) ->
+    Just (messageId, hash) ->
         if path == makeMessagePath (root ready) messageId then
         case constructReferences rows of
         Nothing ->
@@ -874,11 +874,30 @@ extractingReferencesHelp path rows ready =
                 , FailedS
                 )
 
-        Just _ ->
-            undefined
+        Just refs ->
+            if Set.member hash refs then
+            let
+            move =
+                MoveFileO
+                    (downloadPath (root ready) (counter ready))
+                    (makeBlobPath (root ready) hash)
+            newReady = ready { counter = counter ready + 1 }
+            in
+            Just
+                ( BatchO [move, dumpCache newReady]
+                , ReadyS newReady
+                )
+
+            else
+            Nothing
 
         else
-            Nothing
+        Nothing
+
+
+downloadPath :: RootPath -> Int -> FilePath
+downloadPath root unique =
+    tempPath root </> show unique
 
 
 constructReferences :: [MessageDbRow] -> Maybe (Set.Set Hash32)
@@ -2024,19 +2043,18 @@ assembledUpdate from assembled ready =
             )
 
     Referenced messageId hash ->
-        referencedHelp messageId hash from ready
+        referencedHelp messageId hash ready
 
 
 referencedHelp
     :: MessageId
     -> Hash32
-    -> Username
     -> Ready
     -> (Output, State)
-referencedHelp messageId blob from ready =
+referencedHelp messageId blob ready =
     ( ReadMessageO (makeMessagePath (root ready) messageId)
     , ReadyS $ ready
-        { extractingReferences = Just (messageId, from, blob) }
+        { extractingReferences = Just (messageId, blob) }
     )
 
 
