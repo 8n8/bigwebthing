@@ -2,7 +2,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE GADTs #-}
 module Main (main) where
 
 import qualified Control.Concurrent.STM as Stm
@@ -32,7 +31,6 @@ import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
 import Control.Concurrent (forkIO, threadDelay)
-import qualified Data.Set as Set
 import qualified Network.Simple.TCP as Tcp
 import qualified Data.Map as Map
 import Control.Exception.Base (SomeException)
@@ -44,6 +42,8 @@ import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.KDF.Argon2 as Argon2
 import qualified Crypto.Random as CryptoRand
 import qualified Database.SQLite.Simple as Sql
+import qualified Crypto.Hash as Hash
+import qualified Data.ByteArray as Ba
 
 
 main :: IO ()
@@ -179,15 +179,25 @@ io output =
         key <- getEntropy sessionKeyLength
         return $ Just $ NewSessionKeyM key
 
-    ReadMessageO dbPath query -> do
+    ReadMessageO dbPath -> do
         result <- Sql.withConnection
             dbPath
-            (\conn -> Sql.query_ conn query)
+            (\conn -> Sql.query_ conn "SELECT * FROM edits")
         return $ Just $ MessageFromDb dbPath result
 
     ReadFileStrictO path -> do
         contents <- B.readFile path
         return $ Just $ StrictFileContentsM path contents
+
+    DbInsertDiffO path newRow -> do
+        Sql.withConnection path (\conn ->
+            Sql.execute conn insertDiff newRow)
+        return Nothing
+        
+
+insertDiff =
+    "INSERT INTO edits (start, end, insert, integrity) \
+    \VALUES (?, ?, ?, ?);"
 
 
 maxMessageLength =
@@ -332,8 +342,9 @@ data Output
     | AppendFileO FilePath Bl.ByteString
     | GetTimesO
     | AppendFileStrictO FilePath B.ByteString
-    | ReadMessageO FilePath Sql.Query
+    | ReadMessageO FilePath
     | ReadFileStrictO FilePath
+    | DbInsertDiffO FilePath (Int, Int, B.ByteString, B.ByteString)
 
 
 data Msg
@@ -472,6 +483,17 @@ data Init
         CryptoRand.ChaChaDRG
 
 
+data Header
+    = Header
+        { time :: PosixMillis
+        , shares :: [Username]
+        , subject :: T.Text
+        , mainBox :: T.Text
+        , blobs :: [Blob]
+        , wasm :: Hash32
+        }
+
+
 data Ready =
     Ready
         { root :: RootPath
@@ -489,7 +511,8 @@ data Ready =
         , counter :: Int
         , assemblingFile :: Maybe AssemblingFile
         , gettingMessage :: Maybe Hash32
-        , extractingMessage :: Maybe MessageId
+        , extractingMessage :: Maybe (MessageId, Username, Header)
+
         , readingToSendToServer :: Maybe AcknowledgementCode
         }
 
@@ -506,12 +529,18 @@ type TmpBase
 
 data Summary
     = Summary
-        { headerBlob :: Hash32
-        , referenced :: Set.Set Hash32
-        , subjectS :: T.Text
-        , sharersS :: Set.Set UserId
-        , lastEditS :: PosixMillis
-        , historyId :: Int
+        { subjectS :: T.Text
+        , timeS :: PosixMillis
+        , authorS :: Username
+        }
+
+
+summarize :: Username -> Header -> Summary
+summarize from header =
+    Summary
+        { subjectS = subject header
+        , timeS = time header
+        , authorS = from
         }
 
 
@@ -815,16 +844,78 @@ messageFromDbUpdate
     -> [MessageDbRow]
     -> Ready
     -> (Output, State)
-messageFromDbUpdate path _ ready =
+messageFromDbUpdate path rows ready =
     case extractingMessage ready of
     Nothing ->
         (DoNothingO, ReadyS ready)
 
-    Just messageId ->
+    Just (messageId, from, header) ->
         if path == makeMessagePath (root ready) messageId then
-        undefined
+        case constructMessage rows of
+        Nothing ->
+            ( ErrorO $ "corrupted message " ++ show messageId
+            , FailedS
+            )
+
+        Just oldEncoded ->
+            let
+            diff = makeDiff oldEncoded (encodeHeader header)
+            summary = summarize from header
+            saveDiff =
+                DbInsertDiffO
+                    (makeMessagePath (root ready) messageId)
+                    (diffToTuple diff)
+            newReady =
+                ready
+                    { summaries =
+                        Map.insert messageId summary (summaries ready)
+                    }
+            in
+            ( BatchO
+                [ saveDiff
+                , dumpCache newReady
+                ]
+            , ReadyS newReady
+            )
+            else
+            (DoNothingO, ReadyS ready)
+
+
+constructMessage :: [MessageDbRow] -> Maybe B.ByteString
+constructMessage rows =
+    let
+    candidate = foldr constructMessageHelp "" rows
+    actualHash = hash8 candidate
+    in
+    case getLastHash rows of
+    Nothing ->
+        Nothing
+
+    Just expectedHash ->
+        if actualHash == expectedHash then
+            Just candidate
+
         else
-        (DoNothingO, ReadyS ready)
+            Nothing
+
+
+getLastHash :: [MessageDbRow] -> Maybe Hash8
+getLastHash rows =
+    case reverse rows of
+        [] ->
+            Nothing
+
+        (_, _, _, _, hash):_ ->
+            Just $ Hash8 hash
+
+
+constructMessageHelp :: MessageDbRow -> B.ByteString -> B.ByteString
+constructMessageHelp (_, start, end, insert, _) old =
+    let
+    firstBit = B.take start old
+    lastBit = B.reverse $ B.take end $ B.reverse old
+    in
+    firstBit <> insert <> lastBit
 
 
 makeMessagePath :: RootPath -> MessageId -> FilePath
@@ -1044,7 +1135,7 @@ powHelp
     -> Either String Bl.ByteString
 powHelp difficulty unique counter =
     let
-    candidate = encodeUint64 counter
+    candidate = Bl.fromStrict $ encodeUint64 counter
     hashE = Argon2.hash
         argonOptions
         (Bl.toStrict $ unique <> candidate)
@@ -1063,9 +1154,9 @@ powHelp difficulty unique counter =
         Left $ show err
 
 
-encodeUint64 :: Integer -> Bl.ByteString
+encodeUint64 :: Integer -> B.ByteString
 encodeUint64 i =
-    Bl.pack $ map (encodeUint64Help i) (take 8 [0..])
+    B.pack $ map (encodeUint64Help i) (take 8 [0..])
 
 
 encodeUint64Help :: Integer -> Int -> Word8
@@ -1073,9 +1164,9 @@ encodeUint64Help int counter =
     fromIntegral $ (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
 
 
-encodeUint32 :: Int -> Bl.ByteString
+encodeUint32 :: Int -> B.ByteString
 encodeUint32 i =
-    Bl.pack $ map (encodeUint32Help i) (take 4 [0..])
+    B.pack $ map (encodeUint32Help i) (take 4 [0..])
 
 
 encodeUint32Help :: Int -> Int -> Word8
@@ -1793,7 +1884,7 @@ parsedPlainUpdate from plain ready =
 
 
 data Assembled
-    = HeaderA MessageId Bl.ByteString
+    = HeaderA MessageId Header
     | Referenced MessageId Bl.ByteString
 
 
@@ -1803,7 +1894,7 @@ assembledP = do
         [ do
             _ <- P.word8 1
             messageId <- messageIdP
-            header <- P.takeLazyByteString
+            header <- headerP
             return $ HeaderA messageId header
         , do
             _ <- P.word8 2
@@ -1813,15 +1904,52 @@ assembledP = do
         ]
 
 
+headerP :: P.Parser Header
+headerP = do
+    time <- timeP
+    shares <- listP usernameP
+    subject <- sizedStringP
+    mainBox <- sizedStringP
+    blobs <- listP blobP
+    wasm <- hash32P
+    return
+        Header{time, shares, subject, mainBox, blobs, wasm}
+
+
 assembledUpdate
     :: Username
     -> Bl.ByteString
     -> Ready
     -> (Output, State)
-assembledUpdate _ assembled _ =
+assembledUpdate from assembled ready =
     case P.eitherResult $ P.parse assembledP assembled of
-    Right (HeaderA _ _) ->
-        undefined
+    Right (HeaderA messageId header) ->
+        case Map.lookup messageId (summaries ready) of
+        Nothing ->
+            let
+            summary = summarize from header
+            encoded = encodeHeader header
+            diff = diffToTuple $ makeDiff "" encoded
+            path = makeMessagePath (root ready) messageId
+            newReady =
+                ready
+                    { summaries =
+                        Map.insert
+                            messageId
+                            summary
+                            (summaries ready)
+                    }
+            in
+            (DbInsertDiffO path diff, ReadyS newReady)
+
+        Just _ ->
+            ( ReadMessageO (makeMessagePath (root ready) messageId)
+            , ReadyS $
+                ready
+                    { extractingMessage =
+                        Just (messageId, from, header)
+                    }
+            )
 
     Right (Referenced _ _) ->
         undefined
@@ -1830,16 +1958,106 @@ assembledUpdate _ assembled _ =
         undefined
 
 
+encodeHeader :: Header -> B.ByteString
+encodeHeader header =
+    mconcat
+        [ encodeTime $ time header
+        , encodeList (Bl.toStrict . encodeUsername) (shares header)
+        , encodeSizedString $ subject header
+        , encodeSizedString $ mainBox header
+        , encodeList encodeBlob $ blobs header
+        , encodeHash32 $ wasm header
+        ]
+
+
+encodeHash32 :: Hash32 -> B.ByteString
+encodeHash32 (Hash32 hash) =
+    Bl.toStrict hash
+
+
+encodeBlob :: Blob -> B.ByteString
+encodeBlob blob =
+    mconcat
+        [ encodeHash32 $ hashB blob
+        , encodeSizedString $ filename blob
+        , encodeUint64 $ size blob
+        , encodeSizedString $ mime blob
+        ]
+
+
+encodeTime :: PosixMillis -> B.ByteString
+encodeTime (PosixMillis time) =
+    encodeUint64 time
+
+
+encodeSizedString :: T.Text -> B.ByteString
+encodeSizedString string =
+    let
+    encoded = encodeUtf8 string
+    in
+    encodeUint32 (B.length encoded) <> encoded
+
+
+encodeList :: (a -> B.ByteString) -> [a] -> B.ByteString
+encodeList encoder list =
+    encodeUint32 (length list) <> mconcat (map encoder list)
+
+
+data Diff
+    = Diff
+        { start :: Int
+        , end :: Int
+        , insert :: B.ByteString
+        , integrity :: Hash8
+        }
+
+
+makeDiff :: B.ByteString -> B.ByteString -> Diff
+makeDiff old new =
+    let
+    start = countIdentical old new
+    end = countIdentical (B.reverse old) (B.reverse new)
+    insert = B.drop start $ B.reverse $ B.drop end $ B.reverse new
+    integrity = hash8 insert
+    in
+    Diff { start, end, insert, integrity }
+
+
+countIdentical :: B.ByteString -> B.ByteString -> Int
+countIdentical a b =
+     countIdenticalHelp (B.zip a b) 0
+
+
+diffToTuple :: Diff -> (Int, Int, B.ByteString, B.ByteString)
+diffToTuple (Diff start end insert (Hash8 integrity)) =
+    ( start, end, insert, integrity )
+
+
+countIdenticalHelp :: [(Word8, Word8)] -> Int -> Int
+countIdenticalHelp zipped accum =
+    case zipped of
+    [] ->
+        accum
+
+    (z1, z2):ipped ->
+        if z1 == z2 then
+        countIdenticalHelp ipped (accum + 1)
+        else
+        accum
+
+
+hash8 :: B.ByteString -> Hash8
+hash8 raw =
+    Hash8 $ B.take 8 $ Ba.convert (Hash.hash raw :: Hash.Digest Hash.Blake2b_160)
+
+
+newtype Hash8
+    = Hash8 B.ByteString
+    deriving (Eq, Ord)
+
 
 messageIdLen =
     24
-
-
-sharersP :: P.Parser (Set.Set UserId)
-sharersP = do
-    size <- uint32P
-    sharers <- P.count size userIdP
-    return $ Set.fromList sharers
 
 
 timeP :: P.Parser PosixMillis
@@ -2178,7 +2396,7 @@ encodeWhitelist whitelist =
     let
     asList = Map.toList whitelist
     in
-    encodeUint32 (length asList) <>
+    (Bl.fromStrict $ encodeUint32 (length asList)) <>
     mconcat (map encodeOneWhite asList)
 
 
@@ -2894,30 +3112,10 @@ summariesP = do
 summaryP :: P.Parser (MessageId, Summary)
 summaryP = do
     messageId <- messageIdP
-    headerBlob <- hash32P
     subjectS <- sizedStringP
-    sharersS <- sharersP
-    lastEditS <- timeP
-    historyId <- uint32P
-    referenced <- referencedP
-    return
-        ( messageId
-        , Summary
-            { headerBlob
-            , subjectS
-            , sharersS
-            , lastEditS
-            , historyId
-            , referenced
-            }
-        )
-
-
-referencedP :: P.Parser (Set.Set Hash32)
-referencedP = do
-    num <- uint32P
-    asList <- P.count num hash32P
-    return $ Set.fromList asList
+    timeS <- timeP
+    authorS <- usernameP
+    return (messageId, Summary {subjectS, timeS, authorS})
 
 
 whitelistP
