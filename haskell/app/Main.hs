@@ -44,6 +44,7 @@ import qualified Crypto.Random as CryptoRand
 import qualified Database.SQLite.Simple as Sql
 import qualified Crypto.Hash as Hash
 import qualified Data.ByteArray as Ba
+import qualified Data.Set as Set
 
 
 main :: IO ()
@@ -193,7 +194,7 @@ io output =
         Sql.withConnection path (\conn ->
             Sql.execute conn insertDiff newRow)
         return Nothing
-        
+
 
 insertDiff =
     "INSERT INTO edits (start, end, insert, integrity) \
@@ -512,6 +513,7 @@ data Ready =
         , assemblingFile :: Maybe AssemblingFile
         , gettingMessage :: Maybe Hash32
         , extractingMessage :: Maybe (MessageId, Username, Header)
+        , extractingReferences :: Maybe (MessageId, Username, Hash32)
 
         , readingToSendToServer :: Maybe AcknowledgementCode
         }
@@ -845,17 +847,86 @@ messageFromDbUpdate
     -> Ready
     -> (Output, State)
 messageFromDbUpdate path rows ready =
-    case extractingMessage ready of
+    case extractingMessageHelp path rows ready of
     Nothing ->
-        (DoNothingO, ReadyS ready)
+        case extractingReferencesHelp path rows ready of
+        Nothing ->
+            (DoNothingO, ReadyS ready)
 
+        Just done ->
+            done
+
+    Just done ->
+        done
+
+
+extractingReferencesHelp path rows ready =
+    case extractingReferences ready of
+    Nothing ->
+        Nothing
+
+    Just (messageId, _, _) ->
+        if path == makeMessagePath (root ready) messageId then
+        case constructReferences rows of
+        Nothing ->
+            Just
+                ( ErrorO $ "corruped message " ++ show messageId
+                , FailedS
+                )
+
+        Just _ ->
+            undefined
+
+        else
+            Nothing
+
+
+constructReferences :: [MessageDbRow] -> Maybe (Set.Set Hash32)
+constructReferences rows =
+    constructReferencesHelp Set.empty "" rows
+
+
+constructReferencesHelp
+    :: Set.Set Hash32
+    -> B.ByteString
+    -> [MessageDbRow]
+    -> Maybe (Set.Set Hash32)
+constructReferencesHelp accum lastEncoded remaining =
+    case remaining of
+    [] ->
+        Just accum
+
+    r@(_, _, _, _, integrity):emaining ->
+        let
+        encoded = constructMessageHelp r lastEncoded
+        actualHash = hash8 encoded
+        parsed = P.parse headerP $ Bl.fromStrict encoded
+        in
+        if actualHash == Hash8 integrity then
+        case P.eitherResult parsed of
+        Left _ ->
+            Nothing
+
+        Right header ->
+            let
+            refs = Set.fromList $ map hashB $ blobs header
+            allRefs = Set.union refs accum
+            in
+            constructReferencesHelp allRefs encoded emaining
+        else
+        Nothing
+
+
+extractingMessageHelp path rows ready =
+    case extractingMessage ready of
     Just (messageId, from, header) ->
         if path == makeMessagePath (root ready) messageId then
         case constructMessage rows of
         Nothing ->
-            ( ErrorO $ "corrupted message " ++ show messageId
-            , FailedS
-            )
+            Just
+                ( ErrorO $ "corrupted message " ++ show messageId
+                , FailedS
+                )
 
         Just oldEncoded ->
             let
@@ -871,14 +942,15 @@ messageFromDbUpdate path rows ready =
                         Map.insert messageId summary (summaries ready)
                     }
             in
-            ( BatchO
-                [ saveDiff
-                , dumpCache newReady
-                ]
-            , ReadyS newReady
-            )
+            Just
+                ( BatchO [saveDiff, dumpCache newReady]
+                , ReadyS newReady
+                )
             else
-            (DoNothingO, ReadyS ready)
+            Nothing
+
+    Nothing ->
+        Nothing
 
 
 constructMessage :: [MessageDbRow] -> Maybe B.ByteString
@@ -1297,6 +1369,7 @@ fileExistenceUpdate path exists init_ =
                     , waitForAcknowledge = []
                     , extractingMessage = Nothing
                     , readingToSendToServer = Nothing
+                    , extractingReferences = Nothing
                     }
             in
             ( BatchO
@@ -1807,11 +1880,26 @@ gotValidPlaintextUpdate from plain ready =
         parsedPlainUpdate from parsed ready
 
 
+allInOneP :: P.Parser Assembled
+allInOneP = do
+            _ <- P.word8 1
+            messageId <- messageIdP
+            header <- headerP
+            return $ HeaderA messageId header
+
+
 parsedPlainUpdate :: Username -> Plaintext -> Ready -> (Output, State)
 parsedPlainUpdate from plain ready =
     case plain of
     AllInOne p ->
-        assembledUpdate from p ready
+        case P.eitherResult $ P.parse allInOneP p of
+        Left err ->
+            logErr
+                ready
+                ("could not parse AllInOne plaintext: " <> T.pack err)
+
+        Right assembled ->
+            assembledUpdate from assembled ready
 
     NotLastInSequence chunk ->
         case assemblingFile ready of
@@ -1885,23 +1973,7 @@ parsedPlainUpdate from plain ready =
 
 data Assembled
     = HeaderA MessageId Header
-    | Referenced MessageId Bl.ByteString
-
-
-assembledP :: P.Parser Assembled
-assembledP = do
-    P.choice
-        [ do
-            _ <- P.word8 1
-            messageId <- messageIdP
-            header <- headerP
-            return $ HeaderA messageId header
-        , do
-            _ <- P.word8 2
-            messageId <- messageIdP
-            referenced <- P.takeLazyByteString
-            return $ Referenced messageId referenced
-        ]
+    | Referenced MessageId Hash32
 
 
 headerP :: P.Parser Header
@@ -1918,12 +1990,12 @@ headerP = do
 
 assembledUpdate
     :: Username
-    -> Bl.ByteString
+    -> Assembled
     -> Ready
     -> (Output, State)
 assembledUpdate from assembled ready =
-    case P.eitherResult $ P.parse assembledP assembled of
-    Right (HeaderA messageId header) ->
+    case assembled of
+    HeaderA messageId header ->
         case Map.lookup messageId (summaries ready) of
         Nothing ->
             let
@@ -1951,11 +2023,21 @@ assembledUpdate from assembled ready =
                     }
             )
 
-    Right (Referenced _ _) ->
-        undefined
+    Referenced messageId hash ->
+        referencedHelp messageId hash from ready
 
-    Left _ ->
-        undefined
+
+referencedHelp
+    :: MessageId
+    -> Hash32
+    -> Username
+    -> Ready
+    -> (Output, State)
+referencedHelp messageId blob from ready =
+    ( ReadMessageO (makeMessagePath (root ready) messageId)
+    , ReadyS $ ready
+        { extractingReferences = Just (messageId, from, blob) }
+    )
 
 
 encodeHeader :: Header -> B.ByteString
@@ -3336,6 +3418,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , extractingMessage = Nothing
             , waitForAcknowledge = waitForAcknowledgeM memCache
             , readingToSendToServer = Nothing
+            , extractingReferences = Nothing
             }
         )
 
