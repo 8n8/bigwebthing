@@ -514,9 +514,14 @@ data Ready =
         , gettingMessage :: Maybe Hash32
         , extractingMessage :: Maybe (MessageId, Username, Header)
         , extractingReferences :: Maybe (MessageId, Hash32)
-
         , readingToSendToServer :: Maybe AcknowledgementCode
+        , page :: Page
         }
+
+
+data Page
+    = Inbox
+    deriving Eq
 
 
 data AssemblingFile
@@ -779,7 +784,7 @@ update model msg =
                 )
 
             Right apiInput ->
-                uiApiUpdate apiInput model
+                updateReady model $ uiApiUpdate apiInput
 
     GetBlobM body q ->
         updateReady model $ onGetBlobUpdate body q
@@ -1389,6 +1394,7 @@ fileExistenceUpdate path exists init_ =
                     , extractingMessage = Nothing
                     , readingToSendToServer = Nothing
                     , extractingReferences = Nothing
+                    , page = Inbox
                     }
             in
             ( BatchO
@@ -2895,11 +2901,101 @@ fromFrontendP = do
     return input
 
 
-uiApiUpdate :: FromFrontend -> State -> (Output, State)
-uiApiUpdate fromFrontend _ =
+dumpView :: Ready -> Output
+dumpView =
+    BytesInQO toFrontendQ . encodeView . makeView
+
+
+encodeView :: View -> Bl.ByteString
+encodeView view =
+    mconcat
+    [ encodeMaybe (myId view) encodeUserId
+    , encodePage $ pageV view
+    ]
+
+
+encodePage :: ViewPage -> Bl.ByteString
+encodePage viewPage =
+    case viewPage of
+        InboxView summaries ->
+            Bl.singleton 0 <>
+            Bl.fromStrict
+                (encodeList
+                    (Bl.toStrict . encodeSummary)
+                    (Map.toList summaries))
+
+
+encodeSummary :: (MessageId, Summary) -> Bl.ByteString
+encodeSummary (MessageId messageId, summary) =
+    mconcat
+    [ messageId
+    , Bl.fromStrict $ encodeSizedString $ subjectS summary
+    , Bl.fromStrict $ encodeTime $ timeS summary
+    , encodeUsername $ authorS summary
+    ]
+
+
+encodeUserId :: UserId -> Bl.ByteString
+encodeUserId (UserId username fingerprint) =
+    mconcat
+    [ encodeUsername username
+    , encodeFingerprint fingerprint
+    ]
+
+
+makeView :: Ready -> View
+makeView ready =
+    View
+        { myId = myIdView ready
+        , pageV = pageView ready
+        }
+
+
+pageView :: Ready -> ViewPage
+pageView ready =
+    case page ready of
+    Inbox ->
+        InboxView $ summaries ready
+
+
+myIdView :: Ready -> Maybe UserId
+myIdView ready =
+    case authStatus ready of
+    GettingPowInfoA ->
+        Nothing
+
+    GeneratingSessionKey _ _ ->
+        Nothing
+
+    AwaitingUsername _ _ ->
+        Nothing
+
+    LoggedIn staticKeys ->
+        Just $ UserId (username staticKeys) (fingerprint staticKeys)
+
+
+data View
+    = View
+        { myId :: Maybe UserId
+        , pageV :: ViewPage
+        }
+
+
+data ViewPage
+    = InboxView (Map.Map MessageId Summary)
+
+
+uiApiUpdate :: FromFrontend -> Ready -> (Output, State)
+uiApiUpdate fromFrontend ready =
     case fromFrontend of
         InboxClick ->
-            undefined
+            if page ready == Inbox then
+            (DoNothingO, ReadyS ready)
+            else
+            let
+            newReady = ready { page = Inbox }
+            in
+            (dumpView newReady , ReadyS newReady)
 
         DraftsClick ->
             undefined
@@ -3437,6 +3533,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , waitForAcknowledge = waitForAcknowledgeM memCache
             , readingToSendToServer = Nothing
             , extractingReferences = Nothing
+            , page = Inbox
             }
         )
 
