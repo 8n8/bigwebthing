@@ -41,7 +41,6 @@ import qualified Data.Bits as Bits
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.KDF.Argon2 as Argon2
 import qualified Crypto.Random as CryptoRand
-import qualified Database.SQLite.Simple as Sql
 import qualified Crypto.Hash as Hash
 import qualified Data.ByteArray as Ba
 import qualified Data.Set as Set
@@ -184,15 +183,9 @@ io output =
         contents <- B.readFile path
         return $ Just $ StrictFileContentsM path contents
 
-    DbInsertDiffO path newRow -> do
-        Sql.withConnection path (\conn ->
-            Sql.execute conn insertDiff newRow)
+    WriteFileStrictO path contents -> do
+        B.writeFile path contents
         return Nothing
-
-
-insertDiff =
-    "INSERT INTO edits (start, end, insert, integrity) \
-    \VALUES (?, ?, ?, ?);"
 
 
 maxMessageLength =
@@ -338,7 +331,8 @@ data Output
     | GetTimesO
     | AppendFileStrictO FilePath B.ByteString
     | ReadFileStrictO FilePath
-    | DbInsertDiffO FilePath (Int, Int, B.ByteString, B.ByteString)
+    | WriteFileStrictO FilePath B.ByteString
+    -- | DbInsertDiffO FilePath (Int, Int, B.ByteString, B.ByteString)
 
 
 data Msg
@@ -973,7 +967,8 @@ diffP = do
     end <- uint32P
     insert <- sizedBytesP 
     integrity <- hash8P
-    return $ Diff{start, end, insert, integrity}
+    author <- diffAuthorP
+    return $ Diff{start, end, insert, integrity, author}
 
 
 hash8P :: P.Parser Hash8
@@ -1007,12 +1002,16 @@ extractingMessageHelp path raw ready =
 
             Just oldEncoded ->
                 let
-                diff = makeDiff oldEncoded (encodeHeader header)
+                diff =
+                    makeDiff
+                        (NotMe from)
+                        oldEncoded
+                        (encodeHeader header)
                 summary = summarize from header
                 saveDiff =
-                    DbInsertDiffO
+                    WriteFileStrictO
                         (makeMessagePath (root ready) messageId)
-                        (diffToTuple diff)
+                        (encodeDiffs $ diff : diffs)
                 newReady =
                     ready
                         { summaries =
@@ -1184,9 +1183,7 @@ signUpHelp difficulty unique raw ready =
         in
         case eitherSignUp of
         Left err ->
-            ( ErrorO $ "could not sign up: " <> err
-            , FailedS
-            )
+            (ErrorO $ "could not sign up: " <> err, FailedS)
 
         Right signUp ->
             ( BatchO
@@ -2082,8 +2079,7 @@ assembledUpdate from assembled ready =
             let
             summary = summarize from header
             encoded = encodeHeader header
-            diff = diffToTuple $ makeDiff "" encoded
-            path = makeMessagePath (root ready) messageId
+            diff = makeDiff (NotMe from) "" encoded
             newReady =
                 ready
                     { summaries =
@@ -2093,7 +2089,11 @@ assembledUpdate from assembled ready =
                             (summaries ready)
                     }
             in
-            (DbInsertDiffO path diff, ReadyS newReady)
+            ( WriteFileStrictO
+                (makeMessagePath (root ready) messageId)
+                (encodeDiffs [diff])
+            , ReadyS newReady
+            )
 
         Just _ ->
             ( ReadFileStrictO (makeMessagePath (root ready) messageId)
@@ -2106,6 +2106,50 @@ assembledUpdate from assembled ready =
 
     Referenced messageId hash ->
         referencedHelp messageId hash ready
+
+
+encodeDiffs :: [Diff] -> B.ByteString
+encodeDiffs =
+    mconcat . map encodeDiff
+
+
+encodeDiff :: Diff -> B.ByteString
+encodeDiff diff =
+    mconcat
+    [ encodeUint32 $ start diff
+    , encodeUint32 $ end diff
+    , insert diff
+    , encodeHash8 $ integrity diff
+    , encodeDiffAuthor $ author diff
+    ]
+
+
+encodeDiffAuthor :: DiffAuthor -> B.ByteString
+encodeDiffAuthor author =
+    case author of
+    NotMe username ->
+        B.singleton 0 <> Bl.toStrict (encodeUsername username)
+
+    Me ->
+        B.singleton 1
+
+
+diffAuthorP :: P.Parser DiffAuthor
+diffAuthorP =
+    P.choice
+        [ do
+            _ <- P.word8 0
+            username <- usernameP
+            return $ NotMe username
+        , do
+            _ <- P.word8 1
+            return Me
+        ]
+
+
+encodeHash8 :: Hash8 -> B.ByteString
+encodeHash8 (Hash8 hash) =
+    hash
 
 
 referencedHelp
@@ -2171,28 +2215,31 @@ data Diff
         , end :: Int
         , insert :: B.ByteString
         , integrity :: Hash8
+        , author :: DiffAuthor
         }
         deriving (Eq)
 
-makeDiff :: B.ByteString -> B.ByteString -> Diff
-makeDiff old new =
+
+data DiffAuthor
+    = NotMe Username
+    | Me
+    deriving (Eq)
+
+
+makeDiff :: DiffAuthor -> B.ByteString -> B.ByteString -> Diff
+makeDiff author old new =
     let
     start = countIdentical old new
     end = countIdentical (B.reverse old) (B.reverse new)
     insert = B.drop start $ B.reverse $ B.drop end $ B.reverse new
     integrity = hash8 insert
     in
-    Diff { start, end, insert, integrity }
+    Diff { start, end, insert, integrity, author }
 
 
 countIdentical :: B.ByteString -> B.ByteString -> Int
 countIdentical a b =
      countIdenticalHelp (B.zip a b) 0
-
-
-diffToTuple :: Diff -> (Int, Int, B.ByteString, B.ByteString)
-diffToTuple (Diff start end insert (Hash8 integrity)) =
-    ( start, end, insert, integrity )
 
 
 countIdenticalHelp :: [(Word8, Word8)] -> Int -> Int
@@ -3061,7 +3108,7 @@ updateOnNewMain newMain ready =
                 let
                 newHeader = oldHeader { mainBox = newMain }
                 newEncoded = encodeHeader newHeader
-                newDiff = makeDiff oldEncoded newEncoded
+                newDiff = makeDiff Me oldEncoded newEncoded
                 newReady =
                     ready
                         { pageR =

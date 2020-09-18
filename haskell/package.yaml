@@ -40,7 +40,6 @@ dependencies:
 - time
 - entropy
 - cryptonite
-- sqlite-simple
 - memory
 
 library:
