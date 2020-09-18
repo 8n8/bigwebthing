@@ -521,6 +521,7 @@ data Ready =
 
 data Page
     = Inbox
+    | Drafts
     deriving Eq
 
 
@@ -2903,86 +2904,12 @@ fromFrontendP = do
 
 dumpView :: Ready -> Output
 dumpView =
-    BytesInQO toFrontendQ . encodeView . makeView
+    BytesInQO toFrontendQ . encodeReady
 
 
-encodeView :: View -> Bl.ByteString
-encodeView view =
-    mconcat
-    [ encodeMaybe (myId view) encodeUserId
-    , encodePage $ pageV view
-    ]
-
-
-encodePage :: ViewPage -> Bl.ByteString
-encodePage viewPage =
-    case viewPage of
-        InboxView summaries ->
-            Bl.singleton 0 <>
-            Bl.fromStrict
-                (encodeList
-                    (Bl.toStrict . encodeSummary)
-                    (Map.toList summaries))
-
-
-encodeSummary :: (MessageId, Summary) -> Bl.ByteString
-encodeSummary (MessageId messageId, summary) =
-    mconcat
-    [ messageId
-    , Bl.fromStrict $ encodeSizedString $ subjectS summary
-    , Bl.fromStrict $ encodeTime $ timeS summary
-    , encodeUsername $ authorS summary
-    ]
-
-
-encodeUserId :: UserId -> Bl.ByteString
-encodeUserId (UserId username fingerprint) =
-    mconcat
-    [ encodeUsername username
-    , encodeFingerprint fingerprint
-    ]
-
-
-makeView :: Ready -> View
-makeView ready =
-    View
-        { myId = myIdView ready
-        , pageV = pageView ready
-        }
-
-
-pageView :: Ready -> ViewPage
-pageView ready =
-    case page ready of
-    Inbox ->
-        InboxView $ summaries ready
-
-
-myIdView :: Ready -> Maybe UserId
-myIdView ready =
-    case authStatus ready of
-    GettingPowInfoA ->
-        Nothing
-
-    GeneratingSessionKey _ _ ->
-        Nothing
-
-    AwaitingUsername _ _ ->
-        Nothing
-
-    LoggedIn staticKeys ->
-        Just $ UserId (username staticKeys) (fingerprint staticKeys)
-
-
-data View
-    = View
-        { myId :: Maybe UserId
-        , pageV :: ViewPage
-        }
-
-
-data ViewPage
-    = InboxView (Map.Map MessageId Summary)
+encodeReady :: Ready -> Bl.ByteString
+encodeReady _ =
+    undefined
 
 
 uiApiUpdate :: FromFrontend -> Ready -> (Output, State)
@@ -2998,7 +2925,13 @@ uiApiUpdate fromFrontend ready =
             (dumpView newReady , ReadyS newReady)
 
         DraftsClick ->
-            undefined
+            if page ready == Drafts then
+            (DoNothingO, ReadyS ready)
+            else
+            let
+            newReady = ready { page = Drafts }
+            in
+            (dumpView newReady, ReadyS newReady)
 
         WriterClick ->
             undefined
