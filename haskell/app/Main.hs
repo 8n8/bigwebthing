@@ -520,8 +520,10 @@ data Ready =
 
 
 data Page
-    = Inbox
-    | Drafts
+    = Messages
+    | Writer
+    | Contacts
+    | Account
     deriving Eq
 
 
@@ -1395,7 +1397,7 @@ fileExistenceUpdate path exists init_ =
                     , extractingMessage = Nothing
                     , readingToSendToServer = Nothing
                     , extractingReferences = Nothing
-                    , page = Inbox
+                    , page = Messages
                     }
             in
             ( BatchO
@@ -2837,11 +2839,7 @@ hash32P = do
 
 
 data FromFrontend
-    = InboxClick
-    | DraftsClick
-    | WriterClick
-    | ContactsClick
-    | AccountClick
+    = PageClick Page
     | NewMain T.Text
     | NewSubject T.Text
     | NewShares [UserId]
@@ -2872,29 +2870,28 @@ messageIdP = do
 fromFrontendP :: P.Parser FromFrontend
 fromFrontendP = do
     input <- P.choice
-        [ P.word8 0 >> return InboxClick
-        , P.word8 1 >> return DraftsClick
-        , P.word8 2 >> return WriterClick
-        , P.word8 3 >> return ContactsClick
-        , P.word8 4 >> return AccountClick
+        [ P.word8 0 >> return (PageClick Messages)
+        , P.word8 1 >> return (PageClick Writer)
+        , P.word8 2 >> return (PageClick Contacts)
+        , P.word8 3 >> return (PageClick Account)
         , do
-            _ <- P.word8 5
+            _ <- P.word8 4
             newMain <- stringP
             return $ NewMain newMain
         , do
-            _ <- P.word8 6
+            _ <- P.word8 5
             newSubject <- stringP
             return $ NewSubject newSubject
         , do
-            _ <- P.word8 7
+            _ <- P.word8 6
             newShares <- P.many1 userIdP
             return $ NewShares newShares
         , do
-            _ <- P.word8 8
+            _ <- P.word8 7
             hash <- hash32P
             return $ NewWasm hash
         , do
-            _ <- P.word8 9
+            _ <- P.word8 8
             blobs <- P.many1 blobP
             return $ NewBlobs blobs
         ]
@@ -2915,32 +2912,14 @@ encodeReady _ =
 uiApiUpdate :: FromFrontend -> Ready -> (Output, State)
 uiApiUpdate fromFrontend ready =
     case fromFrontend of
-        InboxClick ->
-            if page ready == Inbox then
+        PageClick click ->
+            if page ready == click then
             (DoNothingO, ReadyS ready)
             else
             let
-            newReady = ready { page = Inbox }
-            in
-            (dumpView newReady , ReadyS newReady)
-
-        DraftsClick ->
-            if page ready == Drafts then
-            (DoNothingO, ReadyS ready)
-            else
-            let
-            newReady = ready { page = Drafts }
+            newReady = ready { page = click }
             in
             (dumpView newReady, ReadyS newReady)
-
-        WriterClick ->
-            undefined
-
-        ContactsClick ->
-            undefined
-
-        AccountClick ->
-            undefined
 
         NewMain _ ->
             undefined
@@ -3466,7 +3445,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , waitForAcknowledge = waitForAcknowledgeM memCache
             , readingToSendToServer = Nothing
             , extractingReferences = Nothing
-            , page = Inbox
+            , page = Messages
             }
         )
 
