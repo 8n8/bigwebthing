@@ -3070,8 +3070,8 @@ uiApiUpdate fromFrontend ready =
     NewMain newMain ->
         updateOnNewMain newMain ready
 
-    NewSubject _ ->
-        undefined
+    NewSubject newSubject ->
+        updateOnNewSubject newSubject ready
 
     NewShares _ ->
         undefined
@@ -3081,6 +3081,60 @@ uiApiUpdate fromFrontend ready =
 
     NewBlobs _ ->
         undefined
+
+
+updateOnNewSubject :: T.Text -> Ready -> (Output, State)
+updateOnNewSubject newSubject ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case pageR ready of
+    Messages ->
+        pass
+
+    Writer messageId diffs ->
+        case constructMessage diffs of
+        Nothing ->
+            (ErrorO "could not construct message", FailedS)
+
+        Just oldEncoded ->
+            case decodeHeader (Bl.fromStrict oldEncoded) of
+            Left err ->
+                ( ErrorO $ "could not decode header: " <> err
+                , FailedS
+                )
+
+            Right oldHeader ->
+                let
+                newHeader = oldHeader { subject = newSubject }
+                newEncoded = encodeHeader newHeader
+                newDiff = makeDiff Me oldEncoded newEncoded
+                newDiffs = newDiff : diffs
+                newReady =
+                    ready { pageR = Writer messageId newDiffs }
+                in
+                ( BatchO
+                    [ dumpCache newReady
+                    , dumpMessage (root ready) messageId newDiffs
+                    , dumpView newReady
+                    ]
+                , ReadyS ready
+                )
+
+    Contacts ->
+        pass
+
+    Account ->
+        pass
+
+
+dumpMessage :: RootPath -> MessageId -> [Diff] -> Output
+dumpMessage root messageId diffs =
+    let
+    encoded = encodeDiffs diffs
+    path = makeMessagePath root messageId
+    in
+    WriteFileStrictO path encoded
 
 
 updateOnNewMain :: T.Text -> Ready -> (Output, State)
@@ -3109,13 +3163,18 @@ updateOnNewMain newMain ready =
                 newHeader = oldHeader { mainBox = newMain }
                 newEncoded = encodeHeader newHeader
                 newDiff = makeDiff Me oldEncoded newEncoded
+                newDiffs = newDiff : diffs
                 newReady =
                     ready
                         { pageR =
-                            Writer messageId (newDiff : diffs)
+                            Writer messageId newDiffs
                         }
                 in
-                ( BatchO [dumpCache newReady, dumpView newReady]
+                ( BatchO
+                    [ dumpCache newReady
+                    , dumpView newReady
+                    , dumpMessage (root ready) messageId newDiffs
+                    ]
                 , ReadyS ready
                 )
 
