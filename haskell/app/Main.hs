@@ -495,7 +495,7 @@ data Ready =
         , waitForAcknowledge :: [AcknowledgementCode]
         , summaries :: Map.Map MessageId Summary
         , randomGen :: CryptoRand.ChaChaDRG
-        , counter :: Int
+        , counter :: Integer
         , assemblingFile :: Maybe AssemblingFile
         , gettingMessage :: Maybe Hash32
         , extractingMessage :: Maybe (MessageId, Username, Header)
@@ -525,7 +525,7 @@ data AssemblingFile
 
 
 type TmpBase
-    = Int
+    = Integer
 
 
 data Summary
@@ -907,7 +907,7 @@ extractingReferencesHelp path contents ready =
         Nothing
 
 
-downloadPath :: RootPath -> Int -> FilePath
+downloadPath :: RootPath -> Integer -> FilePath
 downloadPath root unique =
     tempPath root </> show unique
 
@@ -2600,7 +2600,35 @@ encodeCache memCache =
         [ encodeCryptoKeys $ keys memCache
         , encodeHandshakes $ handshakesM memCache
         , encodeWhitelist $ whitelistM memCache
+        , Bl.fromStrict $
+            encodeList
+                (Bl.toStrict . encodeSummary)
+                (Map.toList $ summariesM memCache)
+        , encodeVarInt $ counterM memCache
+        , Bl.fromStrict $
+            encodeList (Bl.toStrict . encodeAcknowledgement) $
+            waitForAcknowledgeM memCache
         ]
+
+
+encodeAcknowledgement :: AcknowledgementCode -> Bl.ByteString
+encodeAcknowledgement (AcknowledgementCode i) =
+    encodeVarInt i
+
+
+encodeSummary :: (MessageId, Summary) -> Bl.ByteString
+encodeSummary (messageId, summary) =
+    mconcat
+    [ encodeMessageId messageId
+    , Bl.fromStrict $ encodeSizedString $ subjectS summary
+    , Bl.fromStrict $ encodeTime $ timeS summary
+    , encodeUsername $ authorS summary
+    ]
+
+
+encodeMessageId :: MessageId -> Bl.ByteString
+encodeMessageId (MessageId id_) =
+    encodeVarInt id_
 
 
 encodeWhitelist
@@ -2792,7 +2820,7 @@ data FromServer
 
 
 newtype AcknowledgementCode
-    = AcknowledgementCode Int
+    = AcknowledgementCode Integer
     deriving (Eq, Ord)
 
 
@@ -2956,7 +2984,7 @@ data FromFrontend
 
 
 newtype MessageId
-    = MessageId Int
+    = MessageId Integer
 
 
 instance Ord MessageId where
@@ -2971,7 +2999,7 @@ instance Eq MessageId where
 
 messageIdP :: P.Parser MessageId
 messageIdP = do
-    id_ <- uint32P
+    id_ <- uint64P
     return $ MessageId id_
 
 
@@ -3164,18 +3192,17 @@ updateOnNewMain newMain ready =
                 newEncoded = encodeHeader newHeader
                 newDiff = makeDiff Me oldEncoded newEncoded
                 newDiffs = newDiff : diffs
-                newReady =
-                    ready
-                        { pageR =
-                            Writer messageId newDiffs
-                        }
+                newReady = ready { pageR = Writer messageId newDiffs }
+                (sendO, sendReady) =
+                    shareHeader newReady messageId newHeader
                 in
                 ( BatchO
-                    [ dumpCache newReady
-                    , dumpView newReady
+                    [ dumpCache sendReady
+                    , dumpView sendReady
                     , dumpMessage (root ready) messageId newDiffs
+                    , sendO
                     ]
-                , ReadyS ready
+                , ReadyS sendReady
                 )
 
     Contacts ->
@@ -3183,6 +3210,15 @@ updateOnNewMain newMain ready =
 
     Account ->
         pass
+
+
+shareHeader :: Ready -> MessageId -> Header -> (Output, Ready)
+shareHeader _ _ _ =
+    undefined
+--     let
+--     beforeChunking = encodeHeaderForSending messageId header
+--     chunks = chunkMessage beforeChunking
+--     in
 
 
 onMovedFile :: FilePath -> Ready -> (Output, State)
@@ -3329,7 +3365,7 @@ hash32 =
     Bl.foldrChunks Blake.update (Blake.initialize 32)
 
 
-tempFile :: RootPath -> Int -> FilePath
+tempFile :: RootPath -> Integer -> FilePath
 tempFile root unique =
     tempPath root </> show unique
 
@@ -3420,9 +3456,46 @@ data MemCache
         , whitelistM ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
         , summariesM :: Map.Map MessageId Summary
-        , counterM :: Int
+        , counterM :: Integer
         , waitForAcknowledgeM :: [AcknowledgementCode]
         }
+
+
+encodeVarInt :: Integer -> Bl.ByteString
+encodeVarInt i =
+    let
+    wds = encodeVarIntHelp i []
+    len = fromIntegral $ length wds
+    in
+    Bl.singleton len <> Bl.pack wds
+
+
+encodeVarIntHelp :: Integer -> [Word8] -> [Word8]
+encodeVarIntHelp remaining accum =
+    if remaining == 0 then
+    accum
+    else
+    encodeVarIntHelp
+        (remaining `Bits.shiftR` 8)
+        (fromIntegral (remaining Bits..&. 0xFF) : accum)
+
+
+varIntP :: P.Parser Integer
+varIntP = do
+    len <- P.anyWord8
+    varIntHelpP len 0 0
+
+varIntHelpP :: Word8 -> Integer -> Integer -> P.Parser Integer
+varIntHelpP len sofar counter =
+    if fromIntegral counter == len then
+    return sofar
+
+    else do
+        word <- P.anyWord8
+        varIntHelpP
+            len
+            (sofar + (fromIntegral word) * (256 ^ counter))
+            (counter + 1)
 
 
 memCacheP :: P.Parser MemCache
@@ -3431,7 +3504,7 @@ memCacheP = do
     handshakesM <- handshakesP
     whitelistM <- whitelistP
     summariesM <- summariesP
-    counterM <- uint32P
+    counterM <- varIntP
     waitForAcknowledgeM <- listP acknowledgementP
     P.endOfInput
     return $
@@ -3447,7 +3520,7 @@ memCacheP = do
 
 acknowledgementP :: P.Parser AcknowledgementCode
 acknowledgementP = do
-    code <- uint32P
+    code <- varIntP
     return $ AcknowledgementCode code
 
 

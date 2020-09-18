@@ -93,7 +93,7 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
         4 bytes: monthly price in GBP^(-2)
     Acknowledgement
         1 byte: 4
-        4 bytes: acknowledgement code
+        8 bytes: acknowledgement code
 
 ### Client to server
 
@@ -109,9 +109,9 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 		16 bytes: random session key
 	Send message (AUTH)
 		1 byte: 3
-        4 bytes: acknowledgement code
+        8 bytes: acknowledgement code
 		8 bytes: recipient username
-		<= 15987 bytes: message
+		<= 15983 bytes: message
 	Delete message (AUTH)
 		1 byte: 4
 		32 bytes: message hash
@@ -147,7 +147,7 @@ Before encryption, a chunk must be a fixed length. A chunk is encoded like this:
 
 After assembling the message (or before chunking and sending it), there is another API inside it:
 
-    16 bytes: globally unique message ID
+    12 bytes: globally unique message ID
     either a header blob
         1 byte: 0
         the header blob
