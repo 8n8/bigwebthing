@@ -180,12 +180,6 @@ io output =
         key <- getEntropy sessionKeyLength
         return $ Just $ NewSessionKeyM key
 
-    ReadMessageO dbPath -> do
-        result <- Sql.withConnection
-            dbPath
-            (\conn -> Sql.query_ conn "SELECT * FROM edits")
-        return $ Just $ MessageFromDb dbPath result
-
     ReadFileStrictO path -> do
         contents <- B.readFile path
         return $ Just $ StrictFileContentsM path contents
@@ -343,7 +337,6 @@ data Output
     | AppendFileO FilePath Bl.ByteString
     | GetTimesO
     | AppendFileStrictO FilePath B.ByteString
-    | ReadMessageO FilePath
     | ReadFileStrictO FilePath
     | DbInsertDiffO FilePath (Int, Int, B.ByteString, B.ByteString)
 
@@ -370,7 +363,6 @@ data Msg
     | NewSessionKeyM B.ByteString
     | RandomGenM CryptoRand.ChaChaDRG
     | AppendedStrictM
-    | MessageFromDb FilePath [MessageDbRow]
 
 
 websocket :: Ws.ServerApp
@@ -515,16 +507,21 @@ data Ready =
         , extractingMessage :: Maybe (MessageId, Username, Header)
         , extractingReferences :: Maybe (MessageId, Hash32)
         , readingToSendToServer :: Maybe AcknowledgementCode
-        , page :: Page
+        , pageR :: Page
         }
 
 
 data Page
     = Messages
-    | Writer
+    | Writer MessageId [Diff]
     | Contacts
     | Account
     deriving Eq
+
+
+decodeHeader :: Bl.ByteString -> Either String Header
+decodeHeader raw =
+    P.eitherResult (P.parse headerP raw)
 
 
 data AssemblingFile
@@ -816,9 +813,6 @@ update model msg =
     AppendedStrictM ->
         updateReady model $ fileAssembledUpdate
 
-    MessageFromDb path rows ->
-        updateReady model $ messageFromDbUpdate path rows
-
     StrictFileContentsM path contents ->
         updateReady model $ strictFileContentsUpdate path contents
 
@@ -829,35 +823,46 @@ strictFileContentsUpdate
     -> Ready
     -> (Output, State)
 strictFileContentsUpdate path contents ready =
+    case fileToSendToServerUpdate path contents ready of
+    Just r1 ->
+        r1
+
+    Nothing ->
+        messageFileUpdate path (Bl.fromStrict contents) ready
+            
+
+fileToSendToServerUpdate
+    :: FilePath
+    -> B.ByteString
+    -> Ready
+    -> Maybe (Output, State)
+fileToSendToServerUpdate path contents ready =
     case readingToSendToServer ready of
     Nothing ->
-        (DoNothingO, ReadyS ready)
+        Nothing
 
     Just code ->
         if path == makeChunkPath (root ready) code then
         let
         newReady = ready { readingToSendToServer = Nothing }
         in
+        Just
         ( BytesInQO toServerQ $ Bl.fromStrict contents
         , ReadyS newReady
         )
         else
-        (DoNothingO, ReadyS ready)
+        Nothing
 
 
-type MessageDbRow
-    = (Int, Int, Int, B.ByteString, B.ByteString)
-
-
-messageFromDbUpdate
+messageFileUpdate
     :: FilePath
-    -> [MessageDbRow]
+    -> Bl.ByteString
     -> Ready
     -> (Output, State)
-messageFromDbUpdate path rows ready =
-    case extractingMessageHelp path rows ready of
+messageFileUpdate path raw ready =
+    case extractingMessageHelp path raw ready of
     Nothing ->
-        case extractingReferencesHelp path rows ready of
+        case extractingReferencesHelp path raw ready of
         Nothing ->
             (DoNothingO, ReadyS ready)
 
@@ -868,36 +873,41 @@ messageFromDbUpdate path rows ready =
         done
 
 
-extractingReferencesHelp path rows ready =
+extractingReferencesHelp path contents ready =
     case extractingReferences ready of
     Nothing ->
         Nothing
 
     Just (messageId, hash) ->
         if path == makeMessagePath (root ready) messageId then
-        case constructReferences rows of
-        Nothing ->
-            Just
-                ( ErrorO $ "corruped message " ++ show messageId
-                , FailedS
-                )
+        case P.eitherResult $ P.parse (listP diffP) contents of
+        Left err ->
+            Just $ corruptMessage err messageId
 
-        Just refs ->
-            if Set.member hash refs then
-            let
-            move =
-                MoveFileO
-                    (downloadPath (root ready) (counter ready))
-                    (makeBlobPath (root ready) hash)
-            newReady = ready { counter = counter ready + 1 }
-            in
-            Just
-                ( BatchO [move, dumpCache newReady]
-                , ReadyS newReady
-                )
+        Right diffs ->
+            case constructReferences diffs of
+            Nothing ->
+                Just $
+                    corruptMessage
+                        "couldn't make references from diffs"
+                        messageId
 
-            else
-            Nothing
+            Just refs ->
+                if Set.member hash refs then
+                let
+                move =
+                    MoveFileO
+                        (downloadPath (root ready) (counter ready))
+                        (makeBlobPath (root ready) hash)
+                newReady = ready { counter = counter ready + 1 }
+                in
+                Just
+                    ( BatchO [move, dumpCache newReady]
+                    , ReadyS newReady
+                    )
+
+                else
+                Nothing
 
         else
         Nothing
@@ -908,28 +918,28 @@ downloadPath root unique =
     tempPath root </> show unique
 
 
-constructReferences :: [MessageDbRow] -> Maybe (Set.Set Hash32)
-constructReferences rows =
-    constructReferencesHelp Set.empty "" rows
+constructReferences :: [Diff] -> Maybe (Set.Set Hash32)
+constructReferences diffs =
+    constructReferencesHelp Set.empty "" diffs
 
 
 constructReferencesHelp
     :: Set.Set Hash32
     -> B.ByteString
-    -> [MessageDbRow]
+    -> [Diff]
     -> Maybe (Set.Set Hash32)
 constructReferencesHelp accum lastEncoded remaining =
     case remaining of
     [] ->
         Just accum
 
-    r@(_, _, _, _, integrity):emaining ->
+    r:emaining ->
         let
         encoded = constructMessageHelp r lastEncoded
         actualHash = hash8 encoded
         parsed = P.parse headerP $ Bl.fromStrict encoded
         in
-        if actualHash == Hash8 integrity then
+        if actualHash == integrity r then
         case P.eitherResult parsed of
         Left _ ->
             Nothing
@@ -943,50 +953,93 @@ constructReferencesHelp accum lastEncoded remaining =
         else
         Nothing
 
+corruptMessage :: String -> MessageId -> (Output, State)
+corruptMessage err messageId =
+            ( ErrorO $
+                mconcat
+                [ "corrupt message file:\n"
+                , "messageId: "
+                , show messageId
+                , "\nparse error: "
+                , err
+                ]
+            , FailedS
+            )
 
-extractingMessageHelp path rows ready =
+
+diffP :: P.Parser Diff
+diffP = do
+    start <- uint32P
+    end <- uint32P
+    insert <- sizedBytesP 
+    integrity <- hash8P
+    return $ Diff{start, end, insert, integrity}
+
+
+hash8P :: P.Parser Hash8
+hash8P = do
+    raw <- P.take 8
+    return $ Hash8 raw
+
+
+sizedBytesP :: P.Parser B.ByteString
+sizedBytesP = do
+    len <- uint32P
+    bytes <- P.take len
+    return bytes
+
+
+extractingMessageHelp path raw ready =
     case extractingMessage ready of
     Just (messageId, from, header) ->
         if path == makeMessagePath (root ready) messageId then
-        case constructMessage rows of
-        Nothing ->
-            Just
-                ( ErrorO $ "corrupted message " ++ show messageId
-                , FailedS
-                )
+        case P.eitherResult $ P.parse (listP diffP) raw of
+        Left err ->
+            Just $ corruptMessage err messageId
 
-        Just oldEncoded ->
-            let
-            diff = makeDiff oldEncoded (encodeHeader header)
-            summary = summarize from header
-            saveDiff =
-                DbInsertDiffO
-                    (makeMessagePath (root ready) messageId)
-                    (diffToTuple diff)
-            newReady =
-                ready
-                    { summaries =
-                        Map.insert messageId summary (summaries ready)
-                    }
-            in
-            Just
-                ( BatchO [saveDiff, dumpCache newReady]
-                , ReadyS newReady
-                )
-            else
-            Nothing
+        Right diffs ->
+            case constructMessage diffs of
+            Nothing ->
+                Just $
+                    corruptMessage
+                        "couldn't construct from diffs"
+                        messageId
+
+            Just oldEncoded ->
+                let
+                diff = makeDiff oldEncoded (encodeHeader header)
+                summary = summarize from header
+                saveDiff =
+                    DbInsertDiffO
+                        (makeMessagePath (root ready) messageId)
+                        (diffToTuple diff)
+                newReady =
+                    ready
+                        { summaries =
+                            Map.insert
+                                messageId
+                                summary
+                                (summaries ready)
+                        }
+                in
+                Just
+                    ( BatchO [saveDiff, dumpCache newReady]
+                    , ReadyS newReady
+                    )
+                else
+                Nothing
 
     Nothing ->
         Nothing
 
 
-constructMessage :: [MessageDbRow] -> Maybe B.ByteString
-constructMessage rows =
+constructMessage :: [Diff] -> Maybe B.ByteString
+constructMessage diffs =
     let
-    candidate = foldr constructMessageHelp "" rows
+    candidate = foldr constructMessageHelp "" diffs
     actualHash = hash8 candidate
     in
-    case getLastHash rows of
+    case getLastHash diffs of
     Nothing ->
         Nothing
 
@@ -998,23 +1051,23 @@ constructMessage rows =
             Nothing
 
 
-getLastHash :: [MessageDbRow] -> Maybe Hash8
-getLastHash rows =
-    case reverse rows of
+getLastHash :: [Diff] -> Maybe Hash8
+getLastHash diffs =
+    case reverse diffs of
         [] ->
             Nothing
 
-        (_, _, _, _, hash):_ ->
-            Just $ Hash8 hash
+        diff:_ ->
+            Just $ integrity diff
 
 
-constructMessageHelp :: MessageDbRow -> B.ByteString -> B.ByteString
-constructMessageHelp (_, start, end, insert, _) old =
+constructMessageHelp :: Diff -> B.ByteString -> B.ByteString
+constructMessageHelp diff old =
     let
-    firstBit = B.take start old
-    lastBit = B.reverse $ B.take end $ B.reverse old
+    firstBit = B.take (start diff) old
+    lastBit = B.reverse $ B.take (end diff) $ B.reverse old
     in
-    firstBit <> insert <> lastBit
+    firstBit <> insert diff <> lastBit
 
 
 makeMessagePath :: RootPath -> MessageId -> FilePath
@@ -1397,7 +1450,7 @@ fileExistenceUpdate path exists init_ =
                     , extractingMessage = Nothing
                     , readingToSendToServer = Nothing
                     , extractingReferences = Nothing
-                    , page = Messages
+                    , pageR = Messages
                     }
             in
             ( BatchO
@@ -2043,7 +2096,7 @@ assembledUpdate from assembled ready =
             (DbInsertDiffO path diff, ReadyS newReady)
 
         Just _ ->
-            ( ReadMessageO (makeMessagePath (root ready) messageId)
+            ( ReadFileStrictO (makeMessagePath (root ready) messageId)
             , ReadyS $
                 ready
                     { extractingMessage =
@@ -2061,7 +2114,7 @@ referencedHelp
     -> Ready
     -> (Output, State)
 referencedHelp messageId blob ready =
-    ( ReadMessageO (makeMessagePath (root ready) messageId)
+    ( ReadFileStrictO (makeMessagePath (root ready) messageId)
     , ReadyS $ ready
         { extractingReferences = Just (messageId, blob) }
     )
@@ -2119,7 +2172,7 @@ data Diff
         , insert :: B.ByteString
         , integrity :: Hash8
         }
-
+        deriving (Eq)
 
 makeDiff :: B.ByteString -> B.ByteString -> Diff
 makeDiff old new =
@@ -2163,10 +2216,6 @@ hash8 raw =
 newtype Hash8
     = Hash8 B.ByteString
     deriving (Eq, Ord)
-
-
-messageIdLen =
-    24
 
 
 timeP :: P.Parser PosixMillis
@@ -2220,6 +2269,15 @@ data Blob
         , mime :: T.Text
         }
         deriving (Eq, Ord)
+
+
+data Wasm
+    = Wasm
+        { hashW :: Hash32
+        , sizeW :: Integer
+        , filenameW :: T.Text
+        } 
+        deriving (Eq)
 
 
 makeBlobPath :: RootPath -> Hash32 -> FilePath
@@ -2839,16 +2897,19 @@ hash32P = do
 
 
 data FromFrontend
-    = PageClick Page
-    | NewMain T.Text
+    = NewMain T.Text
     | NewSubject T.Text
     | NewShares [UserId]
     | NewWasm Hash32
     | NewBlobs [Blob]
+    | MessagesClick
+    | WriterClick
+    | ContactsClick
+    | AccountClick
 
 
 newtype MessageId
-    = MessageId Bl.ByteString
+    = MessageId Int
 
 
 instance Ord MessageId where
@@ -2863,17 +2924,17 @@ instance Eq MessageId where
 
 messageIdP :: P.Parser MessageId
 messageIdP = do
-    id_ <- P.take messageIdLen
-    return $ MessageId $ Bl.fromStrict id_
+    id_ <- uint32P
+    return $ MessageId id_
 
 
 fromFrontendP :: P.Parser FromFrontend
 fromFrontendP = do
     input <- P.choice
-        [ P.word8 0 >> return (PageClick Messages)
-        , P.word8 1 >> return (PageClick Writer)
-        , P.word8 2 >> return (PageClick Contacts)
-        , P.word8 3 >> return (PageClick Account)
+        [ P.word8 0 >> return MessagesClick
+        , P.word8 1 >> return WriterClick
+        , P.word8 2 >> return ContactsClick
+        , P.word8 3 >> return AccountClick
         , do
             _ <- P.word8 4
             newMain <- stringP
@@ -2909,32 +2970,113 @@ encodeReady _ =
     undefined
 
 
+pageClick :: Ready -> Page -> (Output, State)
+pageClick ready page =
+    if pageR ready == page then
+    (DoNothingO, ReadyS ready)
+    else
+    let
+    newReady = ready { pageR = page }
+    in
+    (dumpView newReady, ReadyS newReady)
+
+
+toWriterHelp :: Ready -> (Output, State)
+toWriterHelp ready =
+    let
+    newReady =
+        ready
+            { pageR = Writer (MessageId (counter ready)) []
+            , counter = counter ready + 1
+            }
+    in
+    ( BatchO [ dumpView newReady, dumpCache ready ]
+    , ReadyS newReady)
+
+
 uiApiUpdate :: FromFrontend -> Ready -> (Output, State)
 uiApiUpdate fromFrontend ready =
     case fromFrontend of
-        PageClick click ->
-            if page ready == click then
+    ContactsClick ->
+        pageClick ready Contacts
+
+    MessagesClick ->
+        pageClick ready Messages
+
+    AccountClick ->
+        pageClick ready Account
+
+    WriterClick ->
+        case pageR ready of
+        Messages ->
+            toWriterHelp ready
+
+        Writer _ _ ->
             (DoNothingO, ReadyS ready)
-            else
-            let
-            newReady = ready { page = click }
-            in
-            (dumpView newReady, ReadyS newReady)
 
-        NewMain _ ->
-            undefined
+        Contacts ->
+            toWriterHelp ready
 
-        NewSubject _ ->
-            undefined
+        Account ->
+            toWriterHelp ready
 
-        NewShares _ ->
-            undefined
+    NewMain newMain ->
+        updateOnNewMain newMain ready
 
-        NewWasm _ ->
-            undefined
+    NewSubject _ ->
+        undefined
 
-        NewBlobs _ ->
-            undefined
+    NewShares _ ->
+        undefined
+
+    NewWasm _ ->
+        undefined
+
+    NewBlobs _ ->
+        undefined
+
+
+updateOnNewMain :: T.Text -> Ready -> (Output, State)
+updateOnNewMain newMain ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case pageR ready of
+    Messages ->
+        pass
+
+    Writer messageId diffs ->
+        case constructMessage diffs of
+        Nothing ->
+            (ErrorO "could not contruct message", FailedS)
+
+        Just oldEncoded ->
+            case decodeHeader (Bl.fromStrict oldEncoded) of
+            Left err ->
+                ( ErrorO $ "could not decode header: " <> err
+                , FailedS
+                )
+
+            Right oldHeader ->
+                let
+                newHeader = oldHeader { mainBox = newMain }
+                newEncoded = encodeHeader newHeader
+                newDiff = makeDiff oldEncoded newEncoded
+                newReady =
+                    ready
+                        { pageR =
+                            Writer messageId (newDiff : diffs)
+                        }
+                in
+                ( BatchO [dumpCache newReady, dumpView newReady]
+                , ReadyS ready
+                )
+
+    Contacts ->
+        pass
+
+    Account ->
+        pass
 
 
 onMovedFile :: FilePath -> Ready -> (Output, State)
@@ -3445,7 +3587,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , waitForAcknowledge = waitForAcknowledgeM memCache
             , readingToSendToServer = Nothing
             , extractingReferences = Nothing
-            , page = Messages
+            , pageR = Messages
             }
         )
 
