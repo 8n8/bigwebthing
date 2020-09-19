@@ -2634,7 +2634,7 @@ encodeSummary (messageId, summary) =
 
 encodeMessageId :: MessageId -> Bl.ByteString
 encodeMessageId (MessageId id_) =
-    encodeVarInt id_
+    Bl.fromStrict id_
 
 
 encodeWhitelist
@@ -2991,7 +2991,7 @@ data FromFrontend
 
 
 newtype MessageId
-    = MessageId Integer
+    = MessageId B.ByteString
 
 
 instance Ord MessageId where
@@ -3006,7 +3006,7 @@ instance Eq MessageId where
 
 messageIdP :: P.Parser MessageId
 messageIdP = do
-    id_ <- uint64P
+    id_ <- P.take messageIdLen
     return $ MessageId id_
 
 
@@ -3066,14 +3066,33 @@ pageClick ready page =
 toWriterHelp :: Ready -> (Output, State)
 toWriterHelp ready =
     let
+    (messageId, newGen) = makeMessageId (randomGen ready)
     newReady =
         ready
-            { pageR = Writer (MessageId (counter ready)) []
+            { pageR = Writer messageId []
             , counter = counter ready + 1
+            , randomGen = newGen
             }
     in
     ( BatchO [ dumpView newReady, dumpCache ready ]
     , ReadyS newReady)
+
+
+type Gen
+    = CryptoRand.ChaChaDRG
+
+
+makeMessageId :: Gen -> (MessageId, Gen)
+makeMessageId gen =
+    let
+    new :: (B.ByteString, Gen)
+    new = CryptoRand.randomBytesGenerate messageIdLen gen
+    in
+    (MessageId (fst new), snd new)
+
+
+messageIdLen =
+    32
 
 
 uiApiUpdate :: FromFrontend -> Ready -> (Output, State)
