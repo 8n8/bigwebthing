@@ -502,7 +502,12 @@ data Ready =
         , extractingReferences :: Maybe (MessageId, Hash32)
         , readingToSendToServer :: Maybe AcknowledgementCode
         , pageR :: Page
+        , awaitingCrypto :: [ChunkAwaitingCrypto]
         }
+
+
+newtype ChunkAwaitingCrypto
+    = ChunkAwaitingCrypto Integer
 
 
 data Page
@@ -1448,6 +1453,7 @@ fileExistenceUpdate path exists init_ =
                     , readingToSendToServer = Nothing
                     , extractingReferences = Nothing
                     , pageR = Messages
+                    , awaitingCrypto = []
                     }
             in
             ( BatchO
@@ -2718,6 +2724,7 @@ getCache ready =
             , summariesM = summaries ready
             , counterM = counter ready
             , waitForAcknowledgeM = waitForAcknowledge ready
+            , awaitingCryptoM = awaitingCrypto ready
             }
 
 
@@ -3458,6 +3465,7 @@ data MemCache
         , summariesM :: Map.Map MessageId Summary
         , counterM :: Integer
         , waitForAcknowledgeM :: [AcknowledgementCode]
+        , awaitingCryptoM :: [ChunkAwaitingCrypto]
         }
 
 
@@ -3506,6 +3514,7 @@ memCacheP = do
     summariesM <- summariesP
     counterM <- varIntP
     waitForAcknowledgeM <- listP acknowledgementP
+    awaitingCryptoM <- listP (fmap ChunkAwaitingCrypto varIntP)
     P.endOfInput
     return $
         MemCache
@@ -3515,6 +3524,7 @@ memCacheP = do
             , summariesM
             , counterM
             , waitForAcknowledgeM
+            , awaitingCryptoM
             }
 
 
@@ -3767,6 +3777,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , readingToSendToServer = Nothing
             , extractingReferences = Nothing
             , pageR = Messages
+            , awaitingCrypto = awaitingCryptoM memCache
             }
         )
 
