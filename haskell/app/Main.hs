@@ -481,6 +481,65 @@ data Header
         }
 
 
+plainChunkLen =
+    15894
+
+
+encodeAndChunkHeader :: MessageId -> Header -> [B.ByteString]
+encodeAndChunkHeader (MessageId messageId) header =
+    let
+    encoded = encodeHeader header
+    withId = messageId <> B.singleton 0 <> encoded
+    len = B.length encoded
+    padding = B.replicate (plainChunkLen - 3 - len) 0
+    in
+    if len <= plainChunkLen - 3 then
+    [mconcat [B.singleton 0, encodeUint16 len, withId, padding]]
+
+    else
+    encodeAndChunkHeaderHelp
+        (hash32 $ Bl.fromStrict encoded)
+        encoded
+        []
+
+
+encodeAndChunkHeaderHelp
+    :: Hash32
+    -> B.ByteString
+    -> [B.ByteString]
+    -> [B.ByteString]
+encodeAndChunkHeaderHelp h@(Hash32 hash) encoded chunked =
+    let
+    len = B.length encoded
+    thisLenMax = plainChunkLen - 1 - 32 - 2
+    in
+    if len > thisLenMax then
+
+    let
+    chunk =
+        mconcat
+            [ B.singleton 1
+            , B.replicate 34 0
+            , B.take thisLenMax encoded
+            ]
+    remaining = B.drop thisLenMax encoded
+    in
+    encodeAndChunkHeaderHelp h remaining (chunk : chunked)
+
+    else
+    let
+    chunk =
+        mconcat
+            [ B.singleton 2
+            , Bl.toStrict hash
+            , encodeUint16 len
+            , encoded
+            , B.replicate (thisLenMax - len) 0
+            ]
+    in
+    reverse (chunk : chunked)
+
+
 data Ready =
     Ready
         { root :: RootPath
@@ -492,7 +551,7 @@ data Ready =
         , theTime :: [Clock.UTCTime]
         , whitelist ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
-        , waitForAcknowledge :: [AcknowledgementCode]
+        , waitForAcknowledge :: [Hash32]
         , summaries :: Map.Map MessageId Summary
         , randomGen :: CryptoRand.ChaChaDRG
         , counter :: Integer
@@ -500,14 +559,10 @@ data Ready =
         , gettingMessage :: Maybe Hash32
         , extractingMessage :: Maybe (MessageId, Username, Header)
         , extractingReferences :: Maybe (MessageId, Hash32)
-        , readingToSendToServer :: Maybe AcknowledgementCode
+        , readingToSendToServer :: Maybe Hash32
         , pageR :: Page
-        , awaitingCrypto :: [ChunkAwaitingCrypto]
+        , awaitingCrypto :: [(Hash32, Username)]
         }
-
-
-newtype ChunkAwaitingCrypto
-    = ChunkAwaitingCrypto Integer
 
 
 data Page
@@ -615,8 +670,12 @@ instance Ord FirstMessage where
 
 
 data Handshake
-    = Initiator InitiatorHandshake
+    = Initiator MyEphemeral InitiatorHandshake
     | ResponderSentEncryptedES MyEphemeral
+
+
+data SecondShake
+    = SecondShake MyEphemeral EncryptedEphemeral
 
 
 data InitiatorHandshake
@@ -841,7 +900,7 @@ fileToSendToServerUpdate path contents ready =
         Nothing
 
     Just code ->
-        if path == makeChunkPath (root ready) code then
+        if path == makeBlobPath (root ready) code then
         let
         newReady = ready { readingToSendToServer = Nothing }
         in
@@ -1310,22 +1369,27 @@ powHelp difficulty unique counter =
 
 encodeUint64 :: Integer -> B.ByteString
 encodeUint64 i =
-    B.pack $ map (encodeUint64Help i) (take 8 [0..])
-
-
-encodeUint64Help :: Integer -> Int -> Word8
-encodeUint64Help int counter =
-    fromIntegral $ (int `Bits.shiftR` (counter * 8)) Bits..&. 0xFF
+    B.pack $ map (encodeUintegerHelp i) (take 8 [0..])
 
 
 encodeUint32 :: Int -> B.ByteString
 encodeUint32 i =
-    B.pack $ map (encodeUint32Help i) (take 4 [0..])
+    B.pack $ map (encodeUintHelp i) (take 4 [0..])
 
 
-encodeUint32Help :: Int -> Int -> Word8
-encodeUint32Help int counter =
+encodeUintegerHelp :: Integer -> Int -> Word8
+encodeUintegerHelp int counter =
     fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
+
+
+encodeUintHelp :: Int -> Int -> Word8
+encodeUintHelp int counter =
+    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
+
+
+encodeUint16 :: Int -> B.ByteString
+encodeUint16 i =
+    B.pack $ map (encodeUintHelp i) [0, 1]
 
 
 powHashLength =
@@ -1535,7 +1599,7 @@ fromServerUpdate raw ready =
                     , readingToSendToServer = Just a
                     }
             in
-            ( ReadFileStrictO $ makeChunkPath (root ready) a
+            ( ReadFileStrictO $ makeBlobPath (root ready) a
             , ReadyS newReady
             )
             else
@@ -1554,16 +1618,6 @@ fromServerUpdate raw ready =
         ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
         , ReadyS ready
         )
-
-
-makeChunkPath :: RootPath -> AcknowledgementCode -> FilePath
-makeChunkPath root (AcknowledgementCode code) =
-    makeChunksPath root </> show code
-
-
-makeChunksPath :: RootPath -> FilePath
-makeChunksPath (RootPath root) =
-    root </> "chunks"
 
 
 newPowInfoUpdate
@@ -1753,7 +1807,7 @@ transportUpdate from ready firstMessage thisMessage =
     Nothing ->
         (DoNothingO, ReadyS ready)
 
-    Just (Initiator _ ) ->
+    Just (Initiator _ _ ) ->
         (DoNothingO, ReadyS ready)
 
     Just (ResponderSentEncryptedES myEphemeral) ->
@@ -2326,10 +2380,9 @@ data Blob
 
 data Wasm
     = Wasm
-        { hashW :: Hash32
-        , sizeW :: Integer
-        , filenameW :: T.Text
-        } 
+        Hash32
+        Integer -- size
+        T.Text  -- file name
         deriving (Eq)
 
 
@@ -2376,11 +2429,11 @@ add2ndShakes new2ndShakes id_ oldShake =
         ResponderSentEncryptedES _ ->
             oldShake
 
-        Initiator SentPlainE ->
-            Initiator $ ReceivedEncryptedE $
+        Initiator myEphemeral SentPlainE ->
+            Initiator myEphemeral $ ReceivedEncryptedE $
                 EncryptedEphemeral newMsg
 
-        Initiator (ReceivedEncryptedE _) ->
+        Initiator _ (ReceivedEncryptedE _) ->
             oldShake
 
 
@@ -2535,13 +2588,20 @@ responderOptions
     :: MyStatic
     -> MyEphemeral
     -> Noise.HandshakeOpts Curve25519
-responderOptions
-    (MyStatic myStatic)
-    (MyEphemeral myEphemeral) =
-
+responderOptions (MyStatic myStatic) (MyEphemeral myEphemeral) =
     Noise.setLocalStatic (Just myStatic) .
     Noise.setLocalEphemeral (Just myEphemeral) $
     Noise.defaultHandshakeOpts Noise.ResponderRole ""
+
+
+initiatorOptions
+    :: MyStatic
+    -> MyEphemeral
+    -> Noise.HandshakeOpts Curve25519
+initiatorOptions (MyStatic myStatic) (MyEphemeral myEphemeral) =
+    Noise.setLocalStatic (Just myStatic) .
+    Noise.setLocalEphemeral (Just myEphemeral) $
+    Noise.defaultHandshakeOpts Noise.InitiatorRole ""
 
 
 type NoiseState
@@ -2612,14 +2672,9 @@ encodeCache memCache =
                 (Map.toList $ summariesM memCache)
         , encodeVarInt $ counterM memCache
         , Bl.fromStrict $
-            encodeList (Bl.toStrict . encodeAcknowledgement) $
+            encodeList encodeHash32 $
             waitForAcknowledgeM memCache
         ]
-
-
-encodeAcknowledgement :: AcknowledgementCode -> Bl.ByteString
-encodeAcknowledgement (AcknowledgementCode i) =
-    encodeVarInt i
 
 
 encodeSummary :: (MessageId, Summary) -> Bl.ByteString
@@ -2746,9 +2801,10 @@ encodeHandshakeId (HandshakeId (Username u) (FirstMessage e)) =
 encodeHandshakeShake :: Handshake -> Bl.ByteString
 encodeHandshakeShake h =
     case h of
-    Initiator i ->
+    Initiator myEphemeral i ->
         mconcat
             [ Bl.singleton 0
+            , encodeMyEphemeral myEphemeral
             , case i of
                 SentPlainE ->
                     Bl.singleton 0
@@ -2763,6 +2819,11 @@ encodeHandshakeShake h =
             , Bl.fromStrict $ Noise.convert $
                 Dh.dhSecToBytes secret
             ]
+
+
+encodeMyEphemeral :: MyEphemeral -> Bl.ByteString
+encodeMyEphemeral (MyEphemeral (secret, _)) =
+    Bl.fromStrict $ Ba.convert $ Dh.dhSecToBytes secret
 
 
 toServerQ :: Q
@@ -2802,7 +2863,7 @@ fromServerP =
             return $ Price $ Bl.fromStrict price
         , do
             _ <- P.word8 4
-            code <- acknowledgementP
+            code <- hash32P
             return $ Acknowledgement code
         ]
 
@@ -2823,7 +2884,7 @@ data FromServer
     | NewUsername Username
     | PowInfoT Word8 Bl.ByteString
     | Price Bl.ByteString
-    | Acknowledgement AcknowledgementCode
+    | Acknowledgement Hash32
 
 
 newtype AcknowledgementCode
@@ -3218,17 +3279,19 @@ updateOnNewMain newMain ready =
                 newEncoded = encodeHeader newHeader
                 newDiff = makeDiff Me oldEncoded newEncoded
                 newDiffs = newDiff : diffs
-                newReady = ready { pageR = Writer messageId newDiffs }
-                (sendO, sendReady) =
-                    shareHeader newReady messageId newHeader
+                newReady =
+                    ready { pageR = Writer messageId newDiffs }
+                (sendO, sendState) =
+                    shareHeader (ReadyS newReady) messageId newHeader
                 in
+                updateReady sendState $ \newerReady ->
                 ( BatchO
-                    [ dumpCache sendReady
-                    , dumpView sendReady
-                    , dumpMessage (root ready) messageId newDiffs
+                    [ dumpCache newerReady
+                    , dumpView newerReady
+                    , dumpMessage (root newerReady) messageId newDiffs
                     , sendO
                     ]
-                , ReadyS sendReady
+                , sendState
                 )
 
     Contacts ->
@@ -3238,13 +3301,323 @@ updateOnNewMain newMain ready =
         pass
 
 
-shareHeader :: Ready -> MessageId -> Header -> (Output, Ready)
-shareHeader _ _ _ =
-    undefined
---     let
---     beforeChunking = encodeHeaderForSending messageId header
---     chunks = chunkMessage beforeChunking
---     in
+shareHeader :: State -> MessageId -> Header -> (Output, State)
+shareHeader model messageId header =
+     let
+     chunks = encodeAndChunkHeader messageId header
+     in
+     encodeAndEncrypt chunks (shares header) model
+
+
+encodeAndEncrypt
+    :: [B.ByteString]
+    -> [Username]
+    -> State
+    -> (Output, State)
+encodeAndEncrypt chunks shares model =
+    foldr
+        (encodeAndEncryptHelp chunks)
+        (DoNothingO, model)
+        shares
+
+
+encryptChunks
+    :: MyStatic
+    -> Username
+    -> [(B.ByteString, SecondShake)]
+    -> [Either String Bl.ByteString]
+encryptChunks myStatic to chunkShakes =
+    map (encryptChunk myStatic to) chunkShakes
+
+
+encryptChunk
+    :: MyStatic
+    -> Username
+    -> (B.ByteString, SecondShake)
+    -> Either String Bl.ByteString
+encryptChunk
+    myStatic
+    to
+    (plain, SecondShake myEphemeral (EncryptedEphemeral response)) =
+
+    let
+    options = initiatorOptions myStatic myEphemeral
+    noise0 = Noise.noiseState options noiseXX :: NoiseState
+    in
+    case Noise.writeMessage "" noise0 of
+    Noise.NoiseResultMessage _ noise1 ->
+        case
+            Noise.readMessage
+                (Ba.convert $ Bl.toStrict response)
+                noise1
+        of
+        Noise.NoiseResultMessage _ noise2 ->
+            case Noise.writeMessage (Ba.convert plain) noise2 of
+            Noise.NoiseResultMessage ciphertext _ ->
+                Right $ Bl.fromStrict $ mconcat
+                [ B.singleton 3
+                , Bl.toStrict $ encodeUsername to
+                , Ba.convert ciphertext
+                ]
+
+            Noise.NoiseResultNeedPSK _ ->
+                Left "NoiseResultNeedPSK"
+
+            Noise.NoiseResultException err ->
+                Left $ "NoiseResultException: " ++ show err
+
+        Noise.NoiseResultNeedPSK _ ->
+            Left "NoiseResultNeedPSK"
+
+        Noise.NoiseResultException err ->
+            Left $ "NoiseResultException: " ++ show err
+
+    Noise.NoiseResultNeedPSK _ ->
+        Left "NoiseResultNeedPSK"
+
+    Noise.NoiseResultException err ->
+        Left $ "NoiseResultException: " ++ show err
+
+
+type Handshakes
+    = Map.Map HandshakeId Handshake
+
+
+chooseShakes
+    :: Username
+    -> Int
+    -> Handshakes
+    -> Maybe ([SecondShake], Handshakes)
+chooseShakes to num handshakes =
+    chooseShakesHelp
+        to
+        num
+        (Map.toList handshakes)
+        ([], Map.empty)
+
+
+chooseShakesHelp
+    :: Username
+    -> Int
+    -> [(HandshakeId, Handshake)]
+    -> ([SecondShake], Handshakes)
+    -> Maybe ([SecondShake], Handshakes)
+chooseShakesHelp to num handshakes (relevant, irrelevant) =
+    if length relevant == num then
+    Just (relevant, irrelevant)
+    else
+    case handshakes of
+    [] ->
+        Nothing
+
+    (h@(HandshakeId username _), handshake):andshakes ->
+        chooseShakesHelp
+            to
+            num
+            andshakes
+            (
+            if to == username then
+            case handshake of
+            Initiator myEphemeral (ReceivedEncryptedE response) ->
+                let
+                secondShake = SecondShake myEphemeral response
+                in
+                (secondShake : relevant, irrelevant)
+
+            Initiator _ SentPlainE ->
+                (relevant, Map.insert h handshake irrelevant)
+
+            ResponderSentEncryptedES _ ->
+                (relevant, Map.insert h handshake irrelevant)
+
+            else
+            (relevant, Map.insert h handshake irrelevant))
+
+
+encodeAndEncryptHelp
+    :: [B.ByteString]
+    -> Username
+    -> (Output, State)
+    -> (Output, State)
+encodeAndEncryptHelp chunks to (oldO, model) =
+    let
+    pass = (DoNothingO, model)
+    in
+    updateReady model $ \oldReady ->
+    (\f ->
+        case authStatus oldReady of
+        GettingPowInfoA ->
+            pass
+
+        GeneratingSessionKey _ _ ->
+            pass
+
+        AwaitingUsername _ _ ->
+            pass
+
+        LoggedIn (StaticKeys myStatic _ _ _) ->
+            f myStatic) $ \myStatic ->
+
+    case chooseShakes to (length chunks) (handshakes oldReady) of
+    Nothing ->
+        let
+        writes =
+            map (writeToFile (root oldReady) . Bl.fromStrict) chunks
+        awaitings = map (\b -> (hash32 $ Bl.fromStrict b, to)) chunks
+        (cryptO, cryptoModel) = bumpCrypto oldReady
+        in
+        updateReady cryptoModel $ \cryptoReady ->
+            ( BatchO [oldO, BatchO writes, cryptO]
+            , ReadyS $ cryptoReady { awaitingCrypto = awaitings }
+            )
+
+    Just (relevant, irrelevant) ->
+        let
+        eitherEncrypted =
+            encryptChunks myStatic to (zip chunks relevant)
+        in
+        case allOk eitherEncrypted of
+        Left err ->
+            ( ErrorO $ "failed to encrypt chunks: " <> err
+            , FailedS
+            )
+
+        Right encrypted ->
+            let
+            writes = map (writeToFile (root oldReady)) encrypted
+            sends = map (BytesInQO toServerQ) encrypted
+            waitForAcknowledge = map hash32 encrypted
+            newReady =
+                oldReady
+                    { waitForAcknowledge
+                    , handshakes = irrelevant
+                    }
+            in
+            ( BatchO [oldO, BatchO writes, BatchO sends]
+            , ReadyS newReady
+            )
+
+
+bumpCrypto :: Ready -> (Output, State)
+bumpCrypto ready =
+    foldr
+        bumpCryptoHelp
+        (DoNothingO, ReadyS ready)
+        (Map.keys $ whitelist ready)
+
+
+numFirstShakes =
+    499
+
+
+getStaticKeys
+    :: Ready
+    -> (MyStatic -> (Output, State))
+    -> (Output, State)
+getStaticKeys ready okFunc =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case authStatus ready of
+    GettingPowInfoA ->
+        pass
+
+    GeneratingSessionKey _ _ ->
+        pass
+
+    AwaitingUsername _ _ ->
+        pass
+
+    LoggedIn keys ->
+        okFunc $ staticDh keys
+
+
+bumpCryptoHelp :: Username -> (Output, State) -> (Output, State)
+bumpCryptoHelp contact (oldO, model) =
+    updateReady model $ \oldReady ->
+    getStaticKeys oldReady $ \myStatic ->
+    let
+    ephemerals =
+        map MyEphemeral $ take numFirstShakes (newDhKeys oldReady)
+    remaining = drop numFirstShakes (newDhKeys oldReady)
+    newReady =
+        oldReady
+            { newDhKeys = remaining
+            }
+    eitherCryptos = map (makeFirstShake myStatic) ephemerals
+    in
+    case allOk eitherCryptos of
+    Left err ->
+        ( ErrorO $ "could not make Noise first handshakes: " ++ err
+        , FailedS
+        )
+
+    Right cryptos ->
+        let
+        shakes =
+            mconcat
+            [ Bl.singleton 3
+            , encodeUsername contact
+            , Bl.singleton 0
+            , mconcat cryptos
+            ]
+        toServer = BytesInQO toServerQ shakes
+        hash = hash32 shakes
+        write = writeToFile (root oldReady) shakes
+        in
+        ( BatchO [oldO, toServer, write]
+        , ReadyS newReady
+            { waitForAcknowledge =
+                hash : waitForAcknowledge newReady
+            }
+        )
+
+
+makeFirstShake
+    :: MyStatic
+    -> MyEphemeral
+    -> Either String Bl.ByteString
+makeFirstShake myStatic myEphemeral =
+    let
+    options = initiatorOptions myStatic myEphemeral
+    noise0 :: NoiseState
+    noise0 = Noise.noiseState options noiseXX
+    in
+    case Noise.writeMessage "" noise0 of
+    Noise.NoiseResultMessage ciphertext _ ->
+        Right $ Bl.fromStrict $ Ba.convert ciphertext
+
+    Noise.NoiseResultNeedPSK _ ->
+        Left "NoiseResultNeedPSK"
+
+    Noise.NoiseResultException err ->
+        Left $ "NoiseResultException: " ++ show err
+
+
+writeToFile :: RootPath -> Bl.ByteString -> Output
+writeToFile root bytes =
+    let
+    path = makeBlobPath root (hash32 bytes)
+    in
+    WriteFileO path bytes
+
+
+allOk :: [Either a b] -> Either a [b]
+allOk eithers =
+    allOkHelp eithers []
+
+
+allOkHelp :: [Either a b] -> [b] -> Either a [b]
+allOkHelp eithers accum =
+    case eithers of
+    [] ->
+        Right accum
+
+    Left a : _ ->
+        Left a
+
+    Right b : ithers ->
+        allOkHelp ithers (b:accum)
 
 
 onMovedFile :: FilePath -> Ready -> (Output, State)
@@ -3483,8 +3856,8 @@ data MemCache
             Map.Map Username (Fingerprint, Maybe TheirStatic)
         , summariesM :: Map.Map MessageId Summary
         , counterM :: Integer
-        , waitForAcknowledgeM :: [AcknowledgementCode]
-        , awaitingCryptoM :: [ChunkAwaitingCrypto]
+        , waitForAcknowledgeM :: [Hash32]
+        , awaitingCryptoM :: [(Hash32, Username)]
         }
 
 
@@ -3532,8 +3905,8 @@ memCacheP = do
     whitelistM <- whitelistP
     summariesM <- summariesP
     counterM <- varIntP
-    waitForAcknowledgeM <- listP acknowledgementP
-    awaitingCryptoM <- listP (fmap ChunkAwaitingCrypto varIntP)
+    waitForAcknowledgeM <- listP hash32P
+    awaitingCryptoM <- listP awaitingCryptoP
     P.endOfInput
     return $
         MemCache
@@ -3547,10 +3920,11 @@ memCacheP = do
             }
 
 
-acknowledgementP :: P.Parser AcknowledgementCode
-acknowledgementP = do
-    code <- varIntP
-    return $ AcknowledgementCode code
+awaitingCryptoP :: P.Parser (Hash32, Username)
+awaitingCryptoP = do
+    hash <- hash32P
+    username <- usernameP
+    return (hash, username)
 
 
 listP :: P.Parser a -> P.Parser [a]
@@ -3648,24 +4022,24 @@ uint64HelpP sofar counter =
 handshakeP :: P.Parser (HandshakeId, Handshake)
 handshakeP = do
     handshakeId <- handshakeIdP
-    handshake <- P.choice
-        [ fmap Initiator initiatorP
-        , responderP
-        ]
+    handshake <- P.choice [initiatorP, responderP]
     return (handshakeId, handshake)
 
 
-initiatorP :: P.Parser InitiatorHandshake
+initiatorP :: P.Parser Handshake
 initiatorP = do
     _ <- P.word8 0
+    myEphemeral <- myEphemeralP
     P.choice
         [ do
             _ <- P.word8 0
-            return SentPlainE
+            return $ Initiator myEphemeral SentPlainE
         , do
             _ <- P.word8 1
             ephemeral <- encryptedEphemeralP
-            return $ ReceivedEncryptedE ephemeral
+            return $
+                Initiator myEphemeral $
+                    ReceivedEncryptedE ephemeral
         ]
 
 
