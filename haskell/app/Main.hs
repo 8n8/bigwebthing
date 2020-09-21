@@ -162,9 +162,7 @@ io output =
 
     GetTimesO -> do
         times <-
-            mapM
-                (\_ -> Clock.getCurrentTime)
-                ([1..] :: [Integer])
+            mapM (\_ -> Clock.getCurrentTime) ([1..] :: [Integer])
         return $ Just $ TimesM times
 
     AppendFileO path toAppend -> do
@@ -3188,7 +3186,7 @@ uiApiUpdate fromFrontend ready =
     NewSubject newSubject ->
         updateOnNewSubject newSubject ready
 
-    NewShares _ ->
+    NewShares shares ->
         undefined
 
     NewWasm _ ->
@@ -3227,13 +3225,21 @@ updateOnNewSubject newSubject ready =
                 newDiffs = newDiff : diffs
                 newReady =
                     ready { pageR = Writer messageId newDiffs }
+                (sendO, sendState) =
+                    shareHeader
+                        (ReadyS newReady)
+                        messageId
+                        newHeader
                 in
+                updateReady sendState $ \newerReady ->
                 ( BatchO
                     [ dumpCache newReady
-                    , dumpMessage (root ready) messageId newDiffs
                     , dumpView newReady
+                    , dumpMessage
+                        (root newerReady) messageId newDiffs
+                    , sendO
                     ]
-                , ReadyS ready
+                , sendState
                 )
 
     Contacts ->
