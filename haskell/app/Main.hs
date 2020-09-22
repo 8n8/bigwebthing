@@ -549,8 +549,8 @@ encodeAndChunkHeaderHelp h@(Hash32 hash) encoded chunked =
     reverse (chunk : chunked)
 
 
-data Ready =
-    Ready
+data Ready
+    = Ready
         { root :: RootPath
         , blobsUp :: Jobs BlobUp BlobUpWait
         , getBlob :: Jobs GetBlob GetBlobWait
@@ -3219,8 +3219,57 @@ dumpView =
 
 
 encodeReady :: Ready -> Bl.ByteString
-encodeReady _ =
-    undefined
+encodeReady =
+    encodeReadyView . readyToReadyView
+
+
+encodeReadyView :: ReadyView -> Bl.ByteString
+encodeReadyView readyView =
+    mconcat
+    [ encodeWhitelist $ whitelistV readyView
+    , Bl.fromStrict $
+      encodeList (Bl.toStrict . encodeSummary) $
+      Map.toList $
+      summariesV readyView
+    , encodePage $ pageV readyView
+    ]
+
+
+encodePage :: Page -> Bl.ByteString
+encodePage page =
+    case page of
+    Messages ->
+        Bl.singleton 0
+
+    Writer messageId diffs ->
+        mconcat
+        [ Bl.singleton 1
+        , encodeMessageId messageId
+        , Bl.fromStrict $ encodeDiffs diffs
+        ]
+
+    Contacts ->
+        Bl.singleton 2
+
+    Account ->
+        Bl.singleton 3
+
+
+readyToReadyView :: Ready -> ReadyView
+readyToReadyView ready =
+    ReadyView
+        { whitelistV = whitelist ready
+        , summariesV = summaries ready
+        , pageV = pageR ready
+        }
+
+
+data ReadyView
+    = ReadyView
+        { whitelistV :: Whitelist
+        , summariesV :: Map.Map MessageId Summary
+        , pageV :: Page
+        }
 
 
 pageClick :: Ready -> Page -> (Output, State)
