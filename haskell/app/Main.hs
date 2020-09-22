@@ -3301,11 +3301,129 @@ uiApiUpdate fromFrontend ready =
     NewShares shares ->
         updateOnNewShares shares ready
 
-    NewWasm _ ->
-        undefined
+    NewWasm hash ->
+        updateOnNewWasm hash ready
 
-    NewBlobs _ ->
-        undefined
+    NewBlobs blobs ->
+        updateOnNewBlobs blobs ready
+
+
+updateOnNewBlobs :: [Blob] -> Ready -> (Output, State)
+updateOnNewBlobs newBlobs ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case pageR ready of
+    Messages ->
+        pass
+
+    Writer messageId diffs ->
+        case constructMessage diffs of
+        Nothing ->
+            (ErrorO "could not construct message", FailedS)
+
+        Just oldEncoded ->
+            case decodeHeader $ Bl.fromStrict oldEncoded of
+            Left err ->
+                ( ErrorO $ "could not decode header: " <> err
+                , FailedS
+                )
+
+            Right oldHeader ->
+                let
+                newHeader = oldHeader { blobs = newBlobs }
+                newEncoded = encodeHeader newHeader
+                newDiff = makeDiff Me oldEncoded newEncoded
+                newDiffs = newDiff : diffs
+                newReady =
+                    ready { pageR = Writer messageId newDiffs }
+                onlyNew =
+                    map (\b -> hashB b) $
+                    Set.toList $
+                    Set.difference
+                    (Set.fromList $ blobs oldHeader)
+                    (Set.fromList $ newBlobs)
+                (sendO, sendState) =
+                    shareBlobs
+                        (ReadyS newReady)
+                        messageId
+                        onlyNew
+                        (shares newHeader)
+                write =
+                    WriteFileStrictO
+                        (makeMessagePath (root ready) messageId)
+                        (encodeDiffs newDiffs)
+                in
+                updateReady sendState $ \newerReady ->
+                ( BatchO
+                    [ sendO
+                    , write
+                    , dumpView newerReady
+                    ]
+                , ReadyS newerReady
+                )
+
+    Contacts ->
+        pass
+
+    Account ->
+        pass
+
+
+updateOnNewWasm :: Hash32 -> Ready -> (Output, State)
+updateOnNewWasm hash ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case pageR ready of
+    Messages ->
+        pass
+
+    Writer messageId diffs ->
+        case constructMessage diffs of
+        Nothing ->
+            (ErrorO "could not construct message", FailedS)
+
+        Just oldEncoded ->
+            case decodeHeader $ Bl.fromStrict oldEncoded of
+            Left err ->
+                ( ErrorO $ "could not decode header: " <> err
+                , FailedS
+                )
+
+            Right oldHeader ->
+                let
+                newHeader = oldHeader { wasm = hash }
+                newEncoded = encodeHeader newHeader
+                newDiff = makeDiff Me oldEncoded newEncoded
+                newDiffs = newDiff : diffs
+                newReady = ready { pageR = Writer messageId newDiffs }
+                (sendO, sendState) =
+                    shareBlobsHelp
+                        messageId
+                        (shares newHeader)
+                        hash
+                        (DoNothingO, ReadyS newReady)
+                write =
+                    WriteFileStrictO
+                        (makeMessagePath (root ready) messageId)
+                        (encodeDiffs newDiffs)
+                in
+                updateReady sendState $ \newerReady ->
+                ( BatchO
+                    [ sendO
+                    , write
+                    , dumpView newerReady
+                    ]
+                , ReadyS newerReady
+                )
+
+    Contacts ->
+        pass
+
+    Account ->
+        pass
+
 
 
 updateOnNewShares :: [UserId] -> Ready -> (Output, State)
@@ -3321,7 +3439,7 @@ updateOnNewShares newShareIds ready =
     Writer messageId diffs ->
         case constructMessage diffs of
         Nothing ->
-            (ErrorO "could  not construct message", FailedS)
+            (ErrorO "could not construct message", FailedS)
 
         Just oldEncoded ->
             case decodeHeader (Bl.fromStrict oldEncoded) of
@@ -3332,10 +3450,7 @@ updateOnNewShares newShareIds ready =
 
             Right oldHeader ->
                 let
-                newHeader =
-                    oldHeader
-                        { shares = newShares
-                        }
+                newHeader = oldHeader { shares = newShares }
                 diffShares =
                     Set.toList $ Set.difference
                         (Set.fromList newShares)
@@ -3395,7 +3510,12 @@ type Whitelist
     = Map.Map Username (Fingerprint, Maybe TheirStatic)
 
 
-shareMessage :: [Username] -> State -> MessageId -> Header -> (Output, State)
+shareMessage
+    :: [Username]
+    -> State
+    -> MessageId
+    -> Header
+    -> (Output, State)
 shareMessage newShares model messageId header =
     let
     (headerO, headerState) = shareHeader model messageId header
