@@ -559,8 +559,7 @@ data Ready =
         , handshakes :: Map.Map HandshakeId Handshake
         , newDhKeys :: [Dh.KeyPair Curve25519]
         , theTime :: [Clock.UTCTime]
-        , whitelist ::
-            Map.Map Username (Fingerprint, Maybe TheirStatic)
+        , whitelist :: Whitelist
         , waitForAcknowledge :: [Hash32]
         , summaries :: Map.Map MessageId Summary
         , randomGen :: CryptoRand.ChaChaDRG
@@ -3344,8 +3343,18 @@ updateOnNewShares newShareIds ready =
                 newEncoded = encodeHeader newHeader
                 newDiff = makeDiff Me oldEncoded newEncoded
                 newDiffs = newDiff : diffs
+                newWhites :: Whitelist
+                newWhites =
+                    Map.fromList $ map
+                        (\(UserId u f) -> (u, (f, Nothing)))
+                        newShareIds
+
                 newReady =
-                    ready { pageR = Writer messageId newDiffs }
+                    ready
+                        { pageR = Writer messageId newDiffs
+                        , whitelist =
+                            Map.union (whitelist ready) newWhites
+                        }
                 (sendO, sendState) =
                     shareMessage
                         diffShares
@@ -3357,6 +3366,7 @@ updateOnNewShares newShareIds ready =
                 ( BatchO
                     [ dumpCache newerReady
                     , dumpView newerReady
+                    , uploadContacts $ whitelist newReady
                     , dumpMessage
                         (root newerReady)
                         messageId
@@ -3371,6 +3381,18 @@ updateOnNewShares newShareIds ready =
 
     Account ->
         pass
+
+
+uploadContacts :: Whitelist -> Output
+uploadContacts whitelist =
+    BytesInQO
+    toServerQ $
+    Bl.singleton 6 <>
+    (mconcat $ map encodeUsername (Map.keys whitelist))
+
+
+type Whitelist
+    = Map.Map Username (Fingerprint, Maybe TheirStatic)
 
 
 shareMessage :: [Username] -> State -> MessageId -> Header -> (Output, State)

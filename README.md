@@ -118,7 +118,7 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 		1 byte: 5
     Upload contacts (AUTH)
         1 byte: 6
-        sequence of 8-byte usernames
+        sequence of 8-byte usernames (maximum 1999)
 
 # Client to client
 
@@ -130,11 +130,11 @@ Before encryption, a chunk must be a fixed length. A chunk is encoded like this:
 
 15894 bytes
     either this is a part of a sequence but not the last item
-        1 byte: 1
+        1 byte: 0
         2 bytes: empty
         the chunk
     or this is the final (or only) chunk
-        1 byte: 2
+        1 byte: 1
         2 bytes: length of the chunk
         the chunk
         padding
