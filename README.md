@@ -129,18 +129,12 @@ The message is sliced up into chunks, each chunk is encrypted, and is sent.
 Before encryption, a chunk must be a fixed length. A chunk is encoded like this:
 
 15894 bytes
-    either the whole message fits in one chunk
-        1 byte: 0
-        2 bytes: the length of the message
-        the message
-        padding
-    or this is a part of a sequence but not the last item
+    either this is a part of a sequence but not the last item
         1 byte: 1
-        34 bytes: padding
+        2 bytes: empty
         the chunk
-    or this is the final message in a sequence
+    or this is the final (or only) chunk
         1 byte: 2
-        32 bytes: the hash of the whole message before chunking
         2 bytes: length of the chunk
         the chunk
         padding
@@ -148,6 +142,7 @@ Before encryption, a chunk must be a fixed length. A chunk is encoded like this:
 After assembling the message (or before chunking and sending it), there is another API inside it:
 
     32 bytes: globally unique message ID
+    8 bytes: integrity check
     either a header blob
         1 byte: 0
         the header blob

@@ -185,6 +185,14 @@ io output =
         B.writeFile path contents
         return Nothing
 
+    GetFileHandleO path -> do
+        handle <- Io.openFile path Io.ReadMode
+        return $ Just $ FileHandleM path handle
+
+    ReadFromHandleO path n handle -> do
+        bytes <- B.hGet handle n
+        return $ Just $ ChunkFromHandleM path bytes
+
 
 maxMessageLength =
     16000
@@ -330,7 +338,8 @@ data Output
     | AppendFileStrictO FilePath B.ByteString
     | ReadFileStrictO FilePath
     | WriteFileStrictO FilePath B.ByteString
-    -- | DbInsertDiffO FilePath (Int, Int, B.ByteString, B.ByteString)
+    | GetFileHandleO FilePath
+    | ReadFromHandleO FilePath Int Io.Handle
 
 
 data Msg
@@ -355,6 +364,8 @@ data Msg
     | NewSessionKeyM B.ByteString
     | RandomGenM CryptoRand.ChaChaDRG
     | AppendedStrictM
+    | FileHandleM FilePath Io.Handle
+    | ChunkFromHandleM FilePath B.ByteString
 
 
 websocket :: Ws.ServerApp
@@ -543,6 +554,7 @@ data Ready =
         { root :: RootPath
         , blobsUp :: Jobs BlobUp BlobUpWait
         , getBlob :: Jobs GetBlob GetBlobWait
+        , sendingBlob :: Jobs SendingBlob SendingBlobWait
         , authStatus :: AuthStatus
         , handshakes :: Map.Map HandshakeId Handshake
         , newDhKeys :: [Dh.KeyPair Curve25519]
@@ -561,6 +573,15 @@ data Ready =
         , pageR :: Page
         , awaitingCrypto :: [(Hash32, Username)]
         }
+
+
+data SendingBlob
+    = AwaitingHandle Hash32 [Username]
+    | Chunking Io.Handle Hash32 [Username]
+
+
+data SendingBlobWait
+    = SendingBlobWait MessageId Hash32 [Username]
 
 
 data Page
@@ -871,6 +892,97 @@ update model msg =
 
     StrictFileContentsM path contents ->
         updateReady model $ strictFileContentsUpdate path contents
+
+    FileHandleM path handle ->
+        updateReady model $ updateOnFileHandle path handle
+
+    ChunkFromHandleM path raw ->
+        updateReady model $ updateOnChunkFromHandle path raw
+
+
+updateOnChunkFromHandle
+    :: FilePath
+    -> B.ByteString
+    -> Ready
+    -> (Output, State)
+updateOnChunkFromHandle path raw ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case sendingBlob ready of
+    NoJobs ->
+        pass
+
+    Jobs (AwaitingHandle _ _) _ ->
+        pass
+
+    Jobs (Chunking handle hash tos) _ ->
+        if makeBlobPath (root ready) hash == path then
+
+        let
+        finalChunk = rawLen == plainChunkLen - 3
+        rawLen = B.length raw
+        chunk =
+            if finalChunk then
+            mconcat
+            [ B.singleton 0
+            , B.replicate 2 0
+            , raw
+            ]
+            else
+            mconcat
+            [ B.singleton 1
+            , encodeUint16 rawLen
+            , raw
+            , B.replicate (plainChunkLen - 3 - rawLen) 0
+            ]
+        (sendO, sendModel) =
+            foldr
+                (sendBlobChunk chunk)
+                (DoNothingO, ReadyS ready)
+                tos
+        in
+        ( BatchO
+            [ sendO
+            , if finalChunk then
+              CloseFileO handle
+              else
+              ReadFromHandleO path (plainChunkLen - 3) handle
+            ]
+        , sendModel
+        )
+
+        else
+        pass
+
+
+updateOnFileHandle
+    :: FilePath
+    -> Io.Handle
+    -> Ready
+    -> (Output, State)
+updateOnFileHandle path handle ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case sendingBlob ready of
+    NoJobs ->
+        pass
+
+    Jobs (AwaitingHandle hash tos) waiting ->
+        if makeBlobPath (root ready) hash == path then
+        ( ReadFromHandleO path (plainChunkLen - 3) handle
+        , ReadyS $ ready
+            { sendingBlob =
+                Jobs (Chunking handle hash tos) waiting
+            }
+        )
+
+        else
+        pass
+
+    Jobs (Chunking _ _ _) _ ->
+        pass
 
 
 strictFileContentsUpdate
@@ -1516,6 +1628,7 @@ fileExistenceUpdate path exists init_ =
                     , extractingReferences = Nothing
                     , pageR = Messages
                     , awaitingCrypto = []
+                    , sendingBlob = NoJobs
                     }
             in
             ( BatchO
@@ -3187,13 +3300,127 @@ uiApiUpdate fromFrontend ready =
         updateOnNewSubject newSubject ready
 
     NewShares shares ->
-        undefined
+        updateOnNewShares shares ready
 
     NewWasm _ ->
         undefined
 
     NewBlobs _ ->
         undefined
+
+
+updateOnNewShares :: [UserId] -> Ready -> (Output, State)
+updateOnNewShares newShareIds ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    newShares = map (\(UserId u _) -> u) newShareIds
+    in
+    case pageR ready of
+    Messages ->
+        pass
+
+    Writer messageId diffs ->
+        case constructMessage diffs of
+        Nothing ->
+            (ErrorO "could  not construct message", FailedS)
+
+        Just oldEncoded ->
+            case decodeHeader (Bl.fromStrict oldEncoded) of
+            Left err ->
+                (ErrorO $ "could not decode header: " <> err
+                , FailedS
+                )
+
+            Right oldHeader ->
+                let
+                newHeader =
+                    oldHeader
+                        { shares = newShares
+                        }
+                diffShares =
+                    Set.toList $ Set.difference
+                        (Set.fromList newShares)
+                        (Set.fromList $ shares oldHeader)
+                newEncoded = encodeHeader newHeader
+                newDiff = makeDiff Me oldEncoded newEncoded
+                newDiffs = newDiff : diffs
+                newReady =
+                    ready { pageR = Writer messageId newDiffs }
+                (sendO, sendState) =
+                    shareMessage
+                        diffShares
+                        (ReadyS newReady)
+                        messageId
+                        newHeader
+                in
+                updateReady sendState $ \newerReady ->
+                ( BatchO
+                    [ dumpCache newerReady
+                    , dumpView newerReady
+                    , dumpMessage
+                        (root newerReady)
+                        messageId
+                        newDiffs
+                    , sendO
+                    ]
+                , sendState
+                )
+
+    Contacts ->
+        pass
+
+    Account ->
+        pass
+
+
+shareMessage :: [Username] -> State -> MessageId -> Header -> (Output, State)
+shareMessage newShares model messageId header =
+    let
+    (headerO, headerState) = shareHeader model messageId header
+    hashes :: [Hash32]
+    hashes = wasm header : map hashB (blobs header)
+    (blobsO, blobsState) =
+        shareBlobs headerState messageId hashes newShares
+    in
+    (BatchO [headerO, blobsO], blobsState)
+
+
+shareBlobs
+    :: State
+    -> MessageId
+    -> [Hash32]
+    -> [Username]
+    -> (Output, State)
+shareBlobs model messageId hashes tos =
+    foldr (shareBlobsHelp messageId tos) (DoNothingO, model) hashes
+
+
+shareBlobsHelp
+    :: MessageId
+    -> [Username]
+    -> Hash32
+    -> (Output, State)
+    -> (Output, State)
+shareBlobsHelp messageId tos hash (oldO, model) =
+    updateReady model $ \ready ->
+    ( BatchO
+        [ oldO
+        , GetFileHandleO (makeBlobPath (root ready) hash)
+        ]
+    , case sendingBlob ready of
+        NoJobs ->
+            ReadyS $ ready
+                { sendingBlob =
+                    Jobs (AwaitingHandle hash tos) []
+                }
+
+        Jobs current waiting ->
+            let
+            newWait = SendingBlobWait messageId hash tos
+            jobs = Jobs current (reverse $ newWait : waiting)
+            in
+            ReadyS $ ready { sendingBlob = jobs }
+    )
 
 
 updateOnNewSubject :: T.Text -> Ready -> (Output, State)
@@ -3473,8 +3700,24 @@ encodeAndEncryptHelp chunks to (oldO, model) =
         (cryptO, cryptoModel) = bumpCrypto oldReady
         in
         updateReady cryptoModel $ \cryptoReady ->
-            ( BatchO [oldO, BatchO writes, cryptO]
-            , ReadyS $ cryptoReady { awaitingCrypto = awaitings }
+            let
+            newReady =
+                cryptoReady
+                    { awaitingCrypto =
+                        awaitings ++ awaitingCrypto cryptoReady
+                    }
+            in
+            ( BatchO
+                [ oldO
+                , BatchO writes
+                , cryptO
+                , dumpCache newReady
+                , dumpView newReady
+                ]
+            , ReadyS $
+                cryptoReady
+                    { awaitingCrypto = awaitings
+                    }
             )
 
     Just (relevant, irrelevant) ->
@@ -3502,6 +3745,78 @@ encodeAndEncryptHelp chunks to (oldO, model) =
             ( BatchO [oldO, BatchO writes, BatchO sends]
             , ReadyS newReady
             )
+
+
+sendBlobChunk
+    :: B.ByteString
+    -> Username
+    -> (Output, State)
+    -> (Output, State)
+sendBlobChunk chunk to (oldO, oldModel) =
+    let
+    pass = (DoNothingO, oldModel)
+    in
+    updateReady oldModel $ \ready ->
+    case chooseShakes to 1 (handshakes ready) of
+    Nothing ->
+        let
+        write = writeToFile (root ready) $ Bl.fromStrict chunk
+        awaiting = (hash32 $ Bl.fromStrict chunk, to)
+        (cryptO, cryptoModel) = bumpCrypto ready
+        in
+        updateReady cryptoModel $ \cryptoReady ->
+            let
+            newReady =
+                cryptoReady
+                    { awaitingCrypto =
+                        awaiting : awaitingCrypto cryptoReady
+                    }
+            in
+            ( BatchO
+                [ oldO
+                , write
+                , cryptO
+                , dumpCache newReady
+                , dumpView newReady
+                ]
+            , ReadyS newReady
+            )
+
+    Just ([shake], remainder) ->
+        (\f ->
+            case authStatus ready of
+            GettingPowInfoA ->
+                pass
+
+            GeneratingSessionKey _ _ ->
+                pass
+
+            AwaitingUsername _ _ ->
+                pass
+
+            LoggedIn keys ->
+                f $ staticDh keys) $ \myStatic ->
+        let
+        eitherEncrypted = encryptChunk myStatic to (chunk, shake)
+        newReady =
+            ready { handshakes = remainder }
+        in
+        case eitherEncrypted of
+        Left err ->
+            (ErrorO $ "could not encrypt chunk: " ++ err, FailedS)
+
+        Right encrypted ->
+            let
+            write = writeToFile (root ready) encrypted
+            send = BytesInQO toServerQ encrypted
+            in
+            ( BatchO [oldO, write, send]
+            , ReadyS newReady
+            )
+
+    Just _ ->
+        -- It should never happen.
+        pass
 
 
 bumpCrypto :: Ready -> (Output, State)
@@ -4177,6 +4492,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , extractingReferences = Nothing
             , pageR = Messages
             , awaitingCrypto = awaitingCryptoM memCache
+            , sendingBlob = NoJobs
             }
         )
 
