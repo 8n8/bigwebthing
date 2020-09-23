@@ -481,7 +481,7 @@ data Init
 
 data Header
     = Header
-        { time :: PosixMillis
+        { time :: PosixSeconds
         , shares :: [Username]
         , subject :: T.Text
         , mainBox :: T.Text
@@ -609,7 +609,7 @@ type TmpBase
 data Summary
     = Summary
         { subjectS :: T.Text
-        , timeS :: PosixMillis
+        , timeS :: PosixSeconds
         , authorS :: Username
         }
 
@@ -2361,9 +2361,9 @@ encodeBlob blob =
         ]
 
 
-encodeTime :: PosixMillis -> B.ByteString
-encodeTime (PosixMillis time) =
-    encodeUint64 time
+encodeTime :: PosixSeconds -> B.ByteString
+encodeTime (PosixSeconds time) =
+    encodeUint32 time
 
 
 encodeSizedString :: T.Text -> B.ByteString
@@ -2435,14 +2435,14 @@ newtype Hash8
     deriving (Eq, Ord)
 
 
-timeP :: P.Parser PosixMillis
+timeP :: P.Parser PosixSeconds
 timeP = do
-    t <- uint64P
-    return $ PosixMillis t
+    t <- uint32P
+    return $ PosixSeconds t
 
 
-newtype PosixMillis
-    = PosixMillis Integer
+newtype PosixSeconds
+    = PosixSeconds Int
 
 
 blobP :: P.Parser Blob
@@ -3226,13 +3226,20 @@ encodeReady =
 encodeReadyView :: ReadyView -> Bl.ByteString
 encodeReadyView readyView =
     mconcat
-    [ encodeWhitelist $ whitelistV readyView
+    [ Bl.fromStrict $
+        encodeList encodeWhiteView $ whitelistV readyView
     , Bl.fromStrict $
       encodeList (Bl.toStrict . encodeSummary) $
       Map.toList $
       summariesV readyView
     , encodePage $ pageV readyView
     ]
+
+
+encodeWhiteView :: (Username, Fingerprint) -> B.ByteString
+encodeWhiteView (username, fingerprint) =
+    Bl.toStrict (encodeUsername username) <>
+    Bl.toStrict (encodeFingerprint fingerprint)
 
 
 encodePage :: Page -> Bl.ByteString
@@ -3257,8 +3264,12 @@ encodePage page =
 
 readyToReadyView :: Ready -> ReadyView
 readyToReadyView ready =
+    let
+    whites =
+        map (\(u, (f, _)) -> (u, f)) $ Map.toList $ whitelist ready
+    in
     ReadyView
-        { whitelistV = whitelist ready
+        { whitelistV = whites
         , summariesV = summaries ready
         , pageV = pageR ready
         }
@@ -3266,7 +3277,7 @@ readyToReadyView ready =
 
 data ReadyView
     = ReadyView
-        { whitelistV :: Whitelist
+        { whitelistV :: [(Username, Fingerprint)]
         , summariesV :: Map.Map MessageId Summary
         , pageV :: Page
         }
