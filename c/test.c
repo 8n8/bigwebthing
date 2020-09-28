@@ -77,31 +77,6 @@ int identity_key_store_save_identity(
 }
 
 
-typedef struct {
-    bool fatal_error;
-    state_type type;
-} program_state
-
-
-typedef enum {
-} state_type
-
-
-typedef struct {
-    input_type type;
-} io_input
-
-
-int main() {
-    state program_state = initState();
-    input io_input = initInput();
-    while (!state.fatalError) {
-        output output = update(&state, input);
-        input = io(output)
-    }
-}
-
-
 int main() {
     signal_context *global_context;
     signal_context_create(&global_context, 0);
