@@ -24,7 +24,7 @@ function main(websocket) {
   });
 
   websocket.addEventListener("message", (event) => {
-    toElm({ key: "fromBackend", value: event.data });
+    toElm({ key: "fromBackend", value: base64js.fromByteArray(event.data) });
   });
 
   let WASM;

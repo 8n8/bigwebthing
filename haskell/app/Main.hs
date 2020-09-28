@@ -3153,12 +3153,19 @@ data FromFrontend
     = NewMain T.Text
     | NewSubject T.Text
     | NewShares [UserId]
-    | NewWasm Hash32
+    | NewWasm Wasm
     | NewBlobs [Blob]
     | MessagesClick
     | WriterClick
     | ContactsClick
     | AccountClick
+
+
+data Code
+    = Code
+        { binary :: B.ByteString
+        , filename :: T.Text
+        }
 
 
 newtype MessageId

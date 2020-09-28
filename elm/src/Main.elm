@@ -23,6 +23,9 @@ import Json.Decode as Jd
 import Json.Encode as Je
 import Task
 import Time
+import MessageIdMap as Mid
+import UserIdMap as Uid
+import SHA256
 
 
 main : Program Int Model Msg
@@ -40,11 +43,6 @@ type GetMe
     | PowInfoG MyKeys
     | PowG MyKeys
     | NameFromServerG MyKeys
-
-
-type Page
-    = AdminP AdminPage
-    | MessagingP MessagingPage
 
 
 type alias Blob =
@@ -87,17 +85,9 @@ wasmOutputBytesDecoder =
 
 type MessagingButton
     = ContactsB
-    | InboxB
-    | DraftsB
-    | SentB
-    | WriteB
-
-
-type AdminButton
-    = PricingB
+    | MessagesB
     | AccountB
-    | AboutB
-    | HelpB
+    | WriterB
 
 
 type MessagingPage
@@ -143,30 +133,21 @@ type alias Draft =
 
 type alias Code =
     { contents : Bytes.Bytes
-    , mime : String
     , filename : String
     }
 
 
 type alias Model =
-    { myId : Maybe ( MyName, MyKeys )
-    , nonFatal : Maybe String
-    , connectionErr : Maybe String
-    , adminHover : Maybe AdminButton
-    , messagingHover : Maybe MessagingButton
-    , processes : List Process
-    , fatal : Maybe String
-    , page : Page
+    { messagingHover : Maybe MessagingButton
+    , page : PageV
     , windowWidth : Int
-    , inboxSummary : Maybe (List InboxMessageSummary)
-    , draftsSummary : Maybe (List DraftSummary)
-    , sentSummary : Maybe (List SentSummary)
-    , sendingSummary : Maybe (List SendingSummary)
-    , contacts : Maybe (Dict.Dict String Contact)
-    , iota : Maybe Int
     , lastWasmRun : Maybe String
+    , fatal : Maybe String
     , badWasm : Maybe String
     , timeZone : Maybe Time.Zone
+    , summaries : Mid.MessageIdMap Summary
+    , whitelist : Uid.UserIdMap
+    , zone : Maybe Time.Zone
     }
 
 
@@ -291,24 +272,16 @@ type GetInboxMessage
 
 initModel : Int -> Model
 initModel windowWidth =
-    { myId = Nothing
-    , processes = [ GetMeP KeysFromJsG ]
-    , fatal = Nothing
-    , page = MessagingP (InboxE Nothing)
+    { fatal = Nothing
     , windowWidth = windowWidth
-    , nonFatal = Nothing
-    , inboxSummary = Nothing
-    , draftsSummary = Nothing
-    , sentSummary = Nothing
-    , sendingSummary = Nothing
-    , contacts = Nothing
-    , iota = Nothing
     , lastWasmRun = Nothing
-    , adminHover = Nothing
     , messagingHover = Nothing
     , badWasm = Nothing
-    , connectionErr = Nothing
     , timeZone = Nothing
+    , summaries = Mid.empty
+    , whitelist = Uid.empty
+    , page = Messages
+    , zone = Nothing
     }
 
 
@@ -319,10 +292,7 @@ init windowWidth =
 
 initCmd : Cmd Msg
 initCmd =
-    Cmd.batch
-        [ cacheGet "iota"
-        , Task.perform TimeZoneM Time.here
-        ]
+        Task.perform TimeZoneM Time.here
 
 
 view : Model -> Html.Html Msg
@@ -342,7 +312,6 @@ viewE model =
                 , E.spacingXY 0 20
                 ]
                 [ title model.windowWidth
-                , adminButtons model.windowWidth model.page
                 , messagingButtons model.windowWidth model.page
                 , mainPage model
                 ]
@@ -351,132 +320,83 @@ viewE model =
 mainPage : Model -> E.Element Msg
 mainPage model =
     case model.page of
-        AdminP PricingA ->
-            E.text "Pricing goes here"
-
-        AdminP AccountA ->
-            E.text "Account info goes here"
-
-        AdminP AboutA ->
-            E.text "About info goes here"
-
-        AdminP HelpA ->
-            E.text "Contact details for support go here"
-
-        MessagingP ContactsE ->
-            E.text "Contacts page goes here"
-
-        MessagingP (InboxE Nothing) ->
-            case ( model.inboxSummary, model.timeZone ) of
-                ( Nothing, _ ) ->
-                    noMessages
-
-                ( _, Nothing ) ->
-                    E.text "Internal error: no time zone"
-
-                ( Just inboxSummary, Just timeZone ) ->
-                    inboxPage timeZone inboxSummary
-
-        MessagingP (InboxE (Just message)) ->
+        Messages ->
             case model.timeZone of
                 Nothing ->
-                    E.text "Internal error: no time zone"
+                    E.text "error: no time zone"
 
                 Just zone ->
-                    inboxMessageView zone message model.contacts
-
-        MessagingP (WriteE w) ->
-            writerView w
-
-        MessagingP DraftsE ->
-            case model.draftsSummary of
-                Nothing ->
-                    noMessages
-
-                Just draftsSummary ->
-                    case model.timeZone of
-                        Nothing ->
-                            E.text "Internal error: no time zone"
-
-                        Just zone ->
-                            draftsPage draftsSummary zone
-
-        MessagingP (SentE _) ->
-            E.text "Sent page goes here"
+                    summaryView zone model.whitelist model.summaries
 
 
-draftsPage : List DraftSummary -> Time.Zone -> E.Element Msg
-draftsPage summary zone =
-    E.column
-        [ E.width E.fill
+summaryView : Time.Zone -> Uid.UserIdMap -> Mid.MessageIdMap Summary -> E.Element Msg
+summaryView zone whitelist summaries =
+    case Mid.toList summaries of
+        Nothing ->
+            E.text "could not convert summaries to list"
+
+        Just summariesList ->
+            E.column [] <|
+            List.map (oneSummaryLine zone whitelist) <|
+            summariesList
+
+
+oneSummaryLine :
+    Time.Zone ->
+    Uid.UserIdMap ->
+    (Mid.MessageId, Summary) ->
+    E.Element Msg
+oneSummaryLine zone whitelist (messageId, summary) =
+    E.row []
+        [ prettyTime summary.time zone
+        , E.text summary.subject
+        , E.text <| prettyAuthor whitelist summary.author
         ]
-        (List.indexedMap (draftsMenuItem zone) summary)
 
 
-draftsMenuItem : Time.Zone -> Int -> DraftSummary -> E.Element Msg
-draftsMenuItem zone pos { subject, time, id } =
-    Ei.button
-        [ E.width E.fill
-        , Background.color <|
-            if modBy 2 pos == 0 then
-                veryLightBlue
+prettyAuthor : Uid.UserIdMap -> Uid.Username -> String
+prettyAuthor map username =
+    case Uid.get username map of
+        Nothing ->
+            "could not display username"
 
-            else
-                white
-        , E.mouseOver [ Background.color lightBlue ]
-        ]
-        { onPress = Just <| DraftsMenuClickM id
-        , label =
-            E.row
-                [ E.spacing 13
-                , ubuntuMono
-                , E.width E.fill
-                , Font.size 35
+        Just (Uid.Fingerprint f) ->
+            case username of
+                Uid.Username u ->
+                    bytesToString u ++ bytesToString f
+                    
+
+
+bytesToString : Bytes.Bytes -> String
+bytesToString =
+    B64e.encode << B64e.bytes
+
+
+writerView : (Mid.MessageId, List Diff, Maybe Wasm) -> E.Element Msg
+writerView (messageId, diffs, maybeWasm) =
+    E.column [ E.spacing 30, E.paddingXY 0 20, E.width E.fill ] <|
+        case constructMessage diffs of
+            Err err ->
+                E.text <| "Internal error: " ++ err
+
+            Ok snapshot ->
+                [ toBox snapshot.shares messageId
+                , userInputBox snapshot.mainBox messageId
+                , case maybeWasm of
+                    Nothing ->
+                        E.none
+
+                    Just wasm ->
+                        wasmView wasm
+                , editCode snapshot.wasm messageId
+                , editBlobs snapshot.blobs messageId
                 ]
-                [ prettyTime time zone
-                , E.text subject
-                ]
-        }
-
-
-writerView : ( Draft, Maybe Wasm ) -> E.Element Msg
-writerView ( draft, maybeWasm ) =
-    E.column [ E.spacing 30, E.paddingXY 0 20, E.width E.fill ]
-        [ toBox draft.to draft.id
-        , subjectBox draft.subject draft.id
-        , userInputBox draft.userInput draft.id
-        , case maybeWasm of
-            Nothing ->
-                E.none
-
-            Just wasm ->
-                wasmView wasm
-        , editCode draft.code draft.id
-        , editBlobs draft.blobs draft.id
-        , sendButton draft.to draft.id
-        ]
 
 
 sendButtonLabel : E.Element Msg
 sendButtonLabel =
     E.el writerButtons <|
         E.text "Send"
-
-
-sendButton : String -> String -> E.Element Msg
-sendButton maybeTo id =
-    case maybeTo of
-        "" ->
-            Ei.button []
-                { onPress = Nothing
-                , label = sendButtonLabel
-                }
-
-        _ ->
-            Ei.button []
-                { onPress = Just <| SendMessageM id
-                , label = sendButtonLabel
-                }
 
 
 normalTextSize : Int
@@ -506,51 +426,6 @@ toBox to draftId =
                 ]
             <|
                 E.text "To"
-        }
-
-
-updateDraft : Draft -> Maybe Wasm -> Model -> ( Model, Cmd Msg )
-updateDraft newDraft maybeWasm model =
-    let
-        newDraftsSummary =
-            updateDraftsSummary newDraft model.draftsSummary
-    in
-    ( { model
-        | page = MessagingP (WriteE ( newDraft, maybeWasm ))
-        , draftsSummary = Just newDraftsSummary
-      }
-    , Cmd.batch
-        [ cacheDraft newDraft
-        , if List.isEmpty newDraftsSummary then
-            Cmd.none
-
-          else
-            cacheDraftsSummary newDraftsSummary
-        ]
-    )
-
-
-subjectBox : String -> String -> E.Element Msg
-subjectBox subject draftId =
-    Ei.text
-        [ Font.size normalTextSize
-        , ubuntuMono
-        , E.width <| E.maximum 900 <| E.fill
-        ]
-        { onChange =
-            \s -> NewSubjectM { draftId = draftId, subject = s }
-        , text = subject
-        , placeholder = Nothing
-        , label =
-            Ei.labelLeft
-                [ ubuntu
-                , E.centerY
-                , Font.size normalTextSize
-                , E.paddingEach
-                    { left = 0, right = 7, bottom = 0, top = 0 }
-                ]
-            <|
-                E.text "Subject"
         }
 
 
@@ -600,11 +475,11 @@ editCode maybeCode draftId =
                 ]
 
 
-editBlobs : List Blob -> String -> E.Element Msg
-editBlobs blobs draftId =
+editBlobs : List Blob -> Mid.MessageId -> E.Element Msg
+editBlobs blobs messageId =
     E.column [] <|
-        List.map (editBlob draftId) blobs
-            ++ [ uploadBlob draftId ]
+        List.map (editBlob messageId) blobs
+            ++ [ uploadBlob messageId ]
 
 
 writerButtons : List (E.Attribute Msg)
@@ -617,49 +492,30 @@ writerButtons =
     ]
 
 
-uploadBlob : String -> E.Element Msg
-uploadBlob draftId =
+uploadBlob : Mid.MessageId -> E.Element Msg
+uploadBlob messageId =
     Ei.button []
-        { onPress = Just <| UploadBlobM draftId
+        { onPress = Just <| UploadBlobM messageId
         , label =
             E.el writerButtons <|
                 E.text "Upload a file"
         }
 
 
-editBlob : String -> Blob -> E.Element Msg
-editBlob draftId blob =
+editBlob : Mid.MessageId -> Blob -> E.Element Msg
+editBlob messageId blob =
     E.row []
         [ E.text blob.filename
         , E.text blob.mime
         , E.text <| prettySize blob.size
         , Ei.button []
-            { onPress =
-                Just <|
-                    DeleteBlobM
-                        { draftId = draftId, blobId = blob.id }
-            , label = E.text "Delete"
-            }
-        , Ei.button []
             { onPress = Just <| DownloadBlobM blob
             , label = E.text "Download"
             }
-        ]
-
-
-inboxMessageView :
-    Time.Zone
-    -> ( InboxMessage, Wasm )
-    -> Maybe (Dict.Dict String Contact)
-    -> E.Element Msg
-inboxMessageView zone ( msg, wasm ) _ =
-    E.column []
-        [ prettyTime msg.timeReceived zone
-        , E.text msg.fromId
-        , wasmView wasm
-        , userInputView msg.userInput
-        , blobsView msg.blobs
-        , codeView msg.code
+        , Ei.button []
+            { onPress = Just <| DeleteBlobM blob
+            , label = E.text "Delete"
+            }
         ]
 
 
@@ -746,29 +602,6 @@ noMessages =
     E.text "No messages"
 
 
-inboxPage : Time.Zone -> List InboxMessageSummary -> E.Element Msg
-inboxPage zone summary =
-    E.column
-        []
-        (List.map (inboxMenuItem zone) summary)
-
-
-inboxMenuItem : Time.Zone -> InboxMessageSummary -> E.Element Msg
-inboxMenuItem zone { subject, fromId, time, id } =
-    Ei.button
-        []
-        { onPress = Just <| InboxMenuClickM id
-        , label =
-            E.row
-                [ E.spacing 10
-                ]
-                [ prettyTime time zone
-                , E.text fromId
-                , E.text subject
-                ]
-        }
-
-
 prettyWeekday : Time.Weekday -> String
 prettyWeekday weekday =
     case weekday of
@@ -834,12 +667,9 @@ prettyMonth month =
             "Dec"
 
 
-prettyTime : Int -> Time.Zone -> E.Element Msg
-prettyTime millis zone =
+prettyTime : Time.Posix -> Time.Zone -> E.Element Msg
+prettyTime posix zone =
     let
-        posix =
-            Time.millisToPosix millis
-
         year =
             String.fromInt <| Time.toYear zone posix
 
@@ -929,65 +759,6 @@ titleSize w =
         div
 
 
-adminButtons : Int -> Page -> E.Element Msg
-adminButtons windowWidth page =
-    E.row
-        [ E.centerX
-        , E.spacingXY 13 5
-        ]
-    <|
-        List.map
-            (adminButton windowWidth page)
-            [ PricingB, AccountB, AboutB, HelpB ]
-
-
-adminButton :
-    Int
-    -> Page
-    -> AdminButton
-    -> E.Element Msg
-adminButton windowWidth page button =
-    Ei.button
-        (Border.rounded buttonCorner
-            :: (if adminPageOn page button then
-                    [ Background.color lightBlue ]
-
-                else
-                    [ Background.color white
-                    , E.mouseOver [ Background.color veryLightBlue ]
-                    ]
-               )
-        )
-        { onPress = Just <| adminButtonMsg button
-        , label = adminButtonLabel windowWidth button
-        }
-
-
-adminButtonMsg : AdminButton -> Msg
-adminButtonMsg button =
-    case button of
-        PricingB ->
-            PricingM
-
-        AccountB ->
-            AccountM
-
-        AboutB ->
-            AboutM
-
-        HelpB ->
-            HelpM
-
-
-adminButtonLabel : Int -> AdminButton -> E.Element Msg
-adminButtonLabel windowWidth button =
-    E.el
-        (adminLabelStyle windowWidth)
-    <|
-        E.text <|
-            adminLabelText button
-
-
 adminLabelStyle : Int -> List (E.Attribute Msg)
 adminLabelStyle windowWidth =
     [ E.centerX
@@ -1025,37 +796,6 @@ adminButtonFontSize w =
         div
 
 
-adminPageOn : Page -> AdminButton -> Bool
-adminPageOn page button =
-    case ( page, button ) of
-        ( AdminP PricingA, PricingB ) ->
-            True
-
-        ( AdminP PricingA, _ ) ->
-            False
-
-        ( AdminP AccountA, AccountB ) ->
-            True
-
-        ( AdminP AccountA, _ ) ->
-            False
-
-        ( AdminP AboutA, AboutB ) ->
-            True
-
-        ( AdminP AboutA, _ ) ->
-            False
-
-        ( AdminP HelpA, HelpB ) ->
-            True
-
-        ( AdminP HelpA, _ ) ->
-            False
-
-        ( MessagingP _, _ ) ->
-            False
-
-
 emptyDraft : String -> Int -> Draft
 emptyDraft id time =
     { id = id
@@ -1070,7 +810,7 @@ emptyDraft id time =
 
 messagingButtons :
     Int
-    -> Page
+    -> PageV
     -> E.Element Msg
 messagingButtons windowWidth page =
     E.wrappedRow
@@ -1080,12 +820,12 @@ messagingButtons windowWidth page =
     <|
         List.map
             (messagingButton windowWidth page)
-            [ InboxB, WriteB, DraftsB, SentB, ContactsB ]
+            [ MessagesB, WriterB, ContactsB, AccountB ]
 
 
 messagingButton :
     Int
-    -> Page
+    -> PageV
     -> MessagingButton
     -> E.Element Msg
 messagingButton windowWidth page button =
@@ -1114,16 +854,7 @@ messagingButtonMsg button =
         ContactsB ->
             ContactsM
 
-        InboxB ->
-            InboxM
-
-        DraftsB ->
-            DraftsM
-
-        SentB ->
-            SentM
-
-        WriteB ->
+        WriterB ->
             WriteM
 
 
@@ -1142,20 +873,8 @@ messagingButtonLabel windowWidth button =
 messagingLabelText : MessagingButton -> String
 messagingLabelText button =
     case button of
-        WriteB ->
-            "Write"
-
         ContactsB ->
             "Contacts"
-
-        InboxB ->
-            "Inbox"
-
-        DraftsB ->
-            "Drafts"
-
-        SentB ->
-            "Sent"
 
 
 buttonCorner : Int
@@ -1197,57 +916,11 @@ messagingButtonFontSize w =
         div
 
 
-messagingPageOn : Page -> MessagingButton -> Bool
+messagingPageOn : PageV -> MessagingButton -> Bool
 messagingPageOn page msg =
     case ( page, msg ) of
-        ( MessagingP ContactsE, ContactsB ) ->
-            True
-
-        ( MessagingP ContactsE, _ ) ->
+        (Messages, ContactsB) ->
             False
-
-        ( MessagingP (InboxE _), InboxB ) ->
-            True
-
-        ( MessagingP (InboxE _), _ ) ->
-            False
-
-        ( MessagingP DraftsE, DraftsB ) ->
-            True
-
-        ( MessagingP DraftsE, _ ) ->
-            False
-
-        ( MessagingP (SentE _), SentB ) ->
-            True
-
-        ( MessagingP (SentE _), _ ) ->
-            False
-
-        ( MessagingP (WriteE _), WriteB ) ->
-            True
-
-        ( MessagingP (WriteE _), _ ) ->
-            False
-
-        ( AdminP _, _ ) ->
-            False
-
-
-adminLabelText : AdminButton -> String
-adminLabelText button =
-    case button of
-        PricingB ->
-            "Pricing"
-
-        AccountB ->
-            "Account"
-
-        HelpB ->
-            "Help"
-
-        AboutB ->
-            "About"
 
 
 port elmToJs : Je.Value -> Cmd msg
@@ -1289,48 +962,101 @@ encodeToJs value =
                     , ( "msgId", Je.string msgId )
                     ]
 
-        RunWasmE { userInput, wasmCode, msgId } ->
+        RunWasmE { input, wasmCode, msgId } ->
             jsKeyVal "runWasm" <|
                 Je.object
                     [ ( "userInput"
-                      , Je.string userInput
+                      , Je.string <| B64e.encode <| B64e.bytes input
                       )
                     , ( "wasmCode"
                       , Je.string <|
                             B64e.encode <|
                                 B64e.bytes wasmCode
                       )
-                    , ( "msgId", Je.string msgId )
+                    , case msgId of
+                        Mid.MessageId bytes ->
+                            ( "msgId"
+                            , Je.string <|
+                              B64e.encode <|
+                              B64e.bytes bytes
+                            )
                     ]
+
+
+
+
+
+type ToBackend
+    = NewMain String
+    | NewShares (List Uid.UserId)
+    | NewWasm Code
+    | NewBlobs (List Blob)
+    | MessagesClick
+    | WriterClick
+    | ContactsClick
+    | AccountClick
 
 
 encodeToBackend : ToBackend -> Be.Encoder
 encodeToBackend toBackend =
     case toBackend of
-        ToServerB bytes ->
-            Be.sequence [ Be.unsignedInt8 0, Be.bytes bytes ]
+        MessagesClick ->
+            Be.unsignedInt8 0
 
-        GetPowB powInfo ->
-            Be.sequence [ Be.unsignedInt8 1, powInfoEncoder powInfo ]
+        WriterClick ->
+            Be.unsignedInt8 1
 
-        CacheGetB key ->
-            Be.sequence [ Be.unsignedInt8 2, Be.string key ]
+        ContactsClick ->
+            Be.unsignedInt8 2
 
-        CacheSetB key value ->
-            Be.sequence
-                [ Be.unsignedInt8 3
-                , stringEncoder key
-                , Be.bytes value
-                ]
+        AccountClick ->
+            Be.unsignedInt8 3
 
-        CacheDeleteB key ->
-            Be.sequence [ Be.unsignedInt8 4, Be.string key ]
+        NewMain m ->
+            Be.sequence [Be.unsignedInt8 4, Be.string m]
 
-        SendMessageB to draftId ->
-            Be.sequence
-                [ Be.unsignedInt8 5
-                , stringEncoder draftId
-                ]
+        NewShares shares ->
+            Be.sequence <|
+                Be.unsignedInt8 6 ::
+                    (List.map encodeUserId shares)
+
+        NewWasm code ->
+            Be.sequence [Be.unsignedInt8 7, encodeCode code]
+
+        NewBlobs blobs ->
+            Be.sequence <|
+                Be.unsignedInt8 8 ::
+                    List.map blobEncoder blobs
+
+
+encodeCode : Code -> Be.Encoder
+encodeCode {contents, filename} =
+    Be.sequence [Be.bytes contents, Be.string filename]
+
+
+encodeUserId : Uid.UserId -> Be.Encoder
+encodeUserId (Uid.UserId username fingerprint) =
+    Be.sequence
+        [encodeUsername username, encodeFingerprint fingerprint]
+
+
+encodeFingerprint : Uid.Fingerprint -> Be.Encoder
+encodeFingerprint (Uid.Fingerprint f) =
+    Be.bytes f
+
+
+encodeUsername : Uid.Username -> Be.Encoder
+encodeUsername (Uid.Username u) =
+    Be.bytes u
+
+
+encodeHash32 : Hash32 -> Be.Encoder
+encodeHash32 (Hash32 hash) =
+    Be.bytes hash
+
+
+type Hash32
+    = Hash32 Bytes.Bytes
 
 
 powInfoEncoder : PowInfo -> Be.Encoder
@@ -1339,9 +1065,9 @@ powInfoEncoder { difficulty, unique } =
 
 
 type alias RunWasm =
-    { userInput : String
+    { input : Bytes.Bytes
     , wasmCode : Bytes.Bytes
-    , msgId : String
+    , msgId : Mid.MessageId
     }
 
 
@@ -1351,57 +1077,32 @@ type ElmToJs
     | RerunWasmE { userInput : String, msgId : String }
 
 
-type ToBackend
-    = ToServerB Bytes.Bytes
-    | GetPowB PowInfo
-    | CacheGetB String
-    | CacheSetB String Bytes.Bytes
-    | CacheDeleteB String
-    | SendMessageB String String
-
-
 type Msg
-    = FromCacheM String Bytes.Bytes
-    | TimeZoneM Time.Zone
+    = TimeZoneM Time.Zone
     | UploadedM (Result Http.Error ())
-    | SendMessageM String
-    | RawFromServerM Bytes.Bytes
-    | BadServerM String
-    | NonsenseFromBackendM Bytes.Bytes
-    | NonsenseFromServerM Bytes.Bytes
     | FromBackendM Bytes.Bytes
     | BadWasmM String
     | NoBackendM
-    | TimeForWriteM Time.Posix
     | BlobSelectedM String File.File
     | CodeSelectedM String File.File
     | CodeUploadedM String File.File Bytes.Bytes
-    | MyKeysM MyKeys
-    | PowM Pow
     | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
-    | PricingM
-    | AccountM
-    | AboutM
-    | HelpM
-    | InboxM
-    | DraftsM
-    | SentM
+    | MessagesM
     | ContactsM
     | WriteM
     | NewWindowWidthM Int
     | InboxMenuClickM String
-    | DraftsMenuClickM String
     | DownloadCodeM Code
     | DownloadBlobM Blob
-    | FromServerM FromServer
     | NewToM { draftId : String, to : String }
-    | NewSubjectM { draftId : String, subject : String }
+    | NewSubjectM String
     | NewUserInputM { draftId : String, userInput : String }
     | UploadCodeM String
-    | UploadBlobM String
-    | DeleteBlobM { draftId : String, blobId : String }
-    | NullCacheM String
+    | UploadBlobM Mid.MessageId
+    | NewViewM ReadyView
+    | NonsenseFromBackendM Bytes.Bytes
+    | DeleteBlobM Blob
 
 
 fromJsDecoder : Jd.Decoder Msg
@@ -1477,84 +1178,6 @@ badSummary box =
     Just <| "could not decode " ++ box ++ " summary bytes"
 
 
-blobUploaded :
-    Model
-    -> String
-    -> File.File
-    -> ( Model, Cmd Msg )
-blobUploaded model draftId file =
-    case ( model.page, model.iota ) of
-        ( MessagingP (WriteE ( draft, maybeWasm )), Just iota ) ->
-            if draft.id /= draftId then
-                ( model, Cmd.none )
-
-            else
-                let
-                    blobId =
-                        String.fromInt iota
-
-                    newBlob =
-                        { id = blobId
-                        , mime = File.mime file
-                        , filename = File.name file
-                        , size = File.size file
-                        }
-
-                    newDraft =
-                        { draft | blobs = newBlob :: draft.blobs }
-
-                    newDraftsSummary =
-                        updateDraftsSummary
-                            newDraft
-                            model.draftsSummary
-                in
-                ( { model
-                    | page =
-                        MessagingP (WriteE ( newDraft, maybeWasm ))
-                    , iota = Just <| iota + 1
-                  }
-                , Cmd.batch
-                    [ cacheDraft newDraft
-                    , cacheBlob blobId file
-                    , cacheIota iota
-                    , if List.isEmpty newDraftsSummary then
-                        Cmd.none
-
-                      else
-                        cacheDraftsSummary newDraftsSummary
-                    ]
-                )
-
-        _ ->
-            ( model, Cmd.none )
-
-
-updateDeleteBlob : Model -> String -> String -> ( Model, Cmd Msg )
-updateDeleteBlob model draftId blobId =
-    case model.page of
-        MessagingP (WriteE ( draft, maybeWasm )) ->
-            if draft.id /= draftId then
-                ( model, Cmd.none )
-
-            else
-                let
-                    newDraft =
-                        { draft
-                            | blobs =
-                                deleteBlob blobId draft.blobs
-                        }
-                in
-                ( { model
-                    | page =
-                        MessagingP (WriteE ( newDraft, maybeWasm ))
-                  }
-                , deleteBlobFromCache blobId
-                )
-
-        _ ->
-            ( model, Cmd.none )
-
-
 showB64Error : B64d.Error -> String
 showB64Error error =
     case error of
@@ -1567,7 +1190,9 @@ showB64Error error =
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    updateHelp [] msg model
+    case msg of
+        TimeZoneM zone ->
+            ( { model | zone = Just zone }, Cmd.none )
 
 
 clickCmd : Maybe a -> Cmd Msg -> Cmd Msg
@@ -1588,199 +1213,37 @@ localUrl =
 updateSimple : Msg -> Model -> ( Model, Cmd Msg )
 updateSimple msg model =
     case msg of
-        InboxM ->
-            ( { model | page = MessagingP <| InboxE Nothing }
-            , clickCmd model.inboxSummary <| cacheGet "inboxSummary"
-            )
-
-        DraftsM ->
-            ( { model | page = MessagingP DraftsE }
-            , clickCmd model.draftsSummary <|
-                cacheGet "draftsSummary"
-            )
-
-        SentM ->
-            ( { model | page = MessagingP <| SentE Nothing }
-            , clickCmd model.sentSummary <| cacheGet "sentSummary"
-            )
-
         WriteM ->
-            ( model, Task.perform TimeForWriteM Time.now )
-
-        TimeForWriteM posix ->
-            case model.iota of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just iota ->
-                    ( { model
-                        | page =
-                            MessagingP <|
-                                WriteE
-                                    ( emptyDraft
-                                        (String.fromInt iota)
-                                        (Time.posixToMillis posix)
-                                    , Nothing
-                                    )
-                        , iota = Just <| iota + 1
-                      }
-                    , cacheIota iota
-                    )
+            ( model
+            , WriterClick |>
+              ToBackendE |>
+              encodeToJs |>
+              elmToJs
+            )
 
         ContactsM ->
-            ( { model | page = MessagingP ContactsE }
-            , case model.contacts of
-                Nothing ->
-                    cacheGet "contacts"
-
-                Just _ ->
-                    Cmd.none
-            )
-
-        PricingM ->
-            ( { model | page = AdminP PricingA }
-            , Cmd.none
-            )
-
-        AccountM ->
-            ( { model | page = AdminP AccountA }
-            , Cmd.none
-            )
-
-        AboutM ->
-            ( { model | page = AdminP AboutA }
-            , Cmd.none
-            )
-
-        HelpM ->
-            ( { model | page = AdminP HelpA }
-            , Cmd.none
+            ( model
+            , ContactsClick |>
+              ToBackendE |>
+              encodeToJs |>
+              elmToJs
             )
 
         NewWindowWidthM width ->
             ( { model | windowWidth = width }, Cmd.none )
 
-        InboxMenuClickM id ->
-            ( { model
-                | processes =
-                    GetInboxMessageP (FromCacheG id)
-                        :: model.processes
-              }
-            , cacheGet id
-            )
-
-        DraftsMenuClickM id ->
-            ( { model
-                | processes =
-                    GetDraftP (FromCacheD id) :: model.processes
-              }
-            , cacheGet id
-            )
-
         DownloadCodeM { contents, mime, filename } ->
             ( model, Download.bytes filename mime contents )
 
-        DownloadBlobM blob ->
-            ( { model
-                | processes =
-                    BlobForDownloadP blob :: model.processes
-              }
-            , cacheGet blob.id
-            )
-
-        FromCacheM "inboxSummary" bytes ->
-            case Bd.decode (list inboxMessageSummaryDecoder) bytes of
-                Nothing ->
-                    ( { model | fatal = badSummary "inbox" }
-                    , Cmd.none
-                    )
-
-                Just inboxSummary ->
-                    ( { model | inboxSummary = Just inboxSummary }
-                    , Cmd.none
-                    )
-
-        NullCacheM "inboxSummary" ->
-            ( { model | inboxSummary = Just [] }, Cmd.none )
-
-        FromCacheM "draftsSummary" bytes ->
-            case Bd.decode (list draftSummaryDecoder) bytes of
-                Nothing ->
-                    ( { model | fatal = Just <| "could not decode drafts summary bytes: " ++ Hex.Convert.toString bytes }
-                    , Cmd.none
-                    )
-
-                Just draftsSummary ->
-                    ( { model | draftsSummary = Just draftsSummary }
-                    , Cmd.none
-                    )
-
-        NullCacheM "draftsSummary" ->
-            ( { model | draftsSummary = Just [] }, Cmd.none )
-
-        FromCacheM "sentSummary" bytes ->
-            case Bd.decode (list sentSummaryDecoder) bytes of
-                Nothing ->
-                    ( { model | fatal = badSummary "sent" }
-                    , Cmd.none
-                    )
-
-                Just sentSummary ->
-                    ( { model | sentSummary = Just sentSummary }
-                    , Cmd.none
-                    )
-
-        NullCacheM "sentSummary" ->
-            ( { model | sentSummary = Just [] }, Cmd.none )
-
-        FromCacheM "contacts" bytes ->
-            case Bd.decode contactsDecoder bytes of
-                Nothing ->
-                    ( { model
-                        | fatal =
-                            Just
-                                "could not decode contacts bytes"
-                      }
-                    , Cmd.none
-                    )
-
-                Just contacts ->
-                    ( { model | contacts = Just contacts }, Cmd.none )
-
-        NullCacheM "contacts" ->
-            ( { model | contacts = Just Dict.empty }, Cmd.none )
-
-        FromCacheM "iota" iotaBs ->
-            case Bd.decode (Bd.unsignedInt32 Bytes.LE) iotaBs of
-                Nothing ->
-                    ( { model
-                        | fatal =
-                            Just
-                                "could not decode iota bytes"
-                      }
-                    , Cmd.none
-                    )
-
-                Just iota ->
-                    ( { model | iota = Just iota }, Cmd.none )
-
-        NullCacheM "iota" ->
-            ( { model | iota = Just 0 }, Cmd.none )
-
-        FromCacheM _ _ ->
-            ( model, Cmd.none )
-
         WasmOutputM msgId wasm ->
             case model.page of
-                MessagingP (WriteE ( draft, _ )) ->
-                    if draft.id /= msgId then
+                Writer currentMid diffs _ ->
+                    if currentMid /= msgId then
                         ( model, Cmd.none )
 
                     else
                         ( { model
-                            | page =
-                                MessagingP <|
-                                    WriteE ( draft, Just wasm )
+                            | page = Writer msgId diffs (Just wasm)
                             , lastWasmRun = Just msgId
                             , badWasm = Nothing
                           }
@@ -1803,54 +1266,6 @@ updateSimple msg model =
                 Ok fromJsMsg ->
                     update fromJsMsg model
 
-        PowM _ ->
-            ( model, Cmd.none )
-
-        FromServerM (MyNameW _) ->
-            ( model, Cmd.none )
-
-        FromServerM (KeysForNameW _ _) ->
-            ( model, Cmd.none )
-
-        FromServerM (PowInfoW _) ->
-            ( model, Cmd.none )
-
-        FromServerM (AuthCodeW _) ->
-            ( model, Cmd.none )
-
-        FromServerM (NoInternetW err) ->
-            ( { model | fatal = Just err }, Cmd.none )
-
-        NewToM { draftId, to } ->
-            case model.page of
-                MessagingP (WriteE ( draft, maybeWasm )) ->
-                    if draft.id /= draftId then
-                        ( model, Cmd.none )
-
-                    else
-                        updateDraft
-                            { draft | to = to }
-                            maybeWasm
-                            model
-
-                _ ->
-                    ( model, Cmd.none )
-
-        NewSubjectM { draftId, subject } ->
-            case model.page of
-                MessagingP (WriteE ( draft, maybeWasm )) ->
-                    if draft.id /= draftId then
-                        ( model, Cmd.none )
-
-                    else
-                        updateDraft
-                            { draft | subject = subject }
-                            maybeWasm
-                            model
-
-                _ ->
-                    ( model, Cmd.none )
-
         NewUserInputM i ->
             updateOnUserInput i model
 
@@ -1869,97 +1284,8 @@ updateSimple msg model =
                 File.toBytes file
             )
 
-        CodeUploadedM draftId file bytes ->
-            case model.page of
-                MessagingP (WriteE ( draft, maybeWasm )) ->
-                    if draft.id /= draftId then
-                        ( model, Cmd.none )
-
-                    else
-                        let
-                            newCode =
-                                { contents = bytes
-                                , mime = File.mime file
-                                , filename = File.name file
-                                }
-
-                            newDraft =
-                                { draft | code = Just newCode }
-
-                            newDraftsSummary =
-                                updateDraftsSummary
-                                    newDraft
-                                    model.draftsSummary
-                        in
-                        ( { model
-                            | page =
-                                MessagingP
-                                    (WriteE ( newDraft, maybeWasm ))
-                          }
-                        , Cmd.batch
-                            [ cacheDraft newDraft
-                            , elmToJs
-                                << encodeToJs
-                                << RunWasmE
-                              <|
-                                { userInput = draft.userInput
-                                , wasmCode = newCode.contents
-                                , msgId = draft.id
-                                }
-                            , if List.isEmpty newDraftsSummary then
-                                Cmd.none
-
-                              else
-                                cacheDraftsSummary newDraftsSummary
-                            ]
-                        )
-
-                _ ->
-                    ( model, Cmd.none )
-
-        UploadBlobM draftId ->
-            ( model
-            , Select.file
-                [ "application/octet-stream" ]
-                (BlobSelectedM draftId)
-            )
-
-        BlobSelectedM draftId file ->
-            if File.size file > 1000000000 then
-                ( model, Cmd.none )
-
-            else
-                blobUploaded model draftId file
-
-        DeleteBlobM { draftId, blobId } ->
-            updateDeleteBlob model draftId blobId
-
-        NullCacheM unknown ->
-            ( { model
-                | fatal =
-                    Just <| "unknown null cache: " ++ unknown
-              }
-            , Cmd.none
-            )
-
-        MyKeysM _ ->
-            ( model, Cmd.none )
-
         FromBackendM bytes ->
             update (decodeFromBackend bytes) model
-
-        RawFromServerM bytes ->
-            update (decodeFromServer bytes) model
-
-        NonsenseFromBackendM bytes ->
-            ( { model | fatal = nonsenseFromBackend bytes }
-            , Cmd.none
-            )
-
-        NonsenseFromServerM bytes ->
-            ( { model | fatal = nonsenseFromServer bytes }
-            , Cmd.none
-            )
 
         BadWasmM err ->
             ( { model | badWasm = Just err }, Cmd.none )
@@ -1967,29 +1293,8 @@ updateSimple msg model =
         NoBackendM ->
             ( { model | fatal = Just "No backend" }, Cmd.none )
 
-        BadServerM err ->
-            ( { model | connectionErr = Just err }, Cmd.none )
-
         TimeZoneM zone ->
             ( { model | timeZone = Just zone }, Cmd.none )
-
-        SendMessageM draftId ->
-            case findDraft draftId model.draftsSummary of
-                Nothing ->
-                    ( { model
-                        | fatal =
-                            Just <|
-                                String.concat
-                                    [ "draft with id: \""
-                                    , draftId
-                                    , "\" does not exist"
-                                    ]
-                      }
-                    , Cmd.none
-                    )
-
-                Just summary ->
-                    ( model, sendMessage summary.to draftId )
 
         UploadedM (Ok ()) ->
             ( model, Cmd.none )
@@ -1998,6 +1303,16 @@ updateSimple msg model =
             ( { model | fatal = Just <| httpErrToString err }
             , Cmd.none
             )
+
+        NewViewM newView ->
+            ( { model
+                | whitelist = newView.whitelist
+                , summaries = newView.summaries
+                , page = newView.page
+              }
+            , Cmd.none
+            )
+
 
 
 findDraft : String -> Maybe (List DraftSummary) -> Maybe DraftSummary
@@ -2016,14 +1331,6 @@ findDraft draftId maybeDraftsSummary =
                     d :: _ ->
                         Just d
             )
-
-
-sendMessage : String -> String -> Cmd Msg
-sendMessage to draftId =
-    elmToJs <|
-        encodeToJs <|
-            ToBackendE <|
-                SendMessageB to draftId
 
 
 httpErrToString : Http.Error -> String
@@ -2055,16 +1362,6 @@ nonsenseFromBackend bytes =
     Just <| "nonsense from backend: " ++ Hex.Convert.toString bytes
 
 
-decodeFromServer : Bytes.Bytes -> Msg
-decodeFromServer bytes =
-    case Bd.decode fromServerDecoder bytes of
-        Nothing ->
-            NonsenseFromServerM bytes
-
-        Just fromServer ->
-            FromServerM fromServer
-
-
 decodeFromBackend : Bytes.Bytes -> Msg
 decodeFromBackend bytes =
     case Bd.decode fromBackendDecoder bytes of
@@ -2075,46 +1372,130 @@ decodeFromBackend bytes =
             fromBackend
 
 
-fromBackendDecoder : Bd.Decoder Msg
-fromBackendDecoder =
-    Bd.andThen fromBackendDecoderHelp Bd.unsignedInt8
+viewDecoder : Bd.Decoder ReadyView
+viewDecoder =
+    Bd.map3 ReadyView
+        whitelistD
+        summariesD
+        pageD
 
 
-fromBackendDecoderHelp : Int -> Bd.Decoder Msg
-fromBackendDecoderHelp indicator =
+fingerprintD : Bd.Decoder Uid.Fingerprint
+fingerprintD =
+    Bd.map Uid.Fingerprint (Bd.bytes 8)
+
+
+usernameD : Bd.Decoder Uid.Username
+usernameD =
+    Bd.map Uid.Username (Bd.bytes 8)
+
+
+summaryD : Bd.Decoder (Mid.MessageId, Summary)
+summaryD =
+    Bd.map2 (\m s -> (m, s))
+        messageIdD
+        (Bd.map3 Summary
+            stringDecoder
+            timeD
+            usernameD)
+
+
+diffsD : Bd.Decoder Diff
+diffsD =
+    Bd.map4 Diff
+        (Bd.unsignedInt32 Bytes.LE)
+        (Bd.unsignedInt32 Bytes.LE)
+        bytesDecoder
+        hash8D
+
+
+hash8D : Bd.Decoder Hash8
+hash8D =
+    Bd.map Hash8 <| Bd.bytes 8
+
+
+timeD : Bd.Decoder Time.Posix
+timeD =
+    Bd.map
+        (Time.millisToPosix << ((*) 1000))
+        (Bd.unsignedInt32 Bytes.LE)
+
+
+whitelistD : Bd.Decoder (List Uid.UserId)
+whitelistD =
+    list userIdD
+
+
+userIdD : Bd.Decoder Uid.UserId
+userIdD =
+    Bd.map2 Uid.UserId usernameD fingerprintD
+
+
+summariesD : Bd.Decoder (Mid.MessageIdMap Summary)
+summariesD =
+    Bd.map Mid.fromList <| list summaryD
+
+
+type alias ReadyView =
+    { whitelist : List Uid.UserId
+    , summaries : Mid.MessageIdMap Summary
+    , page : PageV
+    }
+
+
+pageD : Bd.Decoder PageV
+pageD =
+    Bd.andThen pageHelpD Bd.unsignedInt8
+
+
+pageHelpD : Int -> Bd.Decoder PageV
+pageHelpD indicator =
     case indicator of
         0 ->
-            Bd.map2 FromCacheM stringDecoder bytesDecoder
+            Bd.succeed Messages
 
         1 ->
-            Bd.map RawFromServerM bytesDecoder
+            Bd.map2 (\id diffs -> Writer id diffs Nothing)
+                messageIdD
+                (list diffsD)
 
         2 ->
-            Bd.map (PowM << Pow) <| Bd.bytes 16
+            Bd.succeed Contacts
 
         3 ->
-            Bd.map2 (\a b -> MyKeysM <| MyKeys a b)
-                (Bd.bytes 32)
-                (Bd.bytes 32)
-
-        5 ->
-            Bd.map NullCacheM stringDecoder
-
-        6 ->
-            Bd.map BadServerM stringDecoder
-
-        _ ->
-            Bd.fail
+            Bd.succeed Account
 
 
-deleteBlob : String -> List Blob -> List Blob
-deleteBlob id blobs =
-    List.filter (\blob -> blob.id /= id) blobs
+messageIdD : Bd.Decoder Mid.MessageId
+messageIdD =
+    Bd.map Mid.MessageId (Bd.bytes 24)
 
 
-deleteBlobFromCache : String -> Cmd Msg
-deleteBlobFromCache =
-    elmToJs << encodeToJs << ToBackendE << CacheDeleteB
+type PageV
+    = Messages
+    | Writer Mid.MessageId (List Diff) (Maybe Wasm)
+    | Contacts
+    | Account
+
+
+type alias Diff =
+    { start : Int
+    , end : Int
+    , insert : Bytes.Bytes
+    , integrity : Hash8
+    }
+
+
+type alias Summary =
+    { subject : String
+    , time : Time.Posix
+    , author : Uid.Username
+    }
+
+
+fromBackendDecoder : Bd.Decoder Msg
+fromBackendDecoder =
+    Bd.map NewViewM viewDecoder
 
 
 cacheBlob : String -> File.File -> Cmd Msg
@@ -2126,129 +1507,239 @@ cacheBlob id file =
         }
 
 
-updateOnUserInput :
-    { draftId : String, userInput : String }
-    -> Model
-    -> ( Model, Cmd Msg )
-updateOnUserInput { draftId, userInput } model =
-    case model.page of
-        MessagingP (WriteE ( draft, maybeWasm )) ->
-            if draft.id /= draftId then
-                ( model, Cmd.none )
+emptyBytes =
+    Be.encode <| Be.sequence []
+
+
+constructMessage : List Diff -> Result String Snapshot
+constructMessage diffs =
+    let
+        candidate =
+            List.foldr constructMessageHelp emptyBytes diffs
+        actualHash = hash8 candidate
+    in
+    case getLastHash diffs of
+        Nothing ->
+            Err "empty diffs"
+
+        Just expectedHash ->
+            if actualHash == expectedHash then
+                case Bd.decode snapshotD of
+                    Nothing ->
+                        Err "could not decode snapshot"
+
+                    Just snapshot ->
+                        Ok snapshot
 
             else
-                case model.lastWasmRun of
-                    Nothing ->
-                        onUserInputHelp
-                            model
-                            draft
-                            userInput
-                            maybeWasm
+                Err "reconstructed diff didn't match the hash"
 
-                    Just lastRunId ->
-                        if lastRunId /= draft.id then
-                            onUserInputHelp
-                                model
-                                draft
-                                userInput
-                                maybeWasm
 
-                        else
-                            let
-                                newDraft =
-                                    { draft | userInput = userInput }
+getLastHash : List Diff -> Maybe Hash8
+getLastHash diffs =
+    case List.reverse diffs of
+        [] ->
+            Nothing
 
-                                newDraftsSummary =
-                                    updateDraftsSummary
-                                        newDraft
-                                        model.draftsSummary
-                            in
-                            ( { model
-                                | page =
-                                    MessagingP <|
-                                        WriteE ( newDraft, maybeWasm )
-                                , draftsSummary =
-                                    Just newDraftsSummary
-                              }
-                            , Cmd.batch
-                                [ cacheDraft newDraft
-                                , if List.isEmpty newDraftsSummary then
-                                    Cmd.none
+        diff :: _ ->
+            Just diff.integrity
 
-                                  else
-                                    cacheDraftsSummary newDraftsSummary
-                                , case draft.code of
-                                    Nothing ->
-                                        Cmd.none
 
-                                    Just _ ->
-                                        { userInput = userInput
-                                        , msgId = draft.id
-                                        }
-                                            |> elmToJs
-                                            << encodeToJs
-                                            << RerunWasmE
-                                ]
-                            )
+constructMessageHelp : Diff -> Bytes.Bytes -> Maybe Bytes.Bytes
+constructMessageHelp diff old =
+    case reverseBytes old of
+        Nothing ->
+            Nothing
+
+        Just reversedOld ->
+            case Bd.decode (Bd.bytes diff.end) reversedOld of
+                Nothing ->
+                    Nothing
+
+                Just lastBackwards ->
+                    case reverseBytes lastBackwards of
+                        Nothing ->
+                            Nothing
+
+                        Just last ->
+                            case
+                                Bd.decode (Bd.bytes diff.start) old
+                            of
+                                Nothing ->
+                                    Nothing
+
+                                Just first ->
+                                    Just <|
+                                    Be.encode <|
+                                    Be.sequence <|
+                                    List.map
+                                        Be.bytes
+                                        [first, diff.insert, last]
+
+
+type Hash8 =
+    Hash8 Bytes.Bytes
+
+
+hash8 : Bytes.Bytes -> Hash8
+hash8 bytes =
+    SHA256.fromBytes bytes |>
+    SHA256.toBytes |>
+    Hash8
+
+
+reverseBytes : Bytes.Bytes -> Maybe Bytes.Bytes
+reverseBytes bytes =
+    let
+        decoder =
+            Bd.loop (emptyBytes, Bytes.width bytes) reverseBytesHelp
+    in
+    Bd.decode decoder bytes
+
+
+reverseBytesHelp :
+    (Bytes.Bytes, Int) ->
+    Bd.Decoder (Bd.Step (Bytes.Bytes, Int) Bytes.Bytes)
+reverseBytesHelp (setyb, i) =
+    if i == 0 then
+        Bd.succeed <| Bd.Done setyb
+
+    else
+        Bd.map
+            (\b ->
+                Bd.Loop
+                    ( Be.encode <|
+                        Be.sequence
+                            [ Be.unsignedInt8 b
+                            , Be.bytes setyb
+                            ]
+                    , i - 1))
+            Bd.unsignedInt8
+
+
+type alias Snapshot =
+    { time : Time.Posix
+    , shares : List Uid.Username
+    , mainBox : String
+    , blobs : List Blob
+    , wasm : Maybe Code
+    }
+
+
+snapshotD : Bd.Decoder Snapshot
+snapshotD =
+    Bd.map5 Snapshot
+        timeD
+        (list usernameD)
+        stringDecoder
+        (list blobD)
+        (maybeD codeD)
+
+
+maybeD : Bd.Decoder a -> Bd.Decoder (Maybe a)
+maybeD decoder =
+    Bd.unsignedInt8
+        |> Bd.andThen (maybeHelp decoder)
+
+
+maybeHelp : Bd.Decoder a -> Int -> Bd.Decoder (Maybe a)
+maybeHelp decoder indicator =
+    case indicator of
+        0 ->
+            Bd.succeed Nothing
+
+        1 ->
+            Bd.map Just decoder
+
+        _ ->
+            Bd.fail
+
+
+blobD : Bd.Decoder Blob
+blobD =
+    Bd.map4 Blob
+        stringDecoder
+        stringDecoder
+        stringDecoder
+        (Bd.unsignedInt32 Bytes.LE)
+
+
+codeD : Bd.Decoder Code
+codeD =
+    Bd.map2 Code
+       bytesDecoder
+       stringDecoder
+
+
+updateOnUserInput : String -> Model -> ( Model, Cmd Msg )
+updateOnUserInput userInput model =
+    case model.page of
+        Writer mId diffs maybeWasm ->
+            case (model.lastWasmRun, constructMessage diffs) of
+                (_, Err err) ->
+                    ( {model | fatalErr = Just err}
+                    , Cmd.none
+                    )
+
+                (Nothing, Ok snapshot) ->
+                    ( model
+                    , Cmd.batch
+                        [ RunWasmE
+                            { input = Be.encode (Be.string userInput)
+                            , wasmCode = snapshot.wasm.contents
+                            } |>
+                          encodeToJs |>
+                          elmToJs
+                        , NewMain userInput |>
+                          ToBackendE |>
+                          encodeToJs |>
+                          elmToJs
+                        ]
+                    )
+
+                (Just lastRunId, Ok snapshot) ->
+                    if lastRunId /= mId then
+                        ( model
+                        , Cmd.batch
+                            [ RunWasmE
+                               { input =
+                                    Be.encode (Be.string userInput)
+                               , wasmCode = snapshot.wasm.contents
+                               } |>
+                              encodeToJs |>
+                              elmToJs
+                            , NewMain userInput |>
+                              ToBackendE |>
+                              encodeToJs |>
+                              elmToJs
+                            ]
+                        )
+
+                    else
+                        ( model
+                        , Cmd.batch
+                            [ RerunWasmE
+                                { input =
+                                    Be.encode (Be.string userInput)
+                                , wasmCode =
+                                    snapshot.wasm.contents
+                                } |>
+                              encodeToJs |>
+                              elmToJs
+                            , NewMain userInput |>
+                              ToBackendE |>
+                              encodeToJs |>
+                              elmToJs
+                            ]
+                        )
 
         _ ->
             ( model, Cmd.none )
 
 
-onUserInputHelp :
-    Model
-    -> Draft
-    -> String
-    -> Maybe Wasm
-    -> ( Model, Cmd Msg )
-onUserInputHelp model draft userInput maybeWasm =
-    let
-        newDraft =
-            { draft | userInput = userInput }
-
-        newDraftsSummary =
-            updateDraftsSummary
-                newDraft
-                model.draftsSummary
-    in
-    ( { model
-        | page = MessagingP (WriteE ( newDraft, maybeWasm ))
-        , draftsSummary = Just newDraftsSummary
-      }
-    , Cmd.batch
-        [ cacheDraft newDraft
-        , if List.isEmpty newDraftsSummary then
-            Cmd.none
-
-          else
-            cacheDraftsSummary newDraftsSummary
-        , case draft.code of
-            Nothing ->
-                Cmd.none
-
-            Just { contents } ->
-                runDraftWasm
-                    { userInput = userInput
-                    , wasmCode = contents
-                    , msgId = draft.id
-                    }
-        ]
-    )
-
-
 runDraftWasm : RunWasm -> Cmd Msg
 runDraftWasm =
     elmToJs << encodeToJs << RunWasmE
-
-
-cacheDraftsSummary : List DraftSummary -> Cmd Msg
-cacheDraftsSummary =
-    elmToJs
-        << encodeToJs
-        << ToBackendE
-        << CacheSetB "draftsSummary"
-        << Be.encode
-        << listEncoder draftSummaryEncoder
 
 
 draftSummaryEncoder : DraftSummary -> Be.Encoder
@@ -2293,17 +1784,6 @@ summarizeDraft { subject, to, time, id } =
     , time = time
     , id = id
     }
-
-
-cacheDraft : Draft -> Cmd Msg
-cacheDraft draft =
-    draft
-        |> elmToJs
-        << encodeToJs
-        << ToBackendE
-        << CacheSetB draft.id
-        << Be.encode
-        << draftEncoder
 
 
 draftDecoder : Bd.Decoder Draft
@@ -2374,11 +1854,10 @@ maybeCodeEncoder maybeCode =
         Nothing ->
             Be.unsignedInt8 0
 
-        Just { contents, mime, filename } ->
+        Just { contents, filename } ->
             Be.sequence
                 [ Be.unsignedInt8 1
                 , bytesEncoder contents
-                , stringEncoder mime
                 , stringEncoder filename
                 ]
 
@@ -2399,26 +1878,6 @@ blobEncoder { id, mime, filename, size } =
         , stringEncoder filename
         , Be.unsignedInt32 Bytes.LE size
         ]
-
-
-cacheIota : Int -> Cmd Msg
-cacheIota =
-    elmToJs
-        << encodeToJs
-        << ToBackendE
-        << CacheSetB "iota"
-        << Be.encode
-        << Be.unsignedInt32 Bytes.LE
-
-
-cacheMyName : String -> Cmd Msg
-cacheMyName =
-    elmToJs
-        << encodeToJs
-        << ToBackendE
-        << CacheSetB "myName"
-        << Be.encode
-        << stringEncoder
 
 
 stringEncoder : String -> Be.Encoder
@@ -2482,125 +1941,10 @@ powInfoDecoder =
     Bd.map2 PowInfo Bd.unsignedInt8 (Bd.bytes 8)
 
 
-cacheGet : String -> Cmd Msg
-cacheGet =
-    elmToJs << encodeToJs << ToBackendE << CacheGetB
-
-
 type ProcessTick
     = FinishedT Model (Cmd Msg)
     | ContinuingT Model (Cmd Msg) Process
     | NotUsedMessageT
-
-
-updateGetMe : GetMe -> Msg -> Model -> ProcessTick
-updateGetMe getMe msg model =
-    case ( getMe, msg ) of
-        ( KeysFromJsG, MyKeysM myKeys ) ->
-            ContinuingT
-                model
-                getPowInfo
-                (GetMeP <| PowInfoG myKeys)
-
-        ( KeysFromJsG, _ ) ->
-            NotUsedMessageT
-
-        ( PowInfoG myKeys, FromServerM (PowInfoW powInfo) ) ->
-            ContinuingT
-                model
-                (getPow powInfo)
-                (GetMeP <| PowG myKeys)
-
-        ( PowInfoG _, _ ) ->
-            NotUsedMessageT
-
-        ( PowG myKeys, PowM pow ) ->
-            ContinuingT
-                model
-                (elmToJs <| makeNameRequest pow myKeys)
-                (GetMeP <| NameFromServerG myKeys)
-
-        ( PowG _, _ ) ->
-            NotUsedMessageT
-
-        ( NameFromServerG myKeys, FromServerM (MyNameW myName) ) ->
-            FinishedT
-                { model | myId = Just ( MyName myName, myKeys ) }
-                (cacheMyName myName)
-
-        ( NameFromServerG _, _ ) ->
-            NotUsedMessageT
-
-
-getPowInfo : Cmd Msg
-getPowInfo =
-    elmToJs <|
-        encodeToJs <|
-            ToBackendE <|
-                ToServerB <|
-                    Be.encode <|
-                        Be.unsignedInt8 3
-
-
-getPow : PowInfo -> Cmd Msg
-getPow =
-    elmToJs << encodeToJs << ToBackendE << GetPowB
-
-
-makeNameRequest : Pow -> MyKeys -> Je.Value
-makeNameRequest (Pow pow) { encrypt, sign } =
-    encodeToJs <|
-        ToBackendE <|
-            ToServerB <|
-                Be.encode <|
-                    Be.sequence
-                        [ Be.unsignedInt8 1
-                        , Be.bytes pow
-                        , Be.bytes sign
-                        , Be.bytes encrypt
-                        ]
-
-
-processTick : Process -> Msg -> Model -> ProcessTick
-processTick p msg model =
-    case p of
-        GetMeP getMe ->
-            updateGetMe getMe msg model
-
-        GetInboxMessageP getInbox ->
-            updateGetInboxMsg getInbox msg model
-
-        GetDraftP getDraft ->
-            updateGetDraft getDraft msg model
-
-        BlobForDownloadP blob ->
-            case msg of
-                FromCacheM id blobBytes ->
-                    if blob.id == id then
-                        FinishedT
-                            model
-                            (Download.bytes
-                                blob.filename
-                                blob.mime
-                                blobBytes
-                            )
-
-                    else
-                        NotUsedMessageT
-
-                _ ->
-                    NotUsedMessageT
-
-
-runWasm : InboxMessage -> Cmd Msg
-runWasm msg =
-    elmToJs <|
-        encodeToJs <|
-            RunWasmE
-                { userInput = msg.userInput
-                , wasmCode = msg.code.contents
-                , msgId = msg.id
-                }
 
 
 inboxMsgDecoder : Bd.Decoder InboxMessage
@@ -2642,9 +1986,8 @@ int64DecoderHelp s =
 
 codeDecoder : Bd.Decoder Code
 codeDecoder =
-    Bd.map3 Code
+    Bd.map2 Code
         bytesDecoder
-        stringDecoder
         stringDecoder
 
 
@@ -2741,147 +2084,6 @@ badInboxMsg =
 badDraft : Maybe String
 badDraft =
     Just "bad bytes in draft from cache"
-
-
-updateGetDraftHelp : Draft -> Model -> ProcessTick
-updateGetDraftHelp draft model =
-    case draft.code of
-        Nothing ->
-            FinishedT
-                { model
-                    | page =
-                        MessagingP <|
-                            WriteE
-                                ( draft, Nothing )
-                }
-                Cmd.none
-
-        Just code ->
-            ContinuingT
-                model
-                (runDraftWasm
-                    { userInput = draft.userInput
-                    , wasmCode = code.contents
-                    , msgId = draft.id
-                    }
-                )
-                (GetDraftP <| WasmOutputD draft)
-
-
-updateGetDraft : GetDraft -> Msg -> Model -> ProcessTick
-updateGetDraft getting msg model =
-    case ( getting, msg ) of
-        ( FromCacheD idWant, FromCacheM idGot draftBytes ) ->
-            if idWant == idGot then
-                case Bd.decode draftDecoder draftBytes of
-                    Nothing ->
-                        FinishedT
-                            { model | fatal = badDraft }
-                            Cmd.none
-
-                    Just draft ->
-                        updateGetDraftHelp draft model
-
-            else
-                NotUsedMessageT
-
-        ( FromCacheD _, _ ) ->
-            NotUsedMessageT
-
-        ( WasmOutputD draft, WasmOutputM id wasm ) ->
-            if draft.id == id then
-                FinishedT
-                    { model
-                        | page =
-                            MessagingP (WriteE ( draft, Just wasm ))
-                        , badWasm = Nothing
-                    }
-                    Cmd.none
-
-            else
-                NotUsedMessageT
-
-        ( WasmOutputD _, _ ) ->
-            NotUsedMessageT
-
-
-updateGetInboxMsg :
-    GetInboxMessage
-    -> Msg
-    -> Model
-    -> ProcessTick
-updateGetInboxMsg getting msg model =
-    case ( getting, msg ) of
-        ( FromCacheG idWant, FromCacheM idGot inboxMsgBytes ) ->
-            if idWant == idGot then
-                case Bd.decode inboxMsgDecoder inboxMsgBytes of
-                    Nothing ->
-                        FinishedT
-                            { model | fatal = badInboxMsg }
-                            Cmd.none
-
-                    Just inboxMsg ->
-                        ContinuingT
-                            model
-                            (runWasm inboxMsg)
-                            (GetInboxMessageP <| WasmOutputG inboxMsg)
-
-            else
-                NotUsedMessageT
-
-        ( FromCacheG _, _ ) ->
-            NotUsedMessageT
-
-        ( WasmOutputG msg1, WasmOutputM msgId wasm ) ->
-            if msg1.id == msgId then
-                FinishedT
-                    { model
-                        | page =
-                            MessagingP <|
-                                InboxE <|
-                                    Just ( msg1, wasm )
-                        , badWasm = Nothing
-                    }
-                    Cmd.none
-
-            else
-                NotUsedMessageT
-
-        ( WasmOutputG _, _ ) ->
-            NotUsedMessageT
-
-
-updateHelp :
-    List Process
-    -> Msg
-    -> Model
-    -> ( Model, Cmd Msg )
-updateHelp notRelevant msg model =
-    case model.processes of
-        [] ->
-            updateSimple msg { model | processes = notRelevant }
-
-        p :: rocesses ->
-            case processTick p msg model of
-                FinishedT newModel cmd ->
-                    ( { newModel
-                        | processes = rocesses ++ notRelevant
-                      }
-                    , cmd
-                    )
-
-                ContinuingT newModel cmd newP ->
-                    ( { newModel
-                        | processes = newP :: rocesses ++ notRelevant
-                      }
-                    , cmd
-                    )
-
-                NotUsedMessageT ->
-                    updateHelp
-                        (p :: notRelevant)
-                        msg
-                        { model | processes = rocesses }
 
 
 subscriptions : Model -> Sub Msg
