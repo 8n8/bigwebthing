@@ -27,3 +27,4 @@ haskell/haskell.cabal
 main.pdf
 *.hie
 haskell/haskell.cabal
+c/a.out
