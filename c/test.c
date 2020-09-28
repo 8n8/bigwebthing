@@ -36,20 +36,82 @@ void unlock_function(void *user_data) {
 
 
 typedef struct {
-    signal_buffer *identity_key_public;
-    signal_buffer *identity_key_private;
-    uint32_t local_registration_id;
+    char* public_data_path;
+    char* private_data_path;
 } my_data_store
 
 
-int identity_key_store_get_identity_key_pair(
-    signal_buffer **public_data,
-    signal_buffer **private_data,
-    void *user_data) {
+int get_identity_key_pair(
+    signal_buffer** public_data,
+    signal_buffer** private_data,
+    void* user_data) {
 
-    my_data_store *data = user_data;
-    *public_data = signal_buffer_copy(data->identity_key_public);
-    *private_data = signal_buffer_copy(data->identity_key_private);
+    my_data_store* const my_data = user_data;
+
+    int const public_error = read_signal_buffer_from_file(
+        my_data->public_data_path,
+        public_data);
+    if (public_error != 0) {
+        return public_error;
+    }
+
+    int const private_error = read_signal_buffer_from_file(
+        my_data->private_data_path,
+        private_data);
+    return private_error;
+}
+
+
+int read_signal_buffer_from_file(
+    char const* const path,
+    signal_buffer** data) {
+
+    FILE* const file_handle = fopen(path, "rbx");
+    if (file_handle == NULL) {
+        return -1;
+    }
+
+    int const fseekErr = fseek(file_handle, 0, SEEK_END);
+    if (seekErr != 0) {
+        return fseekErr;
+    }
+    int const seekErr = ferror(file_handle);
+    if (fileErr != 0) {
+        return seekErr;
+    }
+    uint32_t const file_size = ftell(file_handle);
+    rewind(file_handle);
+
+    uint8_t* const buffer = malloc(file_size);
+    if (buffer == NULL) {
+        return -1;
+    }
+
+    size_t const num_bytes_from_file = fread(
+        buffer,
+        1,
+        file_size,
+        file_handle);
+
+    int const readErr = ferror(file_handle);
+    if (readErr != 0) {
+        return readErr;
+    }
+    int const closeErr = fclose(file_handle);
+    if (closeErr != 0) {
+        return closeErr;
+    }
+    if (num_bytes_from_file != file_size) {
+        return -1;
+    }
+
+    signal_buffer const with_length = {
+        .buffer = buffer,
+        .len = file_size
+    }
+
+    *data = &signal_buffer;
+
     return 0;
 }
 
@@ -62,9 +124,6 @@ int identity_key_store_get_local_registration_id(
     *registration_id = data->local_registration_id;
     return 0
 }
-
-
-typedef struct
 
 
 int identity_key_store_save_identity(
@@ -121,8 +180,7 @@ int main() {
         global_context);
 
     signal_protocol_identity_key_store store = {
-        .get_identity_key_pair =
-            identity_key_store_get_identity_key_pair,
+        .get_identity_key_pair = get_identity_key_pair,
         .get_local_registration_id =
             identity_key_store_get_local_registration_id,
         .save_identity =
