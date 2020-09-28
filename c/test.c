@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "crypto_provider_openssl.h"
 #include <pthread.h>
+#include <sqlite3.h>
 
 
 signal_crypto_provider provider = {
@@ -36,8 +37,9 @@ void unlock_function(void *user_data) {
 
 
 typedef struct {
-    char* public_data_path;
-    char* private_data_path;
+    signal_buffer* id_key_public;
+    signal_buffer* id_key_private;
+    uint32_t local_registration_id;
 } my_data_store
 
 
@@ -47,18 +49,9 @@ int get_identity_key_pair(
     void* user_data) {
 
     my_data_store* const my_data = user_data;
-
-    int const public_error = read_signal_buffer_from_file(
-        my_data->public_data_path,
-        public_data);
-    if (public_error != 0) {
-        return public_error;
-    }
-
-    int const private_error = read_signal_buffer_from_file(
-        my_data->private_data_path,
-        private_data);
-    return private_error;
+    *public_data = signal_buffer_copy(my_data->id_key_public);
+    *private_data = signal_buffer_copy(my_data->id_key_private);
+    return 0;
 }
 
 
@@ -116,21 +109,65 @@ int read_signal_buffer_from_file(
 }
 
 
-int identity_key_store_get_local_registration_id(
-    void *user_data,
-    uint32_t *registration_id) {
+int get_local_registration_id(
+    void* user_data,
+    uint32_t* registration_id) {
 
-    my_data_store *data = user_data;
+    my_data_store *my_data = user_data;
     *registration_id = data->local_registration_id;
     return 0
 }
 
 
-int identity_key_store_save_identity(
+int save_identity(
     const signal_protocol_address *address,
-    uint8_t *key_data,
+    uint8_t* key_data,
     size_t key_len,
-    void *user_data) {
+    void* user_data) {
+
+    my_data_store const* const my_data = user_data;
+
+    sqlite3* const db;
+
+    int const openStatus = sqlite3_open(my_data->db_path, &db);
+    if (openStatus != SQLITE_OK) {
+        sqlite3_close(db);
+        return -1;
+    }
+
+    sqlite3_stmt* const stmt;
+    char const* const sql =
+        "REPLACE INTO TABLE remote_ids (name, device_id, key) "
+        "VALUES (?, ?, ?);"
+    if (sqlite3_prepare(db, sql, -1, stmt, 0) != SQLITE_OK) {
+        return -1;
+    }
+    
+    int const name_bind =
+        sqlite3_bind_text(stmt, 1, address->name, -1, 0);
+    if (name_bind != SQLITE_OK) {
+        return -1;
+    }
+
+    int const id_bind =
+        sqlite3_bind_int(stmt, 2, address->device_id);
+    if (id_bind != SQLITE_OK) {
+        return -1;
+    }
+
+    int const key_bind =
+        sqlite3_bind_blob(stmt, 3, key_data, key_len, SQLITE_STATIC);
+    if (key_bind != SQLITE_OK) {
+        return -1;
+    }
+
+    if (sqlite3_finalize(stmt) != SQLITE_OK) {
+        return -1;
+    }
+
+    if (sqlite3_close(db) != SQLITE_OK) {
+        return -1;
+    }
 
     return 0
 }
@@ -181,10 +218,8 @@ int main() {
 
     signal_protocol_identity_key_store store = {
         .get_identity_key_pair = get_identity_key_pair,
-        .get_local_registration_id =
-            identity_key_store_get_local_registration_id,
-        .save_identity =
-            identity_key_store_save_identity,
+        .get_local_registration_id = get_local_registration_id,
+        .save_identity = save_identity,
         .is_trusted_identity =
             test_identity_key_store_is_trusted_identity,
         .destroy_func =
