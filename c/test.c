@@ -1,19 +1,21 @@
-#include <signal/signal_protocol.h>
-#include <signal/key_helper.h>
 #include <stdio.h>
-#include "crypto_provider_openssl.h"
-#include <pthread.h>
-#include <sqlite3.h>
 #include <stdlib.h>
+
+#define PATH_SIZE 256
+#define DATA_DIR "bigwebthing"
 
 
 typedef union {
     int dont_care;
+    char got_data_dir[PATH_SIZE];
 } state_value;
 
 
 typedef enum {
-    Empty
+    Empty,
+    GettingHomeDir,
+    GotDataDir,
+    GettingXDG_DATA_HOME,
 } state_type;
 
 
@@ -26,12 +28,13 @@ typedef struct {
 
 typedef union {
     int dont_care;
-    char* get_env;
+    char get_env[PATH_SIZE];
 } output_value;
 
 
 typedef enum {
     GetEnv,
+    WaitForMessage,
 } output_type;
 
 
@@ -42,8 +45,8 @@ typedef struct {
 
 
 typedef struct {
-    char* var;
-    char* value;
+    char name[PATH_SIZE];
+    char value[PATH_SIZE];
 } got_env_t;
 
 
@@ -81,6 +84,7 @@ void init_input(io_input* init) {
     init->value = v;
 }
 
+
 void io_do_nothing(
     io_input* const input,
     output_value const output) {
@@ -89,36 +93,35 @@ void io_do_nothing(
     input->value.dont_care = 0;
 }
 
-void io_get_env(
-    io_input* const input,
-    output_value const output) {
+
+void io_get_env(io_input* const input, output_value const output) {
+    got_env_t got;
+    snprintf(got.name, PATH_SIZE, "%s", output.get_env);
+    snprintf(got.value, PATH_SIZE, "%s", getenv(output.get_env));
 
     input->type = GotEnv;
-
-    got_env_t got;
-    got.var = output.get_env;
-    got.value = getenv(output.get_env);
-
-    (input->value).got_env = got;
+    input->value.got_env = got;
 }
-
-
-const int max_in_out = 20;
 
 
 void io(io_input* const input, io_output const output) {
     switch(output.type) {
     case GetEnv:
         io_get_env(input, output.value);
+
+    case WaitForMessage:
+        // todo
+        return;
     }
 }
 
 
 void init_output(io_output* output) {
+    // todo
 }
 
 
-void updateOnStart(
+void update_on_start(
     program_state const* const old_state,
     program_state* const new_state,
     input_value const input,
@@ -126,8 +129,62 @@ void updateOnStart(
 
     output->type = GetEnv;
     output_value v;
-    v.get_env = "XDG_DATA_HOME";
+    snprintf(v.get_env, PATH_SIZE, "%s", "XDG_DATA_HOME");
     output->value = v;
+
+    new_state->type = GettingXDG_DATA_HOME;
+}
+
+
+void doNothing(io_output* const output) {
+    output->type = WaitForMessage;
+}
+
+
+int eqPaths(char const* const p1, char const* const p2) {
+    for (int i = 0; i < PATH_SIZE; i++) {
+        if (p1[i] != p2[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+
+void update_on_got_env(
+    program_state const* const old_state,
+    program_state* const new_state,
+    input_value const input,
+    io_output* const output) {
+
+    if (old_state->type != GettingXDG_DATA_HOME) {
+        doNothing(output);
+        return;
+    }
+
+    if (eqPaths(input.got_env.name, "XDG_DATA_HOME")) {
+        doNothing(output);
+        return;
+    }
+
+    char const* const data_home = input.got_env.value;
+    if (data_home == NULL) {
+        new_state->type = GettingHomeDir;
+        output->type = GetEnv;
+        output_value v;
+        snprintf(v.get_env, PATH_SIZE, "%s", "HOME");
+        output->value = v;
+        return;
+    }
+
+    snprintf(
+        new_state->value.got_data_dir,
+        PATH_SIZE,
+        "%s/%s",
+        data_home,
+        DATA_DIR);
+    new_state->type = GotDataDir;
+    doNothing(output);
 }
 
 
@@ -139,14 +196,13 @@ void update(
 
     switch (input.type) {
     case Start:
-        updateOnStart(old_state, new_state, input.value, output);
+        update_on_start(old_state, new_state, input.value, output);
 
     case None:
         return;
 
     case GotEnv:
-        // todo
-        return;
+        update_on_got_env(old_state, new_state, input.value, output);
     }
 }
 
