@@ -3,6 +3,7 @@
 
 #define PATH_SIZE 256
 #define DATA_DIR "bigwebthing"
+#define PRINT_SIZE 2000
 
 
 typedef union {
@@ -29,12 +30,14 @@ typedef struct {
 typedef union {
     int dont_care;
     char get_env[PATH_SIZE];
+    char puts[PRINT_SIZE];
 } output_value;
 
 
 typedef enum {
     GetEnv,
     WaitForMessage,
+    Puts,
 } output_type;
 
 
@@ -141,7 +144,7 @@ void doNothing(io_output* const output) {
 }
 
 
-int eqPaths(char const* const p1, char const* const p2) {
+int eq_paths(char const* const p1, char const* const p2) {
     for (int i = 0; i < PATH_SIZE; i++) {
         if (p1[i] != p2[i]) {
             return 0;
@@ -151,18 +154,12 @@ int eqPaths(char const* const p1, char const* const p2) {
 }
 
 
-void update_on_got_env(
-    program_state const* const old_state,
+void update_on_got_xdg(
     program_state* const new_state,
     input_value const input,
     io_output* const output) {
 
-    if (old_state->type != GettingXDG_DATA_HOME) {
-        doNothing(output);
-        return;
-    }
-
-    if (eqPaths(input.got_env.name, "XDG_DATA_HOME")) {
+    if (!eq_paths(input.got_env.name, "XDG_DATA_HOME")) {
         doNothing(output);
         return;
     }
@@ -185,6 +182,67 @@ void update_on_got_env(
         DATA_DIR);
     new_state->type = GotDataDir;
     doNothing(output);
+}
+
+
+void update_on_got_home(
+    program_state* const new_state,
+    input_value const input,
+    io_output* const output) {
+
+    if (!eq_paths(input.got_env.name, "HOME")) {
+        doNothing(output);
+        return;
+    }
+
+    char const* const home_dir = input.got_env.value;
+    if (home_dir == NULL) {
+        fatal_error(
+            new_state,
+            output,
+            "HOME environment variable is NULL");
+        return;
+    }
+
+    snprintf(
+        new_state->value.got_data_dir,
+        PATH_SIZE,
+        "%s/.local/share/%s",
+        home_dir,
+        DATA_DIR);
+    new_state->type = GotDataDir;
+    doNothing(output);
+}
+
+
+void update_on_got_env(
+    program_state const* const old_state,
+    program_state* const new_state,
+    input_value const input,
+    io_output* const output) {
+
+    if (old_state->type == GettingXDG_DATA_HOME) {
+        update_on_got_xdg(new_state, input, output);
+        return;
+    }
+
+    if (old_state->type == GettingHomeDir) {
+        update_on_got_home(new_state, input, output):
+        return;
+    }
+
+    doNothing(output);
+}
+
+
+void fatal_error(
+    program_state* const new_state,
+    io_output* const output,
+    char const* const msg) {
+
+    new_state->fatal = 1;
+    output->type = Puts;
+    snprintf(output->value.puts, PRINT_SIZE, "%s", msg);
 }
 
 
