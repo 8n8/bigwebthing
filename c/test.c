@@ -1,14 +1,22 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #define PATH_SIZE 256
 #define DATA_DIR "bigwebthing"
 #define PRINT_SIZE 2000
 
 
+typedef struct {
+    pthread_mutex_t* tcp_mutex;
+    char data_dir[PATH_SIZE];
+} ReadyT;
+
+
 typedef union {
     int dont_care;
     char got_data_dir[PATH_SIZE];
+    ReadyT ready;
 } state_value;
 
 
@@ -17,6 +25,7 @@ typedef enum {
     GettingHomeDir,
     GotDataDir,
     GettingXDG_DATA_HOME,
+    Ready,
 } state_type;
 
 
@@ -31,12 +40,13 @@ typedef union {
     int dont_care;
     char get_env[PATH_SIZE];
     char puts[PRINT_SIZE];
+    pthread_mutex_t* tcp_mutex;
 } output_value;
 
 
 typedef enum {
     GetEnv,
-    WaitForMessage,
+    UnlockTcpMutex,
     Puts,
 } output_type;
 
@@ -107,14 +117,31 @@ void io_get_env(io_input* const input, output_value const output) {
 }
 
 
+void io_puts(io_input* const input, output_value const output) {
+    puts(output.puts);
+    input->type = None;
+}
+
+
+void io_unlock_tcp_mutex(
+    io_input* const input,
+    output_value const output) {
+
+    pthread_mutex_t* mutex = output.tcp_mutex;
+    pthread_mutex_lock(mutex);
+}
+
+
 void io(io_input* const input, io_output const output) {
     switch(output.type) {
     case GetEnv:
         io_get_env(input, output.value);
 
-    case WaitForMessage:
-        // todo
-        return;
+    case UnlockTcpMutex:
+        io_unlock_tcp_mutex(input, output.value);
+
+    case Puts:
+        io_puts(input, output.value);
     }
 }
 
@@ -125,8 +152,7 @@ void init_output(io_output* output) {
 
 
 void update_on_start(
-    program_state const* const old_state,
-    program_state* const new_state,
+    program_state* const state,
     input_value const input,
     io_output* const output) {
 
@@ -135,12 +161,34 @@ void update_on_start(
     snprintf(v.get_env, PATH_SIZE, "%s", "XDG_DATA_HOME");
     output->value = v;
 
-    new_state->type = GettingXDG_DATA_HOME;
+    state->type = GettingXDG_DATA_HOME;
 }
 
 
-void doNothing(io_output* const output) {
-    output->type = WaitForMessage;
+void do_nothing(
+    program_state const* const state,
+    io_output* const output) {
+
+    switch(state->type) {
+    case Empty:
+        return;
+
+    case GettingHomeDir:
+        return;
+
+    case GotDataDir:
+        return;
+
+    case GettingXDG_DATA_HOME:
+        return;
+
+    case Ready:
+        output->type = UnlockTcpMutex;
+        ReadyT ready = state->value.ready;
+        output_value v;
+        v.tcp_mutex = ready.tcp_mutex;
+        output->value = v;
+    }
 }
 
 
@@ -155,18 +203,18 @@ int eq_paths(char const* const p1, char const* const p2) {
 
 
 void update_on_got_xdg(
-    program_state* const new_state,
+    program_state* const state,
     input_value const input,
     io_output* const output) {
 
     if (!eq_paths(input.got_env.name, "XDG_DATA_HOME")) {
-        doNothing(output);
+        do_nothing(state, output);
         return;
     }
 
     char const* const data_home = input.got_env.value;
     if (data_home == NULL) {
-        new_state->type = GettingHomeDir;
+        state->type = GettingHomeDir;
         output->type = GetEnv;
         output_value v;
         snprintf(v.get_env, PATH_SIZE, "%s", "HOME");
@@ -175,63 +223,13 @@ void update_on_got_xdg(
     }
 
     snprintf(
-        new_state->value.got_data_dir,
+        state->value.got_data_dir,
         PATH_SIZE,
         "%s/%s",
         data_home,
         DATA_DIR);
-    new_state->type = GotDataDir;
-    doNothing(output);
-}
-
-
-void update_on_got_home(
-    program_state* const new_state,
-    input_value const input,
-    io_output* const output) {
-
-    if (!eq_paths(input.got_env.name, "HOME")) {
-        doNothing(output);
-        return;
-    }
-
-    char const* const home_dir = input.got_env.value;
-    if (home_dir == NULL) {
-        fatal_error(
-            new_state,
-            output,
-            "HOME environment variable is NULL");
-        return;
-    }
-
-    snprintf(
-        new_state->value.got_data_dir,
-        PATH_SIZE,
-        "%s/.local/share/%s",
-        home_dir,
-        DATA_DIR);
-    new_state->type = GotDataDir;
-    doNothing(output);
-}
-
-
-void update_on_got_env(
-    program_state const* const old_state,
-    program_state* const new_state,
-    input_value const input,
-    io_output* const output) {
-
-    if (old_state->type == GettingXDG_DATA_HOME) {
-        update_on_got_xdg(new_state, input, output);
-        return;
-    }
-
-    if (old_state->type == GettingHomeDir) {
-        update_on_got_home(new_state, input, output):
-        return;
-    }
-
-    doNothing(output);
+    state->type = GotDataDir;
+    do_nothing(state, output);
 }
 
 
@@ -246,21 +244,76 @@ void fatal_error(
 }
 
 
+void update_on_got_home(
+    program_state* const state,
+    input_value const input,
+    io_output* const output) {
+
+    if (!eq_paths(input.got_env.name, "HOME")) {
+        do_nothing(state, output);
+        return;
+    }
+
+    char const* const home_dir = input.got_env.value;
+    if (home_dir == NULL) {
+        fatal_error(
+            state,
+            output,
+            "HOME environment variable is NULL");
+        return;
+    }
+
+    snprintf(
+        state->value.got_data_dir,
+        PATH_SIZE,
+        "%s/.local/share/%s",
+        home_dir,
+        DATA_DIR);
+    state->type = GotDataDir;
+    do_nothing(state, output);
+}
+
+
+void update_on_got_env(
+    program_state* const state,
+    input_value const input,
+    io_output* const output) {
+
+    switch(state->type) {
+    case Empty:
+        return;
+
+    case GettingXDG_DATA_HOME:
+        update_on_got_xdg(state, input, output);
+        return;
+
+    case GettingHomeDir:
+        update_on_got_home(state, input, output);
+        return;
+
+    case GotDataDir:
+        return;
+
+    case Ready:
+        do_nothing(state, output);
+    }
+}
+
+
 void update(
-    program_state const* const old_state,
-    program_state* const new_state,
+    program_state* const state,
     io_input const input,
     io_output* const output) {
 
     switch (input.type) {
     case Start:
-        update_on_start(old_state, new_state, input.value, output);
+        update_on_start(state, input.value, output);
 
     case None:
         return;
 
     case GotEnv:
-        update_on_got_env(old_state, new_state, input.value, output);
+        update_on_got_env(state, input.value, output);
     }
 }
 
@@ -276,8 +329,7 @@ int main() {
     init_output(&output);
 
     while (!state.fatal) {
-        program_state new_state;
-        update(&state, &new_state, input, &output);
+        update(&state, input, &output);
         io(&input, output);
     }
 }
