@@ -1,3 +1,5 @@
+*Note that this project is in rapid progress, with new things added most days, but is not working yet.*
+
 # Overview
 
 BigWebThing is intended to provide a combined and improved solution to the problem of sharing messages and programs conveniently and securely.
