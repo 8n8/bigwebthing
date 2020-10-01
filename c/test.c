@@ -146,11 +146,6 @@ void io(io_input* const input, io_output const output) {
 }
 
 
-void init_output(io_output* output) {
-    // todo
-}
-
-
 void update_on_start(
     program_state* const state,
     input_value const input,
@@ -326,7 +321,6 @@ int main() {
     init_input(&input);
 
     io_output output;
-    init_output(&output);
 
     while (!state.fatal) {
         update(&state, input, &output);
