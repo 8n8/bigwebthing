@@ -8,7 +8,7 @@
 
 
 typedef struct {
-    pthread_mutex_t* tcp_mutex;
+    pthread_mutex_t tcp_mutex;
     char data_dir[PATH_SIZE];
 } ReadyT;
 
@@ -48,6 +48,7 @@ typedef enum {
     GetEnv,
     UnlockTcpMutex,
     Puts,
+    StartTcpClient,
 } output_type;
 
 
@@ -136,12 +137,15 @@ void io(io_input* const input, io_output const output) {
     switch(output.type) {
     case GetEnv:
         io_get_env(input, output.value);
+        return;
 
     case UnlockTcpMutex:
         io_unlock_tcp_mutex(input, output.value);
+        return;
 
     case Puts:
         io_puts(input, output.value);
+        return;
     }
 }
 
@@ -181,7 +185,7 @@ void do_nothing(
         output->type = UnlockTcpMutex;
         ReadyT ready = state->value.ready;
         output_value v;
-        v.tcp_mutex = ready.tcp_mutex;
+        v.tcp_mutex = &ready.tcp_mutex;
         output->value = v;
     }
 }
@@ -217,14 +221,19 @@ void update_on_got_xdg(
         return;
     }
 
+    ReadyT ready;
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    ready.tcp_mutex = mutex;
     snprintf(
-        state->value.got_data_dir,
+        ready.data_dir,
         PATH_SIZE,
         "%s/%s",
         data_home,
         DATA_DIR);
-    state->type = GotDataDir;
-    do_nothing(state, output);
+    state->value.ready = ready;
+    state->type = Ready;
+    
+    output->type = StartTcpClient;
 }
 
 
@@ -259,12 +268,14 @@ void update_on_got_home(
     }
 
     snprintf(
-        state->value.got_data_dir,
+        state->value.ready.data_dir,
         PATH_SIZE,
         "%s/.local/share/%s",
         home_dir,
         DATA_DIR);
-    state->type = GotDataDir;
+    state->type = Ready;
+
+
     do_nothing(state, output);
 }
 
