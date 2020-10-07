@@ -4,6 +4,7 @@ import Base64.Decode as B64d
 import Base64.Encode as B64e
 import Browser
 import Browser.Events
+import Browser.Dom as Dom
 import Bytes
 import Bytes.Decode as Bd
 import Bytes.Encode as Be
@@ -138,13 +139,19 @@ type alias Code =
 
 
 type alias Model =
+    { counter : Int
+    , lastWasmId : Maybe String
+    , fromBackdned : Maybe FromBackend
+    }
+
+
+type alias FromBackend =
     { messagingHover : Maybe MessagingButton
     , page : PageV
     , windowWidth : Int
     , fatal : Maybe String
     , badWasm : Maybe String
     , timeZone : Maybe Time.Zone
-    , summaries : Mid.MessageIdMap Summary
     , whitelist : Uid.UserIdMap
     , zone : Maybe Time.Zone
     , lastWasmId : Maybe String
@@ -272,19 +279,8 @@ type GetInboxMessage
 
 
 initModel : Int -> Model
-initModel windowWidth =
-    { fatal = Nothing
-    , windowWidth = windowWidth
-    , lastWasmId = Nothing
-    , messagingHover = Nothing
-    , badWasm = Nothing
-    , timeZone = Nothing
-    , summaries = Mid.empty
-    , whitelist = Uid.empty
-    , page = Messages
-    , zone = Nothing
-    , counter = 0
-    }
+initModel _ =
+    Nothing
 
 
 init : Int -> ( Model, Cmd Msg )
@@ -294,7 +290,7 @@ init windowWidth =
 
 initCmd : Cmd Msg
 initCmd =
-        Task.perform TimeZoneM Time.here
+    Task.perform WindowWidthM Dom.getViewport
 
 
 view : Model -> Html.Html Msg
@@ -1076,6 +1072,7 @@ type ToBackend
     | ContactsClick
     | AccountClick
     | DeleteBlob String
+    | DeleteContactB Uid.Username
 
 
 encodeToBackend : ToBackend -> Be.Encoder
@@ -1163,8 +1160,8 @@ type ElmToJs
 
 
 type Msg
-    = TimeZoneM Time.Zone
-    | DeleteContactM Uid.Username
+    = DeleteContactM Uid.Username
+    | WindowWidthM Dom.Viewport
     | UploadedM (Result Http.Error ())
     | FromBackendM Bytes.Bytes
     | BadWasmM String
@@ -1272,11 +1269,18 @@ showB64Error error =
             "Invalid byte sequence"
 
 
+toBackendHelp : ToBackend -> Cmd Msg
+toBackendHelp toBackend =
+    ToBackendE toBackend |> encodeToJs |> elmToJs
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        TimeZoneM zone ->
-            ( { model | zone = Just zone }, Cmd.none )
+        DeleteContactM username ->
+            ( model
+            , toBackendHelp <| DeleteContactB username
+            )
 
 
 clickCmd : Maybe a -> Cmd Msg -> Cmd Msg
@@ -1375,9 +1379,6 @@ updateSimple msg model =
 
         NoBackendM ->
             ( { model | fatal = Just "No backend" }, Cmd.none )
-
-        TimeZoneM zone ->
-            ( { model | timeZone = Just zone }, Cmd.none )
 
         UploadedM (Ok ()) ->
             ( model, Cmd.none )
@@ -1841,30 +1842,23 @@ codeD =
        stringDecoder
 
 
-updateOnUserInput : String -> Model -> ( Model, Cmd Msg )
-updateOnUserInput userInput model =
-    case model.page of
+updateOnUserInput : String -> FromBackend -> ( Model, Cmd Msg )
+updateOnUserInput userInput fromBackend =
+    case fromBackend.page of
         Writer w ->
             case w.snapshot.wasm of
                 Nothing ->
-                    (model, Cmd.none)
+                    (Just fromBackend, Cmd.none)
 
                 Just code ->
                     case model.lastWasmId of
                         Nothing ->
-                            ( { model |
-                                    lastWasmId =
-                                        Just <|
-                                        String.fromInt
-                                        model.counter
-                              , counter = model.counter + 1
-                              }
+                            ( Just fromBackend
                             , Cmd.batch
                                 [ RunWasmE
                                     { input =
                                         Be.encode
-                                            (Be.string
-                                                userInput)
+                                            (Be.string userInput)
                                     , wasmCode = code.contents
                                     , id = String.fromInt model.counter
                                     } |>
@@ -1878,7 +1872,7 @@ updateOnUserInput userInput model =
                             )
 
                         Just lastWasmId ->
-                                ( model
+                                ( Just fromBackend
                                 , Cmd.batch
                                     [ RerunWasmE
                                         { userInput =
@@ -1895,7 +1889,7 @@ updateOnUserInput userInput model =
                                 )
 
         _ ->
-            ( model, Cmd.none )
+            ( Just fromBackend, Cmd.none )
 
 
 runDraftWasm : RunWasm -> Cmd Msg
