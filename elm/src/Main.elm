@@ -141,13 +141,14 @@ type alias Model =
     { messagingHover : Maybe MessagingButton
     , page : PageV
     , windowWidth : Int
-    , lastWasmRun : Maybe String
     , fatal : Maybe String
     , badWasm : Maybe String
     , timeZone : Maybe Time.Zone
     , summaries : Mid.MessageIdMap Summary
     , whitelist : Uid.UserIdMap
     , zone : Maybe Time.Zone
+    , lastWasmId : Maybe String
+    , counter : Int
     }
 
 
@@ -274,7 +275,7 @@ initModel : Int -> Model
 initModel windowWidth =
     { fatal = Nothing
     , windowWidth = windowWidth
-    , lastWasmRun = Nothing
+    , lastWasmId = Nothing
     , messagingHover = Nothing
     , badWasm = Nothing
     , timeZone = Nothing
@@ -282,6 +283,7 @@ initModel windowWidth =
     , whitelist = Uid.empty
     , page = Messages
     , zone = Nothing
+    , counter = 0
     }
 
 
@@ -319,17 +321,82 @@ viewE model =
 
 mainPage : Model -> E.Element Msg
 mainPage model =
-    case model.page of
-        Messages ->
-            case model.timeZone of
-                Nothing ->
-                    E.text "error: no time zone"
+    case (model.timeZone, model.page) of
+        (Nothing, _) ->
+            E.text "error: no time zone"
 
-                Just zone ->
+        (Just zone, Messages) ->
                     summaryView zone model.whitelist model.summaries
 
+        ( Just zone, Writer {wasm, snapshot, summaries, shareSearch}) ->
+            E.column []
+                [ viewSnapshot
+                    zone
+                    snapshot
+                    model.whitelist
+                    shareSearch
+                , case wasm of
+                    Nothing ->
+                        E.none
 
-summaryView : Time.Zone -> Uid.UserIdMap -> Mid.MessageIdMap Summary -> E.Element Msg
+                    Just justWasm ->
+                        wasmView justWasm
+                , viewSummaries zone model.whitelist summaries
+                ]
+
+        (_, Contacts) ->
+            case Uid.toList model.whitelist of
+                Nothing ->
+                    E.text "could not decode contacts"
+
+                Just whitelist ->
+                    E.column [] <|
+                        List.map contactView whitelist
+
+
+contactView : (Uid.Username, Uid.Fingerprint) -> E.Element Msg
+contactView (username, fingerprint) =
+    E.row []
+        [ E.text <| prettyUserId fingerprint username
+        , deleteContact username
+        ]
+
+
+deleteContact : Uid.Username -> E.Element Msg
+deleteContact username =
+    Ei.button []
+        { onPress = Just <| DeleteContactM username
+        , label = E.text "Delete"
+        }
+
+
+viewSummaries :
+    Time.Zone ->
+    Uid.UserIdMap ->
+    List SnapSummary ->
+    E.Element Msg
+viewSummaries zone userIds summaries =
+    E.column [] <| List.map (viewSnapSummary zone userIds) summaries
+
+
+viewSnapSummary :
+    Time.Zone ->
+    Uid.UserIdMap ->
+    SnapSummary ->
+    E.Element Msg
+viewSnapSummary zone whitelist {time, edit, author} =
+    E.row []
+        [ prettyTime time zone
+        , E.text edit
+        , E.text <| prettyAuthor whitelist author
+        ]
+
+
+summaryView :
+    Time.Zone ->
+    Uid.UserIdMap ->
+    Mid.MessageIdMap Summary ->
+    E.Element Msg
 summaryView zone whitelist summaries =
     case Mid.toList summaries of
         Nothing ->
@@ -360,11 +427,14 @@ prettyAuthor map username =
         Nothing ->
             "could not display username"
 
-        Just (Uid.Fingerprint f) ->
-            case username of
-                Uid.Username u ->
-                    bytesToString u ++ bytesToString f
+        Just f ->
+            prettyUserId f username
                     
+
+prettyUserId : Uid.Fingerprint -> Uid.Username -> String
+prettyUserId (Uid.Fingerprint f) (Uid.Username u) =
+    bytesToString u ++ bytesToString f
+
 
 
 bytesToString : Bytes.Bytes -> String
@@ -372,25 +442,40 @@ bytesToString =
     B64e.encode << B64e.bytes
 
 
-writerView : (Mid.MessageId, List Diff, Maybe Wasm) -> E.Element Msg
-writerView (messageId, diffs, maybeWasm) =
-    E.column [ E.spacing 30, E.paddingXY 0 20, E.width E.fill ] <|
-        case constructMessage diffs of
-            Err err ->
-                E.text <| "Internal error: " ++ err
+-- writerView : (Mid.MessageId, List Diff, Maybe Wasm) -> E.Element Msg
+-- writerView (messageId, diffs, maybeWasm) =
+--     E.column [ E.spacing 30, E.paddingXY 0 20, E.width E.fill ] <|
+--         case constructMessage diffs of
+--             Err err ->
+--                 E.text <| "Internal error: " ++ err
+-- 
+--             Ok snapshot ->
+--                 [ toBox <| showShares <| snapshot.shares messageId
+--                 , userInputBox snapshot.mainBox messageId
+--                 , case maybeWasm of
+--                     Nothing ->
+--                         E.none
+-- 
+--                     Just wasm ->
+--                         wasmView wasm
+--                 , editCode snapshot.wasm messageId
+--                 , editBlobs snapshot.blobs messageId
+--                 ]
 
-            Ok snapshot ->
-                [ toBox snapshot.shares messageId
-                , userInputBox snapshot.mainBox messageId
-                , case maybeWasm of
-                    Nothing ->
-                        E.none
 
-                    Just wasm ->
-                        wasmView wasm
-                , editCode snapshot.wasm messageId
-                , editBlobs snapshot.blobs messageId
-                ]
+showShares : List Uid.UserId -> String
+showShares userIds =
+    String.concat <| List.map showUserId userIds
+
+
+showUserId : Uid.UserId -> String
+showUserId
+    (Uid.UserId
+        (Uid.Username username)
+        (Uid.Fingerprint fingerprint)) =
+
+    bytesToString fingerprint ++ bytesToString username
+    
 
 
 sendButtonLabel : E.Element Msg
@@ -411,9 +496,7 @@ toBox to draftId =
         , ubuntuMono
         , E.width <| E.maximum 400 <| E.fill
         ]
-        { onChange =
-            \newTo ->
-                NewToM { draftId = draftId, to = newTo }
+        { onChange = NewToM
         , text = to
         , placeholder = Nothing
         , label =
@@ -436,8 +519,7 @@ userInputBox userInput draftId =
         , ubuntuMono
         , E.height <| E.minimum 100 <| E.shrink
         ]
-        { onChange =
-            \u -> NewUserInputM { draftId = draftId, userInput = u }
+        { onChange = NewUserInputM
         , text = userInput
         , placeholder = Nothing
         , label =
@@ -479,7 +561,7 @@ editBlobs : List Blob -> Mid.MessageId -> E.Element Msg
 editBlobs blobs messageId =
     E.column [] <|
         List.map (editBlob messageId) blobs
-            ++ [ uploadBlob messageId ]
+            ++ [ uploadBlob ]
 
 
 writerButtons : List (E.Attribute Msg)
@@ -492,10 +574,10 @@ writerButtons =
     ]
 
 
-uploadBlob : Mid.MessageId -> E.Element Msg
-uploadBlob messageId =
+uploadBlob : E.Element Msg
+uploadBlob =
     Ei.button []
-        { onPress = Just <| UploadBlobM messageId
+        { onPress = Just UploadBlobM
         , label =
             E.el writerButtons <|
                 E.text "Upload a file"
@@ -944,6 +1026,11 @@ jsKeyVal key value =
     Je.object [ ( "key", Je.string key ), ( "value", value ) ]
 
 
+hash32ToString : Hash32 -> String
+hash32ToString (Hash32 hash) =
+    bytesToString hash
+
+
 encodeToJs : ElmToJs -> Je.Value
 encodeToJs value =
     case value of
@@ -955,14 +1042,14 @@ encodeToJs value =
                             Be.encode <|
                                 encodeToBackend toBackend
 
-        RerunWasmE { userInput, msgId } ->
+        RerunWasmE { userInput, id } ->
             jsKeyVal "rerunWasm" <|
                 Je.object
-                    [ ( "userInput", Je.string userInput )
-                    , ( "msgId", Je.string msgId )
+                    [ ( "userInput", Je.string <| bytesToString userInput )
+                    , ( "msgId", Je.string id)
                     ]
 
-        RunWasmE { input, wasmCode, msgId } ->
+        RunWasmE { input, wasmCode, id } ->
             jsKeyVal "runWasm" <|
                 Je.object
                     [ ( "userInput"
@@ -973,21 +1060,14 @@ encodeToJs value =
                             B64e.encode <|
                                 B64e.bytes wasmCode
                       )
-                    , case msgId of
-                        Mid.MessageId bytes ->
-                            ( "msgId"
-                            , Je.string <|
-                              B64e.encode <|
-                              B64e.bytes bytes
-                            )
+                    , ( "id", Je.string id)
                     ]
-
-
-
 
 
 type ToBackend
     = NewMain String
+    | NewTo String
+    | NewSubject String
     | NewShares (List Uid.UserId)
     | NewWasm Code
     | NewBlobs (List Blob)
@@ -995,6 +1075,7 @@ type ToBackend
     | WriterClick
     | ContactsClick
     | AccountClick
+    | DeleteBlob String
 
 
 encodeToBackend : ToBackend -> Be.Encoder
@@ -1028,6 +1109,15 @@ encodeToBackend toBackend =
                 Be.unsignedInt8 8 ::
                     List.map blobEncoder blobs
 
+        NewTo to ->
+            Be.sequence [Be.unsignedInt8 9, Be.string to]
+
+        NewSubject subject ->
+            Be.sequence [Be.unsignedInt8 10, Be.string subject]
+
+        DeleteBlob id ->
+            Be.sequence [Be.unsignedInt8 11, Be.string id]
+
 
 encodeCode : Code -> Be.Encoder
 encodeCode {contents, filename} =
@@ -1050,11 +1140,6 @@ encodeUsername (Uid.Username u) =
     Be.bytes u
 
 
-encodeHash32 : Hash32 -> Be.Encoder
-encodeHash32 (Hash32 hash) =
-    Be.bytes hash
-
-
 type Hash32
     = Hash32 Bytes.Bytes
 
@@ -1067,42 +1152,41 @@ powInfoEncoder { difficulty, unique } =
 type alias RunWasm =
     { input : Bytes.Bytes
     , wasmCode : Bytes.Bytes
-    , msgId : Mid.MessageId
+    , id : String
     }
 
 
 type ElmToJs
     = ToBackendE ToBackend
     | RunWasmE RunWasm
-    | RerunWasmE { userInput : String, msgId : String }
+    | RerunWasmE { userInput : Bytes.Bytes, id : String }
 
 
 type Msg
     = TimeZoneM Time.Zone
+    | DeleteContactM Uid.Username
     | UploadedM (Result Http.Error ())
     | FromBackendM Bytes.Bytes
     | BadWasmM String
     | NoBackendM
-    | BlobSelectedM String File.File
+    | BlobSelectedM File.File
     | CodeSelectedM String File.File
-    | CodeUploadedM String File.File Bytes.Bytes
     | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
-    | MessagesM
     | ContactsM
     | WriteM
     | NewWindowWidthM Int
-    | InboxMenuClickM String
     | DownloadCodeM Code
     | DownloadBlobM Blob
-    | NewToM { draftId : String, to : String }
+    | NewToM String
     | NewSubjectM String
-    | NewUserInputM { draftId : String, userInput : String }
+    | NewUserInputM String
     | UploadCodeM String
-    | UploadBlobM Mid.MessageId
+    | UploadBlobM
     | NewViewM ReadyView
     | NonsenseFromBackendM Bytes.Bytes
     | DeleteBlobM Blob
+    | ShareBoxContentsM String
 
 
 fromJsDecoder : Jd.Decoder Msg
@@ -1232,19 +1316,23 @@ updateSimple msg model =
         NewWindowWidthM width ->
             ( { model | windowWidth = width }, Cmd.none )
 
-        DownloadCodeM { contents, mime, filename } ->
-            ( model, Download.bytes filename mime contents )
+        DownloadCodeM { contents, filename } ->
+            ( model
+            , Download.bytes filename "application/wasm" contents
+            )
 
-        WasmOutputM msgId wasm ->
-            case model.page of
-                Writer currentMid diffs _ ->
-                    if currentMid /= msgId then
+        WasmOutputM newWasmId wasm ->
+            case (model.page, model.lastWasmId) of
+                (Writer _, Nothing) ->
+                    (model, Cmd.none)
+
+                (Writer w, Just lastWasmId) ->
+                    if newWasmId /= lastWasmId then
                         ( model, Cmd.none )
 
                     else
                         ( { model
-                            | page = Writer msgId diffs (Just wasm)
-                            , lastWasmRun = Just msgId
+                            | page = Writer {w | wasm = Just wasm}
                             , badWasm = Nothing
                           }
                         , Cmd.none
@@ -1277,12 +1365,7 @@ updateSimple msg model =
             )
 
         CodeSelectedM draftId file ->
-            ( model
-            , Task.perform
-                (CodeUploadedM draftId file)
-              <|
-                File.toBytes file
-            )
+            (model, cacheCode file)
 
         FromBackendM bytes ->
             update (decodeFromBackend bytes) model
@@ -1313,6 +1396,49 @@ updateSimple msg model =
             , Cmd.none
             )
 
+        BlobSelectedM file ->
+            (model, cacheBlob file)
+
+        DownloadBlobM {id} ->
+            (model, Download.url <| localUrl ++ "/" ++ id)
+
+        NewToM to ->
+            (model, NewTo to |> ToBackendE |> encodeToJs |> elmToJs)
+
+        NewSubjectM subject ->
+            ( model
+            , NewSubject subject |>
+              ToBackendE |>
+              encodeToJs |>
+              elmToJs
+            )
+
+        UploadBlobM ->
+            ( model
+            , Select.file
+                ["application/octet-stream"]
+                BlobSelectedM
+            )
+
+        NonsenseFromBackendM rawNonsense ->
+            ( { model | fatal = Just <|
+                "bad messeage from backend: " ++
+                    bytesToString rawNonsense
+              }
+            , Cmd.none
+            )
+
+        DeleteBlobM {id} ->
+            ( model
+            , DeleteBlob id |>
+              ToBackendE |>
+              encodeToJs |>
+              elmToJs
+            )
+
+
+type Mime
+    = Mime String
 
 
 findDraft : String -> Maybe (List DraftSummary) -> Maybe DraftSummary
@@ -1421,9 +1547,9 @@ timeD =
         (Bd.unsignedInt32 Bytes.LE)
 
 
-whitelistD : Bd.Decoder (List Uid.UserId)
+whitelistD : Bd.Decoder Uid.UserIdMap
 whitelistD =
-    list userIdD
+    Bd.map Uid.fromList (list userIdD)
 
 
 userIdD : Bd.Decoder Uid.UserId
@@ -1437,7 +1563,7 @@ summariesD =
 
 
 type alias ReadyView =
-    { whitelist : List Uid.UserId
+    { whitelist : Uid.UserIdMap
     , summaries : Mid.MessageIdMap Summary
     , page : PageV
     }
@@ -1448,6 +1574,15 @@ pageD =
     Bd.andThen pageHelpD Bd.unsignedInt8
 
 
+snapSummaryD : Bd.Decoder SnapSummary
+snapSummaryD =
+    Bd.map3 SnapSummary
+        timeD
+        stringDecoder
+        usernameD
+
+
+
 pageHelpD : Int -> Bd.Decoder PageV
 pageHelpD indicator =
     case indicator of
@@ -1455,15 +1590,18 @@ pageHelpD indicator =
             Bd.succeed Messages
 
         1 ->
-            Bd.map2 (\id diffs -> Writer id diffs Nothing)
-                messageIdD
-                (list diffsD)
+            Bd.map2 (\n u -> Writer <| WriterPage Nothing n u "")
+                snapshotD
+                (list snapSummaryD)
 
         2 ->
             Bd.succeed Contacts
 
         3 ->
             Bd.succeed Account
+
+        _ ->
+            Bd.fail
 
 
 messageIdD : Bd.Decoder Mid.MessageId
@@ -1473,9 +1611,24 @@ messageIdD =
 
 type PageV
     = Messages
-    | Writer Mid.MessageId (List Diff) (Maybe Wasm)
+    | Writer WriterPage
     | Contacts
     | Account
+
+
+type alias WriterPage = 
+    { wasm : Maybe Wasm
+    , snapshot : Snapshot
+    , summaries : List SnapSummary
+    , shareSearch : String
+    }
+
+
+type alias SnapSummary =
+    { time : Time.Posix
+    , edit : String
+    , author : Uid.Username
+    }
 
 
 type alias Diff =
@@ -1498,10 +1651,19 @@ fromBackendDecoder =
     Bd.map NewViewM viewDecoder
 
 
-cacheBlob : String -> File.File -> Cmd Msg
-cacheBlob id file =
+cacheCode : File.File -> Cmd Msg
+cacheCode file =
     Http.post
-        { url = localUrl ++ "/uploadFile/" ++ id
+        { url = localUrl ++ "/uploadcode"
+        , body = Http.fileBody file
+        , expect = Http.expectWhatever UploadedM
+        }
+
+
+cacheBlob : File.File -> Cmd Msg
+cacheBlob file =
+    Http.post
+        { url = localUrl ++ "/uploadfile"
         , body = Http.fileBody file
         , expect = Http.expectWhatever UploadedM
         }
@@ -1511,81 +1673,28 @@ emptyBytes =
     Be.encode <| Be.sequence []
 
 
-constructMessage : List Diff -> Result String Snapshot
-constructMessage diffs =
-    let
-        candidate =
-            List.foldr constructMessageHelp emptyBytes diffs
-        actualHash = hash8 candidate
-    in
-    case getLastHash diffs of
-        Nothing ->
-            Err "empty diffs"
-
-        Just expectedHash ->
-            if actualHash == expectedHash then
-                case Bd.decode snapshotD of
-                    Nothing ->
-                        Err "could not decode snapshot"
-
-                    Just snapshot ->
-                        Ok snapshot
-
-            else
-                Err "reconstructed diff didn't match the hash"
-
-
-getLastHash : List Diff -> Maybe Hash8
-getLastHash diffs =
-    case List.reverse diffs of
-        [] ->
-            Nothing
-
-        diff :: _ ->
-            Just diff.integrity
-
-
-constructMessageHelp : Diff -> Bytes.Bytes -> Maybe Bytes.Bytes
-constructMessageHelp diff old =
-    case reverseBytes old of
-        Nothing ->
-            Nothing
-
-        Just reversedOld ->
-            case Bd.decode (Bd.bytes diff.end) reversedOld of
-                Nothing ->
-                    Nothing
-
-                Just lastBackwards ->
-                    case reverseBytes lastBackwards of
-                        Nothing ->
-                            Nothing
-
-                        Just last ->
-                            case
-                                Bd.decode (Bd.bytes diff.start) old
-                            of
-                                Nothing ->
-                                    Nothing
-
-                                Just first ->
-                                    Just <|
-                                    Be.encode <|
-                                    Be.sequence <|
-                                    List.map
-                                        Be.bytes
-                                        [first, diff.insert, last]
-
-
 type Hash8 =
     Hash8 Bytes.Bytes
 
 
-hash8 : Bytes.Bytes -> Hash8
+sha256 : Bytes.Bytes -> Bytes.Bytes
+sha256 bytes =
+    SHA256.fromBytes bytes |> SHA256.toBytes
+
+
+hash8 : Bytes.Bytes -> Maybe Hash8
 hash8 bytes =
-    SHA256.fromBytes bytes |>
-    SHA256.toBytes |>
-    Hash8
+    case Bd.decode (Bd.bytes 8) (sha256 bytes) of
+        Nothing ->
+            Nothing
+
+        Just bytes8 ->
+            Just <| Hash8 bytes8
+
+
+hash32 : Bytes.Bytes -> Hash32
+hash32 bytes =
+    Hash32 <| sha256 bytes
 
 
 reverseBytes : Bytes.Bytes -> Maybe Bytes.Bytes
@@ -1624,6 +1733,67 @@ type alias Snapshot =
     , blobs : List Blob
     , wasm : Maybe Code
     }
+
+
+viewSnapshot : Time.Zone -> Snapshot -> Uid.UserIdMap -> String -> E.Element Msg
+viewSnapshot
+    zone
+    {time, shares, mainBox, blobs, wasm}
+    userIds
+    shareSearch =
+
+    E.column []
+        [ prettyTime time zone
+        , addShareBox shareSearch
+        , viewShares shares userIds
+        , userInputView mainBox
+        , blobsView blobs
+        , case wasm of
+            Just justWasm ->
+                codeView justWasm
+
+            Nothing ->
+                E.none
+        ]
+
+
+viewShares : List Uid.Username -> Uid.UserIdMap -> E.Element Msg
+viewShares usernames whitelist =
+    E.column [] <|
+        List.map (viewShare whitelist) usernames
+
+
+viewShare : Uid.UserIdMap -> Uid.Username -> E.Element Msg
+viewShare whitelist username =
+    case Uid.get username whitelist of
+        Nothing ->
+            E.text "could not display username"
+
+        Just f ->
+            E.text <| prettyUserId f username
+            
+
+addShareBox : String -> E.Element Msg
+addShareBox contents =
+    Ei.text
+        [ Font.size normalTextSize
+        , ubuntuMono
+        , E.width <| E.maximum 400 <| E.fill
+        ]
+        { onChange = ShareBoxContentsM
+        , text = contents
+        , placeholder = Nothing
+        , label =
+            Ei.labelLeft
+                [ Font.size normalTextSize
+                , ubuntu
+                , E.centerY
+                , E.paddingEach
+                    { left = 0, right = 7, bottom = 0, top = 0}
+                ]
+            <|
+                E.text "To"
+        }
 
 
 snapshotD : Bd.Decoder Snapshot
@@ -1674,64 +1844,55 @@ codeD =
 updateOnUserInput : String -> Model -> ( Model, Cmd Msg )
 updateOnUserInput userInput model =
     case model.page of
-        Writer mId diffs maybeWasm ->
-            case (model.lastWasmRun, constructMessage diffs) of
-                (_, Err err) ->
-                    ( {model | fatalErr = Just err}
-                    , Cmd.none
-                    )
+        Writer w ->
+            case w.snapshot.wasm of
+                Nothing ->
+                    (model, Cmd.none)
 
-                (Nothing, Ok snapshot) ->
-                    ( model
-                    , Cmd.batch
-                        [ RunWasmE
-                            { input = Be.encode (Be.string userInput)
-                            , wasmCode = snapshot.wasm.contents
-                            } |>
-                          encodeToJs |>
-                          elmToJs
-                        , NewMain userInput |>
-                          ToBackendE |>
-                          encodeToJs |>
-                          elmToJs
-                        ]
-                    )
+                Just code ->
+                    case model.lastWasmId of
+                        Nothing ->
+                            ( { model |
+                                    lastWasmId =
+                                        Just <|
+                                        String.fromInt
+                                        model.counter
+                              , counter = model.counter + 1
+                              }
+                            , Cmd.batch
+                                [ RunWasmE
+                                    { input =
+                                        Be.encode
+                                            (Be.string
+                                                userInput)
+                                    , wasmCode = code.contents
+                                    , id = String.fromInt model.counter
+                                    } |>
+                                    encodeToJs |>
+                                    elmToJs
+                                , NewMain userInput |>
+                                  ToBackendE |>
+                                  encodeToJs |>
+                                  elmToJs
+                                ]
+                            )
 
-                (Just lastRunId, Ok snapshot) ->
-                    if lastRunId /= mId then
-                        ( model
-                        , Cmd.batch
-                            [ RunWasmE
-                               { input =
-                                    Be.encode (Be.string userInput)
-                               , wasmCode = snapshot.wasm.contents
-                               } |>
-                              encodeToJs |>
-                              elmToJs
-                            , NewMain userInput |>
-                              ToBackendE |>
-                              encodeToJs |>
-                              elmToJs
-                            ]
-                        )
-
-                    else
-                        ( model
-                        , Cmd.batch
-                            [ RerunWasmE
-                                { input =
-                                    Be.encode (Be.string userInput)
-                                , wasmCode =
-                                    snapshot.wasm.contents
-                                } |>
-                              encodeToJs |>
-                              elmToJs
-                            , NewMain userInput |>
-                              ToBackendE |>
-                              encodeToJs |>
-                              elmToJs
-                            ]
-                        )
+                        Just lastWasmId ->
+                                ( model
+                                , Cmd.batch
+                                    [ RerunWasmE
+                                        { userInput =
+                                            Be.encode (Be.string userInput)
+                                        , id = lastWasmId
+                                        } |>
+                                      encodeToJs |>
+                                      elmToJs
+                                    , NewMain userInput |>
+                                      ToBackendE |>
+                                      encodeToJs |>
+                                      elmToJs
+                                    ]
+                                )
 
         _ ->
             ( model, Cmd.none )
