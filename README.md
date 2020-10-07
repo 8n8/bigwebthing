@@ -57,6 +57,9 @@ Events triggered by the user, like clicking buttons and typing in the text boxes
 		32 bytes: hash of blob
 	Response
 		blob
+/setcode
+    Request:
+        binary blob
 
 # Server API
 

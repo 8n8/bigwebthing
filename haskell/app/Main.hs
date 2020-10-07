@@ -276,10 +276,13 @@ httpApi =
             requested <- Sc.param "requested"
             Sc.file $ "static/" ++ requested
 
+        Sc.post "/setcode" $
+            httpPost SetCodeM
+
         Sc.post "/setblob" $
             httpPost SetBlobM
 
-        Sc.post "/getBlob" $
+        Sc.post "/getblob" $
             httpPost GetBlobM
 
 
@@ -344,6 +347,7 @@ data Output
 
 data Msg
     = StartM
+    | SetCodeM Bl.ByteString Q
     | AppDataDirM FilePath
     | DirCreatedIfMissingM FilePath
     | FileContentsM FilePath Bl.ByteString
@@ -897,6 +901,29 @@ update model msg =
 
     ChunkFromHandleM path raw ->
         updateReady model $ updateOnChunkFromHandle path raw
+
+    SetCodeM body q ->
+        updateReady model $ updateOnNewRawWasm body q
+
+
+updateOnNewRawWasm
+    :: Bl.ByteString
+    -> Q
+    -> Ready
+    -> (Output, State)
+updateOnNewRawWasm body q ready =
+    let
+    hash = hash32 body
+    path = makeBlobPath (root ready) hash
+    (wasmO, wasmS) = updateOnNewWasm hash ready
+    in
+    ( BatchO
+        [ wasmO
+        , WriteFileStrictO path $ Bl.toStrict body
+        , BytesInQO q Bl.empty
+        ] 
+    , wasmS
+    )
 
 
 updateOnChunkFromHandle
@@ -2355,7 +2382,7 @@ encodeBlob :: Blob -> B.ByteString
 encodeBlob blob =
     mconcat
         [ encodeHash32 $ hashB blob
-        , encodeSizedString $ filename blob
+        , encodeSizedString $ filenameB blob
         , encodeUint64 $ size blob
         , encodeSizedString $ mime blob
         ]
@@ -2448,10 +2475,10 @@ newtype PosixSeconds
 blobP :: P.Parser Blob
 blobP = do
     hashB <- hash32P
-    filename <- sizedStringP
+    filenameB <- sizedStringP
     size <- uint64P
     mime <- sizedStringP
-    return $ Blob{hashB, filename, size, mime}
+    return $ Blob{hashB, filenameB, size, mime}
 
 
 
@@ -2481,7 +2508,7 @@ stringP = do
 data Blob
     = Blob
         { hashB :: Hash32
-        , filename :: T.Text
+        , filenameB :: T.Text
         , size :: Integer
         , mime :: T.Text
         }
@@ -3151,14 +3178,14 @@ hash32P = do
 
 data FromFrontend
     = NewMain T.Text
-    | NewSubject T.Text
-    | NewShares [UserId]
-    | NewWasm Wasm
-    | NewBlobs [Blob]
+    | NewTo T.Text
     | MessagesClick
     | WriterClick
     | ContactsClick
     | AccountClick
+    | DeleteBlob T.Text
+    | DeleteContact Username
+    | SummaryClick MessageId
 
 
 data Code
@@ -3199,22 +3226,6 @@ fromFrontendP = do
             _ <- P.word8 4
             newMain <- stringP
             return $ NewMain newMain
-        , do
-            _ <- P.word8 5
-            newSubject <- stringP
-            return $ NewSubject newSubject
-        , do
-            _ <- P.word8 6
-            newShares <- P.many1 userIdP
-            return $ NewShares newShares
-        , do
-            _ <- P.word8 7
-            hash <- hash32P
-            return $ NewWasm hash
-        , do
-            _ <- P.word8 8
-            blobs <- P.many1 blobP
-            return $ NewBlobs blobs
         ]
     P.endOfInput
     return input
@@ -3361,18 +3372,6 @@ uiApiUpdate fromFrontend ready =
 
     NewMain newMain ->
         updateOnNewMain newMain ready
-
-    NewSubject newSubject ->
-        updateOnNewSubject newSubject ready
-
-    NewShares shares ->
-        updateOnNewShares shares ready
-
-    NewWasm hash ->
-        updateOnNewWasm hash ready
-
-    NewBlobs blobs ->
-        updateOnNewBlobs blobs ready
 
 
 updateOnNewBlobs :: [Blob] -> Ready -> (Output, State)
@@ -3630,59 +3629,6 @@ shareBlobsHelp messageId tos hash (oldO, model) =
             in
             ReadyS $ ready { sendingBlob = jobs }
     )
-
-
-updateOnNewSubject :: T.Text -> Ready -> (Output, State)
-updateOnNewSubject newSubject ready =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
-    case pageR ready of
-    Messages ->
-        pass
-
-    Writer messageId diffs ->
-        case constructMessage diffs of
-        Nothing ->
-            (ErrorO "could not construct message", FailedS)
-
-        Just oldEncoded ->
-            case decodeHeader (Bl.fromStrict oldEncoded) of
-            Left err ->
-                ( ErrorO $ "could not decode header: " <> err
-                , FailedS
-                )
-
-            Right oldHeader ->
-                let
-                newHeader = oldHeader { subject = newSubject }
-                newEncoded = encodeHeader newHeader
-                newDiff = makeDiff Me oldEncoded newEncoded
-                newDiffs = newDiff : diffs
-                newReady =
-                    ready { pageR = Writer messageId newDiffs }
-                (sendO, sendState) =
-                    shareHeader
-                        (ReadyS newReady)
-                        messageId
-                        newHeader
-                in
-                updateReady sendState $ \newerReady ->
-                ( BatchO
-                    [ dumpCache newReady
-                    , dumpView newReady
-                    , dumpMessage
-                        (root newerReady) messageId newDiffs
-                    , sendO
-                    ]
-                , sendState
-                )
-
-    Contacts ->
-        pass
-
-    Account ->
-        pass
 
 
 dumpMessage :: RootPath -> MessageId -> [Diff] -> Output

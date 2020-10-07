@@ -783,20 +783,20 @@ encodeToBackend toBackend =
             Be.sequence [ Be.unsignedInt8 4, Be.string m ]
 
         NewTo to ->
-            Be.sequence [ Be.unsignedInt8 9, Be.string to ]
+            Be.sequence [ Be.unsignedInt8 5, Be.string to ]
 
         DeleteBlob id ->
-            Be.sequence [ Be.unsignedInt8 11, Be.string id ]
+            Be.sequence [ Be.unsignedInt8 6, Be.string id ]
 
         DeleteContact toDelete ->
             Be.sequence
-                [ Be.unsignedInt8 12
+                [ Be.unsignedInt8 7
                 , encodeUsername toDelete
                 ]
 
         SummaryClick messageId ->
             Be.sequence
-                [ Be.unsignedInt8 13
+                [ Be.unsignedInt8 8
                 , encodeMessageId messageId
                 ]
 
@@ -1039,7 +1039,7 @@ update msg model =
             ( model, cacheBlob file )
 
         DownloadBlobM { id } ->
-            ( model, Download.url <| localUrl ++ "/" ++ id )
+            ( model, Download.url <| localUrl ++ "/getblob/" ++ id )
 
         UploadBlobM ->
             ( model
@@ -1270,7 +1270,7 @@ fromBackendDecoder =
 cacheCode : File.File -> Cmd Msg
 cacheCode file =
     Http.post
-        { url = localUrl ++ "/uploadcode"
+        { url = localUrl ++ "/setcode"
         , body = Http.fileBody file
         , expect = Http.expectWhatever UploadedM
         }
@@ -1279,7 +1279,7 @@ cacheCode file =
 cacheBlob : File.File -> Cmd Msg
 cacheBlob file =
     Http.post
-        { url = localUrl ++ "/uploadfile"
+        { url = localUrl ++ "/setblob"
         , body = Http.fileBody file
         , expect = Http.expectWhatever UploadedM
         }
