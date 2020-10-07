@@ -2,6 +2,7 @@ port module Main exposing (main)
 
 import Base64.Decode as B64d
 import Base64.Encode as B64e
+import Hex.Convert
 import Browser
 import Browser.Events
 import Bytes
@@ -754,7 +755,7 @@ encodeToJs value =
 
 type ToBackend
     = NewMain String
-    | NewTo String
+    | NewTo Uid.Username
     | MessagesClick
     | WriterClick
     | ContactsClick
@@ -762,6 +763,14 @@ type ToBackend
     | DeleteBlob String
     | DeleteContact Uid.Username
     | SummaryClick Mid.MessageId
+
+
+sizedString : String -> Be.Encoder
+sizedString s =
+    Be.sequence
+        [ Be.unsignedInt32 Bytes.LE (Be.getStringWidth s)
+        , Be.string s
+        ]
 
 
 encodeToBackend : ToBackend -> Be.Encoder
@@ -1279,10 +1288,20 @@ cacheCode file =
 cacheBlob : File.File -> Cmd Msg
 cacheBlob file =
     Http.post
-        { url = localUrl ++ "/setblob"
+        { url = localUrl ++ "/setblob/" ++ encodeMetadata file
         , body = Http.fileBody file
         , expect = Http.expectWhatever UploadedM
         }
+
+
+encodeMetadata : File.File -> String
+encodeMetadata file =
+    Hex.Convert.toString <|
+    Be.encode
+        [ sizedString File.name file
+        , sizedString File.mime file
+        , Be.unsignedInt32 Bytes.LE File.size file
+        ]
 
 
 type alias Snapshot =

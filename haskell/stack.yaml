@@ -11,6 +11,7 @@ extra-deps:
 - Diff-0.3.4@sha256:5ab20a407f9e65d13b642c3cd414906a40280343a31b388f6ed69b9228fe42c1,1127
 - liquid-fixpoint-0.8.10.1@sha256:7b40e5d29b72504014fc289bb4807330996c63b37fc33b40a906664c1ea074b1,7291
 - text-format-0.3.2@sha256:2a3fc17cf87120fcfdbca62a0da59759755549285841cdc1483081c35fb3d115,1814
+- hex-text-0.1.0.0@sha256:52dc2cf5ce45f7d86ea5e56e2ac57820f788c10bbb3fe83f6d57e678a426305b,1072
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

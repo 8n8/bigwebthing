@@ -25,6 +25,7 @@ dependencies:
 - stm
 - attoparsec
 - wai-websockets
+- hex-text
 - wai
 - warp
 - websockets

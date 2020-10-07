@@ -31,6 +31,7 @@ import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
 import Control.Concurrent (forkIO, threadDelay)
+import qualified Text.Hex
 import qualified Network.Simple.TCP as Tcp
 import qualified Data.Map as Map
 import Control.Exception.Base (SomeException)
@@ -279,8 +280,12 @@ httpApi =
         Sc.post "/setcode" $
             httpPost SetCodeM
 
-        Sc.post "/setblob" $
-            httpPost SetBlobM
+        Sc.post "/setblob/:metadata" $ do
+            body <- Sc.body
+            metadata <- Sc.param "metadata"
+            liftIO $ Stm.atomically $ do
+                q <- msgQ
+                Q.writeTQueue q (SetBlobM body metadata)
 
         Sc.post "/getblob" $
             httpPost GetBlobM
@@ -298,7 +303,7 @@ httpPost msg =
         body <- Sc.body
         liftIO $ Stm.atomically $ do
             q <- msgQ
-            Q.writeTQueue q $ msg body Q.newTQueue
+            Q.writeTQueue q $ msg body responseQ
         response <- liftIO $ Stm.atomically $ do
             q <- responseQ
             Q.readTQueue q
@@ -352,7 +357,7 @@ data Msg
     | DirCreatedIfMissingM FilePath
     | FileContentsM FilePath Bl.ByteString
     | BatchM [Maybe Msg]
-    | SetBlobM Bl.ByteString Q
+    | SetBlobM Bl.ByteString T.Text
     | TmpFileHandleM FilePath Io.Handle
     | WrittenToHandleM FilePath Io.Handle
     | MovedFileM FilePath
@@ -425,22 +430,13 @@ newtype Hash32
 
 
 data BlobUpWait
-    = BlobUpWait Bl.ByteString Q
+    = BlobUpWait Bl.ByteString T.Text
 
 
 data BlobUp
-    = AwaitingHandleB
-        Q
-        Bl.ByteString
-        Hash32
-    | AwaitingTmpWriteB
-        Q
-        Hash32
-        FilePath
-    | AwaitingMoveB
-        Q
-        Hash32
-        FilePath
+    = AwaitingHandleB Bl.ByteString T.Text Hash32
+    | AwaitingTmpWriteB T.Text Hash32 FilePath
+    | AwaitingMoveB T.Text Hash32 FilePath
 
 
 promoteBlobsUp :: Jobs BlobUp BlobUpWait -> Jobs BlobUp BlobUpWait
@@ -452,8 +448,8 @@ promoteBlobsUp jobs =
     Jobs _ [] ->
         NoJobs
 
-    Jobs _ (BlobUpWait body q : aiting) ->
-        Jobs (AwaitingHandleB q body (hash32 body)) aiting
+    Jobs _ (BlobUpWait body metadata : aiting) ->
+        Jobs (AwaitingHandleB body metadata (hash32 body)) aiting
 
 
 data State
@@ -575,6 +571,7 @@ data Ready
         , readingToSendToServer :: Maybe Hash32
         , pageR :: Page
         , awaitingCrypto :: [(Hash32, Username)]
+        , readingMessageOnClick :: Maybe MessageId
         }
 
 
@@ -836,8 +833,8 @@ update model msg =
         in
         (BatchO outputs, newModel)
 
-    SetBlobM blob responseQ ->
-        updateReady model $ setBlobUpdate blob responseQ
+    SetBlobM body metadata ->
+        updateReady model $ setBlobUpdate body metadata
 
     TmpFileHandleM path handle ->
         updateReady model $ onTmpFileHandleUpdate path handle
@@ -1048,6 +1045,36 @@ fileToSendToServerUpdate path contents ready =
         Nothing
 
 
+messageForClick
+    :: FilePath
+    -> Bl.ByteString
+    -> Ready
+    -> Maybe (Output, State)
+messageForClick path raw ready =
+    case readingMessageOnClick ready of
+    Nothing ->
+        Nothing
+
+    Just messageId ->
+        if path == makeMessagePath (root ready) messageId then
+        case P.eitherResult $ P.parse (listP diffP) raw of
+        Left err ->
+            Just $ corruptMessage err messageId
+
+        Right diffs ->
+            let
+            newReady =
+                ready
+                    { pageR = Writer messageId diffs
+                    , readingMessageOnClick = Nothing
+                    }
+            in
+            Just (dumpView newReady, ReadyS newReady)
+
+        else
+        Nothing
+
+
 messageFileUpdate
     :: FilePath
     -> Bl.ByteString
@@ -1058,7 +1085,12 @@ messageFileUpdate path raw ready =
     Nothing ->
         case extractingReferencesHelp path raw ready of
         Nothing ->
-            (DoNothingO, ReadyS ready)
+            case messageForClick path raw ready of
+            Nothing ->
+                (DoNothingO, ReadyS ready)
+
+            Just done ->
+                done
 
         Just done ->
             done
@@ -1655,6 +1687,7 @@ fileExistenceUpdate path exists init_ =
                     , pageR = Messages
                     , awaitingCrypto = []
                     , sendingBlob = NoJobs
+                    , readingMessageOnClick = Nothing
                     }
             in
             ( BatchO
@@ -2383,7 +2416,7 @@ encodeBlob blob =
     mconcat
         [ encodeHash32 $ hashB blob
         , encodeSizedString $ filenameB blob
-        , encodeUint64 $ size blob
+        , encodeUint32 $ size blob
         , encodeSizedString $ mime blob
         ]
 
@@ -2476,7 +2509,7 @@ blobP :: P.Parser Blob
 blobP = do
     hashB <- hash32P
     filenameB <- sizedStringP
-    size <- uint64P
+    size <- uint32P
     mime <- sizedStringP
     return $ Blob{hashB, filenameB, size, mime}
 
@@ -2509,7 +2542,7 @@ data Blob
     = Blob
         { hashB :: Hash32
         , filenameB :: T.Text
-        , size :: Integer
+        , size :: Int
         , mime :: T.Text
         }
         deriving (Eq, Ord)
@@ -3154,15 +3187,6 @@ instance Eq Username where
         a == b
 
 
-userIdP :: P.Parser UserId
-userIdP = do
-    username <- P.take 8
-    fingerprint <- P.take 8
-    return $ UserId
-        (Username $ Bl.fromStrict username)
-        (Fingerprint $ Bl.fromStrict fingerprint)
-
-
 blobHashP :: P.Parser Hash32
 blobHashP = do
     hash <- hash32P
@@ -3178,21 +3202,14 @@ hash32P = do
 
 data FromFrontend
     = NewMain T.Text
-    | NewTo T.Text
+    | NewTo UserId
     | MessagesClick
     | WriterClick
     | ContactsClick
     | AccountClick
-    | DeleteBlob T.Text
+    | DeleteBlob Hash32
     | DeleteContact Username
     | SummaryClick MessageId
-
-
-data Code
-    = Code
-        { binary :: B.ByteString
-        , filename :: T.Text
-        }
 
 
 newtype MessageId
@@ -3344,9 +3361,101 @@ messageIdLen =
     32
 
 
+removeBlob :: Hash32 -> [Blob] -> [Blob]
+removeBlob hash blobs =
+    filter ((/= hash) . hashB) blobs
+
+
+updateOnDeleteBlob :: Hash32 -> Ready -> (Output, State)
+updateOnDeleteBlob hash ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case pageR ready of
+    Messages ->
+        pass
+
+    Writer messageId diffs ->
+        case constructMessage diffs of
+        Nothing ->
+            (ErrorO "could not construct message", FailedS)
+
+        Just oldEncoded ->
+            case decodeHeader (Bl.fromStrict oldEncoded) of
+            Left err ->
+                ( ErrorO $ "could not decode header: " <> err
+                , FailedS
+                )
+
+            Right oldHeader ->
+                let
+                newHeader =
+                    oldHeader
+                        { blobs =
+                            removeBlob hash (blobs oldHeader)
+                        }
+                newEncoded = encodeHeader newHeader
+                newDiff = makeDiff Me oldEncoded newEncoded
+                newDiffs = newDiff : diffs
+                newReady =
+                    ready { pageR = Writer messageId newDiffs }
+                (sendO, sendState) =
+                    shareHeader (ReadyS newReady) messageId newHeader
+                in
+                updateReady sendState $ \newerReady ->
+                ( BatchO
+                    [ dumpCache newerReady
+                    , dumpView newerReady
+                    , dumpMessage (root newerReady) messageId newDiffs
+                    , sendO
+                    ]
+                , sendState
+                )
+
+    Contacts ->
+        pass
+
+    Account ->
+        pass
+
+
+updateOnDeleteContact :: Username -> Ready -> (Output, State)
+updateOnDeleteContact username ready =
+    let
+    newWhite = Map.delete username (whitelist ready)
+    newReady = ready { whitelist = newWhite }
+    in
+    ( BatchO
+        [ uploadContacts newWhite
+        , dumpView newReady
+        , dumpCache newReady
+        ]
+    , ReadyS newReady
+    )
+
+
+updateOnSummaryClick :: MessageId -> Ready -> (Output, State)
+updateOnSummaryClick messageId ready =
+    ( ReadFileStrictO $ makeMessagePath (root ready) messageId
+    , ReadyS $ ready { readingMessageOnClick = Just messageId }
+    )
+
+
 uiApiUpdate :: FromFrontend -> Ready -> (Output, State)
 uiApiUpdate fromFrontend ready =
     case fromFrontend of
+    SummaryClick messageId ->
+        updateOnSummaryClick messageId ready
+
+    DeleteContact username ->
+        updateOnDeleteContact username ready
+        
+    NewTo userId ->
+        updateOnNewShares [userId] ready
+
+    DeleteBlob id_ ->
+        updateOnDeleteBlob id_ ready
+        
     ContactsClick ->
         pageClick ready Contacts
 
@@ -3489,7 +3598,6 @@ updateOnNewWasm hash ready =
 
     Account ->
         pass
-
 
 
 updateOnNewShares :: [UserId] -> Ready -> (Output, State)
@@ -4096,6 +4204,32 @@ allOkHelp eithers accum =
         allOkHelp ithers (b:accum)
 
 
+data FileMetadata =
+    FileMetadata
+        { fileSizeM :: Int
+        , mimeM :: T.Text
+        , filenameM :: T.Text
+        }
+
+
+decodeMetadata :: T.Text -> Either String FileMetadata
+decodeMetadata raw =
+    case Text.Hex.decodeHex raw of
+        Nothing ->
+            Left "hexadecimal decode error"
+
+        Just bytes ->
+            P.eitherResult $ P.parse metadataP $ Bl.fromStrict bytes
+
+
+metadataP :: P.Parser FileMetadata
+metadataP = do
+    filename <- sizedStringP
+    mime <- sizedStringP
+    size <- uint32P
+    return $ FileMetadata size mime filename
+
+
 onMovedFile :: FilePath -> Ready -> (Output, State)
 onMovedFile new ready =
     let
@@ -4105,36 +4239,27 @@ onMovedFile new ready =
     NoJobs ->
         pass
 
-    Jobs (AwaitingMoveB q (Hash32 hash) toPath) [] ->
-        if toPath == new then
-        ( BytesInQO q (Bl.singleton 1 <> hash)
-        , ReadyS $ ready { blobsUp = NoJobs }
-        )
+    j@(Jobs (AwaitingMoveB rawMetadata (Hash32 hash) toPath) _) ->
+        case decodeMetadata rawMetadata of
+        Left err ->
+            (ErrorO err, FailedS)
 
-        else
-        pass
-
-    Jobs
-        (AwaitingMoveB q (Hash32 hash) toPath)
-        (BlobUpWait blob newQ : _) ->
-
-        if toPath == new then
-        let
-        (output, newModel) = update
-            (ReadyS $ ready
-                { blobsUp =
-                    promoteBlobsUp $ blobsUp ready
-                })
-            (SetBlobM blob newQ)
-        in
-        ( BatchO
-            [ BytesInQO q (Bl.singleton 1 <> hash)
-            , output
-            ]
-        , newModel
-        )
-        else
-        pass
+        Right metadata ->
+            if toPath == new then
+            let
+            blob =
+                Blob
+                    { hashB = Hash32 hash
+                    , filenameB = filenameM metadata
+                    , size = fileSizeM metadata
+                    , mime = mimeM metadata
+                    }
+            in
+            updateOnNewBlobs
+                [blob]
+                (ready { blobsUp = promoteBlobsUp j })
+            else
+            pass
 
     Jobs (AwaitingTmpWriteB _ _ _) _ ->
         pass
@@ -4152,7 +4277,7 @@ onWrittenToTmp writtenPath handle ready =
     NoJobs ->
         pass
 
-    Jobs (AwaitingTmpWriteB q hash expectPath) waiting ->
+    Jobs (AwaitingTmpWriteB rawMeta hash expectPath) waiting ->
         if writtenPath == expectPath then
         let
         blobPath = makeBlobPath (root ready) hash
@@ -4164,7 +4289,7 @@ onWrittenToTmp writtenPath handle ready =
         , ReadyS $ ready
             { blobsUp =
                 Jobs
-                    (AwaitingMoveB q hash blobPath)
+                    (AwaitingMoveB rawMeta hash blobPath)
                     waiting
             }
         )
@@ -4194,11 +4319,11 @@ onTmpFileHandleUpdate path handle ready =
     NoJobs ->
         (DoNothingO, ReadyS ready)
 
-    Jobs (AwaitingHandleB q blob hash) waiting ->
-        ( WriteToHandleO handle blob path
+    Jobs (AwaitingHandleB body rawMetadata hash) waiting ->
+        ( WriteToHandleO handle body path
         , ReadyS $ ready {
             blobsUp = Jobs
-                (AwaitingTmpWriteB q hash path)
+                (AwaitingTmpWriteB rawMetadata hash path)
                 waiting
             }
         )
@@ -4209,16 +4334,16 @@ onTmpFileHandleUpdate path handle ready =
 
 setBlobUpdate ::
     Bl.ByteString ->
-    Q ->
+    T.Text ->
     Ready ->
     (Output, State)
-setBlobUpdate blob q ready =
+setBlobUpdate body rawMetadata ready =
     case blobsUp ready of
     NoJobs ->
         ( GetTmpFileHandleO $ tempPath $ root ready
         , ReadyS $ ready
             { blobsUp =
-                Jobs (AwaitingHandleB q blob (hash32 blob)) []
+                Jobs (AwaitingHandleB body rawMetadata (hash32 body)) []
             }
         )
 
@@ -4227,7 +4352,7 @@ setBlobUpdate blob q ready =
         , ReadyS $
             ready
                 { blobsUp =
-                    Jobs current (BlobUpWait blob q : waiting)
+                    Jobs current (BlobUpWait body rawMetadata : waiting)
                 }
         )
 
@@ -4478,23 +4603,6 @@ uint32P = do
     return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
 
 
-uint64P :: P.Parser Integer
-uint64P =
-    uint64HelpP 0 0
-
-
-uint64HelpP :: Integer -> Integer -> P.Parser Integer
-uint64HelpP sofar counter =
-    if counter == 8 then
-    return sofar
-
-    else do
-        word <- P.anyWord8
-        uint64HelpP
-            (sofar + (fromIntegral word) * (256 ^ counter))
-            (counter + 1)
-
-
 handshakeP :: P.Parser (HandshakeId, Handshake)
 handshakeP = do
     handshakeId <- handshakeIdP
@@ -4648,6 +4756,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , pageR = Messages
             , awaitingCrypto = awaitingCryptoM memCache
             , sendingBlob = NoJobs
+            , readingMessageOnClick = Nothing
             }
         )
 
