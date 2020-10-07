@@ -7,7 +7,6 @@ import Browser.Events
 import Bytes
 import Bytes.Decode as Bd
 import Bytes.Encode as Be
-import Dict
 import Element as E
 import Element.Background as Background
 import Element.Border as Border
@@ -16,16 +15,14 @@ import Element.Input as Ei
 import File
 import File.Download as Download
 import File.Select as Select
-import Hex.Convert
 import Html
 import Http
 import Json.Decode as Jd
 import Json.Encode as Je
+import MessageIdMap as Mid
 import Task
 import Time
-import MessageIdMap as Mid
 import UserIdMap as Uid
-import SHA256
 
 
 main : Program Int Model Msg
@@ -38,26 +35,12 @@ main =
         }
 
 
-type GetMe
-    = KeysFromJsG
-    | PowInfoG MyKeys
-    | PowG MyKeys
-    | NameFromServerG MyKeys
-
-
 type alias Blob =
     { id : String
     , mime : String
     , filename : String
     , size : Int
     }
-
-
-type AdminPage
-    = PricingA
-    | AccountA
-    | AboutA
-    | HelpA
 
 
 type Wasm
@@ -90,47 +73,6 @@ type MessagingButton
     | WriterB
 
 
-type MessagingPage
-    = ContactsE
-    | WriteE ( Draft, Maybe Wasm )
-    | InboxE (Maybe ( InboxMessage, Wasm ))
-    | DraftsE
-    | SentE (Maybe ( Sent, Wasm ))
-
-
-type alias Sent =
-    { id : String
-    , subject : String
-    , to : String
-    , userInput : String
-    , code : Code
-    , blobs : List Blob
-    }
-
-
-type alias InboxMessage =
-    { subject : String
-    , fromId : String
-    , userInput : String
-    , blobs : List Blob
-    , timeSent : Int
-    , timeReceived : Int
-    , id : String
-    , code : Code
-    }
-
-
-type alias Draft =
-    { id : String
-    , subject : String
-    , to : String
-    , time : Int
-    , userInput : String
-    , code : Maybe Code
-    , blobs : List Blob
-    }
-
-
 type alias Code =
     { contents : Bytes.Bytes
     , filename : String
@@ -149,126 +91,8 @@ type alias Model =
     , zone : Maybe Time.Zone
     , lastWasmId : Maybe String
     , counter : Int
+    , shareBox : String
     }
-
-
-type alias Contact =
-    { name : String
-    , keys : TheirKeys
-    }
-
-
-contactsDecoder : Bd.Decoder (Dict.Dict String Contact)
-contactsDecoder =
-    Bd.map Dict.fromList <| list contactDecoderHelp
-
-
-contactDecoderHelp : Bd.Decoder ( String, Contact )
-contactDecoderHelp =
-    Bd.map2 (\a b -> ( a, b ))
-        stringDecoder
-        contactDecoder
-
-
-contactDecoder : Bd.Decoder Contact
-contactDecoder =
-    Bd.map2 Contact
-        stringDecoder
-        theirKeysDecoder
-
-
-type alias TheirKeys =
-    { signing : Bytes.Bytes
-    , encryption : Bytes.Bytes
-    }
-
-
-type alias SendingSummary =
-    { subject : String
-    , to : String
-    , time : Int
-    , id : Int
-    }
-
-
-type alias SentSummary =
-    { subject : String
-    , toId : String
-    , sentTime : Int
-    , receivedTime : Int
-    , id : String
-    }
-
-
-sentSummaryDecoder : Bd.Decoder SentSummary
-sentSummaryDecoder =
-    Bd.map5 SentSummary
-        stringDecoder
-        stringDecoder
-        int64Decoder
-        int64Decoder
-        stringDecoder
-
-
-type alias DraftSummary =
-    { subject : String
-    , to : String
-    , time : Int
-    , id : String
-    }
-
-
-draftSummaryDecoder : Bd.Decoder DraftSummary
-draftSummaryDecoder =
-    Bd.map4 DraftSummary
-        stringDecoder
-        stringDecoder
-        int64Decoder
-        stringDecoder
-
-
-type alias InboxMessageSummary =
-    { subject : String
-    , fromId : String
-    , time : Int
-    , id : String
-    }
-
-
-inboxMessageSummaryDecoder : Bd.Decoder InboxMessageSummary
-inboxMessageSummaryDecoder =
-    Bd.map4 InboxMessageSummary
-        stringDecoder
-        stringDecoder
-        int64Decoder
-        stringDecoder
-
-
-type alias MyKeys =
-    { encrypt : Bytes.Bytes
-    , sign : Bytes.Bytes
-    }
-
-
-type MyName
-    = MyName String
-
-
-type Process
-    = GetMeP GetMe
-    | GetInboxMessageP GetInboxMessage
-    | GetDraftP GetDraft
-    | BlobForDownloadP Blob
-
-
-type GetDraft
-    = FromCacheD String
-    | WasmOutputD Draft
-
-
-type GetInboxMessage
-    = FromCacheG String
-    | WasmOutputG InboxMessage
 
 
 initModel : Int -> Model
@@ -284,6 +108,7 @@ initModel windowWidth =
     , page = Messages
     , zone = Nothing
     , counter = 0
+    , shareBox = ""
     }
 
 
@@ -294,7 +119,7 @@ init windowWidth =
 
 initCmd : Cmd Msg
 initCmd =
-        Task.perform TimeZoneM Time.here
+    Task.perform TimeZoneM Time.here
 
 
 view : Model -> Html.Html Msg
@@ -321,14 +146,14 @@ viewE model =
 
 mainPage : Model -> E.Element Msg
 mainPage model =
-    case (model.timeZone, model.page) of
-        (Nothing, _) ->
+    case ( model.timeZone, model.page ) of
+        ( Nothing, _ ) ->
             E.text "error: no time zone"
 
-        (Just zone, Messages) ->
-                    summaryView zone model.whitelist model.summaries
+        ( Just zone, Messages ) ->
+            summaryView zone model.whitelist model.summaries
 
-        ( Just zone, Writer {wasm, snapshot, summaries, shareSearch}) ->
+        ( Just zone, Writer { wasm, snapshot, summaries, shareSearch } ) ->
             E.column []
                 [ viewSnapshot
                     zone
@@ -337,14 +162,20 @@ mainPage model =
                     shareSearch
                 , case wasm of
                     Nothing ->
-                        E.none
+                        Ei.button []
+                            { onPress = Just UploadCodeM
+                            , label = E.text "Choose WASM"
+                            }
 
                     Just justWasm ->
-                        wasmView justWasm
+                        E.column []
+                            [ wasmView justWasm
+                            , replaceWasm
+                            ]
                 , viewSummaries zone model.whitelist summaries
                 ]
 
-        (_, Contacts) ->
+        ( _, Contacts ) ->
             case Uid.toList model.whitelist of
                 Nothing ->
                     E.text "could not decode contacts"
@@ -353,9 +184,12 @@ mainPage model =
                     E.column [] <|
                         List.map contactView whitelist
 
+        ( Just _, Account ) ->
+            E.text "Account page goes here."
 
-contactView : (Uid.Username, Uid.Fingerprint) -> E.Element Msg
-contactView (username, fingerprint) =
+
+contactView : ( Uid.Username, Uid.Fingerprint ) -> E.Element Msg
+contactView ( username, fingerprint ) =
     E.row []
         [ E.text <| prettyUserId fingerprint username
         , deleteContact username
@@ -371,20 +205,20 @@ deleteContact username =
 
 
 viewSummaries :
-    Time.Zone ->
-    Uid.UserIdMap ->
-    List SnapSummary ->
-    E.Element Msg
+    Time.Zone
+    -> Uid.UserIdMap
+    -> List SnapSummary
+    -> E.Element Msg
 viewSummaries zone userIds summaries =
     E.column [] <| List.map (viewSnapSummary zone userIds) summaries
 
 
 viewSnapSummary :
-    Time.Zone ->
-    Uid.UserIdMap ->
-    SnapSummary ->
-    E.Element Msg
-viewSnapSummary zone whitelist {time, edit, author} =
+    Time.Zone
+    -> Uid.UserIdMap
+    -> SnapSummary
+    -> E.Element Msg
+viewSnapSummary zone whitelist { time, edit, author } =
     E.row []
         [ prettyTime time zone
         , E.text edit
@@ -393,10 +227,10 @@ viewSnapSummary zone whitelist {time, edit, author} =
 
 
 summaryView :
-    Time.Zone ->
-    Uid.UserIdMap ->
-    Mid.MessageIdMap Summary ->
-    E.Element Msg
+    Time.Zone
+    -> Uid.UserIdMap
+    -> Mid.MessageIdMap Summary
+    -> E.Element Msg
 summaryView zone whitelist summaries =
     case Mid.toList summaries of
         Nothing ->
@@ -404,16 +238,28 @@ summaryView zone whitelist summaries =
 
         Just summariesList ->
             E.column [] <|
-            List.map (oneSummaryLine zone whitelist) <|
-            summariesList
+                List.map (oneSummaryLine zone whitelist) <|
+                    summariesList
 
 
 oneSummaryLine :
-    Time.Zone ->
-    Uid.UserIdMap ->
-    (Mid.MessageId, Summary) ->
-    E.Element Msg
-oneSummaryLine zone whitelist (messageId, summary) =
+    Time.Zone
+    -> Uid.UserIdMap
+    -> ( Mid.MessageId, Summary )
+    -> E.Element Msg
+oneSummaryLine zone whitelist ( messageId, summary ) =
+    Ei.button []
+        { onPress = Just (SummaryClickM messageId)
+        , label = summaryLabel zone whitelist summary
+        }
+
+
+summaryLabel :
+    Time.Zone
+    -> Uid.UserIdMap
+    -> Summary
+    -> E.Element Msg
+summaryLabel zone whitelist summary =
     E.row []
         [ prettyTime summary.time zone
         , E.text summary.subject
@@ -429,12 +275,11 @@ prettyAuthor map username =
 
         Just f ->
             prettyUserId f username
-                    
+
 
 prettyUserId : Uid.Fingerprint -> Uid.Username -> String
 prettyUserId (Uid.Fingerprint f) (Uid.Username u) =
     bytesToString u ++ bytesToString f
-
 
 
 bytesToString : Bytes.Bytes -> String
@@ -442,126 +287,9 @@ bytesToString =
     B64e.encode << B64e.bytes
 
 
--- writerView : (Mid.MessageId, List Diff, Maybe Wasm) -> E.Element Msg
--- writerView (messageId, diffs, maybeWasm) =
---     E.column [ E.spacing 30, E.paddingXY 0 20, E.width E.fill ] <|
---         case constructMessage diffs of
---             Err err ->
---                 E.text <| "Internal error: " ++ err
--- 
---             Ok snapshot ->
---                 [ toBox <| showShares <| snapshot.shares messageId
---                 , userInputBox snapshot.mainBox messageId
---                 , case maybeWasm of
---                     Nothing ->
---                         E.none
--- 
---                     Just wasm ->
---                         wasmView wasm
---                 , editCode snapshot.wasm messageId
---                 , editBlobs snapshot.blobs messageId
---                 ]
-
-
-showShares : List Uid.UserId -> String
-showShares userIds =
-    String.concat <| List.map showUserId userIds
-
-
-showUserId : Uid.UserId -> String
-showUserId
-    (Uid.UserId
-        (Uid.Username username)
-        (Uid.Fingerprint fingerprint)) =
-
-    bytesToString fingerprint ++ bytesToString username
-    
-
-
-sendButtonLabel : E.Element Msg
-sendButtonLabel =
-    E.el writerButtons <|
-        E.text "Send"
-
-
 normalTextSize : Int
 normalTextSize =
     25
-
-
-toBox : String -> String -> E.Element Msg
-toBox to draftId =
-    Ei.text
-        [ Font.size normalTextSize
-        , ubuntuMono
-        , E.width <| E.maximum 400 <| E.fill
-        ]
-        { onChange = NewToM
-        , text = to
-        , placeholder = Nothing
-        , label =
-            Ei.labelLeft
-                [ Font.size normalTextSize
-                , ubuntu
-                , E.centerY
-                , E.paddingEach
-                    { left = 0, right = 7, bottom = 0, top = 0 }
-                ]
-            <|
-                E.text "To"
-        }
-
-
-userInputBox : String -> String -> E.Element Msg
-userInputBox userInput draftId =
-    Ei.multiline
-        [ Font.size normalTextSize
-        , ubuntuMono
-        , E.height <| E.minimum 100 <| E.shrink
-        ]
-        { onChange = NewUserInputM
-        , text = userInput
-        , placeholder = Nothing
-        , label =
-            Ei.labelAbove
-                [ ubuntu
-                , Font.size normalTextSize
-                , E.paddingEach
-                    { left = 0, right = 0, top = 0, bottom = 5 }
-                ]
-            <|
-                E.text "Message"
-        , spellcheck = True
-        }
-
-
-editCode : Maybe Code -> String -> E.Element Msg
-editCode maybeCode draftId =
-    case maybeCode of
-        Nothing ->
-            Ei.button []
-                { onPress = Just <| UploadCodeM draftId
-                , label =
-                    E.el writerButtons <|
-                        E.text "Upload code"
-                }
-
-        Just code ->
-            E.row []
-                [ E.text code.filename
-                , E.text <| prettySize <| Bytes.width code.contents
-                , Ei.button []
-                    { onPress = Just <| DownloadCodeM code
-                    , label = E.text "Download"
-                    }
-                ]
-
-
-editBlobs : List Blob -> Mid.MessageId -> E.Element Msg
-editBlobs blobs messageId =
-    E.column [] <|
-        List.map (editBlob messageId) blobs
-            ++ [ uploadBlob ]
 
 
 writerButtons : List (E.Attribute Msg)
@@ -584,9 +312,41 @@ uploadBlob =
         }
 
 
-editBlob : Mid.MessageId -> Blob -> E.Element Msg
-editBlob messageId blob =
-    E.row []
+ubuntu : E.Attribute Msg
+ubuntu =
+    Font.family [ Font.typeface "Ubuntu" ]
+
+
+ubuntuMono : E.Attribute Msg
+ubuntuMono =
+    Font.family [ Font.typeface "Ubuntu Mono" ]
+
+
+userInputView : String -> E.Element Msg
+userInputView userInput =
+    E.el [ ubuntuMono ] <|
+        Ei.multiline []
+            { onChange = NewMainM
+            , text = userInput
+            , placeholder = Nothing
+            , spellcheck = False
+            , label =
+                Ei.labelAbove [] <|
+                    E.text "Main box"
+            }
+
+
+blobsView : List Blob -> E.Element Msg
+blobsView blobs =
+    E.column []
+        [ E.column [ E.spacing 10 ] <| List.map blobView blobs
+        , uploadBlob
+        ]
+
+
+blobView : Blob -> E.Element Msg
+blobView blob =
+    E.row [ E.spacing 10 ]
         [ E.text blob.filename
         , E.text blob.mime
         , E.text <| prettySize blob.size
@@ -601,40 +361,6 @@ editBlob messageId blob =
         ]
 
 
-ubuntu : E.Attribute Msg
-ubuntu =
-    Font.family [ Font.typeface "Ubuntu" ]
-
-
-ubuntuMono : E.Attribute Msg
-ubuntuMono =
-    Font.family [ Font.typeface "Ubuntu Mono" ]
-
-
-userInputView : String -> E.Element Msg
-userInputView userInput =
-    E.el [ ubuntuMono ] <|
-        E.text userInput
-
-
-blobsView : List Blob -> E.Element Msg
-blobsView blobs =
-    E.column [ E.spacing 10 ] <| List.map blobView blobs
-
-
-blobView : Blob -> E.Element Msg
-blobView blob =
-    E.row [ E.spacing 10 ]
-        [ E.text blob.filename
-        , E.text blob.mime
-        , E.text <| prettySize blob.size
-        , Ei.button []
-            { onPress = Just <| DownloadBlobM blob
-            , label = E.text "Download"
-            }
-        ]
-
-
 wasmView : Wasm -> E.Element Msg
 wasmView wasm =
     case wasm of
@@ -644,6 +370,14 @@ wasmView wasm =
         Ordering os ->
             E.column []
                 (List.map wasmView os)
+
+
+replaceWasm : E.Element Msg
+replaceWasm =
+    Ei.button []
+        { onPress = Just UploadCodeM
+        , label = E.text "Replace WASM"
+        }
 
 
 showSmallString : String -> E.Element Msg
@@ -677,11 +411,6 @@ prettySize s =
 
     else
         "Bad size"
-
-
-noMessages : E.Element Msg
-noMessages =
-    E.text "No messages"
 
 
 prettyWeekday : Time.Weekday -> String
@@ -841,53 +570,9 @@ titleSize w =
         div
 
 
-adminLabelStyle : Int -> List (E.Attribute Msg)
-adminLabelStyle windowWidth =
-    [ E.centerX
-    , ubuntu
-    , Font.size <| adminButtonFontSize windowWidth
-    , E.paddingXY 8 16
-    , Border.rounded buttonCorner
-    ]
-
-
 white : E.Color
 white =
     E.rgb255 255 255 255
-
-
-adminButtonFontSize : Int -> Int
-adminButtonFontSize w =
-    let
-        min =
-            18
-
-        max =
-            28
-
-        div =
-            w // 20
-    in
-    if div > max then
-        max
-
-    else if div < min then
-        min
-
-    else
-        div
-
-
-emptyDraft : String -> Int -> Draft
-emptyDraft id time =
-    { id = id
-    , subject = ""
-    , time = time
-    , to = ""
-    , userInput = ""
-    , code = Nothing
-    , blobs = []
-    }
 
 
 messagingButtons :
@@ -939,6 +624,12 @@ messagingButtonMsg button =
         WriterB ->
             WriteM
 
+        MessagesB ->
+            MessagesM
+
+        AccountB ->
+            AccountM
+
 
 messagingButtonLabel :
     Int
@@ -957,6 +648,15 @@ messagingLabelText button =
     case button of
         ContactsB ->
             "Contacts"
+
+        MessagesB ->
+            "Documents"
+
+        AccountB ->
+            "Account"
+
+        WriterB ->
+            "Writer"
 
 
 buttonCorner : Int
@@ -1001,7 +701,10 @@ messagingButtonFontSize w =
 messagingPageOn : PageV -> MessagingButton -> Bool
 messagingPageOn page msg =
     case ( page, msg ) of
-        (Messages, ContactsB) ->
+        ( Messages, MessagesB ) ->
+            True
+
+        _ ->
             False
 
 
@@ -1011,24 +714,9 @@ port elmToJs : Je.Value -> Cmd msg
 port jsToElm : (Je.Value -> msg) -> Sub msg
 
 
-type Pow
-    = Pow Bytes.Bytes
-
-
-type alias PowInfo =
-    { difficulty : Int
-    , unique : Bytes.Bytes
-    }
-
-
 jsKeyVal : String -> Je.Value -> Je.Value
 jsKeyVal key value =
     Je.object [ ( "key", Je.string key ), ( "value", value ) ]
-
-
-hash32ToString : Hash32 -> String
-hash32ToString (Hash32 hash) =
-    bytesToString hash
 
 
 encodeToJs : ElmToJs -> Je.Value
@@ -1046,7 +734,7 @@ encodeToJs value =
             jsKeyVal "rerunWasm" <|
                 Je.object
                     [ ( "userInput", Je.string <| bytesToString userInput )
-                    , ( "msgId", Je.string id)
+                    , ( "msgId", Je.string id )
                     ]
 
         RunWasmE { input, wasmCode, id } ->
@@ -1060,22 +748,20 @@ encodeToJs value =
                             B64e.encode <|
                                 B64e.bytes wasmCode
                       )
-                    , ( "id", Je.string id)
+                    , ( "id", Je.string id )
                     ]
 
 
 type ToBackend
     = NewMain String
     | NewTo String
-    | NewSubject String
-    | NewShares (List Uid.UserId)
-    | NewWasm Code
-    | NewBlobs (List Blob)
     | MessagesClick
     | WriterClick
     | ContactsClick
     | AccountClick
     | DeleteBlob String
+    | DeleteContact Uid.Username
+    | SummaryClick Mid.MessageId
 
 
 encodeToBackend : ToBackend -> Be.Encoder
@@ -1094,59 +780,35 @@ encodeToBackend toBackend =
             Be.unsignedInt8 3
 
         NewMain m ->
-            Be.sequence [Be.unsignedInt8 4, Be.string m]
-
-        NewShares shares ->
-            Be.sequence <|
-                Be.unsignedInt8 6 ::
-                    (List.map encodeUserId shares)
-
-        NewWasm code ->
-            Be.sequence [Be.unsignedInt8 7, encodeCode code]
-
-        NewBlobs blobs ->
-            Be.sequence <|
-                Be.unsignedInt8 8 ::
-                    List.map blobEncoder blobs
+            Be.sequence [ Be.unsignedInt8 4, Be.string m ]
 
         NewTo to ->
-            Be.sequence [Be.unsignedInt8 9, Be.string to]
-
-        NewSubject subject ->
-            Be.sequence [Be.unsignedInt8 10, Be.string subject]
+            Be.sequence [ Be.unsignedInt8 9, Be.string to ]
 
         DeleteBlob id ->
-            Be.sequence [Be.unsignedInt8 11, Be.string id]
+            Be.sequence [ Be.unsignedInt8 11, Be.string id ]
+
+        DeleteContact toDelete ->
+            Be.sequence
+                [ Be.unsignedInt8 12
+                , encodeUsername toDelete
+                ]
+
+        SummaryClick messageId ->
+            Be.sequence
+                [ Be.unsignedInt8 13
+                , encodeMessageId messageId
+                ]
 
 
-encodeCode : Code -> Be.Encoder
-encodeCode {contents, filename} =
-    Be.sequence [Be.bytes contents, Be.string filename]
-
-
-encodeUserId : Uid.UserId -> Be.Encoder
-encodeUserId (Uid.UserId username fingerprint) =
-    Be.sequence
-        [encodeUsername username, encodeFingerprint fingerprint]
-
-
-encodeFingerprint : Uid.Fingerprint -> Be.Encoder
-encodeFingerprint (Uid.Fingerprint f) =
-    Be.bytes f
+encodeMessageId : Mid.MessageId -> Be.Encoder
+encodeMessageId (Mid.MessageId m) =
+    Be.bytes m
 
 
 encodeUsername : Uid.Username -> Be.Encoder
 encodeUsername (Uid.Username u) =
     Be.bytes u
-
-
-type Hash32
-    = Hash32 Bytes.Bytes
-
-
-powInfoEncoder : PowInfo -> Be.Encoder
-powInfoEncoder { difficulty, unique } =
-    Be.sequence [ Be.unsignedInt8 difficulty, Be.bytes unique ]
 
 
 type alias RunWasm =
@@ -1164,24 +826,26 @@ type ElmToJs
 
 type Msg
     = TimeZoneM Time.Zone
+    | NewMainM String
+    | NewToM String
     | DeleteContactM Uid.Username
     | UploadedM (Result Http.Error ())
     | FromBackendM Bytes.Bytes
+    | SummaryClickM Mid.MessageId
     | BadWasmM String
     | NoBackendM
     | BlobSelectedM File.File
-    | CodeSelectedM String File.File
+    | CodeSelectedM File.File
     | WasmOutputM String Wasm
     | JsonFromJsM Je.Value
     | ContactsM
     | WriteM
+    | AccountM
+    | MessagesM
     | NewWindowWidthM Int
     | DownloadCodeM Code
     | DownloadBlobM Blob
-    | NewToM String
-    | NewSubjectM String
-    | NewUserInputM String
-    | UploadCodeM String
+    | UploadCodeM
     | UploadBlobM
     | NewViewM ReadyView
     | NonsenseFromBackendM Bytes.Bytes
@@ -1257,11 +921,6 @@ wasmOutputDecoder =
             )
 
 
-badSummary : String -> Maybe String
-badSummary box =
-    Just <| "could not decode " ++ box ++ " summary bytes"
-
-
 showB64Error : B64d.Error -> String
 showB64Error error =
     case error of
@@ -1272,45 +931,28 @@ showB64Error error =
             "Invalid byte sequence"
 
 
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        TimeZoneM zone ->
-            ( { model | zone = Just zone }, Cmd.none )
-
-
-clickCmd : Maybe a -> Cmd Msg -> Cmd Msg
-clickCmd summary cmd =
-    case summary of
-        Nothing ->
-            cmd
-
-        Just _ ->
-            Cmd.none
-
-
 localUrl : String
 localUrl =
     "http://localhost:17448"
 
 
-updateSimple : Msg -> Model -> ( Model, Cmd Msg )
-updateSimple msg model =
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
     case msg of
         WriteM ->
             ( model
-            , WriterClick |>
-              ToBackendE |>
-              encodeToJs |>
-              elmToJs
+            , WriterClick
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
             )
 
         ContactsM ->
             ( model
-            , ContactsClick |>
-              ToBackendE |>
-              encodeToJs |>
-              elmToJs
+            , ContactsClick
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
             )
 
         NewWindowWidthM width ->
@@ -1322,17 +964,17 @@ updateSimple msg model =
             )
 
         WasmOutputM newWasmId wasm ->
-            case (model.page, model.lastWasmId) of
-                (Writer _, Nothing) ->
-                    (model, Cmd.none)
+            case ( model.page, model.lastWasmId ) of
+                ( Writer _, Nothing ) ->
+                    ( model, Cmd.none )
 
-                (Writer w, Just lastWasmId) ->
+                ( Writer w, Just lastWasmId ) ->
                     if newWasmId /= lastWasmId then
                         ( model, Cmd.none )
 
                     else
                         ( { model
-                            | page = Writer {w | wasm = Just wasm}
+                            | page = Writer { w | wasm = Just wasm }
                             , badWasm = Nothing
                           }
                         , Cmd.none
@@ -1354,18 +996,15 @@ updateSimple msg model =
                 Ok fromJsMsg ->
                     update fromJsMsg model
 
-        NewUserInputM i ->
-            updateOnUserInput i model
-
-        UploadCodeM draftId ->
+        UploadCodeM ->
             ( model
             , Select.file
                 [ "application/wasm" ]
-                (CodeSelectedM draftId)
+                CodeSelectedM
             )
 
-        CodeSelectedM draftId file ->
-            (model, cacheCode file)
+        CodeSelectedM file ->
+            ( model, cacheCode file )
 
         FromBackendM bytes ->
             update (decodeFromBackend bytes) model
@@ -1397,65 +1036,74 @@ updateSimple msg model =
             )
 
         BlobSelectedM file ->
-            (model, cacheBlob file)
+            ( model, cacheBlob file )
 
-        DownloadBlobM {id} ->
-            (model, Download.url <| localUrl ++ "/" ++ id)
-
-        NewToM to ->
-            (model, NewTo to |> ToBackendE |> encodeToJs |> elmToJs)
-
-        NewSubjectM subject ->
-            ( model
-            , NewSubject subject |>
-              ToBackendE |>
-              encodeToJs |>
-              elmToJs
-            )
+        DownloadBlobM { id } ->
+            ( model, Download.url <| localUrl ++ "/" ++ id )
 
         UploadBlobM ->
             ( model
             , Select.file
-                ["application/octet-stream"]
+                [ "application/octet-stream" ]
                 BlobSelectedM
             )
 
         NonsenseFromBackendM rawNonsense ->
-            ( { model | fatal = Just <|
-                "bad messeage from backend: " ++
-                    bytesToString rawNonsense
+            ( { model
+                | fatal =
+                    Just <|
+                        "bad messeage from backend: "
+                            ++ bytesToString rawNonsense
               }
             , Cmd.none
             )
 
-        DeleteBlobM {id} ->
+        DeleteBlobM { id } ->
             ( model
-            , DeleteBlob id |>
-              ToBackendE |>
-              encodeToJs |>
-              elmToJs
+            , DeleteBlob id
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
             )
 
+        DeleteContactM username ->
+            ( model
+            , DeleteContact username
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
+            )
 
-type Mime
-    = Mime String
+        ShareBoxContentsM box ->
+            ( { model | shareBox = box }, Cmd.none )
 
+        AccountM ->
+            ( model
+            , AccountClick |> ToBackendE |> encodeToJs |> elmToJs
+            )
 
-findDraft : String -> Maybe (List DraftSummary) -> Maybe DraftSummary
-findDraft draftId maybeDraftsSummary =
-    maybeDraftsSummary
-        |> Maybe.andThen
-            (\draftsSummary ->
-                case
-                    List.filter
-                        (\d -> d.id == draftId)
-                        draftsSummary
-                of
-                    [] ->
-                        Nothing
+        MessagesM ->
+            ( model
+            , MessagesClick |> ToBackendE |> encodeToJs |> elmToJs
+            )
 
-                    d :: _ ->
-                        Just d
+        NewMainM s ->
+            updateOnUserInput s model
+
+        NewToM t ->
+            ( model
+            , NewTo t
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
+            )
+
+        SummaryClickM messageId ->
+            ( model
+            , SummaryClick messageId
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
             )
 
 
@@ -1476,16 +1124,6 @@ httpErrToString err =
 
         Http.BadBody e ->
             "bad body: " ++ e
-
-
-nonsenseFromServer : Bytes.Bytes -> Maybe String
-nonsenseFromServer bytes =
-    Just <| "nonsense from server: " ++ Hex.Convert.toString bytes
-
-
-nonsenseFromBackend : Bytes.Bytes -> Maybe String
-nonsenseFromBackend bytes =
-    Just <| "nonsense from backend: " ++ Hex.Convert.toString bytes
 
 
 decodeFromBackend : Bytes.Bytes -> Msg
@@ -1516,34 +1154,21 @@ usernameD =
     Bd.map Uid.Username (Bd.bytes 8)
 
 
-summaryD : Bd.Decoder (Mid.MessageId, Summary)
+summaryD : Bd.Decoder ( Mid.MessageId, Summary )
 summaryD =
-    Bd.map2 (\m s -> (m, s))
+    Bd.map2 (\m s -> ( m, s ))
         messageIdD
         (Bd.map3 Summary
             stringDecoder
             timeD
-            usernameD)
-
-
-diffsD : Bd.Decoder Diff
-diffsD =
-    Bd.map4 Diff
-        (Bd.unsignedInt32 Bytes.LE)
-        (Bd.unsignedInt32 Bytes.LE)
-        bytesDecoder
-        hash8D
-
-
-hash8D : Bd.Decoder Hash8
-hash8D =
-    Bd.map Hash8 <| Bd.bytes 8
+            usernameD
+        )
 
 
 timeD : Bd.Decoder Time.Posix
 timeD =
     Bd.map
-        (Time.millisToPosix << ((*) 1000))
+        (Time.millisToPosix << (*) 1000)
         (Bd.unsignedInt32 Bytes.LE)
 
 
@@ -1582,7 +1207,6 @@ snapSummaryD =
         usernameD
 
 
-
 pageHelpD : Int -> Bd.Decoder PageV
 pageHelpD indicator =
     case indicator of
@@ -1616,7 +1240,7 @@ type PageV
     | Account
 
 
-type alias WriterPage = 
+type alias WriterPage =
     { wasm : Maybe Wasm
     , snapshot : Snapshot
     , summaries : List SnapSummary
@@ -1628,14 +1252,6 @@ type alias SnapSummary =
     { time : Time.Posix
     , edit : String
     , author : Uid.Username
-    }
-
-
-type alias Diff =
-    { start : Int
-    , end : Int
-    , insert : Bytes.Bytes
-    , integrity : Hash8
     }
 
 
@@ -1669,63 +1285,6 @@ cacheBlob file =
         }
 
 
-emptyBytes =
-    Be.encode <| Be.sequence []
-
-
-type Hash8 =
-    Hash8 Bytes.Bytes
-
-
-sha256 : Bytes.Bytes -> Bytes.Bytes
-sha256 bytes =
-    SHA256.fromBytes bytes |> SHA256.toBytes
-
-
-hash8 : Bytes.Bytes -> Maybe Hash8
-hash8 bytes =
-    case Bd.decode (Bd.bytes 8) (sha256 bytes) of
-        Nothing ->
-            Nothing
-
-        Just bytes8 ->
-            Just <| Hash8 bytes8
-
-
-hash32 : Bytes.Bytes -> Hash32
-hash32 bytes =
-    Hash32 <| sha256 bytes
-
-
-reverseBytes : Bytes.Bytes -> Maybe Bytes.Bytes
-reverseBytes bytes =
-    let
-        decoder =
-            Bd.loop (emptyBytes, Bytes.width bytes) reverseBytesHelp
-    in
-    Bd.decode decoder bytes
-
-
-reverseBytesHelp :
-    (Bytes.Bytes, Int) ->
-    Bd.Decoder (Bd.Step (Bytes.Bytes, Int) Bytes.Bytes)
-reverseBytesHelp (setyb, i) =
-    if i == 0 then
-        Bd.succeed <| Bd.Done setyb
-
-    else
-        Bd.map
-            (\b ->
-                Bd.Loop
-                    ( Be.encode <|
-                        Be.sequence
-                            [ Be.unsignedInt8 b
-                            , Be.bytes setyb
-                            ]
-                    , i - 1))
-            Bd.unsignedInt8
-
-
 type alias Snapshot =
     { time : Time.Posix
     , shares : List Uid.Username
@@ -1735,16 +1294,16 @@ type alias Snapshot =
     }
 
 
-viewSnapshot : Time.Zone -> Snapshot -> Uid.UserIdMap -> String -> E.Element Msg
-viewSnapshot
-    zone
-    {time, shares, mainBox, blobs, wasm}
-    userIds
-    shareSearch =
-
+viewSnapshot :
+    Time.Zone
+    -> Snapshot
+    -> Uid.UserIdMap
+    -> String
+    -> E.Element Msg
+viewSnapshot zone { time, shares, mainBox, blobs, wasm } userIds shareSearch =
     E.column []
         [ prettyTime time zone
-        , addShareBox shareSearch
+        , addShare shareSearch
         , viewShares shares userIds
         , userInputView mainBox
         , blobsView blobs
@@ -1771,7 +1330,23 @@ viewShare whitelist username =
 
         Just f ->
             E.text <| prettyUserId f username
-            
+
+
+addShare : String -> E.Element Msg
+addShare contents =
+    E.row []
+        [ addShareBox contents
+        , addShareButton contents
+        ]
+
+
+addShareButton : String -> E.Element Msg
+addShareButton contents =
+    Ei.button []
+        { onPress = Just <| NewToM contents
+        , label = E.text "Add share"
+        }
+
 
 addShareBox : String -> E.Element Msg
 addShareBox contents =
@@ -1789,7 +1364,7 @@ addShareBox contents =
                 , ubuntu
                 , E.centerY
                 , E.paddingEach
-                    { left = 0, right = 7, bottom = 0, top = 0}
+                    { left = 0, right = 7, bottom = 0, top = 0 }
                 ]
             <|
                 E.text "To"
@@ -1837,8 +1412,8 @@ blobD =
 codeD : Bd.Decoder Code
 codeD =
     Bd.map2 Code
-       bytesDecoder
-       stringDecoder
+        bytesDecoder
+        stringDecoder
 
 
 updateOnUserInput : String -> Model -> ( Model, Cmd Msg )
@@ -1847,318 +1422,56 @@ updateOnUserInput userInput model =
         Writer w ->
             case w.snapshot.wasm of
                 Nothing ->
-                    (model, Cmd.none)
+                    ( model, Cmd.none )
 
                 Just code ->
                     case model.lastWasmId of
                         Nothing ->
-                            ( { model |
-                                    lastWasmId =
-                                        Just <|
+                            ( { model
+                                | lastWasmId =
+                                    Just <|
                                         String.fromInt
-                                        model.counter
-                              , counter = model.counter + 1
+                                            model.counter
+                                , counter = model.counter + 1
                               }
                             , Cmd.batch
                                 [ RunWasmE
                                     { input =
                                         Be.encode
                                             (Be.string
-                                                userInput)
+                                                userInput
+                                            )
                                     , wasmCode = code.contents
                                     , id = String.fromInt model.counter
-                                    } |>
-                                    encodeToJs |>
-                                    elmToJs
-                                , NewMain userInput |>
-                                  ToBackendE |>
-                                  encodeToJs |>
-                                  elmToJs
+                                    }
+                                    |> encodeToJs
+                                    |> elmToJs
+                                , NewMain userInput
+                                    |> ToBackendE
+                                    |> encodeToJs
+                                    |> elmToJs
                                 ]
                             )
 
                         Just lastWasmId ->
-                                ( model
-                                , Cmd.batch
-                                    [ RerunWasmE
-                                        { userInput =
-                                            Be.encode (Be.string userInput)
-                                        , id = lastWasmId
-                                        } |>
-                                      encodeToJs |>
-                                      elmToJs
-                                    , NewMain userInput |>
-                                      ToBackendE |>
-                                      encodeToJs |>
-                                      elmToJs
-                                    ]
-                                )
+                            ( model
+                            , Cmd.batch
+                                [ RerunWasmE
+                                    { userInput =
+                                        Be.encode (Be.string userInput)
+                                    , id = lastWasmId
+                                    }
+                                    |> encodeToJs
+                                    |> elmToJs
+                                , NewMain userInput
+                                    |> ToBackendE
+                                    |> encodeToJs
+                                    |> elmToJs
+                                ]
+                            )
 
         _ ->
             ( model, Cmd.none )
-
-
-runDraftWasm : RunWasm -> Cmd Msg
-runDraftWasm =
-    elmToJs << encodeToJs << RunWasmE
-
-
-draftSummaryEncoder : DraftSummary -> Be.Encoder
-draftSummaryEncoder { subject, to, time, id } =
-    Be.sequence
-        [ stringEncoder subject
-        , stringEncoder to
-        , int64Encoder time
-        , stringEncoder id
-        ]
-
-
-listEncoder : (a -> Be.Encoder) -> List a -> Be.Encoder
-listEncoder encoder items =
-    Be.sequence <|
-        (Be.unsignedInt32 Bytes.LE <| List.length items)
-            :: List.map encoder items
-
-
-updateDraftsSummary :
-    Draft
-    -> Maybe (List DraftSummary)
-    -> List DraftSummary
-updateDraftsSummary draft maybeOldSummary =
-    case maybeOldSummary of
-        Nothing ->
-            [ summarizeDraft draft ]
-
-        Just oldSummary ->
-            case List.partition (\d -> d.id == draft.id) oldSummary of
-                ( [], _ ) ->
-                    summarizeDraft draft :: oldSummary
-
-                ( _ :: _, remainder ) ->
-                    summarizeDraft draft :: remainder
-
-
-summarizeDraft : Draft -> DraftSummary
-summarizeDraft { subject, to, time, id } =
-    { subject = subject
-    , to = to
-    , time = time
-    , id = id
-    }
-
-
-draftDecoder : Bd.Decoder Draft
-draftDecoder =
-    map7 Draft
-        stringDecoder
-        stringDecoder
-        stringDecoder
-        timeDecoder
-        stringDecoder
-        (maybeDecoder codeDecoder)
-        (list blobDecoder)
-
-
-maybeDecoder : Bd.Decoder a -> Bd.Decoder (Maybe a)
-maybeDecoder dec =
-    Bd.andThen
-        (\indicator ->
-            case indicator of
-                0 ->
-                    Bd.succeed Nothing
-
-                1 ->
-                    Bd.map Just dec
-
-                _ ->
-                    Bd.fail
-        )
-        Bd.unsignedInt8
-
-
-draftEncoder : Draft -> Be.Encoder
-draftEncoder { id, subject, to, time, userInput, code, blobs } =
-    Be.sequence
-        [ stringEncoder id
-        , stringEncoder subject
-        , stringEncoder to
-        , timeEncoder time
-        , stringEncoder userInput
-        , maybeCodeEncoder code
-        , listEncoder blobEncoder blobs
-        ]
-
-
-timeEncoder : Int -> Be.Encoder
-timeEncoder t =
-    stringEncoder <| String.fromInt t
-
-
-timeDecoder : Bd.Decoder Int
-timeDecoder =
-    Bd.andThen timeDecoderHelp stringDecoder
-
-
-timeDecoderHelp : String -> Bd.Decoder Int
-timeDecoderHelp s =
-    case String.toInt s of
-        Nothing ->
-            Bd.fail
-
-        Just i ->
-            Bd.succeed i
-
-
-maybeCodeEncoder : Maybe Code -> Be.Encoder
-maybeCodeEncoder maybeCode =
-    case maybeCode of
-        Nothing ->
-            Be.unsignedInt8 0
-
-        Just { contents, filename } ->
-            Be.sequence
-                [ Be.unsignedInt8 1
-                , bytesEncoder contents
-                , stringEncoder filename
-                ]
-
-
-bytesEncoder : Bytes.Bytes -> Be.Encoder
-bytesEncoder bytes =
-    Be.sequence
-        [ Be.unsignedInt32 Bytes.LE <| Bytes.width bytes
-        , Be.bytes bytes
-        ]
-
-
-blobEncoder : Blob -> Be.Encoder
-blobEncoder { id, mime, filename, size } =
-    Be.sequence
-        [ stringEncoder id
-        , stringEncoder mime
-        , stringEncoder filename
-        , Be.unsignedInt32 Bytes.LE size
-        ]
-
-
-stringEncoder : String -> Be.Encoder
-stringEncoder s =
-    Be.sequence
-        [ Be.unsignedInt32 Bytes.LE <| Be.getStringWidth s
-        , Be.string s
-        ]
-
-
-type FromServer
-    = MyNameW String
-    | KeysForNameW String TheirKeys
-    | PowInfoW PowInfo
-    | AuthCodeW Bytes.Bytes
-    | NoInternetW String
-
-
-fromServerDecoder : Bd.Decoder FromServer
-fromServerDecoder =
-    Bd.unsignedInt8
-        |> Bd.andThen
-            (\indicator ->
-                case indicator of
-                    1 ->
-                        Bd.map MyNameW stringDecoder
-
-                    2 ->
-                        keysForNameDecoder
-
-                    3 ->
-                        Bd.map PowInfoW powInfoDecoder
-
-                    4 ->
-                        Bd.map AuthCodeW <| Bd.bytes 8
-
-                    5 ->
-                        Bd.map NoInternetW stringDecoder
-
-                    _ ->
-                        Bd.fail
-            )
-
-
-keysForNameDecoder : Bd.Decoder FromServer
-keysForNameDecoder =
-    Bd.map2 KeysForNameW
-        stringDecoder
-        theirKeysDecoder
-
-
-theirKeysDecoder : Bd.Decoder TheirKeys
-theirKeysDecoder =
-    Bd.map2 TheirKeys
-        (Bd.bytes 32)
-        (Bd.bytes 32)
-
-
-powInfoDecoder : Bd.Decoder PowInfo
-powInfoDecoder =
-    Bd.map2 PowInfo Bd.unsignedInt8 (Bd.bytes 8)
-
-
-type ProcessTick
-    = FinishedT Model (Cmd Msg)
-    | ContinuingT Model (Cmd Msg) Process
-    | NotUsedMessageT
-
-
-inboxMsgDecoder : Bd.Decoder InboxMessage
-inboxMsgDecoder =
-    map8 InboxMessage
-        stringDecoder
-        stringDecoder
-        stringDecoder
-        (list blobDecoder)
-        int64Decoder
-        int64Decoder
-        stringDecoder
-        codeDecoder
-
-
-int64Encoder : Int -> Be.Encoder
-int64Encoder i =
-    stringEncoder <| String.fromInt i
-
-
-int64Decoder : Bd.Decoder Int
-int64Decoder =
-    Bd.andThen int64DecoderHelp stringDecoder
-
-
-int64DecoderHelp : String -> Bd.Decoder Int
-int64DecoderHelp s =
-    case String.toInt s of
-        Nothing ->
-            Bd.fail
-
-        Just i ->
-            if i < 0 then
-                Bd.fail
-
-            else
-                Bd.succeed i
-
-
-codeDecoder : Bd.Decoder Code
-codeDecoder =
-    Bd.map2 Code
-        bytesDecoder
-        stringDecoder
-
-
-blobDecoder : Bd.Decoder Blob
-blobDecoder =
-    Bd.map4 Blob
-        stringDecoder
-        stringDecoder
-        stringDecoder
-        (Bd.unsignedInt32 Bytes.LE)
 
 
 list : Bd.Decoder a -> Bd.Decoder (List a)
@@ -2188,63 +1501,6 @@ stringDecoder =
 bytesDecoder : Bd.Decoder Bytes.Bytes
 bytesDecoder =
     Bd.unsignedInt32 Bytes.LE |> Bd.andThen Bd.bytes
-
-
-map7 :
-    (a -> b -> c -> d -> e -> f -> g -> result)
-    -> Bd.Decoder a
-    -> Bd.Decoder b
-    -> Bd.Decoder c
-    -> Bd.Decoder d
-    -> Bd.Decoder e
-    -> Bd.Decoder f
-    -> Bd.Decoder g
-    -> Bd.Decoder result
-map7 func decA decB decC decD decE decF decG =
-    Bd.map func decA
-        |> Bd.andThen (dmap decB)
-        |> Bd.andThen (dmap decC)
-        |> Bd.andThen (dmap decD)
-        |> Bd.andThen (dmap decE)
-        |> Bd.andThen (dmap decF)
-        |> Bd.andThen (dmap decG)
-
-
-map8 :
-    (a -> b -> c -> d -> e -> f -> g -> h -> result)
-    -> Bd.Decoder a
-    -> Bd.Decoder b
-    -> Bd.Decoder c
-    -> Bd.Decoder d
-    -> Bd.Decoder e
-    -> Bd.Decoder f
-    -> Bd.Decoder g
-    -> Bd.Decoder h
-    -> Bd.Decoder result
-map8 func decA decB decC decD decE decF decG decH =
-    Bd.map func decA
-        |> Bd.andThen (dmap decB)
-        |> Bd.andThen (dmap decC)
-        |> Bd.andThen (dmap decD)
-        |> Bd.andThen (dmap decE)
-        |> Bd.andThen (dmap decF)
-        |> Bd.andThen (dmap decG)
-        |> Bd.andThen (dmap decH)
-
-
-dmap : Bd.Decoder a -> (a -> b) -> Bd.Decoder b
-dmap a b =
-    Bd.map b a
-
-
-badInboxMsg : Maybe String
-badInboxMsg =
-    Just "bad bytes in inbox message from cache"
-
-
-badDraft : Maybe String
-badDraft =
-    Just "bad bytes in draft from cache"
 
 
 subscriptions : Model -> Sub Msg

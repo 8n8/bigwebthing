@@ -1,24 +1,22 @@
 module MessageIdMap exposing
-    ( MessageIdMap
-    , MessageId(..)
+    ( MessageId(..)
+    , MessageIdMap
+    , empty
     , fromList
     , toList
-    , empty
     )
 
-
-import Dict
-import Bytes
-import Time
-import Base64.Encode as B64e
 import Base64.Decode as B64d
-import Bytes.Encode as Be
+import Base64.Encode as B64e
+import Bytes
+import Dict
 
 
-fromList : List (MessageId, a) -> MessageIdMap a
+fromList : List ( MessageId, a ) -> MessageIdMap a
 fromList list =
     let
-        asString = List.map (\(k, v) -> (toString k, v)) list
+        asString =
+            List.map (\( k, v ) -> ( toString k, v )) list
     in
     MakeMap <| Dict.fromList asString
 
@@ -33,18 +31,17 @@ toString (MessageId raw) =
     B64e.encode <| B64e.bytes raw
 
 
-type MessageIdMap a =
-    MakeMap (Dict.Dict String a)
+type MessageIdMap a
+    = MakeMap (Dict.Dict String a)
 
 
-type MessageId =
-    MessageId Bytes.Bytes
+type MessageId
+    = MessageId Bytes.Bytes
 
 
-toList : MessageIdMap a -> Maybe (List (MessageId, a))
+toList : MessageIdMap a -> Maybe (List ( MessageId, a ))
 toList (MakeMap m) =
     allJust <| List.map decodeItem <| Dict.toList m
-
 
 
 allJust : List (Maybe a) -> Maybe (List a)
@@ -58,18 +55,18 @@ allJustHelp maybes accum =
         [] ->
             Just accum
 
-        Just m :: aybes ->
+        (Just m) :: aybes ->
             allJustHelp aybes (m :: accum)
 
         Nothing :: _ ->
             Nothing
 
 
-decodeItem : (String, a) -> Maybe (MessageId, a)
-decodeItem (raw, v) =
+decodeItem : ( String, a ) -> Maybe ( MessageId, a )
+decodeItem ( raw, v ) =
     case B64d.decode B64d.bytes raw of
         Err _ ->
             Nothing
 
         Ok bytes ->
-            Just (MessageId bytes, v)
+            Just ( MessageId bytes, v )

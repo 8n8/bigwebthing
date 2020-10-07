@@ -1,21 +1,18 @@
 module UserIdMap exposing
-    ( UserIdMap
+    ( Fingerprint(..)
     , UserId(..)
+    , UserIdMap
     , Username(..)
-    , fromList
-    , Fingerprint(..)
-    , toList
     , empty
+    , fromList
     , get
+    , toList
     )
 
-
-import Dict
-import Bytes
-import Time
-import Base64.Encode as B64e
 import Base64.Decode as B64d
-import Bytes.Encode as Be
+import Base64.Encode as B64e
+import Bytes
+import Dict
 
 
 fromList : List UserId -> UserIdMap
@@ -23,26 +20,26 @@ fromList list =
     let
         asString =
             List.map
-                (\(UserId u f) -> (toString u, f))
+                (\(UserId u f) -> ( toString u, f ))
                 list
     in
     MakeMap <| Dict.fromList asString
 
 
-type UserIdMap =
-    MakeMap (Dict.Dict String Fingerprint)
+type UserIdMap
+    = MakeMap (Dict.Dict String Fingerprint)
 
 
-type UserId =
-    UserId Username Fingerprint
+type UserId
+    = UserId Username Fingerprint
 
 
-type Username =
-    Username Bytes.Bytes
+type Username
+    = Username Bytes.Bytes
 
 
-type Fingerprint =
-    Fingerprint Bytes.Bytes
+type Fingerprint
+    = Fingerprint Bytes.Bytes
 
 
 empty : UserIdMap
@@ -55,14 +52,9 @@ toString (Username raw) =
     B64e.encode <| B64e.bytes raw
 
 
-type MessageId =
-    MessageId Bytes.Bytes
-
-
-toList : UserIdMap -> Maybe (List (Username, Fingerprint))
+toList : UserIdMap -> Maybe (List ( Username, Fingerprint ))
 toList (MakeMap m) =
     allJust <| List.map decodeItem <| Dict.toList m
-
 
 
 allJust : List (Maybe a) -> Maybe (List a)
@@ -76,21 +68,21 @@ allJustHelp maybes accum =
         [] ->
             Just accum
 
-        Just m :: aybes ->
+        (Just m) :: aybes ->
             allJustHelp aybes (m :: accum)
 
         Nothing :: _ ->
             Nothing
 
 
-decodeItem : (String, Fingerprint) -> Maybe (Username, Fingerprint)
-decodeItem (raw, f) =
+decodeItem : ( String, Fingerprint ) -> Maybe ( Username, Fingerprint )
+decodeItem ( raw, f ) =
     case B64d.decode B64d.bytes raw of
         Err _ ->
             Nothing
 
         Ok bytes ->
-            Just (Username bytes, f)
+            Just ( Username bytes, f )
 
 
 get : Username -> UserIdMap -> Maybe Fingerprint
