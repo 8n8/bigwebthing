@@ -28,3 +28,4 @@ main.pdf
 *.hie
 haskell/haskell.cabal
 c/a.out
+elm/main.js

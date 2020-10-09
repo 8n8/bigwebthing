@@ -2,7 +2,6 @@ port module Main exposing (main)
 
 import Base64.Decode as B64d
 import Base64.Encode as B64e
-import Hex.Convert
 import Browser
 import Browser.Events
 import Bytes
@@ -16,6 +15,7 @@ import Element.Input as Ei
 import File
 import File.Download as Download
 import File.Select as Select
+import Hex.Convert
 import Html
 import Http
 import Json.Decode as Jd
@@ -93,6 +93,7 @@ type alias Model =
     , lastWasmId : Maybe String
     , counter : Int
     , shareBox : String
+    , addContactBox : String
     }
 
 
@@ -110,6 +111,7 @@ initModel windowWidth =
     , zone = Nothing
     , counter = 0
     , shareBox = ""
+    , addContactBox = ""
     }
 
 
@@ -183,10 +185,33 @@ mainPage model =
 
                 Just whitelist ->
                     E.column [] <|
-                        List.map contactView whitelist
+                        addNewContact model.addContactBox
+                            :: List.map contactView whitelist
 
         ( Just _, Account ) ->
             E.text "Account page goes here."
+
+
+addNewContact : String -> E.Element Msg
+addNewContact box =
+    E.row []
+        [ Ei.text []
+            { onChange = AddNewContactBoxM
+            , text = box
+            , placeholder = Nothing
+            , label = Ei.labelLeft [] <| E.text "New contact"
+            }
+        , Ei.button []
+            { onPress =
+                case fromFriendlyUserId box of
+                    Ok userId ->
+                        Just <| AddNewContactM userId
+
+                    Err _ ->
+                        Nothing
+            , label = E.text "Add new contact"
+            }
+        ]
 
 
 contactView : ( Uid.Username, Uid.Fingerprint ) -> E.Element Msg
@@ -763,6 +788,7 @@ type ToBackend
     | DeleteBlob String
     | DeleteContact Uid.Username
     | SummaryClick Mid.MessageId
+    | NewContact Uid.UserId
 
 
 sizedString : String -> Be.Encoder
@@ -792,7 +818,7 @@ encodeToBackend toBackend =
             Be.sequence [ Be.unsignedInt8 4, Be.string m ]
 
         NewTo to ->
-            Be.sequence [ Be.unsignedInt8 5, Be.string to ]
+            Be.sequence [ Be.unsignedInt8 5, encodeUsername to ]
 
         DeleteBlob id ->
             Be.sequence [ Be.unsignedInt8 6, Be.string id ]
@@ -808,6 +834,25 @@ encodeToBackend toBackend =
                 [ Be.unsignedInt8 8
                 , encodeMessageId messageId
                 ]
+
+        NewContact userId ->
+            Be.sequence
+                [ Be.unsignedInt8 9
+                , encodeUserId userId
+                ]
+
+
+encodeUserId : Uid.UserId -> Be.Encoder
+encodeUserId (Uid.UserId username fingerprint) =
+    Be.sequence
+        [ encodeUsername username
+        , encodeFingerprint fingerprint
+        ]
+
+
+encodeFingerprint : Uid.Fingerprint -> Be.Encoder
+encodeFingerprint (Uid.Fingerprint f) =
+    Be.bytes f
 
 
 encodeMessageId : Mid.MessageId -> Be.Encoder
@@ -835,8 +880,10 @@ type ElmToJs
 
 type Msg
     = TimeZoneM Time.Zone
+    | AddNewContactBoxM String
+    | AddNewContactM Uid.UserId
     | NewMainM String
-    | NewToM String
+    | NewToM Uid.Username
     | DeleteContactM Uid.Username
     | UploadedM (Result Http.Error ())
     | FromBackendM Bytes.Bytes
@@ -1115,6 +1162,17 @@ update msg model =
                 |> elmToJs
             )
 
+        AddNewContactM userId ->
+            ( model
+            , NewContact userId
+                |> ToBackendE
+                |> encodeToJs
+                |> elmToJs
+            )
+
+        AddNewContactBoxM box ->
+            ( { model | addContactBox = box }, Cmd.none )
+
 
 httpErrToString : Http.Error -> String
 httpErrToString err =
@@ -1297,11 +1355,12 @@ cacheBlob file =
 encodeMetadata : File.File -> String
 encodeMetadata file =
     Hex.Convert.toString <|
-    Be.encode
-        [ sizedString File.name file
-        , sizedString File.mime file
-        , Be.unsignedInt32 Bytes.LE File.size file
-        ]
+        Be.encode <|
+            Be.sequence
+                [ sizedString <| File.name file
+                , sizedString <| File.mime file
+                , Be.unsignedInt32 Bytes.LE <| File.size file
+                ]
 
 
 type alias Snapshot =
@@ -1355,14 +1414,68 @@ addShare : String -> E.Element Msg
 addShare contents =
     E.row []
         [ addShareBox contents
+        , shareValidationMsg contents
         , addShareButton contents
         ]
+
+
+shareValidationMsg : String -> E.Element Msg
+shareValidationMsg candidate =
+    case fromFriendlyUserId candidate of
+        Err err ->
+            E.text err
+
+        Ok _ ->
+            E.none
+
+
+fromFriendlyUserId : String -> Result String Uid.UserId
+fromFriendlyUserId friendly =
+    if String.length friendly < 18 then
+        Err "string too short, must be at least 18 chars"
+
+    else
+        let
+            rawFingerprint =
+                String.left 16 friendly
+
+            rawUsername =
+                String.dropLeft 16 friendly
+
+            maybeFinger =
+                Hex.Convert.toBytes rawFingerprint
+
+            maybeUser =
+                Hex.Convert.toBytes rawUsername
+        in
+        case ( maybeFinger, maybeUser ) of
+            ( Nothing, _ ) ->
+                Err <|
+                    "fingerprint was not valid HEX"
+                        ++ rawFingerprint
+
+            ( _, Nothing ) ->
+                Err <|
+                    "username was not valid HEX"
+                        ++ rawUsername
+
+            ( Just finger, Just user ) ->
+                Ok <|
+                    Uid.UserId
+                        (Uid.Username user)
+                        (Uid.Fingerprint finger)
 
 
 addShareButton : String -> E.Element Msg
 addShareButton contents =
     Ei.button []
-        { onPress = Just <| NewToM contents
+        { onPress =
+            case fromFriendlyUserId contents of
+                Err _ ->
+                    Nothing
+
+                Ok (Uid.UserId u _) ->
+                    Just <| NewToM u
         , label = E.text "Add share"
         }
 
