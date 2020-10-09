@@ -3202,7 +3202,7 @@ hash32P = do
 
 data FromFrontend
     = NewMain T.Text
-    | NewTo UserId
+    | NewTo Username
     | MessagesClick
     | WriterClick
     | ContactsClick
@@ -3210,6 +3210,7 @@ data FromFrontend
     | DeleteBlob Hash32
     | DeleteContact Username
     | SummaryClick MessageId
+    | NewContact UserId
 
 
 newtype MessageId
@@ -3243,9 +3244,36 @@ fromFrontendP = do
             _ <- P.word8 4
             newMain <- stringP
             return $ NewMain newMain
+        , do
+            _ <- P.word8 5
+            username <- usernameP
+            return $ NewTo username
+        , do
+            _ <- P.word8 6
+            hash <- hash32P
+            return $ DeleteBlob hash
+        , do
+            _ <- P.word8 7
+            username <- usernameP
+            return $ DeleteContact username
+        , do
+            _ <- P.word8 8
+            messageId <- messageIdP
+            return $ SummaryClick messageId
+        , do
+            _ <- P.word8 9
+            userId <- userIdP
+            return $ NewContact userId
         ]
     P.endOfInput
     return input
+
+
+userIdP :: P.Parser UserId
+userIdP = do
+    username <- usernameP
+    fingerprint <- fingerprintP
+    return $ UserId username fingerprint
 
 
 dumpView :: Ready -> Output
@@ -3449,13 +3477,13 @@ uiApiUpdate fromFrontend ready =
 
     DeleteContact username ->
         updateOnDeleteContact username ready
-        
+
     NewTo userId ->
         updateOnNewShares [userId] ready
 
     DeleteBlob id_ ->
         updateOnDeleteBlob id_ ready
-        
+
     ContactsClick ->
         pageClick ready Contacts
 
@@ -3481,6 +3509,25 @@ uiApiUpdate fromFrontend ready =
 
     NewMain newMain ->
         updateOnNewMain newMain ready
+
+    NewContact userId ->
+        updateOnNewContact userId ready
+
+
+updateOnNewContact :: UserId -> Ready -> (Output, State)
+updateOnNewContact (UserId username fingerprint) ready =
+    let
+    newWhite =
+        Map.insert username (fingerprint, Nothing) (whitelist ready)
+    newReady = ready { whitelist = newWhite }
+    in
+    ( BatchO
+        [ uploadContacts newWhite
+        , dumpView newReady
+        , dumpCache newReady
+        ]
+    , ReadyS newReady
+    )
 
 
 updateOnNewBlobs :: [Blob] -> Ready -> (Output, State)
@@ -3600,11 +3647,10 @@ updateOnNewWasm hash ready =
         pass
 
 
-updateOnNewShares :: [UserId] -> Ready -> (Output, State)
-updateOnNewShares newShareIds ready =
+updateOnNewShares :: [Username] -> Ready -> (Output, State)
+updateOnNewShares newShares ready =
     let
     pass = (DoNothingO, ReadyS ready)
-    newShares = map (\(UserId u _) -> u) newShareIds
     in
     case pageR ready of
     Messages ->
@@ -3632,18 +3678,9 @@ updateOnNewShares newShareIds ready =
                 newEncoded = encodeHeader newHeader
                 newDiff = makeDiff Me oldEncoded newEncoded
                 newDiffs = newDiff : diffs
-                newWhites :: Whitelist
-                newWhites =
-                    Map.fromList $ map
-                        (\(UserId u f) -> (u, (f, Nothing)))
-                        newShareIds
 
                 newReady =
-                    ready
-                        { pageR = Writer messageId newDiffs
-                        , whitelist =
-                            Map.union (whitelist ready) newWhites
-                        }
+                    ready { pageR = Writer messageId newDiffs }
                 (sendO, sendState) =
                     shareMessage
                         diffShares
@@ -3655,7 +3692,6 @@ updateOnNewShares newShareIds ready =
                 ( BatchO
                     [ dumpCache newerReady
                     , dumpView newerReady
-                    , uploadContacts $ whitelist newReady
                     , dumpMessage
                         (root newerReady)
                         messageId
