@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+    "net"
+    "time"
 )
 
 const csp = "default-src 'none'; " +
@@ -38,6 +40,14 @@ func encodeInt(theInt int) []byte {
 	return result
 }
 
+func int64Power(base int64, power int64) int64 {
+    result := 1
+    for i := 0; i < power; i++ {
+        result = result * base
+    }
+    return result
+}
+
 func intPower(base, power int) int {
 	result := 1
 	for i := 0; i < power; i++ {
@@ -55,6 +65,14 @@ func decodeInt(bs []byte) int {
 	return result
 }
 
+func decodeInt64(bs []byte) int64 {
+    result := 0
+    for i, b := range bs {
+        result += int64(b) * int64Power(256, i)
+    }
+    return result
+}
+
 type stateT struct {
 	toChans        map[int]websocketChans
 	fatalErr       error
@@ -65,6 +83,17 @@ type stateT struct {
 	authUnique     int
 	whitelists     map[int]map[int]struct{}
 	encryptionKeys map[int][]byte
+    conns map[int]tcpConnT
+    dbLogIn dbLogInT
+}
+
+type dbLogInT interface {
+    dbLogInTplaceholder()
+}
+
+type tcpConnT struct {
+    kill chan struct{}
+    conn net.Conn
 }
 
 type proofOfWorkState struct {
@@ -97,7 +126,7 @@ type outputT interface {
 }
 
 func initOutputs() []outputT {
-	outputs := []outputT{startHttpServer{}, loadData{}}
+	outputs := []outputT{startTcpServer{}, loadData{}}
 	return outputs
 }
 
@@ -105,7 +134,7 @@ const createMembers = `
 	CREATE TABLE IF NOT EXISTS members (name INTEGER UNIQUE NOT NULL);`
 
 const createFriendlyNames = `
-	CREATE TABLE IF NOT EXISTS friendlynames (keys BLOB UNIQUE NOT NULL);`
+	CREATE TABLE IF NOT EXISTS usernames (keys BLOB UNIQUE NOT NULL);`
 
 const createWhitelist = `
 	CREATE TABLE IF NOT EXISTS whitelist (owner INTEGER NOT NULL, sender INTEGER NOT NULL);`
@@ -143,10 +172,10 @@ func loadMembers(database *sql.DB) (map[int]struct{}, error) {
 }
 
 func loadFriendlyNames(database *sql.DB) ([][]byte, error) {
-	rows, err := database.Query("SELECT keys FROM friendlynames")
+	rows, err := database.Query("SELECT keys FROM usernames")
 	var friendlyNames [][]byte
 	if err != nil {
-		err = fmt.Errorf("could not load friendlynames: %v", err)
+		err = fmt.Errorf("could not load usernames: %v", err)
 		return friendlyNames, err
 	}
 	for rows.Next() {
@@ -279,7 +308,7 @@ func (l loadedData) update(state stateT) (stateT, []outputT) {
 	return state, []outputT{}
 }
 
-type startHttpServer struct{}
+type startTcpServer struct{}
 
 type inputT interface {
 	update(stateT) (stateT, []outputT)
@@ -353,17 +382,6 @@ type uploadEncryptionKeyRequest struct {
 type deleteMessageT struct {
 	idToken     idTokenT
 	messageHash []byte
-}
-
-func parseDeleteMessage(body []byte) parsedRequestT {
-	if len(body) != 145 {
-		return badRequest{"length of body is not 145", 400}
-	}
-	idToken := parseIdToken(body)
-	return deleteMessageT{
-		idToken:     idToken,
-		messageHash: body[113:145],
-	}
 }
 
 func (d deleteMessageT) updateOnRequest(state stateT, responseChan chan httpResponseT) (stateT, []outputT) {
@@ -681,7 +699,7 @@ func (c cacheNewKey) io(inputChannel chan inputT) {
 		return
 	}
 	defer database.Close()
-	statement, err := database.Prepare("UPDATE friendlynames SET key=? WHERE rowid=?")
+	statement, err := database.Prepare("UPDATE usernames SET key=? WHERE rowid=?")
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
@@ -725,15 +743,6 @@ func (c cacheNewAuthUnique) io(inputChannel chan inputT) {
 
 func (s sendAuthCode) io(inputChannel chan inputT) {
 	s.channel <- goodHttpResponse(s.code)
-}
-
-func parseSendMessage(body []byte) parsedRequestT {
-	if len(body) < 122 {
-		return badRequest{"body less than 122 bytes", 400}
-	}
-	idToken := parseIdToken(body)
-	recipient := decodeInt(body[113:121])
-	return sendMessageRequest{idToken, recipient, body}
 }
 
 type sendMessageRequest struct {
@@ -1148,7 +1157,7 @@ func (c cacheNewKeyT) io(inputChannel chan inputT) {
 		return
 	}
 	defer database.Close()
-	statement, err := database.Prepare("INSERT INTO friendlynames (key) VALUES (?);")
+	statement, err := database.Prepare("INSERT INTO usernames (key) VALUES (?);")
 	if err != nil {
 		inputChannel <- fatalError{err}
 		return
@@ -1294,42 +1303,235 @@ func (b badWebsocketAuth) io(inputChan chan inputT) {
 	b <- struct{}{}
 }
 
-func (startHttpServer) io(inputChan chan inputT) {
-	http.HandleFunc(
-		"/downloadmessages",
-		func(w http.ResponseWriter, r *http.Request) {
-			websocketsHandler(inputChan, w, r)
-		})
-	http.HandleFunc(
-		"/api",
-		func(w http.ResponseWriter, r *http.Request) {
-			httpApiHandler(inputChan, w, r)
-		})
-	http.HandleFunc(
-		"/",
-		func(w http.ResponseWriter, r *http.Request) {
-			// Turned off in development, because webpack uses eval.
-			// w.Header().Add("Content-Security-Policy", csp)
-			w.Header().Add("Cache-Control", "no-cache")
-			handle, err := os.Open("index.html")
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			_, err = io.Copy(w, handle)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-			}
-		})
-	http.HandleFunc(
-		"/cspreport",
-		func(w http.ResponseWriter, r *http.Request) {
-			body, _ := ioutil.ReadAll(r.Body)
-			fmt.Println(string(body))
-		})
-	http.Handle("/static/", http.FileServer(http.Dir("")))
-	serveFile("favicon.ico", "image/ico")
-	fmt.Println(http.ListenAndServe(":3001", nil))
+const tcpTimeout = time.Hour * 2
+
+type newConn struct {
+    conn net.Conn
+    connId int
+    kill chan struct{}
+}
+
+type deadTcp int
+
+func (d deadTcp) update(state stateT) (stateT, []outputT) {
+    delete(state.conns, int(d))
+    return state, []outputT{}
+}
+
+func (n newConn) update(state stateT) (stateT, []outputT) {
+    state.conns[n.connId] = tcpConnT{
+        kill: n.kill,
+        conn: n.conn,
+    }
+    return state, []outputT{}
+}
+
+func handleTcpConn(
+    conn net.Conn,
+    inputChan chan inputT,
+    connId int) {
+
+    defer conn.Close()
+    killChan := make(chan struct{})
+    inputChan <- newConn{conn, connId, killChan}
+    go func() {
+        for {
+            err := conn.SetDeadline(time.Now().Add(tcpTimeout))
+            if err != nil {
+                inputChan <-deadTcp(connId)
+                return
+            }
+            rawLength := make([]byte, 2)
+            n, err := conn.Read(rawLength)
+            if n != 2 {
+                inputChan <-deadTcp(connId)
+                return
+            }
+            if err != nil {
+                inputChan <-deadTcp(connId)
+                return
+            }
+            length := decodeInt(rawLength)
+            if length > maxBodyLength {
+                inputChan <-deadTcp(connId)
+                return
+            }
+
+            message := make([]byte, length)
+            n, err = conn.Read(message)
+            if n != length {
+                inputChan <-deadTcp(connId)
+                return
+            }
+            if err != nil {
+                inputChan <-deadTcp(connId)
+                return
+            }
+            inputChan <- newTcpMessage{message, connId}
+        }
+    }()
+    <-killChan
+}
+
+type newTcpMessage struct {
+    message []byte
+    connId int
+}
+
+type tcpMessage interface {
+    updateOnTcpMsg(stateT, int) (stateT, []outputT)
+}
+
+func parseTcpMessage(raw []byte) (tcpMessage, error) {
+    if len(raw) == 0 {
+        return *new(tcpMessage), errors.New("empty")
+    }
+
+    switch raw[0] {
+    case 0:
+        return getProofOfWorkInfo{}, nil
+    case 1:
+        return parseSignIn(raw[1:])
+    case 2:
+        return parseNewAccount(raw[1:])
+    case 3:
+        return parseSendMessage(raw[1:])
+    case 4:
+        return parseDeleteMessage(raw[1:])
+    case 5:
+        return getPrice{}, nil
+    case 6:
+        return parseUploadContacts(raw[1:])
+    }
+    return *new(tcpMessage), fmt.Errorf("bad indicator: %d", raw[0])
+}
+
+type uploadContacts []usernameT
+
+func parseUploadContacts(raw []byte) (uploadContacts, error) {
+    length := len(raw)
+    numContacts := length / 8
+    if numContacts * 8 != length {
+        return *new(uploadContacts), fmt.Errorf("bad length: expecting %d, but got %d", numContacts * 8, length)
+    }
+    contacts := make([]username, numContacts)
+    for i := range contacts {
+        rawContact := raw[i*8: (i + 1)*8]
+        username := decodeInt64(rawContact)
+        contacts[i] = username
+    }
+    return uploadContacts(contacts), nil
+}
+
+type hash32 [32]byte
+
+type deleteMessage hash32
+
+func parseDeleteMessage(raw []byte) (deleteMessage, error) {
+    length := len(raw)
+    if length != 32 {
+        return *new(deleteMessage), fmt.Errorf("expecting message length 32, but got %d", length)
+    }
+
+    return deleteMessage(raw), nil
+}
+
+func parseSendMessage(raw []byte) (sendMessage, error) {
+    length := len(raw)
+    if length < 9 {
+        return *new(sendMessage), fmt.Errorf("expecting message length > 9, but got %d", length)
+    }
+
+    return sendMessage{
+        recipient: raw[:8],
+        message: raw[8:],
+    }, nil
+}
+
+type getProofOfWorkInfo struct{}
+
+type secretKeyT [16]byte
+
+type usernameT [8]byte
+
+type signIn struct {
+    secretKey secretKeyT
+    username usernameT
+}
+
+type jobs 
+
+func (s signIn) updateOnTcpMsg(
+    state stateT,
+    connId int) (stateT, []outputT) {
+
+    state.dbLogIn = makeDbConnT{
+        connId: connId,
+        secretKey: s.secretKey,
+        username: s.username,
+    }
+    return 
+}
+
+func parseSignIn(raw []byte) (signIn, error) {
+    if len(raw) != 24 {
+        return *new(signIn), fmt.Errorf("bad sign in message length: expecting 24 but got %d", len(raw))
+    }
+
+    return signIn{
+        secretKey: raw[:16],
+        username: raw[16:],
+    }, nil
+}
+
+type newAccount struct {
+    proofOfWork [24]byte
+    secretKey [16]byte
+}
+
+func parseNewAccount(raw []byte) (newAccount, error) {
+    if len(raw) != 40 {
+        return *new(newAccount), fmt.Errorf("bad new account message length: expecting 40 but got %d", len(raw))
+    }
+    var msg newAccount
+    copy(msg.proofOfWork[:], raw)
+    copy(msg.secretKey[:], raw[24:])
+    return msg, nil
+}
+
+func (n newTcpMessage) update(state stateT) (stateT, []outputT) {
+    context, ok := state.conns[n.connId]
+    if !ok {
+        state.fatalErr = errors.New(
+            "received message from unknown connection")
+        return state, []outputT{}
+    }
+
+    parsed, err := parseTcpMessage(n.message)
+    if err != nil {
+        context.kill <- struct{}{}
+        delete(state.conns, n.connId)
+        return state, []outputT{}
+    }
+
+    return parsed.updateOnTcpMsg(state, n.connId)
+}
+
+func (startTcpServer) io(inputChan chan inputT) {
+    listener, err := net.Listen("tcp", ":11453")
+    if err != nil {
+        inputChan <- fatalError{err}
+        return
+    }
+
+    for connId := 0; true; connId++ {
+        conn, err := listener.Accept()
+        if err != nil {
+            continue
+        }
+
+        handleTcpConn(conn, inputChan, connId)
+    }
 }
 
 func serveFile(filename, contentType string) {
