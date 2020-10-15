@@ -65,15 +65,6 @@ Events triggered by the user, like clicking buttons and typing in the text boxes
 
 The server provides a TCP server on port 11453.
 
-## Proof of work
-
-Some API routes are protected by a proof of work problem. To create a proof of work token, the user must download some unique bytes and a difficulty value from the server, and find some more unique bytes that will create a 32-byte slow hash with all the bytes greater than the difficulty. The 'slow' hash should not be that slow. It should be slow enough that any implementation details apart from hashing are amortised. So a proof of work token is like this:
-
-+ 16 bytes: unique from the server
-+ 8 bytes: calculated by the client
-
-The server checks that the first part is indeed something that it recently gave out, then that the hash of the whole meets the current difficulty.
-
 ## TCP API
 
 It will accept incoming TCP connections. A connection begins unauthenticated, and can change to authenticated. Messages that are only sent/acceptable on an authenticated channel are marked "AUTH".
@@ -89,10 +80,6 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
     New username (AUTH)
         1 byte: 1
         8 bytes: username
-    Proof of work info
-        1 byte: 2
-		1 byte: difficulty
-		16 bytes: random
     Price (AUTH)
         1 byte: 3
         4 bytes: monthly price in GBP^(-2)
@@ -110,7 +97,6 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 	    8 bytes: username
     New account
 		1 byte: 2
-		24 bytes: proof of work
 		16 bytes: random session key
 	Send message (AUTH)
 		1 byte: 3
