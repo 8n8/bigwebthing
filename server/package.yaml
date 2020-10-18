@@ -1,0 +1,33 @@
+name:                server
+
+dependencies:
+- base >= 4.7 && < 5
+- stm
+- filepath
+- bytestring
+- attoparsec
+- text
+- containers
+- network-simple
+- cryptonite
+- time
+- hex-text
+- memory
+
+executables:
+  server-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -Weverything
+    - -Wno-prepositive-qualified-module
+    - -Wno-unsafe
+    - -Wno-safe
+    - -Wno-missing-safe-haskell-mode
+    - -Wno-implicit-prelude
+    - -Wno-monomorphism-restriction
+    - -Wno-missing-deriving-strategies
+    - -Werror

@@ -29,3 +29,5 @@ main.pdf
 haskell/haskell.cabal
 c/a.out
 elm/main.js
+server/server.cabal
+server/.stack-work
