@@ -73,43 +73,55 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
 
 ### Server to client
 
-	New message from another user (AUTH)
+	New message from another user
 		1 byte: 0
-        8 bytes: sender username
-        <= 15987 bytes: the message
-    New username (AUTH)
+        32 bytes: sender public signing key
+        32 bytes: message hash
+    Shortened key
         1 byte: 1
-        8 bytes: username
-    Price (AUTH)
+        8 bytes: shortened key
+    Price
+        1 byte: 2
+        4 bytes: monthly price in pence
+    Message acknowledgement
         1 byte: 3
-        4 bytes: monthly price in GBP^(-2)
-    Acknowledgement
+        32 bytes: hash of message
+    Blob acknowledgement
         1 byte: 4
         32 bytes: hash of message
+    Billing certificate
+        1 byte: 5
+        72 bytes: certificate
+    Auth code
+        1 byte: 6
+        32 bytes: random
 
 ### Client to server
 
-    Get proof of work info
+    Get billing certificate
         1 byte: 0
-    Sign in
-        1 byte: 1
-	    16 bytes: secret session key
-	    8 bytes: username
-    New account
-		1 byte: 2
-		16 bytes: random session key
-	Send message (AUTH)
+	Price
+		1 byte: 1
+    Get payment history
+        1 byte: 2
+	Send message
 		1 byte: 3
-		8 bytes: recipient username
-		<= 15991 bytes: message
-	Delete message (AUTH)
+        64 bytes: billing certificate
+		32 bytes: recipient public signing key
+        32 bytes: message hash
+	Delete message
 		1 byte: 4
 		32 bytes: message hash
-	Get price (AUTH)
-		1 byte: 5
-    Upload contacts (AUTH)
+    Upload blob
+        1 byte: 5
+        64 bytes: billing certificate
+        <= 15935 bytes: the blob
+    Shorten public key
         1 byte: 6
-        sequence of 8-byte usernames (maximum 1999)
+        32 bytes: public key
+    ID token
+        1 byte: 7
+        64 bytes: Ed25519 signature of auth code
 
 # Client to client
 
