@@ -67,16 +67,17 @@ The server provides a TCP server on port 11453.
 
 ## TCP API
 
-It will accept incoming TCP connections. A connection begins unauthenticated, and can change to authenticated. Messages that are only sent/acceptable on an authenticated channel are marked "AUTH".
+It will accept incoming TCP connections over TLS.
 
-Each message should be not more than 16KB, and should be prefixed with a 2-byte Little-Endian length.
+All messages should be prefixed by a 4-byte little-endian length.
 
 ### Server to client
 
-	New message from another user
+	Inbox
 		1 byte: 0
-        32 bytes: sender public signing key
-        32 bytes: message hash
+        sequence of message stubs, where each is
+            32 bytes: sender public signing key
+            32 bytes: message hash
     Shortened key
         1 byte: 1
         8 bytes: shortened key
@@ -88,19 +89,24 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
         32 bytes: hash of message
     Blob acknowledgement
         1 byte: 4
-        32 bytes: hash of message
+        32 bytes: hash of blob
     Billing certificate
         1 byte: 5
         72 bytes: certificate
     Auth code
         1 byte: 6
         32 bytes: random
+    Blob
+        1 byte: 7
+        <= 15999 bytes: the blob
 
 ### Client to server
 
+Messages must be no more than 16KB, not counting the length prefix.
+
     Get billing certificate
         1 byte: 0
-	Price
+	Get price
 		1 byte: 1
     Get payment history
         1 byte: 2
@@ -109,9 +115,8 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
         64 bytes: billing certificate
 		32 bytes: recipient public signing key
         32 bytes: message hash
-	Delete message
+	Delete inbox
 		1 byte: 4
-		32 bytes: message hash
     Upload blob
         1 byte: 5
         64 bytes: billing certificate
@@ -122,27 +127,60 @@ Each message should be not more than 16KB, and should be prefixed with a 2-byte 
     ID token
         1 byte: 7
         64 bytes: Ed25519 signature of auth code
+    Get blob
+        1 byte: 8
+        32 bytes: blob hash
 
 # Client to client
 
 ## API
 
-The message is sliced up into chunks, each chunk is encrypted, and is sent.
+The messages can be <= 15935 bytes long. There are several layers to the API, as follows.
 
-Before encryption, a chunk must be a fixed length. A chunk is encoded like this:
+### Top layer
 
-15894 bytes
-    either this is a part of a sequence but not the last item
+One of these:
+
+    15745 bytes: Fresh Noise first handshake messages
         1 byte: 0
-        2 bytes: empty
-        the chunk
-    or this is the final (or only) chunk
-        1 byte: 1
-        2 bytes: length of the chunk
-        the chunk
-        padding
+        15744 bytes: 492 32-byte messages
+            (492 = 4 x 123, which is the number of second shakes
+             in a chunk)
 
-After assembling the message (or before chunking and sending it), there is another API inside it:
+    15809 bytes: Fresh Noise second handshake messages
+        1 byte: 1
+        64 bytes: signature of Noise static key
+        15744 bytes: 123 128-byte messages
+            32 bytes: first handshake message
+            32 bytes: my plain-text ephemeral key
+            32 + 16 bytes: encrypted static key
+            16 bytes: overhead of empty payload
+
+    141 bytes: Noise transport message
+        1 byte: 2
+        32 bytes: first handshake message
+        16 bytes: overhead
+        92 bytes
+            encrypted
+                32 bytes: hash of encrypted chunk
+                32 bytes: secret key of encrypted chunk
+                12 bytes: nonce for symmetric crypto
+                16 bytes: mac for symmetric crypto
+
+    <= 15935 bytes: Symmetrically encrypted: last and possibly first
+        1 byte: 3
+        <= 15934 bytes: the chunk
+
+    15935 bytes: Symmetrically encrypted: not the last in sequence
+        1 byte: 4
+        15934 bytes
+            encrypted
+                32 bytes: the hash of the next encrypted chunk
+                15902 bytes: the chunk
+
+### Before chunking but after encoding
+
+After encoding the message (or before chunking and sending it), there is another API inside it:
 
     32 bytes: globally unique message ID
     8 bytes: integrity check
@@ -155,25 +193,7 @@ After assembling the message (or before chunking and sending it), there is anoth
 
 ## Crypto
 
-The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload. The server will accept messages that are <= 15991 bytes long:
-
-    either some fresh first handshake messages
-        1 byte: 0
-        15968 bytes: 499 32-byte messages
-    or some fresh second handshake messages
-        1 byte: 1
-        15936 bytes: 166 96-byte messages
-            32 bytes: first handshake message
-            16 + 32 bytes: encrypted static key
-            16 bytes: overhead of empty payload
-    or a transport message
-        1 byte: 2
-        32 bytes: first handshake message
-            used as the unique session reference
-        48 bytes: encrypted static key
-        15910 bytes: Noise payload
-            16 bytes: crypto overhead
-            15894 bytes: plaintext
+The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
 
 # Encodings
 
@@ -182,9 +202,8 @@ The cryptography is done using Cacophony, a Noise implementation in Haskell. It 
 A message version is encoded as follows:
     8 bytes: POSIX time
     2 bytes: number of members
-    sequence of member IDs
-    16 bytes: author ID
-    sized string: subject
+    sequence of 32-byte member public signing keys
+    32 bytes: author signing key
     sized string: main box
     2 bytes: number of blobs
     sequence of blobs, where one blob is
@@ -196,7 +215,7 @@ A message version is encoded as follows:
 
 The difference between two encoded messages is encoded as follows:
 
-    start (int) 
+    start (int)
         The position of the first character in the string that is different to the other. Examples are:
 
         ("", "a") => 0
@@ -214,6 +233,8 @@ The difference between two encoded messages is encoded as follows:
 
     integrity (blob)
         an 8-byte BLAKE2b hash of the new string
+
+    the author ID of the edit
 
 This should lead to efficient storage of diffs because most changes are going to be character inserts and deletions.
 
@@ -238,26 +259,13 @@ or
 
 feminist polish fanfare front barber resume palpable
 
-## Message ID encoding
-
-16 bytes
-    20 bytes: globally unique random message chaining ID
-    4 bytes: version counter within the chain
-
 # Client cache
 
 blobs
     A key-value store of binaries.
 
 messages
-    a flat folder of message files (sets of edits), named by locally unique message IDs, where each is an SQLITE database with this table:
-
-        edits
-            row ID (int)
-            start position (int)
-            end position (int)
-            insert (blob)
-            8-byte integrity check (blob)
+    a flat folder of message files (sets of edits), named by locally unique message IDs, where each is an encoded sequence of diffs
 
 memCache
     A binary file containing a dump of the in-memory cache.
@@ -268,10 +276,13 @@ log.txt
 # Server cache
 
 blobs
-    A key-value store of binaries.
+    A flat directory of binaries, named by hash.
 
 memCache
     A binary file containing a dump of the in-memory cache.
+
+inboxes
+    A flat directory of inbox files, one per user.
 
 log.txt
     Log messages for debugging.
