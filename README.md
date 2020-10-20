@@ -141,13 +141,13 @@ The messages can be <= 15935 bytes long. There are several layers to the API, as
 
 One of these:
 
-    15745 bytes: Fresh Noise first handshake messages
+    15745 bytes: Noise first handshake messages
         1 byte: 0
         15744 bytes: 492 32-byte messages
             (492 = 4 x 123, which is the number of second shakes
              in a chunk)
 
-    15809 bytes: Fresh Noise second handshake messages
+    15809 bytes: Noise second handshake messages
         1 byte: 1
         64 bytes: signature of Noise static key
         15744 bytes: 123 128-byte messages
@@ -156,27 +156,28 @@ One of these:
             32 + 16 bytes: encrypted static key
             16 bytes: overhead of empty payload
 
-    141 bytes: Noise transport message
+    113 bytes: Noise transport message
         1 byte: 2
         32 bytes: first handshake message
         16 bytes: overhead
-        92 bytes
+        64 bytes
             encrypted
                 32 bytes: hash of encrypted chunk
                 32 bytes: secret key of encrypted chunk
-                12 bytes: nonce for symmetric crypto
-                16 bytes: mac for symmetric crypto
 
-    <= 15935 bytes: Symmetrically encrypted: last and possibly first
+    <= 15935 bytes: Symmetrically encrypted chunk
         1 byte: 3
-        <= 15934 bytes: the chunk
-
-    15935 bytes: Symmetrically encrypted: not the last in sequence
-        1 byte: 4
-        15934 bytes
+        12 bytes: random nonce
+        16 bytes: auth tag
+        <= 15906 bytes
             encrypted
-                32 bytes: the hash of the next encrypted chunk
-                15902 bytes: the chunk
+                either
+                    1 byte: 0 (this is the last chunk)
+                    <= 15905 bytes: the chunk
+                or
+                    1 byte: 1 (this is not the last chunk)
+                    32 bytes: the hash of the next encrypted chunk
+                    15873 bytes: the chunk
 
 ### Before chunking but after encoding
 
@@ -193,11 +194,15 @@ After encoding the message (or before chunking and sending it), there is another
 
 ## Crypto
 
-The cryptography is done using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
+The inbox messages are encrypted using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
+
+All client-server traffic is encrypted with TLS.
+
+The Noise messages just contain blob hashes and secret keys, and then the actual content is symmetrically encrypted with ChaChaPoly1305.
 
 # Encodings
 
-## Message version encoding
+## Message header encoding for local storage
 
 A message version is encoded as follows:
     8 bytes: POSIX time
@@ -210,6 +215,10 @@ A message version is encoded as follows:
         32 bytes: hash of blob
         sized string: original file name of blob
     32 bytes: hash of WASM
+
+## Message header encoding for transmission
+
+The same as for local storage, except the hashes and secret keys of the encrypted binaries are stored alongside the hashes of plaintext binaries.
 
 ## Message edit encoding
 
@@ -289,4 +298,8 @@ log.txt
 
 # Pricing
 
-There is a fixed monthly charge, paid in advance, but the first part of a month and full month is free. There is a generous usage allowance, that is intended to be high enough that non-abusive users will never reach it.
+It is free to download messages and blobs, but only paying users can upload them. Users pay by buying a monthly billing certificate off the server, which they can present when required.
+
+There will probably also be a scheme where paying users can invite people for a free trial period.
+
+There is a generous usage allowance, that is intended to be high enough that non-abusive users will never reach it.
