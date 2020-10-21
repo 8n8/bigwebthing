@@ -63,7 +63,107 @@ Events triggered by the user, like clicking buttons and typing in the text boxes
 
 # Server API
 
-The server provides a TCP server on port 11453.
+There are three main parts to the server infrastructure. They all provide TCP servers, and all have these routes as well as their individual ones:
+
+    Client to server
+        Signed auth code:
+            1 byte: 0
+            64 bytes: signed auth code
+
+    Server to client
+        Auth code to sign
+            1 byte: 0
+            32 bytes: random
+        
+
+1. A billing server for buying billing certificates. This provides a TCP server on port 53745 as follows:
+
+Client to server
+    Get billing certificate
+        1 byte: 1
+    Get inbox URL
+        1 byte: 2
+    Get blob URL
+        1 byte: 3
+    Get price
+        1 byte: 4
+    Get payment history
+        1 byte: 5
+    Shorten ID
+        1 byte: 6
+        32 bytes: public signing key
+        UTF-8 sized string: URL of inbox server
+    Update fingerprint hashing parameters
+        1 byte: 7
+        32 bytes: public signing key
+        new fingerprint hashing parameters
+Server to client
+    Billing certificate
+        1 byte: 1
+        64 bytes: billing certificate
+    Inbox URL
+        1 byte: 2
+        UTF-8 sized string: current inbox URL
+    Blob URL
+        1 byte: 3
+        UTF-8 sized string: current blob server URL
+    Price
+        1 byte: 4
+        4 bytes: Little-Endian monthly price in pence
+    Payment history
+        1 byte: 5
+        sequence of payment amounts and times
+    Shortened ID
+        1 byte: 6
+        8 bytes: shortened ID
+        fingerprint hashing parameters
+
+2. A bunch of blob storage servers. Blob server URLs are available from the billing server. This provides a TCP server on port 27316 as follows:
+
+    Client to server
+        Upload blob
+            1 byte: 1
+            64 bytes: billing certificate
+            <= 15935 bytes: the blob
+        Download blob
+            1 byte: 2
+            32 bytes: hash of blob
+    Server to client
+        Requested blob
+            1 byte: 3
+            <= 15935 bytes: the blob
+        Acknowledgement
+            1 byte: 4
+            32 bytes: hash of blob
+        No such blob
+            1 byte: 5
+            32 bytes: hash of blob
+        Can't serve you now
+            1 byte: 6
+
+3. A bunch of message-passing servers. Each user is assigned to a message-passing server where their inbox is stored. This provides a TCP server on port 55792 as follows:
+
+    Client to server
+        Send message
+            1 byte: 1
+            64 bytes: billing certificate
+            32 bytes: recipient public signing key
+            32 bytes: message
+        Delete inbox
+            1 byte: 2
+
+    Server to client
+        Message acknowledgement
+            1 byte: 1
+            32 bytes: hash of whole 'send message' request
+        Inbox
+            1 byte: 2
+            sequence of messages, where each is
+                32 bytes: sender public signing key
+                32 bytes: message
+
+
+Users are assigned a server URL by the billing server.
 
 ## TCP API
 
@@ -303,3 +403,41 @@ It is free to download messages and blobs, but only paying users can upload them
 There will probably also be a scheme where paying users can invite people for a free trial period.
 
 There is a generous usage allowance, that is intended to be high enough that non-abusive users will never reach it.
+
+# Embedded programming language (speculative)
+
+This might be put in a later version. The idea is that there will be a programming language embedded in the system for making new built-in programs.
+
+It will be specifically designed to target WASM.
+
+It will have a Lisp-like syntax, except that instead of parentheses, it will use whitespace.
+
+So in Python, a dict would be {"hi": 3, "apple": 4, "onions": 55, "stew": 22}. In Lisp it would be like:
+
+(Map.fromList (("hi" 3) ("apple" 4) ("onions" 55) ("stew" 22)))
+
+And in Truelang it would be like:
+
+====Top of file====
+Map.fromList
+    "hi" 3
+    "apple" 4
+    "onions" 55
+    "stew" 22
+
+And a file is just a convenience for making a list, so you don't have to indent the whole file to get the opening parenthesis.
+
+And the main feature of the language is
+
+|
+| Runtime exceptions are compiler bugs.
+|
+
+This is achieved with a type-level lanugage interpreter. So there is a lot of type-level computation. If you type 3 + 2 then the type of the result will be 5, not 'int'.
+
+Other ideas:
+
++ no type annotations
++ there are no user-defined names, you just use maps
++ module imports include a cryptographic hash of the file so that builds are deterministic
++ performance is nice, but will usually be sacrificed if it makes users lives easier
