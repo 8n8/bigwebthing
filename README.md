@@ -74,9 +74,16 @@ There are three main parts to the server infrastructure. They all provide TCP se
         Auth code to sign
             1 byte: 0
             32 bytes: random
-        
 
-1. A billing server for buying billing certificates. This provides a TCP server on port 53745 as follows:
+All messages should be prefixed by a 2-byte little-endian length.
+
+All these messages between client and server are encrypted with TLS.
+
+All the servers run on port 53745.
+
+Note that in practice, all these servers can be combined into a single server.
+
+1. A billing server for buying billing certificates.
 
 Client to server
     Get billing certificate
@@ -92,7 +99,8 @@ Client to server
     Shorten ID
         1 byte: 6
         32 bytes: public signing key
-        UTF-8 sized string: URL of inbox server
+        32 bytes: public Noise key
+        20 bytes: URL of inbox server
     Update fingerprint hashing parameters
         1 byte: 7
         32 bytes: public signing key
@@ -100,13 +108,14 @@ Client to server
 Server to client
     Billing certificate
         1 byte: 1
+        8 bytes: POSIX expiry time
         64 bytes: billing certificate
     Inbox URL
         1 byte: 2
-        UTF-8 sized string: current inbox URL
+        20 bytes: current inbox URL
     Blob URL
         1 byte: 3
-        UTF-8 sized string: current blob server URL
+        20 bytes: current blob server URL
     Price
         1 byte: 4
         4 bytes: Little-Endian monthly price in pence
@@ -118,118 +127,48 @@ Server to client
         8 bytes: shortened ID
         fingerprint hashing parameters
 
-2. A bunch of blob storage servers. Blob server URLs are available from the billing server. This provides a TCP server on port 27316 as follows:
+2. A bunch of blob storage servers. Blob server URLs are available from the billing server.
 
     Client to server
         Upload blob
-            1 byte: 1
+            1 byte: 8
             64 bytes: billing certificate
             <= 15935 bytes: the blob
         Download blob
-            1 byte: 2
+            1 byte: 9
             32 bytes: hash of blob
     Server to client
         Requested blob
-            1 byte: 3
+            1 byte: 7
             <= 15935 bytes: the blob
         Acknowledgement
-            1 byte: 4
+            1 byte: 8
             32 bytes: hash of blob
         No such blob
-            1 byte: 5
+            1 byte: 9
             32 bytes: hash of blob
-        Can't serve you now
-            1 byte: 6
+        Too busy
+            1 byte: 10
 
-3. A bunch of message-passing servers. Each user is assigned to a message-passing server where their inbox is stored. This provides a TCP server on port 55792 as follows:
+3. A bunch of message-passing servers. Each user is assigned to a message-passing server where their inbox is stored.
 
     Client to server
         Send message
-            1 byte: 1
+            1 byte: 10
             64 bytes: billing certificate
             32 bytes: recipient public signing key
             32 bytes: message
         Delete inbox
-            1 byte: 2
-
+            1 byte: 11
     Server to client
         Message acknowledgement
-            1 byte: 1
+            1 byte: 11
             32 bytes: hash of whole 'send message' request
         Inbox
-            1 byte: 2
+            1 byte: 12
             sequence of messages, where each is
                 32 bytes: sender public signing key
                 32 bytes: message
-
-
-Users are assigned a server URL by the billing server.
-
-## TCP API
-
-It will accept incoming TCP connections over TLS.
-
-All messages should be prefixed by a 4-byte little-endian length.
-
-### Server to client
-
-	Inbox
-		1 byte: 0
-        sequence of message stubs, where each is
-            32 bytes: sender public signing key
-            32 bytes: message hash
-    Shortened key
-        1 byte: 1
-        8 bytes: shortened key
-    Price
-        1 byte: 2
-        4 bytes: monthly price in pence
-    Message acknowledgement
-        1 byte: 3
-        32 bytes: hash of message
-    Blob acknowledgement
-        1 byte: 4
-        32 bytes: hash of blob
-    Billing certificate
-        1 byte: 5
-        72 bytes: certificate
-    Auth code
-        1 byte: 6
-        32 bytes: random
-    Blob
-        1 byte: 7
-        <= 15999 bytes: the blob
-
-### Client to server
-
-Messages must be no more than 16KB, not counting the length prefix.
-
-    Get billing certificate
-        1 byte: 0
-	Get price
-		1 byte: 1
-    Get payment history
-        1 byte: 2
-	Send message
-		1 byte: 3
-        64 bytes: billing certificate
-		32 bytes: recipient public signing key
-        32 bytes: message hash
-	Delete inbox
-		1 byte: 4
-    Upload blob
-        1 byte: 5
-        64 bytes: billing certificate
-        <= 15935 bytes: the blob
-    Shorten public key
-        1 byte: 6
-        32 bytes: public key
-    ID token
-        1 byte: 7
-        64 bytes: Ed25519 signature of auth code
-    Get blob
-        1 byte: 8
-        32 bytes: blob hash
 
 # Client to client
 
@@ -241,29 +180,28 @@ The messages can be <= 15935 bytes long. There are several layers to the API, as
 
 One of these:
 
-    15745 bytes: Noise first handshake messages
+    15841 bytes: Noise first handshake messages
         1 byte: 0
-        15744 bytes: 492 32-byte messages
-            (492 = 4 x 123, which is the number of second shakes
+        15840 bytes: 495 32-byte messages
+            (495 = 3 x 165, which is the number of second shakes
              in a chunk)
 
-    15809 bytes: Noise second handshake messages
+    15841 bytes: Noise second handshake messages
         1 byte: 1
-        64 bytes: signature of Noise static key
-        15744 bytes: 123 128-byte messages
+        15840 bytes: 165 96-byte messages
             32 bytes: first handshake message
-            32 bytes: my plain-text ephemeral key
-            32 + 16 bytes: encrypted static key
+            32 + 16 bytes: my encrypted ephemeral key
             16 bytes: overhead of empty payload
 
-    113 bytes: Noise transport message
+    133 bytes: Noise transport message
         1 byte: 2
         32 bytes: first handshake message
         16 bytes: overhead
-        64 bytes
+        84 bytes
             encrypted
                 32 bytes: hash of encrypted chunk
                 32 bytes: secret key of encrypted chunk
+                20 bytes: URL of blob server
 
     <= 15935 bytes: Symmetrically encrypted chunk
         1 byte: 3
@@ -277,7 +215,8 @@ One of these:
                 or
                     1 byte: 1 (this is not the last chunk)
                     32 bytes: the hash of the next encrypted chunk
-                    15873 bytes: the chunk
+                    20 bytes: URL of next encrypted chunk
+                    <= 15853 bytes: the chunk
 
 ### Before chunking but after encoding
 
@@ -294,13 +233,21 @@ After encoding the message (or before chunking and sending it), there is another
 
 ## Crypto
 
-The inbox messages are encrypted using Cacophony, a Noise implementation in Haskell. It uses the XX pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
+The inbox messages are encrypted using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
 
 All client-server traffic is encrypted with TLS.
 
 The Noise messages just contain blob hashes and secret keys, and then the actual content is symmetrically encrypted with ChaChaPoly1305.
 
 # Encodings
+
+## Server URLs
+
+Server URLs are pretty short, and are encoded in 20 bytes:
+
+    1 byte: number of characters in UTF-8 up to 127
+    the URL, with one byte per character
+    padding up to 20 bytes
 
 ## Message header encoding for local storage
 
@@ -318,7 +265,7 @@ A message version is encoded as follows:
 
 ## Message header encoding for transmission
 
-The same as for local storage, except the hashes and secret keys of the encrypted binaries are stored alongside the hashes of plaintext binaries.
+The same as for local storage, except the hashes, urls and secret keys of the encrypted binaries are stored alongside the hashes of plaintext binaries.
 
 ## Message edit encoding
 
@@ -412,6 +359,12 @@ It will be specifically designed to target WASM.
 
 It will have a Lisp-like syntax, except that instead of parentheses, it will use whitespace.
 
+So:
+
++ "(" == newline and increment indent level
++ ")" == two or more newlines and decrement indent level
++ " " == " " or newline
+
 So in Python, a dict would be {"hi": 3, "apple": 4, "onions": 55, "stew": 22}. In Lisp it would be like:
 
 (Map.fromList (("hi" 3) ("apple" 4) ("onions" 55) ("stew" 22)))
@@ -419,13 +372,15 @@ So in Python, a dict would be {"hi": 3, "apple": 4, "onions": 55, "stew": 22}. I
 And in Truelang it would be like:
 
 ====Top of file====
-Map.fromList
-    "hi" 3
-    "apple" 4
-    "onions" 55
-    "stew" 22
+"hi" 3
 
-And a file is just a convenience for making a list, so you don't have to indent the whole file to get the opening parenthesis.
+"apple" 4
+
+"onions" 55
+
+"stew" 22
+
+And a file is just a convenience for making a map, so you don't have to indent the whole file to get the opening parenthesis.
 
 And the main feature of the language is
 
@@ -441,3 +396,4 @@ Other ideas:
 + there are no user-defined names, you just use maps
 + module imports include a cryptographic hash of the file so that builds are deterministic
 + performance is nice, but will usually be sacrificed if it makes users lives easier
++ items in maps can reference their parent map
