@@ -183,7 +183,7 @@ updateOnRawTcpMessage
     -> B.ByteString
     -> State
     -> (Output, State)
-updateOnRawTcpMessage address rawMessage model = 
+updateOnRawTcpMessage address rawMessage model =
     case model of
     InitS ->
         (DoNothingO, model)
@@ -512,8 +512,20 @@ data AuthStatus
 
 
 data TcpMessage
-    = NeedsAuthT NeedsAuth
+    = NeedsAuthT BillingCertificate NeedsAuth
     | FreeT Free
+
+
+data BillingCertificate
+    = BillingCertificate EncodedPosix BillingSignature
+
+
+newtype EncodedPosix
+    = EncodedPosix B.ByteString
+
+
+newtype BillingSignature
+    = BillingSignature Ed.Signature
 
 
 data Free
@@ -728,7 +740,14 @@ sendWantedMessage sender recipient message ready =
         forwardMessage sender recipientQ message ready
 
 
-forwardMessage :: Sender -> Queue TcpInstruction
+forwardMessage
+    :: Sender
+    -> Queue TcpInstruction
+    -> Message
+    -> Ready
+    -> (Output, State)
+forwardMessage sender recipientQ message ready =
+    
 
 
 saveMessage
