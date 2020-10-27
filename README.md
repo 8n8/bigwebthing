@@ -63,29 +63,16 @@ Events triggered by the user, like clicking buttons and typing in the text boxes
 
 # Server API
 
-There are three main parts to the server infrastructure. They all provide TCP servers, and all have these routes as well as their individual ones:
+The server runs a TCP server on port 53745.
 
-    Client to server
-        Signed auth code:
-            1 byte: 0
-            64 bytes: signed auth code
-
-    Server to client
-        Auth code to sign
-            1 byte: 0
-            32 bytes: random
-
-All messages should be prefixed by a 2-byte little-endian length.
+All messages should be prefixed by a 4-byte little-endian length.
 
 All these messages between client and server are encrypted with TLS.
 
-All the servers run on port 53745.
-
-Note that in practice, all these servers can be combined into a single server.
-
-1. A billing server for buying billing certificates.
-
 Client to server
+    Signed auth code:
+        1 byte: 0
+        64 bytes: signed auth code
     Get billing certificate
         1 byte: 1
     Get inbox URL
@@ -97,19 +84,34 @@ Client to server
     Get payment history
         1 byte: 5
     Shorten ID
+        // If this is a new signing key, then the server will respond
+        // with a new username. If not, it will update the record.
         1 byte: 6
-        32 bytes: public signing key
+        72 bytes: billing certificate
         32 bytes: public Noise key
         20 bytes: URL of inbox server
-    Update fingerprint hashing parameters
+        9 bytes: fingerprint hashing options
+    Upload blob
         1 byte: 7
-        32 bytes: public signing key
-        new fingerprint hashing parameters
+        72 bytes: billing certificate
+        <= 15935 bytes: the blob
+    Download blob
+        1 byte: 8
+        32 bytes: hash of blob
+    Send message
+        1 byte: 9
+        72 bytes: billing certificate
+        32 bytes: recipient public signing key
+        32 bytes: message
+    Delete inbox
+        1 byte: 10
 Server to client
+    Auth code to sign
+        1 byte: 0
+        32 bytes: random
     Billing certificate
         1 byte: 1
-        8 bytes: POSIX expiry time
-        64 bytes: billing certificate
+        72 bytes: billing certificate
     Inbox URL
         1 byte: 2
         20 bytes: current inbox URL
@@ -125,50 +127,25 @@ Server to client
     Shortened ID
         1 byte: 6
         8 bytes: shortened ID
-        fingerprint hashing parameters
-
-2. A bunch of blob storage servers. Blob server URLs are available from the billing server.
-
-    Client to server
-        Upload blob
-            1 byte: 8
-            64 bytes: billing certificate
-            <= 15935 bytes: the blob
-        Download blob
-            1 byte: 9
-            32 bytes: hash of blob
-    Server to client
-        Requested blob
-            1 byte: 7
-            <= 15935 bytes: the blob
-        Acknowledgement
-            1 byte: 8
-            32 bytes: hash of blob
-        No such blob
-            1 byte: 9
-            32 bytes: hash of blob
-        Too busy
-            1 byte: 10
-
-3. A bunch of message-passing servers. Each user is assigned to a message-passing server where their inbox is stored.
-
-    Client to server
-        Send message
-            1 byte: 10
-            64 bytes: billing certificate
-            32 bytes: recipient public signing key
+    Requested blob
+        1 byte: 7
+        <= 15935 bytes: the blob
+    Acknowledgement
+        1 byte: 8
+        32 bytes: hash of blob
+    No such blob
+        1 byte: 9
+        32 bytes: hash of blob
+    Too busy
+        1 byte: 10
+    Message acknowledgement
+        1 byte: 11
+        32 bytes: hash of whole 'send message' request
+    Inbox
+        1 byte: 12
+        sequence of messages, where each is
+            32 bytes: sender public signing key
             32 bytes: message
-        Delete inbox
-            1 byte: 11
-    Server to client
-        Message acknowledgement
-            1 byte: 11
-            32 bytes: hash of whole 'send message' request
-        Inbox
-            1 byte: 12
-            sequence of messages, where each is
-                32 bytes: sender public signing key
-                32 bytes: message
 
 # Client to client
 
@@ -240,6 +217,19 @@ All client-server traffic is encrypted with TLS.
 The Noise messages just contain blob hashes and secret keys, and then the actual content is symmetrically encrypted with ChaChaPoly1305.
 
 # Encodings
+
+## Argon2 hashing options
+
+    9 bytes
+        4 bytes: iterations
+        4 bytes: memory
+        1 byte: parallelism
+
+## Billing certificate
+
+    72 bytes
+        64 bytes: Ed25519 signature
+        8 bytes: POSIX expiry timestamp
 
 ## Server URLs
 
@@ -342,6 +332,9 @@ inboxes
 
 log.txt
     Log messages for debugging.
+
+usernames.sqlite
+    Contains a table of usernames and the associated key data.
 
 # Pricing
 
