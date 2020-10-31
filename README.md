@@ -74,16 +74,12 @@ Client to server
         1 byte: 0
         32 bytes: public key
         64 bytes: signed auth code
-    Get billing certificate
-        1 byte: 1
     Get inbox URL
         1 byte: 2
     Get blob URL
         1 byte: 3
     Get price
         1 byte: 4
-    Get payment history
-        1 byte: 5
     Shorten ID
         // If this is a new signing key, then the server will respond
         // with a new username. If not, it will update the record.
@@ -94,14 +90,12 @@ Client to server
             10 bytes: fingerprint hashing options
     Upload blob
         1 byte: 7
-        72 bytes: billing certificate
         <= 15935 bytes: the blob
     Download blob
         1 byte: 8
         32 bytes: hash of blob
     Send message
         1 byte: 9
-        72 bytes: billing certificate
         32 bytes: recipient public signing key
         32 bytes: message
     Delete message
@@ -112,9 +106,6 @@ Server to client
     Auth code to sign
         1 byte: 0
         32 bytes: random
-    Billing certificate
-        1 byte: 1
-        72 bytes: billing certificate
     Inbox URL
         1 byte: 2
         20 bytes: current inbox URL
@@ -346,6 +337,39 @@ It is free to download messages and blobs, but only paying users can upload them
 There will probably also be a scheme where paying users can invite people for a free trial period.
 
 There is a generous usage allowance, that is intended to be high enough that non-abusive users will never reach it.
+
+# Accounting
+
+The accounting system uses a blockchain-like distributed database, so everyone has access to all the transactions (privacy?). Transactions are hashed onto the top of the chain. A transaction is encoded as follows:
+
+    8 bytes: sender public key[:10]
+    8 bytes: recipient public key[:10]
+    64 bytes: signature from sender of blockchain hash
+    4 bytes: positive amount in m£
+
+Only the first few bytes of the public keys are needed, because if there is a conflict then both can be tried and the signature used to resolve it.
+
+A blockchain is only valid if all the accounts but the server account have zero or positive balances, and if the sum of all the account balances is zero.
+
+If two blockchains conflict then the longest wins.
+
+This system is distributed like Bitcoin, but not decentralised like Bitcoin. The only source of money is the server account.
+
+Because this blockchain will get pretty large, there is a blockchain hosting service with this API:
+
+Client to server
+    Upload transaction
+        encoded transaction
+
+    Download transactions
+        start hash
+        end hash
+
+Server to client
+    Transaction
+        start hash
+        end hash
+        transaction
 
 # Embedded programming language (speculative)
 
