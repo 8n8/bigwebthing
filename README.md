@@ -72,6 +72,7 @@ All these messages between client and server are encrypted with TLS.
 Client to server
     Signed auth code:
         1 byte: 0
+        32 bytes: public key
         64 bytes: signed auth code
     Get billing certificate
         1 byte: 1
@@ -87,10 +88,10 @@ Client to server
         // If this is a new signing key, then the server will respond
         // with a new username. If not, it will update the record.
         1 byte: 6
-        72 bytes: billing certificate
-        32 bytes: public Noise key
-        20 bytes: URL of inbox server
-        9 bytes: fingerprint hashing options
+        61 bytes
+            32 bytes: public Noise key
+            20 bytes: URL of inbox server
+            10 bytes: fingerprint hashing options
     Upload blob
         1 byte: 7
         72 bytes: billing certificate
@@ -103,8 +104,10 @@ Client to server
         72 bytes: billing certificate
         32 bytes: recipient public signing key
         32 bytes: message
-    Delete inbox
+    Delete message
         1 byte: 10
+        32 bytes: sender public signing key
+        32 bytes: message
 Server to client
     Auth code to sign
         1 byte: 0
@@ -141,11 +144,10 @@ Server to client
     Message acknowledgement
         1 byte: 11
         32 bytes: hash of whole 'send message' request
-    Inbox
+    Inbox message
         1 byte: 12
-        sequence of messages, where each is
-            32 bytes: sender public signing key
-            32 bytes: message
+        32 bytes: sender public signing key
+        32 bytes: message
 
 # Client to client
 
@@ -218,9 +220,10 @@ The Noise messages just contain blob hashes and secret keys, and then the actual
 
 # Encodings
 
-## Argon2 hashing options
+## Slow hashing options
 
-    9 bytes
+    Argon2Id:
+        1 byte: 0
         4 bytes: iterations
         4 bytes: memory
         1 byte: parallelism
@@ -328,13 +331,13 @@ memCache
     A binary file containing a dump of the in-memory cache.
 
 inboxes
-    A flat directory of inbox files, one per user.
+    A flat directory containing an inbox file per user.
+
+payments
+    A flat directory containing a transactions file per user.
 
 log.txt
     Log messages for debugging.
-
-usernames.sqlite
-    Contains a table of usernames and the associated key data.
 
 # Pricing
 
