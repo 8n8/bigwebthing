@@ -102,6 +102,17 @@ Client to server
         1 byte: 10
         32 bytes: sender public signing key
         32 bytes: message
+    Upload transaction
+        1 byte: 11
+        32 bytes: recipient public key
+        4 bytes: amount
+    Upload accounts signature
+        1 byte: 12
+        32 bytes: hash of new state
+        64 bytes: signature(hash of new state || hash of old state)
+    Get accounts hash
+        1 byte: 13
+        32 bytes: public key of user
 Server to client
     Auth code to sign
         1 byte: 0
@@ -139,6 +150,11 @@ Server to client
         1 byte: 12
         32 bytes: sender public signing key
         32 bytes: message
+    Accounts hash
+        1 byte: 13
+        32 bytes: old hash
+        32 bytes: new hash
+        64 bytes: signature(old hash || new hash)
 
 # Client to client
 
@@ -324,52 +340,24 @@ memCache
 inboxes
     A flat directory containing an inbox file per user.
 
-payments
-    A flat directory containing a transactions file per user.
-
 log.txt
     Log messages for debugging.
 
+account hashes database
+    statehashes
+        oldhash
+        newhash
+        signature
+
 # Pricing
 
-It is free to download messages and blobs, but only paying users can upload them. Users pay by buying a monthly billing certificate off the server, which they can present when required.
+It is free to download messages and blobs, but there is a small fee for uploading messages and blobs.
+
+Users can also send money to each other, for which there is also a small fee.
 
 There will probably also be a scheme where paying users can invite people for a free trial period.
 
-There is a generous usage allowance, that is intended to be high enough that non-abusive users will never reach it.
-
-# Accounting
-
-The accounting system uses a blockchain-like distributed database, so everyone has access to all the transactions (privacy?). Transactions are hashed onto the top of the chain. A transaction is encoded as follows:
-
-    8 bytes: sender public key[:10]
-    8 bytes: recipient public key[:10]
-    64 bytes: signature from sender of blockchain hash
-    4 bytes: positive amount in m£
-
-Only the first few bytes of the public keys are needed, because if there is a conflict then both can be tried and the signature used to resolve it.
-
-A blockchain is only valid if all the accounts but the server account have zero or positive balances, and if the sum of all the account balances is zero.
-
-If two blockchains conflict then the longest wins.
-
-This system is distributed like Bitcoin, but not decentralised like Bitcoin. The only source of money is the server account.
-
-Because this blockchain will get pretty large, there is a blockchain hosting service with this API:
-
-Client to server
-    Upload transaction
-        encoded transaction
-
-    Download transactions
-        start hash
-        end hash
-
-Server to client
-    Transaction
-        start hash
-        end hash
-        transaction
+Each user keeps their own accounts. The server doesn't keep any accounts. It just keeps a pair of hashes and a signature for each client, and guarantees that the client is only allowed to change this by uploading a new hash and a signature of the old new hash and the new new one.
 
 # Embedded programming language (speculative)
 
