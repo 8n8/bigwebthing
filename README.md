@@ -102,17 +102,17 @@ Client to server
         1 byte: 10
         32 bytes: sender public signing key
         32 bytes: message
-    Upload transaction
+    Update accounts hash
         1 byte: 11
-        32 bytes: recipient public key
-        4 bytes: amount
-    Upload accounts signature
-        1 byte: 12
-        32 bytes: hash of new state
-        64 bytes: signature(hash of new state || hash of old state)
+        32 bytes: old hash
+        32 bytes: new hash
+        64 bytes: signature
     Get accounts hash
-        1 byte: 13
+        1 byte: 12
         32 bytes: public key of user
+    Delete transaction records (to maintain user's privacy)
+        1 byte: 13
+        32 bytes: hash to delete up to
 Server to client
     Auth code to sign
         1 byte: 0
@@ -150,11 +150,14 @@ Server to client
         1 byte: 12
         32 bytes: sender public signing key
         32 bytes: message
-    Accounts hash
+    Hash of accounts
         1 byte: 13
-        32 bytes: old hash
-        32 bytes: new hash
-        64 bytes: signature(old hash || new hash)
+        32 bytes: user ID
+        32 bytes: hash
+    New transaction (like an account top-up)
+        1 byte: 14
+        64 bytes: server signature
+        4 bytes: amount
 
 # Client to client
 
@@ -329,6 +332,9 @@ memCache
 log.txt
 	A log of error messages, for debugging.
 
+accounts
+    A file containing the user's blockchain-like accounts data structure.
+
 # Server cache
 
 blobs
@@ -345,6 +351,7 @@ log.txt
 
 account hashes database
     statehashes
+        user
         oldhash
         newhash
         signature
@@ -357,7 +364,13 @@ Users can also send money to each other, for which there is also a small fee.
 
 There will probably also be a scheme where paying users can invite people for a free trial period.
 
-Each user keeps their own accounts. The server doesn't keep any accounts. It just keeps a pair of hashes and a signature for each client, and guarantees that the client is only allowed to change this by uploading a new hash and a signature of the old new hash and the new new one.
+# Accounting
+
+The accounts between a user and a server are kept in a blockchain-like structure, where the loser has to sign each transaction.
+
+The server maintains the signature of the whole accounts for each client, and will hand out this signature to anyone who asks for it. The client can only change this by providing a new hash and a new signature of the new and the old hashes.
+
+When the server is notified by the payments authority of a payment from or to (a refund) a user, it records the transaction by hashing it onto the top of the existing client signature. The client can request that this transaction record be deleted.
 
 # Embedded programming language (speculative)
 
