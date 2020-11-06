@@ -70,94 +70,64 @@ All messages should be prefixed by a 4-byte little-endian length.
 All these messages between client and server are encrypted with TLS.
 
 Client to server
-    Signed auth code:
-        1 byte: 0
+    Signed auth code: 0
+        1 byte:
         32 bytes: public key
         64 bytes: signed auth code
-    Get inbox URL
-        1 byte: 2
-    Get blob URL
-        1 byte: 3
-    Get price
-        1 byte: 4
+    Get prices
+        1 byte: 1
     Shorten ID
         // If this is a new signing key, then the server will respond
         // with a new username. If not, it will update the record.
-        1 byte: 6
+        1 byte: 2
+        payment details
         61 bytes
             32 bytes: public Noise key
             20 bytes: URL of inbox server
             10 bytes: fingerprint hashing options
     Upload blob
-        1 byte: 7
-        <= 15935 bytes: the blob
+        1 byte: 3
+        payment details
+        32 bytes: blob ID
+        the blob
     Download blob
-        1 byte: 8
-        32 bytes: hash of blob
+        1 byte: 4
+        32 bytes: blob ID
     Send message
-        1 byte: 9
+        1 byte: 5
+        payment details
         32 bytes: recipient public signing key
         32 bytes: message
     Delete message
-        1 byte: 10
+        1 byte: 6
         32 bytes: sender public signing key
         32 bytes: message
-    Update accounts hash
-        1 byte: 11
-        32 bytes: old hash
-        32 bytes: new hash
-        64 bytes: signature
-    Get accounts hash
-        1 byte: 12
-        32 bytes: public key of user
-    Delete transaction records (to maintain user's privacy)
-        1 byte: 13
-        32 bytes: hash to delete up to
 Server to client
     Auth code to sign
         1 byte: 0
         32 bytes: random
-    Inbox URL
-        1 byte: 2
-        20 bytes: current inbox URL
-    Blob URL
-        1 byte: 3
-        20 bytes: current blob server URL
-    Price
-        1 byte: 4
-        4 bytes: Little-Endian monthly price in pence
-    Payment history
-        1 byte: 5
-        sequence of payment amounts and times
+    Prices
+        1 byte: 1
+        4 bytes: shortening price
+        4 bytes: blob upload price
+        4 bytes: message upload price
     Shortened ID
-        1 byte: 6
+        1 byte: 2
         8 bytes: shortened ID
     Requested blob
-        1 byte: 7
-        <= 15935 bytes: the blob
+        1 byte: 3
+        32 bytes: blob ID
+        the blob
     Acknowledgement
-        1 byte: 8
-        32 bytes: hash of blob
-    No such blob
-        1 byte: 9
-        32 bytes: hash of blob
-    Too busy
-        1 byte: 10
-    Message acknowledgement
-        1 byte: 11
-        32 bytes: hash of whole 'send message' request
+        1 byte: 4
+        32 bytes: hash of message
     Inbox message
-        1 byte: 12
+        1 byte: 5
         32 bytes: sender public signing key
         32 bytes: message
-    Hash of accounts
-        1 byte: 13
-        32 bytes: user ID
-        32 bytes: hash
     New transaction (like an account top-up)
-        1 byte: 14
-        64 bytes: server signature
-        4 bytes: amount
+        1 byte: 6
+        transaction
 
 # Client to client
 
@@ -182,30 +152,27 @@ One of these:
             32 + 16 bytes: my encrypted ephemeral key
             16 bytes: overhead of empty payload
 
-    133 bytes: Noise transport message
+    113 bytes: Noise transport message
         1 byte: 2
         32 bytes: first handshake message
         16 bytes: overhead
-        84 bytes
+        64 bytes
             encrypted
                 32 bytes: hash of encrypted chunk
                 32 bytes: secret key of encrypted chunk
-                20 bytes: URL of blob server
 
-    <= 15935 bytes: Symmetrically encrypted chunk
+    Symmetrically encrypted chunk
         1 byte: 3
         12 bytes: random nonce
         16 bytes: auth tag
-        <= 15906 bytes
-            encrypted
-                either
-                    1 byte: 0 (this is the last chunk)
-                    <= 15905 bytes: the chunk
-                or
-                    1 byte: 1 (this is not the last chunk)
-                    32 bytes: the hash of the next encrypted chunk
-                    20 bytes: URL of next encrypted chunk
-                    <= 15853 bytes: the chunk
+        encrypted
+            either
+                1 byte: 0 (this is the last chunk)
+                the chunk
+            or
+                1 byte: 1 (this is not the last chunk)
+                32 bytes: the hash of the next encrypted chunk
+                the chunk
 
 ### Before chunking but after encoding
 
@@ -238,19 +205,26 @@ The Noise messages just contain blob hashes and secret keys, and then the actual
         4 bytes: memory
         1 byte: parallelism
 
-## Billing certificate
+## Payment details
 
-    72 bytes
-        64 bytes: Ed25519 signature
-        8 bytes: POSIX expiry timestamp
+    previous transaction
+    this transaction
+    64 bytes: signature of hash of new accounts
 
-## Server URLs
+## Transaction
 
-Server URLs are pretty short, and are encoded in 20 bytes:
-
-    1 byte: number of characters in UTF-8 up to 127
-    the URL, with one byte per character
-    padding up to 20 bytes
+    8 bytes: amount in m£
+    8 bytes: POSIX time stamp
+    8 bytes: new balance in m£
+    either
+        Payment to server
+            32 bytes: hash of message
+            1 byte: 0
+    or
+        Account top-up
+            1 byte: 1
+            32 bytes: unique ID
+            extra fields like credit card number, payment provider etc
 
 ## Message header encoding for local storage
 
@@ -338,39 +312,39 @@ accounts
 # Server cache
 
 blobs
-    A flat directory of binaries, named by hash.
+    A flat directory of binaries, named by user-made ID.
 
 memCache
     A binary file containing a dump of the in-memory cache.
 
-inboxes
-    A flat directory containing an inbox file per user.
-
 log.txt
     Log messages for debugging.
 
-account hashes database
-    statehashes
+database
+    accountsignatures
         user
-        oldhash
-        newhash
         signature
+    messages
+        sender
+        recipient
+        message
+    waitingpayments
+        uniqueid
+        encodedpayment
 
 # Pricing
 
-It is free to download messages and blobs, but there is a small fee for uploading messages and blobs.
-
-Users can also send money to each other, for which there is also a small fee.
+It is free to download messages and blobs, but there is a small fee for uploading messages and blobs, and for shortening usernames.
 
 There will probably also be a scheme where paying users can invite people for a free trial period.
 
 # Accounting
 
-The accounts between a user and a server are kept in a blockchain-like structure, where the loser has to sign each transaction.
+Clients are responsible for storing their accounts information, and uploading it to the server when required.
 
-The server maintains the signature of the whole accounts for each client, and will hand out this signature to anyone who asks for it. The client can only change this by providing a new hash and a new signature of the new and the old hashes.
+The server maintains the signature of the whole accounts for each client. It will only update it when the client uploads the previous transaction and a new one and a new signature.
 
-When the server is notified by the payments authority of a payment from or to (a refund) a user, it records the transaction by hashing it onto the top of the existing client signature. The client can request that this transaction record be deleted.
+The server will only accept account top-ups if it has a corresponding transaction stored in its database. Once the client has added it, the server will delete it. The server will not accept negative balances, or balances higher than a constant small upper limit.
 
 # Embedded programming language (speculative)
 
