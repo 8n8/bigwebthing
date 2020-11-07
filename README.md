@@ -26,7 +26,7 @@ These are the different parts of the program:
 
 4. (Rust / Webassembly) The user programs. These are programs that users can write and send to each other. They are pure functions written in Rust and compiled to Webassembly, and produce a DOM-like structure from a user input text box and user-uploaded binary blobs.
 
-6. (Go) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys. Users need to inform the server of their whitelists so that it can reject spam for them.
+6. (Haskell) The server. This acts as a route between clients. They upload and download messages, and also use it to store their public keys.
 
 # Calculating fingerprint
 
@@ -70,64 +70,43 @@ All messages should be prefixed by a 4-byte little-endian length.
 All these messages between client and server are encrypted with TLS.
 
 Client to server
-    Signed auth code: 0
+    Get price
         1 byte:
-        32 bytes: public key
-        64 bytes: signed auth code
-    Get prices
-        1 byte: 1
     Shorten ID
         // If this is a new signing key, then the server will respond
         // with a new username. If not, it will update the record.
-        1 byte: 2
-        payment details
-        61 bytes
-            32 bytes: public Noise key
+        1 byte:
+        30 bytes
             20 bytes: URL of inbox server
             10 bytes: fingerprint hashing options
     Upload blob
-        1 byte: 3
-        payment details
+        1 byte:
         32 bytes: blob ID
         the blob
     Download blob
-        1 byte: 4
+        1 byte:
         32 bytes: blob ID
     Send message
-        1 byte: 5
-        payment details
-        32 bytes: recipient public signing key
-        32 bytes: message
-    Delete message
-        1 byte: 6
-        32 bytes: sender public signing key
-        32 bytes: message
+        1 byte:
+        message
+    Get chain after
+        1 byte:
+        32 bytes: start hash
 Server to client
-    Auth code to sign
-        1 byte: 0
-        32 bytes: random
-    Prices
-        1 byte: 1
-        4 bytes: shortening price
-        4 bytes: blob upload price
-        4 bytes: message upload price
+    Price
+        1 byte:
+        4 bytes: price per byte upload in £ x 10 ^ -6
     Shortened ID
-        1 byte: 2
+        1 byte:
         8 bytes: shortened ID
     Requested blob
-        1 byte: 3
+        1 byte:
         32 bytes: blob ID
         the blob
-    Acknowledgement
-        1 byte: 4
-        32 bytes: hash of message
-    Inbox message
-        1 byte: 5
-        32 bytes: sender public signing key
-        32 bytes: message
-    New transaction (like an account top-up)
-        1 byte: 6
-        transaction
+    Chain after
+        1 byte:
+        32 bytes: start hash
+        chain
 
 # Client to client
 
@@ -136,30 +115,6 @@ Server to client
 The messages can be <= 15935 bytes long. There are several layers to the API, as follows.
 
 ### Top layer
-
-One of these:
-
-    15841 bytes: Noise first handshake messages
-        1 byte: 0
-        15840 bytes: 495 32-byte messages
-            (495 = 3 x 165, which is the number of second shakes
-             in a chunk)
-
-    15841 bytes: Noise second handshake messages
-        1 byte: 1
-        15840 bytes: 165 96-byte messages
-            32 bytes: first handshake message
-            32 + 16 bytes: my encrypted ephemeral key
-            16 bytes: overhead of empty payload
-
-    113 bytes: Noise transport message
-        1 byte: 2
-        32 bytes: first handshake message
-        16 bytes: overhead
-        64 bytes
-            encrypted
-                32 bytes: hash of encrypted chunk
-                32 bytes: secret key of encrypted chunk
 
     Symmetrically encrypted chunk
         1 byte: 3
@@ -187,15 +142,47 @@ After encoding the message (or before chunking and sending it), there is another
         1 byte: 1
         the referenced blob
 
-## Crypto
-
-The inbox messages are encrypted using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
-
-All client-server traffic is encrypted with TLS.
-
-The Noise messages just contain blob hashes and secret keys, and then the actual content is symmetrically encrypted with ChaChaPoly1305.
-
 # Encodings
+
+## URLs
+
+    20 bytes
+        1 byte: length
+        UTF8-encoded string: url
+        padding
+
+## Blob address
+
+    28 bytes
+        20 bytes: URL
+        8 bytes: machine-unique blob ID
+
+## Chain message
+
+    79 bytes: First handshake messages
+        1 byte:
+        2 bytes: conversation reference
+        76 bytes (32 + 28 + 16)
+            KK Noise first handshake message, with encrypted payload
+            containing the 28-byte blob address of a load more first
+            handshake messages
+    95 bytes: Second handshake messages
+        1 byte:
+        2 bytes: conversation reference
+        92 bytes: (32 + 16 + 28 + 16)
+            KK Noise second handshake message, with encrypted payload
+            containing the 28-byte blob address of a load more second
+            handshake messages
+    47 bytes: Payload message
+        1 byte:
+        2 bytes: conversation reference
+        16 bytes: overhead
+        28 bytes encrypted
+            address of blob in blob server
+    97 bytes: Certificate
+        1 byte:
+        32 bytes: public static Noise key
+        64 bytes: Ed25519 signature of Noise key.
 
 ## Slow hashing options
 
@@ -204,27 +191,6 @@ The Noise messages just contain blob hashes and secret keys, and then the actual
         4 bytes: iterations
         4 bytes: memory
         1 byte: parallelism
-
-## Payment details
-
-    previous transaction
-    this transaction
-    64 bytes: signature of hash of new accounts
-
-## Transaction
-
-    8 bytes: amount in m£
-    8 bytes: POSIX time stamp
-    8 bytes: new balance in m£
-    either
-        Payment to server
-            32 bytes: hash of message
-            1 byte: 0
-    or
-        Account top-up
-            1 byte: 1
-            32 bytes: unique ID
-            extra fields like credit card number, payment provider etc
 
 ## Message header encoding for local storage
 
@@ -337,14 +303,6 @@ database
 It is free to download messages and blobs, but there is a small fee for uploading messages and blobs, and for shortening usernames.
 
 There will probably also be a scheme where paying users can invite people for a free trial period.
-
-# Accounting
-
-Clients are responsible for storing their accounts information, and uploading it to the server when required.
-
-The server maintains the signature of the whole accounts for each client. It will only update it when the client uploads the previous transaction and a new one and a new signature.
-
-The server will only accept account top-ups if it has a corresponding transaction stored in its database. Once the client has added it, the server will delete it. The server will not accept negative balances, or balances higher than a constant small upper limit.
 
 # Embedded programming language (speculative)
 
