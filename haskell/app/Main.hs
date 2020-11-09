@@ -37,7 +37,6 @@ import qualified Data.Map as Map
 import Control.Exception.Base (SomeException)
 import qualified Data.Time.Clock as Clock
 import Data.Text.Encoding (encodeUtf8, decodeUtf8')
-import System.Entropy (getEntropy)
 import qualified Data.Bits as Bits
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.KDF.Argon2 as Argon2
@@ -173,10 +172,6 @@ io output =
     AppendFileStrictO path toAppend -> do
         _ <- B.appendFile path toAppend
         return $ Just AppendedStrictM
-
-    MakeSessionKeyO -> do
-        key <- getEntropy sessionKeyLength
-        return $ Just $ NewSessionKeyM key
 
     ReadFileStrictO path -> do
         contents <- B.readFile path
@@ -324,7 +319,6 @@ data Output
     = GetAppDataDirO
     | GetRandomGenO
     | MakeDirIfMissingO FilePath
-    | MakeSessionKeyO
     | DoNothingO
     | ReadFileO FilePath
     | BatchO [Output]
@@ -370,7 +364,6 @@ data Msg
     | FileExistenceM FilePath Bool
     | NewDhKeysM [Dh.KeyPair Curve25519]
     | TimesM [Clock.UTCTime]
-    | NewSessionKeyM B.ByteString
     | RandomGenM CryptoRand.ChaChaDRG
     | AppendedStrictM
     | FileHandleM FilePath Io.Handle
@@ -407,21 +400,8 @@ toFrontendQ =
     Q.newTQueue
 
 
-newtype SessionKey
-    = SessionKey Bl.ByteString
-
-
 newtype RootPath
     = RootPath FilePath
-
-
-data StaticKeys
-    = StaticKeys
-        { staticDh :: MyStatic
-        , sessionKey :: SessionKey
-        , username :: Username
-        , fingerprint :: Fingerprint
-        }
 
 
 newtype Hash32
@@ -572,6 +552,8 @@ data Ready
         , pageR :: Page
         , awaitingCrypto :: [(Hash32, Username)]
         , readingMessageOnClick :: Maybe MessageId
+        , staticNoiseKeys :: Maybe MyStatic
+        , userId :: Maybe (Fingerprint, Username)
         }
 
 
@@ -711,10 +693,7 @@ newtype EncryptedEphemeral
 
 
 data AuthStatus
-    = GettingPowInfoA
-    | GeneratingSessionKey Word8 Bl.ByteString
-    | AwaitingUsername MyStatic SessionKey
-    | LoggedIn StaticKeys
+    = AwaitingAuthCode
 
 
 data Jobs a b
@@ -880,9 +859,6 @@ update model msg =
 
     TimesM times ->
         updateInit model $ updateOnTimes times
-
-    NewSessionKeyM rawKey ->
-        updateReady model $ updateOnNewSessionKey rawKey
 
     RandomGenM gen ->
         updateInit model $ updateOnRandomGen gen
@@ -1372,60 +1348,6 @@ updateOnRandomGen gen init_ =
         pass
 
 
-updateOnNewSessionKey :: B.ByteString -> Ready -> (Output, State)
-updateOnNewSessionKey raw ready =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
-    case authStatus ready of
-    GettingPowInfoA ->
-        pass
-
-    GeneratingSessionKey difficulty unique ->
-        signUpHelp difficulty unique raw ready
-
-    AwaitingUsername _ _ ->
-        pass
-
-    LoggedIn _ ->
-        pass
-
-
-signUpHelp
-    :: Word8
-    -> Bl.ByteString
-    -> B.ByteString
-    -> Ready
-    -> (Output, State)
-signUpHelp difficulty unique raw ready =
-    case newDhKeys ready of
-    [] ->
-        (ErrorO "no DH keys", FailedS)
-
-    dh : keys ->
-        let
-        myStatic = MyStatic dh
-        session = SessionKey $ Bl.fromStrict raw
-        newReady = ready
-            { authStatus = AwaitingUsername myStatic session
-            , newDhKeys = keys
-            }
-        eitherSignUp =
-            makeSignUp difficulty unique session myStatic
-        in
-        case eitherSignUp of
-        Left err ->
-            (ErrorO $ "could not sign up: " <> err, FailedS)
-
-        Right signUp ->
-            ( BatchO
-                [ BytesInQO toServerQ signUp
-                , dumpCache newReady
-                ]
-            , ReadyS newReady
-            )
-
-
 fingerprintSalt =
     B.pack
         [121, 42, 53, 200, 120, 148, 151, 77, 190, 181, 194, 24, 139, 196, 215, 179]
@@ -1454,43 +1376,6 @@ makeFingerprint (Username usernameLazy) key =
         Left $ show err
 
 
-makeSignUp
-    :: Word8
-    -> Bl.ByteString
-    -> SessionKey
-    -> MyStatic
-    -> Either String Bl.ByteString
-makeSignUp
-    difficulty
-    unique
-    (SessionKey sessionKey)
-    (MyStatic (_, public)) = do
-
-    pow <- makePow difficulty unique
-    return $ mconcat
-        [ Bl.singleton 2
-        , pow
-        , sessionKey
-        , Bl.fromStrict $ Noise.convert $ Dh.dhPubToBytes public
-        ]
-
-
-makePow :: Word8 -> Bl.ByteString -> Either String Bl.ByteString
-makePow difficulty unique =
-    powHelp difficulty unique 0
-
-
-argonOptions :: Argon2.Options
-argonOptions =
-    Argon2.Options
-        { iterations = 1
-        , memory = 64 * 1024
-        , parallelism = 4
-        , variant = Argon2.Argon2id
-        , version = Argon2.Version13
-        }
-
-
 argonFingerprint :: Argon2.Options
 argonFingerprint =
     Argon2.Options
@@ -1502,52 +1387,9 @@ argonFingerprint =
         }
 
 
-
-powSalt =
-    B.pack
-        [220, 55, 235, 37, 39, 106, 232, 132, 98, 40, 144, 227, 96, 33, 238, 202]
-
-
-
-powHelp
-    :: Word8
-    -> Bl.ByteString
-    -> Integer
-    -> Either String Bl.ByteString
-powHelp difficulty unique counter =
-    let
-    candidate = Bl.fromStrict $ encodeUint64 counter
-    hashE = Argon2.hash
-        argonOptions
-        (Bl.toStrict $ unique <> candidate)
-        powSalt
-        powHashLength
-    in
-    case hashE of
-    CryptoPassed hash ->
-        if isDifficult hash difficulty then
-        Right candidate
-
-        else
-        powHelp difficulty unique (counter + 1)
-
-    CryptoFailed err ->
-        Left $ show err
-
-
-encodeUint64 :: Integer -> B.ByteString
-encodeUint64 i =
-    B.pack $ map (encodeUintegerHelp i) (take 8 [0..])
-
-
 encodeUint32 :: Int -> B.ByteString
 encodeUint32 i =
     B.pack $ map (encodeUintHelp i) (take 4 [0..])
-
-
-encodeUintegerHelp :: Integer -> Int -> Word8
-encodeUintegerHelp int counter =
-    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
 
 
 encodeUintHelp :: Int -> Int -> Word8
@@ -1558,15 +1400,6 @@ encodeUintHelp int counter =
 encodeUint16 :: Int -> B.ByteString
 encodeUint16 i =
     B.pack $ map (encodeUintHelp i) [0, 1]
-
-
-powHashLength =
-    32
-
-
-isDifficult :: B.ByteString -> Word8 -> Bool
-isDifficult bytes difficulty =
-    B.all (> difficulty) bytes
 
 
 updateOnTimes :: [Clock.UTCTime] -> Init -> (Output, State)
@@ -1670,7 +1503,7 @@ fileExistenceUpdate path exists init_ =
                     { root
                     , blobsUp = NoJobs
                     , getBlob = NoJobs
-                    , authStatus = GettingPowInfoA
+                    , authStatus = AwaitingAuthCode
                     , handshakes = Map.empty
                     , newDhKeys = newKeys
                     , theTime = times
@@ -1688,6 +1521,8 @@ fileExistenceUpdate path exists init_ =
                     , awaitingCrypto = []
                     , sendingBlob = NoJobs
                     , readingMessageOnClick = Nothing
+                    , staticNoiseKeys = Nothing
+                    , userId = Nothing
                     }
             in
             ( BatchO
@@ -1706,35 +1541,9 @@ fileExistenceUpdate path exists init_ =
 
 restartingTcpUpdate :: Ready -> (Output, State)
 restartingTcpUpdate ready =
-    let
-    startAuth =
-        ( BytesInQO toServerQ $ Bl.singleton 0
-        , ReadyS $ ready { authStatus = GettingPowInfoA }
-        )
-    in
-    case authStatus ready of
-    GettingPowInfoA ->
-        startAuth
-
-    GeneratingSessionKey _ _ ->
-        startAuth
-
-    AwaitingUsername _ _ ->
-        startAuth
-
-    LoggedIn (StaticKeys _ sessionKey username _) ->
-        ( BytesInQO toServerQ $ logIn sessionKey username
-        , ReadyS ready
-        )
-
-
-logIn :: SessionKey -> Username -> Bl.ByteString
-logIn (SessionKey sessionKey) (Username username) =
-    mconcat
-        [ Bl.singleton 1
-        , sessionKey
-        , username
-        ]
+    ( DoNothingO
+    , ReadyS $ ready { authStatus = AwaitingAuthCode }
+    )
 
 
 fromServerUpdate :: Bl.ByteString -> Ready -> (Output, State)
@@ -1781,40 +1590,10 @@ fromServerUpdate raw ready =
     Right (NewUsername username) ->
         newUserIdUpdate username ready
 
-    Right (PowInfoT difficulty unique) ->
-        newPowInfoUpdate difficulty unique ready
-
     Right (Price price) ->
         ( BytesInQO toFrontendQ $ Bl.singleton 9 <> price
         , ReadyS ready
         )
-
-
-newPowInfoUpdate
-    :: Word8
-    -> Bl.ByteString
-    -> Ready
-    -> (Output, State)
-newPowInfoUpdate difficulty unique ready =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
-    case authStatus ready of
-    GettingPowInfoA ->
-        ( MakeSessionKeyO
-        , ReadyS $ ready
-            { authStatus = GeneratingSessionKey difficulty unique
-            }
-        )
-
-    GeneratingSessionKey _ _ ->
-        pass
-
-    AwaitingUsername _ _ ->
-        pass
-
-    LoggedIn _ ->
-        pass
 
 
 newUserIdUpdate :: Username -> Ready -> (Output, State)
@@ -1822,14 +1601,11 @@ newUserIdUpdate username ready =
     let
     pass = (DoNothingO, ReadyS ready)
     in
-    case authStatus ready of
-    GettingPowInfoA ->
+    case staticNoiseKeys ready of
+    Nothing ->
         pass
 
-    GeneratingSessionKey _ _ ->
-        pass
-
-    AwaitingUsername staticDh@(MyStatic (_, pub)) sessionKey ->
+    Just (MyStatic (_, pub)) ->
         case makeFingerprint username pub of
         Left err ->
             ( ErrorO $ "couldn't make fingerprint: " ++ err
@@ -1839,29 +1615,11 @@ newUserIdUpdate username ready =
         Right fingerprint ->
             let
             newReady =
-                ready
-                    { authStatus = LoggedIn $
-                        StaticKeys
-                            { staticDh
-                            , sessionKey
-                            , username
-                            , fingerprint
-                            }
-                    }
+                ready { userId = Just (fingerprint, username) }
             in
-            ( BatchO
-                [ BytesInQO
-                    toServerQ
-                    (logIn sessionKey username)
-                , dumpCache newReady
-                ]
+            ( dumpCache newReady
             , ReadyS newReady
             )
-
-    LoggedIn _ ->
-        logErr
-            ready
-            "received new username but authstatus is LoggedIn"
 
 
 num1stShakes =
@@ -1981,17 +1739,11 @@ transportUpdate from ready firstMessage thisMessage =
         (DoNothingO, ReadyS ready)
 
     Just (ResponderSentEncryptedES myEphemeral) ->
-        case authStatus ready of
-        GettingPowInfoA ->
+        case staticNoiseKeys ready of
+        Nothing ->
             (DoNothingO, ReadyS ready)
 
-        GeneratingSessionKey _ _ ->
-            (DoNothingO, ReadyS ready)
-
-        AwaitingUsername _ _ ->
-            (DoNothingO, ReadyS ready)
-
-        LoggedIn staticKeys ->
+        Just staticKeys ->
             transportUpdateHelp
                 from
                 ready
@@ -2007,7 +1759,7 @@ transportUpdateHelp
     -> FirstMessage
     -> Bl.ByteString
     -> MyEphemeral
-    -> StaticKeys
+    -> MyStatic
     -> (Output, State)
 transportUpdateHelp
     from
@@ -2018,7 +1770,7 @@ transportUpdateHelp
     myStatic =
 
     let
-    options = responderOptions (staticDh myStatic) myEphemeral
+    options = responderOptions myStatic myEphemeral
     noise0 = Noise.noiseState options noiseXX :: NoiseState
     in
     case
@@ -2642,17 +2394,11 @@ firstHandshakesUpdate from ready msgs =
             Map.union (handshakes ready) newHandshakes
         }
     in
-    case authStatus ready of
-    GettingPowInfoA ->
+    case staticNoiseKeys ready of
+    Nothing ->
         pass
 
-    GeneratingSessionKey _ _ ->
-        pass
-
-    AwaitingUsername _ _ ->
-        pass
-
-    LoggedIn (StaticKeys myStatic _ _ _) ->
+    Just myStatic ->
         case sendNoiseXX2s myEphemerals msgs myStatic from of
         Left err ->
             logErr newReady err
@@ -2820,14 +2566,9 @@ noiseException err =
 
 dumpCache :: Ready -> Output
 dumpCache ready =
-    case getCache ready of
-    Nothing ->
-        DoNothingO
-
-    Just cache ->
-        WriteFileO
-            (cachePath $ root ready)
-            (encodeCache cache)
+    WriteFileO
+        (cachePath $ root ready)
+        (encodeCache $ getCache ready)
 
 
 encodeCache :: MemCache -> Bl.ByteString
@@ -2894,14 +2635,14 @@ encodeMaybe a encoder =
         Bl.singleton 1 <> encoder justa
 
 
-encodeCryptoKeys :: StaticKeys -> Bl.ByteString
-encodeCryptoKeys keys =
-    mconcat
-        [ encodeKeyPair $ staticDh keys
-        , encodeSessionKey $ sessionKey keys
-        , encodeUsername $ username keys
-        , encodeFingerprint $ fingerprint keys
-        ]
+encodeCryptoKeys :: Maybe MyStatic -> Bl.ByteString
+encodeCryptoKeys maybeKeys =
+    encodeMaybe maybeKeys encodeMyStatic
+
+
+encodeMyStatic :: MyStatic -> Bl.ByteString
+encodeMyStatic (MyStatic (sec, _)) =
+    Bl.fromStrict $ Ba.convert $ Dh.dhSecToBytes sec
 
 
 encodeFingerprint :: Fingerprint -> Bl.ByteString
@@ -2914,43 +2655,22 @@ encodeUsername (Username username) =
     username
 
 
-encodeSessionKey :: SessionKey -> Bl.ByteString
-encodeSessionKey (SessionKey key) =
-    key
-
-
-encodeKeyPair :: MyStatic -> Bl.ByteString
-encodeKeyPair (MyStatic (secret, _)) =
-    Bl.fromStrict $ Noise.convert $ Dh.dhSecToBytes secret
-
-
 cachePath :: RootPath -> FilePath
 cachePath (RootPath root) =
     root </> "memCache"
 
 
-getCache :: Ready -> Maybe MemCache
+getCache :: Ready -> MemCache
 getCache ready =
-    case authStatus ready of
-    GettingPowInfoA ->
-        Nothing
-
-    GeneratingSessionKey _ _ ->
-        Nothing
-
-    AwaitingUsername _ _ ->
-        Nothing
-
-    LoggedIn keys ->
-        Just $ MemCache
-            { keys
-            , handshakesM = handshakes ready
-            , whitelistM = whitelist ready
-            , summariesM = summaries ready
-            , counterM = counter ready
-            , waitForAcknowledgeM = waitForAcknowledge ready
-            , awaitingCryptoM = awaitingCrypto ready
-            }
+    MemCache
+        { keys = staticNoiseKeys ready
+        , handshakesM = handshakes ready
+        , whitelistM = whitelist ready
+        , summariesM = summaries ready
+        , counterM = counter ready
+        , waitForAcknowledgeM = waitForAcknowledge ready
+        , awaitingCryptoM = awaitingCrypto ready
+        }
 
 
 encodeHandshakes :: Map.Map HandshakeId Handshake -> Bl.ByteString
@@ -3021,13 +2741,6 @@ fromServerP =
             username <- usernameP
             return $ NewUsername username
         , do
-            _ <- P.word8 2
-            difficulty <- uint8P
-            unique <- P.take 16
-            return $ PowInfoT
-                (fromIntegral difficulty)
-                (Bl.fromStrict unique)
-        , do
             _ <- P.word8 3
             price <- P.take 4
             return $ Price $ Bl.fromStrict price
@@ -3052,7 +2765,6 @@ theirStaticP = do
 data FromServer
     = NewMessageT Username ClientToClient
     | NewUsername Username
-    | PowInfoT Word8 Bl.ByteString
     | Price Bl.ByteString
     | Acknowledgement Hash32
 
@@ -3977,18 +3689,12 @@ encodeAndEncryptHelp chunks to (oldO, model) =
     in
     updateReady model $ \oldReady ->
     (\f ->
-        case authStatus oldReady of
-        GettingPowInfoA ->
+        case staticNoiseKeys oldReady of
+        Nothing ->
             pass
 
-        GeneratingSessionKey _ _ ->
-            pass
-
-        AwaitingUsername _ _ ->
-            pass
-
-        LoggedIn (StaticKeys myStatic _ _ _) ->
-            f myStatic) $ \myStatic ->
+        Just keys ->
+            f keys) $ \myStatic ->
 
     case chooseShakes to (length chunks) (handshakes oldReady) of
     Nothing ->
@@ -4083,18 +3789,12 @@ sendBlobChunk chunk to (oldO, oldModel) =
 
     Just ([shake], remainder) ->
         (\f ->
-            case authStatus ready of
-            GettingPowInfoA ->
+            case staticNoiseKeys ready of
+            Nothing ->
                 pass
 
-            GeneratingSessionKey _ _ ->
-                pass
-
-            AwaitingUsername _ _ ->
-                pass
-
-            LoggedIn keys ->
-                f $ staticDh keys) $ \myStatic ->
+            Just keys ->
+                f keys) $ \myStatic ->
         let
         eitherEncrypted = encryptChunk myStatic to (chunk, shake)
         newReady =
@@ -4135,21 +3835,12 @@ getStaticKeys
     -> (MyStatic -> (Output, State))
     -> (Output, State)
 getStaticKeys ready okFunc =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
-    case authStatus ready of
-    GettingPowInfoA ->
-        pass
+    case staticNoiseKeys ready of
+    Nothing ->
+        (DoNothingO, ReadyS ready)
 
-    GeneratingSessionKey _ _ ->
-        pass
-
-    AwaitingUsername _ _ ->
-        pass
-
-    LoggedIn keys ->
-        okFunc $ staticDh keys
+    Just keys ->
+        okFunc keys
 
 
 bumpCryptoHelp :: Username -> (Output, State) -> (Output, State)
@@ -4487,7 +4178,7 @@ parseCrypto raw =
 
 data MemCache
     = MemCache
-        { keys :: StaticKeys
+        { keys :: Maybe MyStatic
         , handshakesM :: Map.Map HandshakeId Handshake
         , whitelistM ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
@@ -4724,30 +4415,20 @@ uint8P =
     fromIntegral <$> P.anyWord8
 
 
-sessionKeyLength :: Int
-sessionKeyLength =
-    16
-
-
-myKeysP :: P.Parser StaticKeys
-myKeysP = do
-    sessionKey <- P.take sessionKeyLength
-    username <- usernameP
-    fingerprint <- fingerprintP
+myStaticP :: P.Parser MyStatic
+myStaticP = do
     rawDhKey <- P.take secretKeyLen
     case Dh.dhBytesToPair $ Noise.convert rawDhKey of
         Nothing ->
             fail "could not parse secret key from file"
 
         Just dhKeys ->
-            return $
-                StaticKeys
-                    { staticDh = MyStatic dhKeys
-                    , sessionKey =
-                        SessionKey $ Bl.fromStrict sessionKey
-                    , username
-                    , fingerprint
-                    }
+            return $ MyStatic dhKeys
+
+
+myKeysP :: P.Parser (Maybe MyStatic)
+myKeysP =
+    maybeP myStaticP
 
 
 rawKeysUpdate
@@ -4765,17 +4446,12 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
         )
 
     Right memCache ->
-        ( BatchO
-            [ BytesInQO toServerQ $
-              logIn
-                (sessionKey $ keys memCache)
-                (username $ keys $ memCache)
-            ]
+        ( DoNothingO
         , ReadyS $ Ready
             { root
             , blobsUp = NoJobs
             , getBlob = NoJobs
-            , authStatus = LoggedIn $ keys memCache
+            , authStatus = AwaitingAuthCode
             , handshakes = handshakesM memCache
             , newDhKeys
             , theTime = times
@@ -4793,6 +4469,8 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , awaitingCrypto = awaitingCryptoM memCache
             , sendingBlob = NoJobs
             , readingMessageOnClick = Nothing
+            , staticNoiseKeys = Nothing
+            , userId = Nothing
             }
         )
 

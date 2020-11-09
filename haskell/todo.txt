@@ -1,0 +1,7 @@
++ DONE update AuthStatus
++ catch IO errors
++ check State
++ check Msg
++ rename MyStatic to MyStaticNoise
++ update FromServer and parser
++ get rid of lazy bytestrings as much as possible

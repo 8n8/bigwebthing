@@ -39,7 +39,6 @@ dependencies:
 - containers
 - network-simple
 - time
-- entropy
 - cryptonite
 - memory
 
