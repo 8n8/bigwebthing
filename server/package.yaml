@@ -13,6 +13,8 @@ dependencies:
 - time
 - hex-text
 - memory
+- directory
+- sqlite-simple
 
 executables:
   server-exe:

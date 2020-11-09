@@ -81,9 +81,8 @@ Client to server
         // with a new username. If not, it will update the record.
         1 byte: 2
         payment details
-        61 bytes
+        42 bytes
             32 bytes: public Noise key
-            20 bytes: URL of inbox server
             10 bytes: fingerprint hashing options
     Upload blob
         1 byte: 3
@@ -225,6 +224,9 @@ The Noise messages just contain blob hashes and secret keys, and then the actual
             1 byte: 1
             32 bytes: unique ID
             extra fields like credit card number, payment provider etc
+    32 bytes
+        hash of previous transaction hash combined with this
+        transaction encoded (without the hash of course)
 
 ## Message header encoding for local storage
 
@@ -331,6 +333,10 @@ database
     waitingpayments
         uniqueid
         encodedpayment
+    shortenings
+        user
+        short
+        shortenable
 
 # Pricing
 
