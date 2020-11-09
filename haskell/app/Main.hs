@@ -552,7 +552,7 @@ data Ready
         , pageR :: Page
         , awaitingCrypto :: [(Hash32, Username)]
         , readingMessageOnClick :: Maybe MessageId
-        , staticNoiseKeys :: Maybe MyStatic
+        , staticNoiseKeys :: Maybe MyStaticNoise
         , userId :: Maybe (Fingerprint, Username)
         }
 
@@ -1460,8 +1460,8 @@ newDhKeysUpdate newKeys init_ =
         pass
 
 
-newtype MyStatic
-    = MyStatic (Dh.KeyPair Curve25519)
+newtype MyStaticNoise
+    = MyStaticNoise (Dh.KeyPair Curve25519)
 
 
 fileExistenceUpdate :: FilePath -> Bool -> Init -> (Output, State)
@@ -1605,7 +1605,7 @@ newUserIdUpdate username ready =
     Nothing ->
         pass
 
-    Just (MyStatic (_, pub)) ->
+    Just (MyStaticNoise (_, pub)) ->
         case makeFingerprint username pub of
         Left err ->
             ( ErrorO $ "couldn't make fingerprint: " ++ err
@@ -1759,7 +1759,7 @@ transportUpdateHelp
     -> FirstMessage
     -> Bl.ByteString
     -> MyEphemeral
-    -> MyStatic
+    -> MyStaticNoise
     -> (Output, State)
 transportUpdateHelp
     from
@@ -2437,7 +2437,7 @@ makeResponderShake from (myEphemeral, theirEphemeral) =
 sendNoiseXX2s
     :: [MyEphemeral]
     -> [FirstMessage]
-    -> MyStatic
+    -> MyStaticNoise
     -> Username
     -> Either T.Text Output
 sendNoiseXX2s myEphemerals firsts myStatic from =
@@ -2462,7 +2462,7 @@ sendNoiseXX2s myEphemerals firsts myStatic from =
 
 make2ndNoise
     :: Username
-    -> MyStatic
+    -> MyStaticNoise
     -> [(MyEphemeral, FirstMessage)]
     -> Either T.Text Bl.ByteString
 make2ndNoise (Username username) myStatic noises1 =
@@ -2501,20 +2501,20 @@ allRightHelp eithers accum =
 
 
 responderOptions
-    :: MyStatic
+    :: MyStaticNoise
     -> MyEphemeral
     -> Noise.HandshakeOpts Curve25519
-responderOptions (MyStatic myStatic) (MyEphemeral myEphemeral) =
+responderOptions (MyStaticNoise myStatic) (MyEphemeral myEphemeral) =
     Noise.setLocalStatic (Just myStatic) .
     Noise.setLocalEphemeral (Just myEphemeral) $
     Noise.defaultHandshakeOpts Noise.ResponderRole ""
 
 
 initiatorOptions
-    :: MyStatic
+    :: MyStaticNoise
     -> MyEphemeral
     -> Noise.HandshakeOpts Curve25519
-initiatorOptions (MyStatic myStatic) (MyEphemeral myEphemeral) =
+initiatorOptions (MyStaticNoise myStatic) (MyEphemeral myEphemeral) =
     Noise.setLocalStatic (Just myStatic) .
     Noise.setLocalEphemeral (Just myEphemeral) $
     Noise.defaultHandshakeOpts Noise.InitiatorRole ""
@@ -2525,7 +2525,7 @@ type NoiseState
 
 
 makeOne2ndNoise
-    :: MyStatic
+    :: MyStaticNoise
     -> (MyEphemeral, FirstMessage)
     -> Either T.Text Bl.ByteString
 makeOne2ndNoise myStatic (myEphemeral, FirstMessage refKey) =
@@ -2635,13 +2635,13 @@ encodeMaybe a encoder =
         Bl.singleton 1 <> encoder justa
 
 
-encodeCryptoKeys :: Maybe MyStatic -> Bl.ByteString
+encodeCryptoKeys :: Maybe MyStaticNoise -> Bl.ByteString
 encodeCryptoKeys maybeKeys =
     encodeMaybe maybeKeys encodeMyStatic
 
 
-encodeMyStatic :: MyStatic -> Bl.ByteString
-encodeMyStatic (MyStatic (sec, _)) =
+encodeMyStatic :: MyStaticNoise -> Bl.ByteString
+encodeMyStatic (MyStaticNoise (sec, _)) =
     Bl.fromStrict $ Ba.convert $ Dh.dhSecToBytes sec
 
 
@@ -3566,7 +3566,7 @@ encodeAndEncrypt chunks shares model =
 
 
 encryptChunks
-    :: MyStatic
+    :: MyStaticNoise
     -> Username
     -> [(B.ByteString, SecondShake)]
     -> [Either String Bl.ByteString]
@@ -3575,7 +3575,7 @@ encryptChunks myStatic to chunkShakes =
 
 
 encryptChunk
-    :: MyStatic
+    :: MyStaticNoise
     -> Username
     -> (B.ByteString, SecondShake)
     -> Either String Bl.ByteString
@@ -3832,7 +3832,7 @@ numFirstShakes =
 
 getStaticKeys
     :: Ready
-    -> (MyStatic -> (Output, State))
+    -> (MyStaticNoise -> (Output, State))
     -> (Output, State)
 getStaticKeys ready okFunc =
     case staticNoiseKeys ready of
@@ -3885,7 +3885,7 @@ bumpCryptoHelp contact (oldO, model) =
 
 
 makeFirstShake
-    :: MyStatic
+    :: MyStaticNoise
     -> MyEphemeral
     -> Either String Bl.ByteString
 makeFirstShake myStatic myEphemeral =
@@ -4178,7 +4178,7 @@ parseCrypto raw =
 
 data MemCache
     = MemCache
-        { keys :: Maybe MyStatic
+        { keys :: Maybe MyStaticNoise
         , handshakesM :: Map.Map HandshakeId Handshake
         , whitelistM ::
             Map.Map Username (Fingerprint, Maybe TheirStatic)
@@ -4415,7 +4415,7 @@ uint8P =
     fromIntegral <$> P.anyWord8
 
 
-myStaticP :: P.Parser MyStatic
+myStaticP :: P.Parser MyStaticNoise
 myStaticP = do
     rawDhKey <- P.take secretKeyLen
     case Dh.dhBytesToPair $ Noise.convert rawDhKey of
@@ -4423,10 +4423,10 @@ myStaticP = do
             fail "could not parse secret key from file"
 
         Just dhKeys ->
-            return $ MyStatic dhKeys
+            return $ MyStaticNoise dhKeys
 
 
-myKeysP :: P.Parser (Maybe MyStatic)
+myKeysP :: P.Parser (Maybe MyStaticNoise)
 myKeysP =
     maybeP myStaticP
 
