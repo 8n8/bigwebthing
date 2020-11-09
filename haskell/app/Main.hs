@@ -4,6 +4,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
+import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Control.Concurrent.STM as Stm
 import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.Wai.Handler.Warp (run)
@@ -173,10 +174,6 @@ io output =
     AppendFileStrictO path toAppend -> do
         _ <- B.appendFile path toAppend
         return $ Just AppendedStrictM
-
-    MakeSessionKeyO -> do
-        key <- getEntropy sessionKeyLength
-        return $ Just $ NewSessionKeyM key
 
     ReadFileStrictO path -> do
         contents <- B.readFile path
@@ -418,7 +415,6 @@ newtype RootPath
 data StaticKeys
     = StaticKeys
         { staticDh :: MyStatic
-        , sessionKey :: SessionKey
         , username :: Username
         , fingerprint :: Fingerprint
         }
@@ -467,12 +463,7 @@ data Init
         RootPath
         [Dh.KeyPair Curve25519]
         [Clock.UTCTime]
-    | DoKeysExistI
-        RootPath
-        [Dh.KeyPair Curve25519]
-        [Clock.UTCTime]
-        CryptoRand.ChaChaDRG
-    | GettingKeysFromFileI
+    | ReadingMemCache
         RootPath
         [Dh.KeyPair Curve25519]
         [Clock.UTCTime]
@@ -711,10 +702,8 @@ newtype EncryptedEphemeral
 
 
 data AuthStatus
-    = GettingPowInfoA
-    | GeneratingSessionKey Word8 Bl.ByteString
-    | AwaitingUsername MyStatic SessionKey
-    | LoggedIn StaticKeys
+    = AwaitingAuthCode
+    | LoggedIn
 
 
 data Jobs a b
@@ -1020,7 +1009,7 @@ strictFileContentsUpdate path contents ready =
 
     Nothing ->
         messageFileUpdate path (Bl.fromStrict contents) ready
-            
+
 
 fileToSendToServerUpdate
     :: FilePath
@@ -1043,6 +1032,81 @@ fileToSendToServerUpdate path contents ready =
         )
         else
         Nothing
+
+
+data ToServer
+    = SignedAuthCode Ed.PublicKey Ed.Signature
+    | GetPrices
+    | ShortenId PaymentDetails MyStatic Argon2.Options
+    | UploadBlob PaymentDetails BlobId Blob
+    | DownloadBlob BlobId
+    | SendMessage PaymentDetails Recipient InboxMessage
+    | DeleteMessage Ed.PublicKey InboxMessage
+
+
+newtype Recipient
+    = Recipient Ed.PublicKey
+
+
+newtype TopUpId
+    = TopUpId B.ByteString
+
+
+-- Seconds since POSIX epoch.
+newtype PosixTime
+    = PosixTime Integer
+
+
+newtype Money
+    = Money Int
+    deriving Eq
+
+
+newtype BlobId
+    = BlobId B.ByteString
+
+
+newtype Amount
+    = Amount Money
+    deriving Eq
+
+
+newtype Balance
+    = Balance Money
+
+
+-- The hash is the hash of the previous transaction hash combined
+-- with the encoded transaction:
+--
+--     previousHash <> amount <> posixTime <> balance <> payment
+--
+data Transaction
+    = Transaction Amount PosixTime Balance Payment Hash32
+
+
+newtype AccountsSignature
+    = AccountsSignature Ed.Signature
+
+
+newtype OldTransaction
+    = OldTransaction Transaction
+
+
+newtype NewTransaction
+    = NewTransaction Transaction
+
+
+data PaymentDetails
+    = PaymentDetails OldTransaction NewTransaction AccountsSignature
+
+
+data Payment
+    = PaymentToServer Hash32
+    | AccountTopUp TopUpId
+
+
+newtype InboxMessage
+    = InboxMessage B.ByteString
 
 
 messageForClick
@@ -1391,41 +1455,6 @@ updateOnNewSessionKey raw ready =
         pass
 
 
-signUpHelp
-    :: Word8
-    -> Bl.ByteString
-    -> B.ByteString
-    -> Ready
-    -> (Output, State)
-signUpHelp difficulty unique raw ready =
-    case newDhKeys ready of
-    [] ->
-        (ErrorO "no DH keys", FailedS)
-
-    dh : keys ->
-        let
-        myStatic = MyStatic dh
-        session = SessionKey $ Bl.fromStrict raw
-        newReady = ready
-            { authStatus = AwaitingUsername myStatic session
-            , newDhKeys = keys
-            }
-        eitherSignUp =
-            makeSignUp difficulty unique session myStatic
-        in
-        case eitherSignUp of
-        Left err ->
-            (ErrorO $ "could not sign up: " <> err, FailedS)
-
-        Right signUp ->
-            ( BatchO
-                [ BytesInQO toServerQ signUp
-                , dumpCache newReady
-                ]
-            , ReadyS newReady
-            )
-
-
 fingerprintSalt =
     B.pack
         [121, 42, 53, 200, 120, 148, 151, 77, 190, 181, 194, 24, 139, 196, 215, 179]
@@ -1453,26 +1482,6 @@ makeFingerprint (Username usernameLazy) key =
     CryptoFailed err ->
         Left $ show err
 
-
-makeSignUp
-    :: Word8
-    -> Bl.ByteString
-    -> SessionKey
-    -> MyStatic
-    -> Either String Bl.ByteString
-makeSignUp
-    difficulty
-    unique
-    (SessionKey sessionKey)
-    (MyStatic (_, public)) = do
-
-    pow <- makePow difficulty unique
-    return $ mconcat
-        [ Bl.singleton 2
-        , pow
-        , sessionKey
-        , Bl.fromStrict $ Noise.convert $ Dh.dhPubToBytes public
-        ]
 
 
 makePow :: Word8 -> Bl.ByteString -> Either String Bl.ByteString
@@ -1627,8 +1636,8 @@ newDhKeysUpdate newKeys init_ =
         pass
 
 
-newtype MyStatic
-    = MyStatic (Dh.KeyPair Curve25519)
+newtype MyStaticNoise
+    = MyStaticNoise (Dh.KeyPair Curve25519)
 
 
 fileExistenceUpdate :: FilePath -> Bool -> Init -> (Output, State)
@@ -4083,17 +4092,11 @@ sendBlobChunk chunk to (oldO, oldModel) =
 
     Just ([shake], remainder) ->
         (\f ->
-            case authStatus ready of
-            GettingPowInfoA ->
+            case staticNoiseKeys ready of
+            Nothing ->
                 pass
 
-            GeneratingSessionKey _ _ ->
-                pass
-
-            AwaitingUsername _ _ ->
-                pass
-
-            LoggedIn keys ->
+            Just keys ->
                 f $ staticDh keys) $ \myStatic ->
         let
         eitherEncrypted = encryptChunk myStatic to (chunk, shake)
@@ -4132,24 +4135,18 @@ numFirstShakes =
 
 getStaticKeys
     :: Ready
-    -> (MyStatic -> (Output, State))
+    -> (MyStaticNoise -> (Output, State))
     -> (Output, State)
 getStaticKeys ready okFunc =
     let
     pass = (DoNothingO, ReadyS ready)
     in
-    case authStatus ready of
-    GettingPowInfoA ->
+    case staticNoiseKeys ready of
+    Nothing ->
         pass
 
-    GeneratingSessionKey _ _ ->
-        pass
-
-    AwaitingUsername _ _ ->
-        pass
-
-    LoggedIn keys ->
-        okFunc $ staticDh keys
+    Just keys ->
+        okFunc keys
 
 
 bumpCryptoHelp :: Username -> (Output, State) -> (Output, State)
@@ -4194,7 +4191,7 @@ bumpCryptoHelp contact (oldO, model) =
 
 
 makeFirstShake
-    :: MyStatic
+    :: MyStaticNoise
     -> MyEphemeral
     -> Either String Bl.ByteString
 makeFirstShake myStatic myEphemeral =
@@ -4455,12 +4452,9 @@ fileContentsUpdate path contents model =
     InitS (GettingRandomGen _ _ _) ->
         pass
 
-    InitS (DoKeysExistI _ _ _ _) ->
-        pass
-
-    InitS (GettingKeysFromFileI root dhKeys times gen) ->
-        if path == keysPath root then
-        rawKeysUpdate contents root dhKeys times gen
+    InitS (ReadingMemCache root dhKeys times gen) ->
+        if path == cachePath root then
+        memCacheUpdate contents root dhKeys times gen
         else
         pass
 
@@ -4729,36 +4723,15 @@ sessionKeyLength =
     16
 
 
-myKeysP :: P.Parser StaticKeys
-myKeysP = do
-    sessionKey <- P.take sessionKeyLength
-    username <- usernameP
-    fingerprint <- fingerprintP
-    rawDhKey <- P.take secretKeyLen
-    case Dh.dhBytesToPair $ Noise.convert rawDhKey of
-        Nothing ->
-            fail "could not parse secret key from file"
-
-        Just dhKeys ->
-            return $
-                StaticKeys
-                    { staticDh = MyStatic dhKeys
-                    , sessionKey =
-                        SessionKey $ Bl.fromStrict sessionKey
-                    , username
-                    , fingerprint
-                    }
-
-
-rawKeysUpdate
+memCacheUpdate
     :: Bl.ByteString
     -> RootPath
     -> [Dh.KeyPair Curve25519]
     -> [Clock.UTCTime]
     -> CryptoRand.ChaChaDRG
     -> (Output, State)
-rawKeysUpdate rawCrypto root newDhKeys times gen =
-    case parseCrypto rawCrypto of
+memCacheUpdate raw root newDhKeys times gen =
+    case parseMemCache raw of
     Left err ->
         ( ErrorO $ "could not parse static keys: " <> err
         , FailedS
@@ -4825,10 +4798,4 @@ dirCreatedUpdate path initModel =
         pass
 
     GettingRandomGen _ _ _ ->
-        pass
-
-    DoKeysExistI _ _ _ _ ->
-        pass
-
-    GettingKeysFromFileI _ _ _ _ ->
         pass
