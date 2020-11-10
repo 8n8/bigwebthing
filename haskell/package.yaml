@@ -61,6 +61,7 @@ executables:
     - -Wno-monomorphism-restriction
     - -Wno-missing-deriving-strategies
     - -with-rtsopts=-N
+    - -Werror
 
 tests:
   haskell-test:

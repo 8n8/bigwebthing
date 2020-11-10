@@ -212,13 +212,13 @@ The Noise messages just contain blob hashes and secret keys, and then the actual
 
 ## Transaction
 
-    8 bytes: amount in m£
+    4 bytes: amount in m£
     8 bytes: POSIX time stamp
-    8 bytes: new balance in m£
+    4 bytes: new balance in m£
     either
         Payment to server
-            32 bytes: hash of message
             1 byte: 0
+            32 bytes: hash of message
     or
         Account top-up
             1 byte: 1

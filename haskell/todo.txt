@@ -1,6 +1,9 @@
 + DONE update AuthStatus
 + DONE rename MyStatic to MyStaticNoise
-+ update FromServer and parser
++ DONE make a ToServer and an encoder rather than doing it ad hoc
++ update FromServer and its parser
++ make a consolidated memcache
++ sort out authentication using public crypto
 + check Msg
 + check State
 + catch IO errors

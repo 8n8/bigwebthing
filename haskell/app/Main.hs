@@ -44,6 +44,11 @@ import qualified Crypto.Random as CryptoRand
 import qualified Crypto.Hash as Hash
 import qualified Data.ByteArray as Ba
 import qualified Data.Set as Set
+import qualified Crypto.PubKey.Ed25519 as Ed
+
+
+newtype Recipient
+    = Recipient Ed.PublicKey
 
 
 main :: IO ()
@@ -1402,6 +1407,11 @@ encodeUint16 i =
     B.pack $ map (encodeUintHelp i) [0, 1]
 
 
+encodeUint8 :: Int -> Bl.ByteString
+encodeUint8 =
+    Bl.singleton . fromIntegral
+
+
 updateOnTimes :: [Clock.UTCTime] -> Init -> (Output, State)
 updateOnTimes times init_ =
     let
@@ -1526,7 +1536,7 @@ fileExistenceUpdate path exists init_ =
                     }
             in
             ( BatchO
-                [ BytesInQO toServerQ $ Bl.singleton 0
+                [ BytesInQO toServerQ $ Bl.singleton 1
                 , dumpCache ready
                 ]
             , ReadyS ready
@@ -1537,6 +1547,236 @@ fileExistenceUpdate path exists init_ =
 
     GettingKeysFromFileI _ _ _ _ ->
         pass
+
+
+
+sendToServer :: ToServer -> Output
+sendToServer msg =
+    BytesInQO toServerQ $ encodeToServer msg
+
+
+type PublicNoise
+    = Dh.PublicKey Curve25519
+
+
+encodePublicNoise :: PublicNoise -> Bl.ByteString
+encodePublicNoise pub =
+    Bl.fromStrict $ Ba.convert $ Dh.dhPubToBytes pub
+
+
+data ToServer
+    = SignedAuthCodeT Ed.PublicKey Ed.Signature
+    | GetPricesT
+    | ShortenIdT PaymentDetails PublicNoise Argon2.Options
+    | UploadBlobT PaymentDetails BlobId Blob
+    | DownloadBlobT BlobId
+    | SendMessageT PaymentDetails Recipient InboxMessage
+    | DeleteMessageT Sender InboxMessage
+
+
+encodeToServer :: ToServer -> Bl.ByteString
+encodeToServer toServer =
+    case toServer of
+    SignedAuthCodeT publicKey signature ->
+        mconcat
+        [ Bl.singleton 0
+        , Bl.fromStrict $ Ba.convert publicKey
+        ]
+
+    GetPricesT ->
+        Bl.singleton 1
+
+    ShortenIdT paymentDetails publicNoise argonOptions ->
+        mconcat
+        [ Bl.singleton 2
+        , encodePaymentDetails paymentDetails
+        , encodePublicNoise publicNoise
+        , encodeArgonOptions argonOptions
+        ]
+
+    UploadBlobT paymentDetails blobId blob ->
+        mconcat
+        [ Bl.singleton 3
+        , encodePaymentDetails paymentDetails
+        , encodeBlobId blobId
+        , Bl.fromStrict $ encodeBlob blob
+        ]
+
+    DownloadBlobT blobId ->
+        Bl.singleton 4 <> encodeBlobId blobId
+
+    SendMessageT paymentDetails recipient inboxMessage ->
+        mconcat
+        [ Bl.singleton 5
+        , encodePaymentDetails paymentDetails
+        , encodeRecipient recipient
+        , encodeInboxMessage inboxMessage
+        ]
+
+    DeleteMessageT sender inboxMessage ->
+        mconcat
+        [ Bl.singleton 6
+        , encodeSender sender
+        , encodeInboxMessage inboxMessage
+        ]
+
+
+encodeInboxMessage :: InboxMessage -> Bl.ByteString
+encodeInboxMessage (InboxMessage i) =
+    i
+
+
+encodeSender :: Sender -> Bl.ByteString
+encodeSender (Sender pubKey) =
+    Bl.fromStrict $ Ba.convert pubKey
+
+
+encodeRecipient :: Recipient -> Bl.ByteString
+encodeRecipient (Recipient pubKey) =
+    Bl.fromStrict $ Ba.convert pubKey
+
+
+encodePaymentDetails :: PaymentDetails -> Bl.ByteString
+encodePaymentDetails
+    (PaymentDetails
+        (OldTransaction old)
+        (NewTransaction new)
+        (AccountsSignature sig)) =
+
+    mconcat
+    [ encodeTransaction old
+    , encodeTransaction new
+    , encodeSignature sig
+    ]
+
+
+encodeTransaction :: Transaction -> Bl.ByteString
+encodeTransaction (Transaction amount time balance payment hash) =
+    mconcat
+    [ encodeAmount amount
+    , Bl.fromStrict $ encodeTime time
+    , encodeBalance balance
+    , encodePayment payment
+    , encodeHash hash
+    ]
+
+
+encodeBlobId :: BlobId -> Bl.ByteString
+encodeBlobId (BlobId blobId) =
+    blobId
+
+
+encodeArgonOptions :: Argon2.Options -> Bl.ByteString
+encodeArgonOptions argon =
+    let
+    convert = Bl.fromStrict . encodeUint32 . fromIntegral
+    in
+    mconcat
+    [ Bl.singleton 0
+    , convert $ Argon2.iterations argon
+    , convert $ Argon2.memory argon
+    , convert $ Argon2.parallelism argon
+    ]
+
+
+encodeSignature :: Ed.Signature -> Bl.ByteString
+encodeSignature sig =
+    Bl.fromStrict $ Ba.convert sig
+
+
+encodeAmount :: Amount -> Bl.ByteString
+encodeAmount (Amount m) =
+    encodeMoney m
+
+
+encodeBalance :: Balance -> Bl.ByteString
+encodeBalance (Balance m) =
+    encodeMoney m
+
+
+encodeMoney :: Money -> Bl.ByteString
+encodeMoney (Money m) =
+    Bl.fromStrict $ encodeUint32 m
+
+
+encodeUint64 :: Integer -> B.ByteString
+encodeUint64 i =
+    B.pack $ map (encodeUintegerHelp i) (take 8 [0..])
+
+
+encodeUintegerHelp :: Integer -> Int -> Word8
+encodeUintegerHelp int counter =
+    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
+
+
+encodePayment :: Payment -> Bl.ByteString
+encodePayment payment =
+    case payment of
+    PaymentToServer hash ->
+        Bl.singleton 0 <> encodeHash hash
+
+    AccountTopUp (TopUpId t) ->
+        Bl.singleton 1 <> Bl.fromStrict t
+
+
+encodeHash :: Hash32 -> Bl.ByteString
+encodeHash (Hash32 h) =
+    h
+
+
+newtype InboxMessage
+    = InboxMessage Bl.ByteString
+
+
+data PaymentDetails
+    = PaymentDetails OldTransaction NewTransaction AccountsSignature
+
+
+data Transaction
+    = Transaction Amount PosixSeconds Balance Payment Hash32
+
+
+newtype TopUpId
+    = TopUpId B.ByteString
+
+
+newtype Balance
+    = Balance Money
+
+
+newtype Money
+    = Money Int
+    deriving Eq
+
+
+newtype BlobId
+    = BlobId Bl.ByteString
+
+
+newtype Amount
+    = Amount Money
+    deriving Eq
+
+
+data Payment
+    = PaymentToServer Hash32
+    | AccountTopUp TopUpId
+
+
+newtype OldTransaction
+    = OldTransaction Transaction
+
+
+newtype NewTransaction
+    = NewTransaction Transaction
+
+
+newtype AccountsSignature
+    = AccountsSignature Ed.Signature
+
+
+newtype Sender
+    = Sender Ed.PublicKey
 
 
 restartingTcpUpdate :: Ready -> (Output, State)
@@ -2786,6 +3026,10 @@ data SecondHandshake
 
 newtype TheirStatic
     = TheirStatic (Dh.PublicKey Curve25519)
+
+
+newtype MyPublic
+    = MyPublic (Dh.PublicKey Curve25519)
 
 
 newtype ClientToClient
