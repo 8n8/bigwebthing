@@ -101,6 +101,9 @@ Client to server
         1 byte: 6
         32 bytes: sender public signing key
         32 bytes: message
+    Look up shortened
+        1 byte: 7
+        8 bytes: short ID
 Server to client
     Auth code to sign
         1 byte: 0
@@ -127,6 +130,13 @@ Server to client
     New transaction (like an account top-up)
         1 byte: 6
         transaction
+    Long ID for short ID
+        1 byte: 7
+        8 bytes: short ID
+        32 bytes: public signing key
+        42 bytes
+            32 bytes: public Noise key
+            10 bytes: fingerprint hashing options
 
 # Client to client
 

@@ -1,2 +1,7 @@
-+ change counter to an Integer so it doesn't have an upper limit
-+ change AcknowledgementCode to an Integer
++ get rid of signatures, just have the hash of the accounts on the server, and use Noise instead of TLS
++ have a thorough read of all the code, fixing errors and deleting as much as possible
++ have a renaming pass
++ stick as many LiquidHaskell annotations as possible
++ write loads of Quickcheck tests
++ write loads of Elm fuzz tests
++ put the whole lot into a single NuWeb file

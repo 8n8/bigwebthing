@@ -1,10 +1,15 @@
 + DONE update AuthStatus
 + DONE rename MyStatic to MyStaticNoise
 + DONE make a ToServer and an encoder rather than doing it ad hoc
-+ update FromServer and its parser
++ DONE update FromServer and its parser
++ make a ToFrontend and an encoder rather than doing it ad hoc
++ make sure that all ToServer branches are used
++ make the blob encrypter use the Noise state rather than a separate symmetric crypto scheme
++ Get rid of internal usage of Shortened. Replace it with signing key instead.
 + make a consolidated memcache
 + sort out authentication using public crypto
 + check Msg
 + check State
 + catch IO errors
 + get rid of lazy bytestrings as much as possible
++ change the name from 'haskell' to 'client'
