@@ -3,6 +3,7 @@
 + DONE make a ToServer and an encoder rather than doing it ad hoc
 + DONE update FromServer and its parser
 + make sure that all FromServer branches are used
+    + make new inboxMessage handler to fit new API
 + make sure that all ToServer branches are used
 + make a ToFrontend and an encoder rather than doing it ad hoc
 + make the blob encrypter use the Noise state rather than a separate symmetric crypto scheme
