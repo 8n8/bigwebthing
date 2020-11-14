@@ -126,7 +126,24 @@ Server to client
     Inbox message
         1 byte: 5
         32 bytes: sender public signing key
-        32 bytes: message
+        either
+            81 bytes: first handshake message
+                1 byte: 0
+                32 bytes: initiator ephemeral public key
+                48 bytes
+                    encrypted blob ID of a batch of first messages
+        or
+            129 bytes: second handshake messages
+                1 byte: 1
+                32 bytes: initiator ephemeral public key
+                48 bytes: encrypted ephemeral public key
+                48 bytes
+                    encrypted blob ID of a batch of second messages
+        or
+            81 bytes: payload message
+                1 byte: 2
+                32 bytes: initiator ephemeral public key
+                48 bytes: encrypted blob ID of payload
     New transaction (like an account top-up)
         1 byte: 6
         transaction
