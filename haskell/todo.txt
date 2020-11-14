@@ -2,8 +2,9 @@
 + DONE rename MyStatic to MyStaticNoise
 + DONE make a ToServer and an encoder rather than doing it ad hoc
 + DONE update FromServer and its parser
-+ make a ToFrontend and an encoder rather than doing it ad hoc
++ make sure that all FromServer branches are used
 + make sure that all ToServer branches are used
++ make a ToFrontend and an encoder rather than doing it ad hoc
 + make the blob encrypter use the Noise state rather than a separate symmetric crypto scheme
 + Get rid of internal usage of Shortened. Replace it with signing key instead.
 + make a consolidated memcache

@@ -558,6 +558,7 @@ data Ready
         , awaitingCrypto :: [(Hash32, Sender)]
         , readingMessageOnClick :: Maybe MessageId
         , staticNoiseKeys :: Maybe MyStaticNoise
+        , secretSigningKey :: Maybe Ed.SecretKey
         , userId :: Maybe (Fingerprint, Shortened)
         , lookingUpShortened :: Map.Map Shortened Fingerprint
         }
@@ -1354,6 +1355,13 @@ updateOnRandomGen gen init_ =
         pass
 
 
+
+-- Assocated data
+authCodeA :: B.ByteString
+authCodeA =
+    B.pack [197, 154, 22, 2, 21, 159, 38, 105, 240, 15, 236, 142, 31, 124, 100, 71, 22, 117, 69, 163, 39, 221, 135, 100, 193, 244, 134, 63, 28, 226, 89, 31]
+
+
 fingerprintSalt =
     B.pack
         [121, 42, 53, 200, 120, 148, 151, 77, 190, 181, 194, 24, 139, 196, 215, 179]
@@ -1533,6 +1541,7 @@ fileExistenceUpdate path exists init_ =
                     , staticNoiseKeys = Nothing
                     , userId = Nothing
                     , lookingUpShortened = Map.empty
+                    , secretSigningKey = Nothing
                     }
             in
             ( BatchO
@@ -1866,6 +1875,21 @@ fromServerUpdate raw ready =
             ]
         , ReadyS ready
         )
+
+    Right (AuthCodeToSignF (AuthCode authCode)) ->
+        case secretSigningKey ready of
+        Nothing ->
+            (DoNothingO, ReadyS ready)
+
+        Just secretSign ->
+            let
+            publicKey = Ed.toPublic secretSign
+            toSign = authCodeA <> authCode
+            signature = Ed.sign secretSign publicKey toSign
+            in
+            ( sendToServer $ SignedAuthCodeT publicKey signature
+            , ReadyS ready
+            )
 
 
 encodeShorteningPrice :: ShorteningPrice -> Bl.ByteString
@@ -2958,6 +2982,7 @@ getCache ready =
         , counterM = counter ready
         , waitForAcknowledgeM = waitForAcknowledge ready
         , awaitingCryptoM = awaitingCrypto ready
+        , secretSigningKeyM = secretSigningKey ready
         }
 
 
@@ -4691,6 +4716,7 @@ data MemCache
         , counterM :: Integer
         , waitForAcknowledgeM :: [Hash32]
         , awaitingCryptoM :: [(Hash32, Sender)]
+        , secretSigningKeyM :: Maybe Ed.SecretKey
         }
 
 
@@ -4740,6 +4766,7 @@ memCacheP = do
     counterM <- varIntP
     waitForAcknowledgeM <- listP hash32P
     awaitingCryptoM <- listP awaitingCryptoP
+    secretSigningKeyM <- maybeP secretSigningP
     P.endOfInput
     return $
         MemCache
@@ -4750,7 +4777,19 @@ memCacheP = do
             , counterM
             , waitForAcknowledgeM
             , awaitingCryptoM
+            , secretSigningKeyM
             }
+
+
+secretSigningP :: P.Parser Ed.SecretKey
+secretSigningP = do
+    raw <- P.take Ed.secretKeySize
+    case Ed.secretKey raw of
+        CryptoFailed err ->
+            fail $ show err
+
+        CryptoPassed key ->
+            return key
 
 
 awaitingCryptoP :: P.Parser (Hash32, Sender)
@@ -4971,6 +5010,7 @@ rawKeysUpdate rawCrypto root newDhKeys times gen =
             , readingMessageOnClick = Nothing
             , staticNoiseKeys = Nothing
             , userId = Nothing
+            , secretSigningKey = secretSigningKeyM memCache
             , lookingUpShortened = Map.empty
             }
         )
