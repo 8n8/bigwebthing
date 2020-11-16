@@ -3,8 +3,18 @@
 + DONE make a ToServer and an encoder rather than doing it ad hoc
 + DONE update FromServer and its parser
 + make sure that all FromServer branches are used
+    + update InboxMessage type for new API
+        + DONE change Blob so that it optionally stores a blob ID and symmetric key
+        + DONE in the new blobs handler (line 3795)
+            + DONE generate a key and blob ID for each new blob
+            + DONE store the new keys and blob IDs in the header
+            + DONE encrypt and upload each blob
+            + DONE rename shareBlobs to uploadBlobs
+            + DONE send the new header to each of the recipients
+            + DONE defer sending the new header until the blobs are uploaded
     + make new inboxMessage handler to fit new API
 + make sure that all ToServer branches are used
++ change Ready handshakes field to be a list not a map
 + make a ToFrontend and an encoder rather than doing it ad hoc
 + make the blob encrypter use the Noise state rather than a separate symmetric crypto scheme
 + Get rid of internal usage of Shortened. Replace it with signing key instead.

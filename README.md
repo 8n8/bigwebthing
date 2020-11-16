@@ -125,7 +125,6 @@ Server to client
         32 bytes: hash of message
     Inbox message
         1 byte: 5
-        32 bytes: sender public signing key
         either
             81 bytes: first handshake message
                 1 byte: 0

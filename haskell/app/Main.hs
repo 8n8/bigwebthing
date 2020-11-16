@@ -26,6 +26,7 @@ import qualified Network.Wai as Wai
 import qualified Network.WebSockets as Ws
 import Control.Monad.IO.Class (liftIO)
 import qualified Crypto.Hash.BLAKE2.BLAKE2b as Blake
+import qualified Crypto.Cipher.ChaChaPoly1305 as ChaPoly
 import qualified System.IO as Io
 import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.ByteString.Char8 as Bc
@@ -540,6 +541,7 @@ data Ready
         , blobsUp :: Jobs BlobUp BlobUpWait
         , getBlob :: Jobs GetBlob GetBlobWait
         , sendingBlob :: Jobs SendingBlob SendingBlobWait
+        , headerAfterBlobs :: Jobs HeaderAfterBlobs HeaderAfterBlobs
         , authStatus :: AuthStatus
         , handshakes :: Map.Map HandshakeId Handshake
         , newDhKeys :: [Dh.KeyPair Curve25519]
@@ -564,9 +566,21 @@ data Ready
         }
 
 
+data HeaderAfterBlobs
+    = HeaderAfterBlobs MessageId (Set.Set Sender) (Set.Set Hash32)
+
+
 data SendingBlob
-    = AwaitingHandle Hash32 [Sender]
-    | Chunking Io.Handle Hash32 [Sender]
+    = AwaitingHandle Hash32 [Sender] InitDRG
+    | Chunking Io.Handle Hash32 InitDRG CurrentDRG ChaPoly.State
+
+
+newtype InitDRG
+    = InitDRG CryptoRand.ChaChaDRG
+
+
+newtype CurrentDRG
+    = CurrentDRG CryptoRand.ChaChaDRG
 
 
 data SendingBlobWait
@@ -623,8 +637,8 @@ data ShareName
     deriving (Eq, Ord)
 
 
-data HandshakeId
-    = HandshakeId Sender FirstMessage
+newtype TheirEphemeral
+    = TheirEphemeral (Dh.PublicKey Curve25519)
 
 
 newtype FirstMessage
@@ -678,8 +692,8 @@ instance Ord FirstMessage where
 
 
 data Handshake
-    = Initiator MyEphemeral InitiatorHandshake
-    | ResponderSentEncryptedES MyEphemeral
+    = Initiator InitiatorHandshake
+    | ResponderSentEncryptedES FirstMessage MyEphemeral
 
 
 data SecondShake
@@ -901,7 +915,7 @@ updateOnNewRawWasm body q ready =
         [ wasmO
         , WriteFileStrictO path $ Bl.toStrict body
         , BytesInQO q Bl.empty
-        ] 
+        ]
     , wasmS
     )
 
@@ -922,10 +936,20 @@ updateOnChunkFromHandle path raw ready =
     Jobs (AwaitingHandle _ _) _ ->
         pass
 
-    Jobs (Chunking handle hash tos) _ ->
+    Jobs (Chunking handle hash initDrg drg chaState) waiting ->
         if makeBlobPath (root ready) hash == path then
 
         let
+        (sendChunk, drg', chaState') =
+            sendBlobChunk chunk drg chaState
+        sendModel =
+            ReadyS $
+            ready
+                { sendingBlob =
+                    Jobs
+                        (Chunking handle hash initDrg drg' chaState')
+                        waiting
+                }
         finalChunk = rawLen == plainChunkLen - 3
         rawLen = B.length raw
         chunk =
@@ -942,20 +966,20 @@ updateOnChunkFromHandle path raw ready =
             , raw
             , B.replicate (plainChunkLen - 3 - rawLen) 0
             ]
-        (sendO, sendModel) =
-            foldr
-                (sendBlobChunk chunk)
-                (DoNothingO, ReadyS ready)
-                (map (\(Sender s) -> s) tos)
+        (headerO, headerModel) =
+            if finalChunk then
+            sendHeaderIfAllBlobsUploaded sendModel hash
+            else
+            (sendO, sendModel)
         in
         ( BatchO
-            [ sendO
+            [ headerO
             , if finalChunk then
               CloseFileO handle
               else
               ReadFromHandleO path (plainChunkLen - 3) handle
             ]
-        , sendModel
+        , headerModel
         )
 
         else
@@ -1646,7 +1670,6 @@ encodeToServer toServer =
         [ Bl.singleton 5
         , encodePaymentDetails paymentDetails
         , encodeRecipient recipient
-        , encodeInboxMessage inboxMessage
         ]
 
     DeleteMessageT sender inboxMessage ->
@@ -1658,11 +1681,6 @@ encodeToServer toServer =
 
     LookupShortenedT (Shortened shortened) ->
         Bl.singleton 7 <> shortened
-
-
-encodeInboxMessage :: InboxMessage -> Bl.ByteString
-encodeInboxMessage (InboxMessage i) =
-    i
 
 
 encodeSender :: Sender -> Bl.ByteString
@@ -1753,8 +1771,26 @@ encodeHash (Hash32 h) =
     h
 
 
-newtype InboxMessage
-    = InboxMessage Bl.ByteString
+data InboxMessage
+    = FirstShakeI FirstShakeWithPayload
+    | SecondShakeI InitiatorPublicEphemeral SecondShakeWithPayload
+    | PayloadI InitiatorPublicEphemeral Payload
+
+
+newtype InitiatorPublicEphemeral
+    = InitiatorPublicEphemeral (Dh.PublicKey Curve25519)
+
+
+newtype Payload
+    = Payload B.ByteString
+
+
+newtype SecondShakeWithPayload
+    = SecondShakeWithPayload B.ByteString
+
+
+newtype FirstShakeWithPayload
+    = FirstShakeWithPayload B.ByteString
 
 
 data PaymentDetails
@@ -1780,6 +1816,7 @@ newtype Money
 
 newtype BlobId
     = BlobId Bl.ByteString
+    deriving (Eq, Ord)
 
 
 newtype Amount
@@ -2016,69 +2053,60 @@ messageInUpdate
     -> InboxMessage
     -> Ready
     -> (Output, State)
-messageInUpdate from (InboxMessage raw) ready =
-    case P.eitherResult $ P.parse ciphertextP raw of
-    Left err ->
-        logErr ready $
-            "could not parse ciphertext: " <> T.pack err
+messageInUpdate from msg ready =
+    case msg of
+    FirstShakeI firstShake ->
+        firstHandshakesUpdate ready firstShake
 
-    Right (FirstHandshakes msgs) ->
-        firstHandshakesUpdate from ready msgs
+    SecondShakeI initiatorPublicEphemeral secondShake ->
+        secondHandshakeUpdate
+            ready
+            initiatorPublicEphemeral
+            secondShake
 
-    Right (SecondHandshakes secondShakes) ->
-        secondHandshakesUpdate from ready secondShakes
-
-    Right (TransportC firstMessage thisMessage) ->
-        transportUpdate from ready firstMessage thisMessage
+    PayloadI initiatorPublicEphemeral payload ->
+        transportUpdate ready initiatorPublicEphemeral payload
 
 
 transportUpdate
-    :: Sender
-    -> Ready
-    -> FirstMessage
-    -> Bl.ByteString
+    :: Ready
+    -> InitiatorPublicEphemeral
+    -> Payload
     -> (Output, State)
-transportUpdate from ready firstMessage thisMessage =
-    let
-        handshake = HandshakeId from firstMessage
-    in
-    case Map.lookup handshake (handshakes ready) of
+transportUpdate ready initiatorEphemeral payload =
+    case Map.lookup initiatorEphemeral (handshakes ready) of
     Nothing ->
         (DoNothingO, ReadyS ready)
 
-    Just (Initiator _ _ ) ->
+    Just (Initiator _) ->
         (DoNothingO, ReadyS ready)
 
-    Just (ResponderSentEncryptedES myEphemeral) ->
+    Just (ResponderSentEncryptedES firstMessage) ->
         case staticNoiseKeys ready of
         Nothing ->
             (DoNothingO, ReadyS ready)
 
         Just staticKeys ->
             transportUpdateHelp
-                from
                 ready
                 firstMessage
-                thisMessage
-                myEphemeral
+                payload
                 staticKeys
 
 
 transportUpdateHelp
-    :: Sender
-    -> Ready
+    :: Ready
     -> FirstMessage
-    -> Bl.ByteString
-    -> MyEphemeral
+    -> Payload
     -> MyStaticNoise
+    -> MyEphemeral
     -> (Output, State)
 transportUpdateHelp
-    from
     ready
     (FirstMessage first)
     encrypted
-    myEphemeral
-    myStatic =
+    myStatic
+    myEphemeral =
 
     case Map.lookup from $ whitelist ready of
     Nothing ->
@@ -2589,8 +2617,14 @@ data Blob
         , filenameB :: T.Text
         , size :: Int
         , mime :: T.Text
+        , uploadB :: Maybe (SymmetricKey, BlobId)
         }
         deriving (Eq, Ord)
+
+
+newtype SymmetricKey
+    = SymmetricKey B.ByteString
+    deriving (Eq, Ord)
 
 
 data Wasm
@@ -3123,16 +3157,77 @@ inboxMessageLength =
     32
 
 
+firstShakeWithPayloadLength :: Int
+firstShakeWithPayloadLength =
+    80
+
+
+firstShakeWithPayloadP :: P.Parser FirstShakeWithPayload
+firstShakeWithPayloadP = do
+    raw <- P.take firstShakeWithPayloadLength
+    return $ FirstShakeWithPayload raw
+
+
 inboxMessageP :: P.Parser InboxMessage
-inboxMessageP = do
-    raw <- P.take inboxMessageLength
-    return $ InboxMessage $ Bl.fromStrict raw
+inboxMessageP =
+    P.choice
+        [ do
+            _ <- P.word8 0
+            raw <- firstShakeWithPayloadP
+            return $ FirstShakeI raw
+        , do
+            _ <- P.word8 1
+            initiatorEphemeral <- initiatorPublicEphemeralP
+            shake <- secondShakeWithPayloadP
+            return $ SecondShakeI initiatorEphemeral shake
+        , do
+            _ <- P.word8 2
+            initiatorEphemeral <- initiatorPublicEphemeralP
+            payload <- payloadP
+            return $ PayloadI initiatorEphemeral payload
+        ]
+
+
+secondShakeLength :: Int
+secondShakeLength =
+    48 + 48
+
+
+secondShakeWithPayloadP :: P.Parser SecondShakeWithPayload
+secondShakeWithPayloadP = do
+    raw <- P.take secondShakeLength
+    return $ SecondShakeWithPayload raw
+
+
+initiatorPublicEphemeralP :: P.Parser InitiatorPublicEphemeral
+initiatorPublicEphemeralP = do
+    raw <- P.take Dh.dhLength
+    case Dh.dhBytesToPub raw of
+        Nothing ->
+            fail "couldn't parse public Noise key"
+
+        Just key ->
+            return key
 
 
 senderP :: P.Parser Sender
 senderP = do
     raw <- pubEdKeyP
     return $ Sender raw
+
+
+payloadMessageLength :: Int
+payloadMessageLength =
+    16 + 32
+--  ^^   ^^
+--  ^^   Encrypted blob ID
+--  MAC
+
+
+payloadP :: P.Parser Payload
+payloadP = do
+    raw <- P.take payloadMessageLength
+    return $ Payload raw
 
 
 pubEdKeyP :: P.Parser Ed.PublicKey
@@ -3751,33 +3846,46 @@ updateOnNewBlobs newBlobs ready =
 
             Right oldHeader ->
                 let
-                newHeader = oldHeader { blobs = newBlobs }
+                newHeader = updateBlobs oldHeader onlyNewWithKeys
                 newEncoded = encodeHeader newHeader
                 newDiff = makeDiff Me oldEncoded newEncoded
                 newDiffs = newDiff : diffs
                 newReady =
-                    ready { pageR = Writer messageId newDiffs }
-                onlyNew =
-                    map (\b -> hashB b) $
+                    ready
+                        { pageR = Writer messageId newDiffs
+                        , randomGen = gen
+                        }
+                onlyNewNoKeys =
                     Set.toList $
                     Set.difference
                     (Set.fromList $ blobs oldHeader)
                     (Set.fromList $ newBlobs)
-                (sendO, sendState) =
-                    shareBlobs
-                        (ReadyS newReady)
-                        messageId
-                        onlyNew
-                        (shares newHeader)
+                (onlyNewWithKeys, gen) =
+                    makeBlobKeys onlyNewNoKeys (randomGen ready)
+                encodedDiffs = encodeDiffs newDiffs
+                (blobsO, blobsState) =
+                    case shares newHeader of
+                    [] ->
+                        (DoNothingO, ReadyS ready)
+
+                    _ ->
+                        uploadBlobs
+                            (ReadyS newReady)
+                            messageId
+                            onlyNewWithKeys
+
+                (headerO, headerState) =
+                    foldr (sendHeader newHeader) (blobsO, blobState) (shares newHeader)
+
                 write =
                     WriteFileStrictO
                         (makeMessagePath (root ready) messageId)
-                        (encodeDiffs newDiffs)
+                        encodeDiffs
                 in
-                updateReady sendState $ \newerReady ->
+                updateReady headerState $ \newerReady ->
                 ( BatchO
-                    [ sendO
-                    , write
+                    [ write
+                    , headerO
                     , dumpView newerReady
                     ]
                 , ReadyS newerReady
@@ -3953,21 +4061,17 @@ shareMessage
 shareMessage newShares model messageId header =
     let
     (headerO, headerState) = shareHeader model messageId header
-    hashes :: [Hash32]
-    hashes = wasm header : map hashB (blobs header)
-    (blobsO, blobsState) =
-        shareBlobs headerState messageId hashes newShares
     in
     (BatchO [headerO, blobsO], blobsState)
 
 
-shareBlobs
+uploadBlobs
     :: State
     -> MessageId
     -> [Hash32]
     -> [Sender]
     -> (Output, State)
-shareBlobs model messageId hashes tos =
+uploadBlobs model messageId hashes tos =
     foldr (shareBlobsHelp messageId tos) (DoNothingO, model) hashes
 
 
@@ -4080,10 +4184,22 @@ encodeAndEncrypt chunks shares model =
 encryptChunks
     :: MyStaticNoise
     -> TheirStaticNoise
-    -> [(B.ByteString, SecondShake)]
+    -> [B.ByteString]
+    -> SecondShake
     -> [Either String Bl.ByteString]
-encryptChunks myStatic theirStaticNoise chunkShakes =
-    map (encryptChunk myStatic theirStaticNoise) chunkShakes
+encryptChunks myStatic theirStaticNoise chunks secondShake =
+    case chunks of
+    [] ->
+        Left "no chunks"
+
+    c : hunks ->
+        let
+        (encrypted, noise0) =
+            encryptFirstChunk c myStatic theirStaticNoise secondShake
+        in
+        foldr encryptChunk ([encrypted], noise0) hunks
+
+    -- map (encryptChunk myStatic theirStaticNoise) chunkShakes
 
 
 encryptChunk
@@ -4138,55 +4254,36 @@ type Handshakes
     = Map.Map HandshakeId Handshake
 
 
-chooseShakes
+getSecondShake
     :: Sender
-    -> Int
-    -> Handshakes
-    -> Maybe ([SecondShake], Handshakes)
-chooseShakes to num handshakes =
-    chooseShakesHelp
-        to
-        num
-        (Map.toList handshakes)
-        ([], Map.empty)
-
-
-chooseShakesHelp
-    :: Sender
-    -> Int
-    -> [(HandshakeId, Handshake)]
-    -> ([SecondShake], Handshakes)
-    -> Maybe ([SecondShake], Handshakes)
-chooseShakesHelp to num handshakes (relevant, irrelevant) =
-    if length relevant == num then
-    Just (relevant, irrelevant)
-    else
-    case handshakes of
+    -> Map.Map HandshakeId Handshake
+    -> Maybe SecondShake
+getSecondShake sender handshakes =
+    let
+    asList = Map.toList handshakes
+    in
+    case filter (matchingShake sender) asList of
     [] ->
         Nothing
 
-    (h@(HandshakeId shortened _), handshake):andshakes ->
-        chooseShakesHelp
-            to
-            num
-            andshakes
-            (
-            if to == shortened then
-            case handshake of
-            Initiator myEphemeral (ReceivedEncryptedE response) ->
-                let
-                secondShake = SecondShake myEphemeral response
-                in
-                (secondShake : relevant, irrelevant)
+    r:esults ->
+        Just r
 
-            Initiator _ SentPlainE ->
-                (relevant, Map.insert h handshake irrelevant)
 
-            ResponderSentEncryptedES _ ->
-                (relevant, Map.insert h handshake irrelevant)
+matchingShake :: Sender -> (HandshakeId, Handshake) -> Bool
+matchingShake
+    sender
+    (HandshakeId hSender (InitiatorPublicEphemeral pub), shake) =
 
-            else
-            (relevant, Map.insert h handshake irrelevant))
+    case shake of
+    (Initiator (ReceivedEncryptedE encryptedEphemeral)) ->
+        sender == hSender
+
+    Initiator SentPlainE ->
+        False
+
+    ResponderSentEncryptedES _ _ ->
+        False
 
 
 encodeAndEncryptHelp
@@ -4207,7 +4304,8 @@ encodeAndEncryptHelp chunks to (oldO, model) =
         Just keys ->
             f keys) $ \myStatic ->
 
-    case chooseShakes to (length chunks) (handshakes oldReady) of
+    case getSecondShake to $ handshakes oldReady of
+    -- case chooseShakes to (length chunks) (handshakes oldReady) of
     Nothing ->
         let
         writes =
@@ -4236,7 +4334,8 @@ encodeAndEncryptHelp chunks to (oldO, model) =
                     }
             )
 
-    Just (relevant, irrelevant) ->
+    Just secondShake ->
+    -- Just (relevant, irrelevant) ->
         case Map.lookup to $ whitelist oldReady of
         Nothing ->
             pass
@@ -4244,7 +4343,7 @@ encodeAndEncryptHelp chunks to (oldO, model) =
         Just (_, _, theirNoise) ->
             let
             eitherEncrypted =
-                encryptChunks myStatic theirNoise (zip chunks relevant)
+                encryptChunks myStatic theirNoise chunks secondShake
             in
             case allOk eitherEncrypted of
             Left err ->
@@ -4260,7 +4359,10 @@ encodeAndEncryptHelp chunks to (oldO, model) =
                 newReady =
                     oldReady
                         { waitForAcknowledge
-                        , handshakes = irrelevant
+                        , handshakes =
+                            removeShake
+                                secondShake $
+                                handshakes oldReady
                         }
                 in
                 ( BatchO [oldO, BatchO writes, BatchO sends]
@@ -4268,76 +4370,28 @@ encodeAndEncryptHelp chunks to (oldO, model) =
                 )
 
 
+removeShake
+    :: SecondShake
+    -> Map.Map HandshakeId Handshake
+    -> Map.Map HandshakeId Handshake
+removeShake (SecondShake (MyEphemeral (_, pub)) _) oldShakes =
+    Map.filterWithKey
+        (\(HandshakeId _ (InitiatorPublicEphemeral p)) -> p /= pub)
+        oldShakes
+
+
 sendBlobChunk
     :: B.ByteString
-    -> Ed.PublicKey
-    -> (Output, State)
-    -> (Output, State)
-sendBlobChunk chunk toKey (oldO, oldModel) =
-    let
-    pass = (DoNothingO, oldModel)
-    in
-    updateReady oldModel $ \ready ->
-    case chooseShakes (Sender toKey) 1 (handshakes ready) of
-    Nothing ->
-        let
-        write = writeToFile (root ready) $ Bl.fromStrict chunk
-        awaiting = (hash32 $ Bl.fromStrict chunk, Sender toKey)
-        (cryptO, cryptoModel) = bumpCrypto ready
-        in
-        updateReady cryptoModel $ \cryptoReady ->
-            let
-            newReady =
-                cryptoReady
-                    { awaitingCrypto =
-                        awaiting : awaitingCrypto cryptoReady
-                    }
-            in
-            ( BatchO
-                [ oldO
-                , write
-                , cryptO
-                , dumpCache newReady
-                , dumpView newReady
-                ]
-            , ReadyS newReady
-            )
+    -> BlobId
+    -> ChaPoly.State
+    -> Output
+sendBlobChunk chunk blobId chaPolyState =
+    case encryptChunk chunk of
+    Left err ->
+        DoNothingO 
 
-    Just ([shake], remainder) ->
-        (\f ->
-            case staticNoiseKeys ready of
-            Nothing ->
-                pass
-
-            Just keys ->
-                f keys) $ \myStatic ->
-        case Map.lookup (Sender toKey) $ whitelist ready of
-        Nothing ->
-            pass
-
-        Just (_, _, theirStatic) ->
-            let
-            eitherEncrypted =
-                encryptChunk myStatic theirStatic (chunk, shake)
-            newReady =
-                ready { handshakes = remainder }
-            in
-            case eitherEncrypted of
-            Left err ->
-                (ErrorO $ "could not encrypt chunk: " ++ err, FailedS)
-
-            Right encrypted ->
-                let
-                write = writeToFile (root ready) encrypted
-                send = BytesInQO toServerQ encrypted
-                in
-                ( BatchO [oldO, write, send]
-                , ReadyS newReady
-                )
-
-    Just _ ->
-        -- It should never happen.
-        pass
+    Right encrypted ->
+        BytesInQO toServerQ encrypted
 
 
 bumpCrypto :: Ready -> (Output, State)
@@ -4733,7 +4787,7 @@ encodeVarIntHelp :: Integer -> [Word8] -> [Word8]
 encodeVarIntHelp remaining accum =
     if remaining == 0 then
     accum
-    else
+    else 
     encodeVarIntHelp
         (remaining `Bits.shiftR` 8)
         (fromIntegral (remaining Bits..&. 0xFF) : accum)
@@ -4927,6 +4981,10 @@ encryptedEphemeralP =
     fmap Bl.fromStrict $
     P.take $
     16 + 32 + 16
+
+
+data HandshakeId
+    = HandshakeId Sender InitiatorPublicEphemeral
 
 
 handshakeIdP :: P.Parser HandshakeId
