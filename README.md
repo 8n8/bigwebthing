@@ -323,10 +323,32 @@ feminist polish fanfare front barber resume palpable
 # Client cache
 
 blobs
-    A key-value store of binaries.
+    A flat directory of small encrypted blobs, with 32-byte random names.
 
-messages
-    a flat folder of message files (sets of edits), named by locally unique message IDs, where each is an encoded sequence of diffs
+database
+    diffs
+        fromhash (blob)
+        tohash (blob)
+        uploaded (bool)
+        diff (blob)
+            a Noise KK first handhake message
+                1 byte: 0
+                32 bytes: sender ephemeral public key
+                48 bytes: encrypted blob ID of more first messages
+            a Noise KK second handshake message 
+                1 byte: 1
+                32 bytes: initiator ephemeral public key
+                48 bytes: encrypted responder public key
+                48 bytes: encrypted blob ID of more second messages
+            a Noise KK transport message
+                1 byte: 2
+                32 bytes: initiator ephemeral public key
+                encrypted
+                    16 bytes: MAC
+                    40 bytes: random seed for ChaCha random generator
+    blobuploads
+        blobid (blob)
+        uploaded (bool)
 
 memCache
     A binary file containing a dump of the in-memory cache.
@@ -340,7 +362,7 @@ accounts
 # Server cache
 
 blobs
-    A flat directory of binaries, named by user-made ID.
+    A flat directory of small encrypted blobs, with 32-byte random names.
 
 memCache
     A binary file containing a dump of the in-memory cache.
@@ -363,6 +385,25 @@ database
         user
         short
         shortenable
+    diffs
+        fromhash (blob)
+        tohash (blob)
+        diff (blob)
+            a Noise KK first handhake message
+                1 byte: 0
+                32 bytes: sender ephemeral public key
+                48 bytes: encrypted blob ID of more first messages
+            a Noise KK second handshake message 
+                1 byte: 1
+                32 bytes: initiator ephemeral public key
+                48 bytes: encrypted responder public key
+                48 bytes: encrypted blob ID of more second messages
+            a Noise KK transport message
+                1 byte: 2
+                32 bytes: initiator ephemeral public key
+                encrypted
+                    16 bytes: MAC
+                    40 bytes: random seed for ChaCha random generator
 
 # Pricing
 
@@ -377,50 +418,3 @@ Clients are responsible for storing their accounts information, and uploading it
 The server maintains the signature of the whole accounts for each client. It will only update it when the client uploads the previous transaction and a new one and a new signature.
 
 The server will only accept account top-ups if it has a corresponding transaction stored in its database. Once the client has added it, the server will delete it. The server will not accept negative balances, or balances higher than a constant small upper limit.
-
-# Embedded programming language (speculative)
-
-This might be put in a later version. The idea is that there will be a programming language embedded in the system for making new built-in programs.
-
-It will be specifically designed to target WASM.
-
-It will have a Lisp-like syntax, except that instead of parentheses, it will use whitespace.
-
-So:
-
-+ "(" == newline and increment indent level
-+ ")" == two or more newlines and decrement indent level
-+ " " == " " or newline
-
-So in Python, a dict would be {"hi": 3, "apple": 4, "onions": 55, "stew": 22}. In Lisp it would be like:
-
-(Map.fromList (("hi" 3) ("apple" 4) ("onions" 55) ("stew" 22)))
-
-And in Truelang it would be like:
-
-====Top of file====
-"hi" 3
-
-"apple" 4
-
-"onions" 55
-
-"stew" 22
-
-And a file is just a convenience for making a map, so you don't have to indent the whole file to get the opening parenthesis.
-
-And the main feature of the language is
-
-|
-| Runtime exceptions are compiler bugs.
-|
-
-This is achieved with a type-level lanugage interpreter. So there is a lot of type-level computation. If you type 3 + 2 then the type of the result will be 5, not 'int'.
-
-Other ideas:
-
-+ no type annotations
-+ there are no user-defined names, you just use maps
-+ module imports include a cryptographic hash of the file so that builds are deterministic
-+ performance is nice, but will usually be sacrificed if it makes users lives easier
-+ items in maps can reference their parent map
