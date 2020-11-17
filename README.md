@@ -95,11 +95,11 @@ Client to server
     Send message
         1 byte: 5
         payment details
-        32 bytes: recipient public signing key
-        32 bytes: message
+        32 bytes: recipient public static Noise key
+        inbox message
     Delete message
         1 byte: 6
-        32 bytes: sender public signing key
+        32 bytes: sender public static Noise key
         32 bytes: message
     Look up shortened
         1 byte: 7
@@ -125,31 +125,13 @@ Server to client
         32 bytes: hash of message
     Inbox message
         1 byte: 5
-        either
-            81 bytes: first handshake message
-                1 byte: 0
-                32 bytes: initiator ephemeral public key
-                48 bytes
-                    encrypted blob ID of a batch of first messages
-        or
-            129 bytes: second handshake messages
-                1 byte: 1
-                32 bytes: initiator ephemeral public key
-                48 bytes: encrypted ephemeral public key
-                48 bytes
-                    encrypted blob ID of a batch of second messages
-        or
-            81 bytes: payload message
-                1 byte: 2
-                32 bytes: initiator ephemeral public key
-                48 bytes: encrypted blob ID of payload
+        inbox message
     New transaction (like an account top-up)
         1 byte: 6
         transaction
     Long ID for short ID
         1 byte: 7
         8 bytes: short ID
-        32 bytes: public signing key
         42 bytes
             32 bytes: public Noise key
             10 bytes: fingerprint hashing options
@@ -158,59 +140,7 @@ Server to client
 
 ## API
 
-The messages can be <= 15935 bytes long. There are several layers to the API, as follows.
-
-### Top layer
-
-One of these:
-
-    15841 bytes: Noise first handshake messages
-        1 byte: 0
-        15840 bytes: 495 32-byte messages
-            (495 = 3 x 165, which is the number of second shakes
-             in a chunk)
-
-    15841 bytes: Noise second handshake messages
-        1 byte: 1
-        15840 bytes: 165 96-byte messages
-            32 bytes: first handshake message
-            32 + 16 bytes: my encrypted ephemeral key
-            16 bytes: overhead of empty payload
-
-    113 bytes: Noise transport message
-        1 byte: 2
-        32 bytes: first handshake message
-        16 bytes: overhead
-        64 bytes
-            encrypted
-                32 bytes: hash of encrypted chunk
-                32 bytes: secret key of encrypted chunk
-
-    Symmetrically encrypted chunk
-        1 byte: 3
-        12 bytes: random nonce
-        16 bytes: auth tag
-        encrypted
-            either
-                1 byte: 0 (this is the last chunk)
-                the chunk
-            or
-                1 byte: 1 (this is not the last chunk)
-                32 bytes: the hash of the next encrypted chunk
-                the chunk
-
-### Before chunking but after encoding
-
-After encoding the message (or before chunking and sending it), there is another API inside it:
-
-    32 bytes: globally unique message ID
-    8 bytes: integrity check
-    either a header blob
-        1 byte: 0
-        the header blob
-    or a referenced blob
-        1 byte: 1
-        the referenced blob
+There are several layers to the API, as follows.
 
 ## Crypto
 
@@ -221,6 +151,25 @@ All client-server traffic is encrypted with TLS.
 The Noise messages just contain blob hashes and secret keys, and then the actual content is symmetrically encrypted with ChaChaPoly1305.
 
 # Encodings
+
+## Inbox message
+
+One of:
+    89 bytes: Noise KK first handshake message
+        1 byte: 0
+        32 bytes: initiator public ephemeral key
+        56 bytes: encrypted seed of 999 more first handshake messages
+    137 bytes: Noise KK second handshake message
+        1 byte: 1
+        32 bytes: initiator public ephemeral key
+        48 bytes: encrypted responder public ephemeral key
+        56 bytes: encrypted seed of 999 more second handshake messages
+    89 bytes: Noise KK transport static message
+        1 byte: 2
+        32 bytes: initiator public ephemeral key
+        encrypted:
+            16 bytes: MAC
+            40 bytes: seed of header
 
 ## Slow hashing options
 
@@ -254,51 +203,20 @@ The Noise messages just contain blob hashes and secret keys, and then the actual
         hash of previous transaction hash combined with this
         transaction encoded (without the hash of course)
 
-## Message header encoding for local storage
+## Message header encoding
 
 A message version is encoded as follows:
+    32 bytes: random message ID
     8 bytes: POSIX time
     2 bytes: number of members
-    sequence of 32-byte member public signing keys
-    32 bytes: author signing key
+    sequence of 32-byte member public static Noise keys
+    32 bytes: author public static Noise key
     sized string: main box
     2 bytes: number of blobs
     sequence of blobs, where one blob is
-        32 bytes: hash of blob
+        40 bytes: seed of blob
         sized string: original file name of blob
-    32 bytes: hash of WASM
-
-## Message header encoding for transmission
-
-The same as for local storage, except the hashes, urls and secret keys of the encrypted binaries are stored alongside the hashes of plaintext binaries.
-
-## Message edit encoding
-
-The difference between two encoded messages is encoded as follows:
-
-    start (int)
-        The position of the first character in the string that is different to the other. Examples are:
-
-        ("", "a") => 0
-        ("ab", "ac") => 1
-
-    end (int)
-        If the strings are both reversed, this is the position of the first character that is different. Examples are:
-
-        ("", "a") => 0
-        ("ab", "ac") => 0
-        ("ab", "b") => 1
-
-    insert (blob)
-        the piece of the new string that lies between start and end
-
-    integrity (blob)
-        an 8-byte BLAKE2b hash of the new string
-
-    the author ID of the edit
-
-This should lead to efficient storage of diffs because most changes are going to be character inserts and deletions.
-
+    40 bytes: seed of wasm
 
 ## User ID encoding
 
@@ -326,29 +244,20 @@ blobs
     A flat directory of small encrypted blobs, with 32-byte random names.
 
 database
-    diffs
-        fromhash (blob)
-        tohash (blob)
-        uploaded (bool)
-        diff (blob)
-            a Noise KK first handhake message
-                1 byte: 0
-                32 bytes: sender ephemeral public key
-                48 bytes: encrypted blob ID of more first messages
-            a Noise KK second handshake message 
-                1 byte: 1
-                32 bytes: initiator ephemeral public key
-                48 bytes: encrypted responder public key
-                48 bytes: encrypted blob ID of more second messages
-            a Noise KK transport message
-                1 byte: 2
-                32 bytes: initiator ephemeral public key
-                encrypted
-                    16 bytes: MAC
-                    40 bytes: random seed for ChaCha random generator
-    blobuploads
-        blobid (blob)
-        uploaded (bool)
+    uploadstatus
+        seed
+        uploaded
+    myephemeralkeys
+        public
+        secret
+    theirfirstshakes
+        theirephemeral
+        theirstatic
+        encrypted
+    theirsecondshakes
+        theirephemeral
+        theirstatic
+        encrypted
 
 memCache
     A binary file containing a dump of the in-memory cache.
@@ -385,25 +294,6 @@ database
         user
         short
         shortenable
-    diffs
-        fromhash (blob)
-        tohash (blob)
-        diff (blob)
-            a Noise KK first handhake message
-                1 byte: 0
-                32 bytes: sender ephemeral public key
-                48 bytes: encrypted blob ID of more first messages
-            a Noise KK second handshake message 
-                1 byte: 1
-                32 bytes: initiator ephemeral public key
-                48 bytes: encrypted responder public key
-                48 bytes: encrypted blob ID of more second messages
-            a Noise KK transport message
-                1 byte: 2
-                32 bytes: initiator ephemeral public key
-                encrypted
-                    16 bytes: MAC
-                    40 bytes: random seed for ChaCha random generator
 
 # Pricing
 
