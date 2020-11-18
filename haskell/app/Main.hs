@@ -46,6 +46,7 @@ import qualified Crypto.Hash as Hash
 import qualified Data.ByteArray as Ba
 import qualified Data.Set as Set
 import qualified Crypto.PubKey.Ed25519 as Ed
+import qualified Hydrogen as H
 
 
 newtype Recipient

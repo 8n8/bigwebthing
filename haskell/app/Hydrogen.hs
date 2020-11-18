@@ -1,13 +1,13 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Hydrogen where
+module Hydrogen (init_) where
 
 import qualified Language.C.Inline as C
 import qualified Foreign.C.Types as Ty
 
 C.include "hydrogen.h"
 
-init :: IO Ty.CInt
-init = do
+init_ :: IO Ty.CInt
+init_ =
     [C.exp| int{ hydro_init() } |]
