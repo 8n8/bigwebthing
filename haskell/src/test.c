@@ -41,6 +41,19 @@ void unlock_function(void *user_data) {
 }
 
 
+signal_context *global_context;
+
+
+int normal_init() {
+    signal_context_create(&global_context, 0);
+    signal_context_set_crypto_provider(global_context, provider);
+    signal_context_set_locking_functions(
+        global_context,
+        lock_function,
+        unlock_function);
+}
+
+
 typedef struct {
     signal_buffer* id_key_public;
     signal_buffer* id_key_private;
