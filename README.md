@@ -144,11 +144,11 @@ There are several layers to the API, as follows.
 
 ## Crypto
 
-The inbox messages are encrypted using Cacophony, a Noise implementation in Haskell. It uses the KK pattern. Each user has a pair of static keys. For each of their contacts they have some handshakes in various stages. Temporary keys deleted after one payload.
+The inbox messages are encrypted using bindings to jedisct1's Hydrogen bindings. It uses the Noise KK pattern for key exchange. Static keys are discarded after 24 hours by the sender. The sender sends a kill message to the receiver before deleting the key.
 
 All client-server traffic is encrypted with TLS.
 
-The Noise messages just contain blob hashes and secret keys, and then the actual content is symmetrically encrypted with ChaChaPoly1305.
+The Noise messages just contain random seeds, and then the actual content is symmetrically encrypted.
 
 # Encodings
 
