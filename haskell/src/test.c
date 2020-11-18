@@ -6,85 +6,8 @@
 #include <sqlite3.h>
 
 
-typedef struct {
-    state_type type;
-    state_value value;
-} program_state;
-
-
-typedef enum {
-    Empty;
-} state_type
-
-
-typedef union {
-    void dont_care;
-} state_value;
-
-
-typedef struct {
-    output_type type;
-    output_value value;
-} io_output;
-
-
-typedef union {
-    void dont_care;
-} output_value;
-
-
-typedef enum {
-    DoNothing;
-} output_type;
-
-
-typedef struct {
-    input_type type;
-    input_value value;
-} io_input;
-
-
-typedef union {
-    void dont_care;
-} input_value;
-
-
-typedef enum {
-    Start;
-} input_type;
-
-
-program_state init_state() {
-    program_state s;
-    return s;
-}
-
-
-io_input init_input() {
-    void dont_care;
-    return {
-        .type = Start;
-        .value = dont_care;
-    };
-}
-
-
-io_output init_output() {
-    return {
-        .type = 
-    };
-}
-
-
 int main() {
-    program_state state = init_state();
-    io_input input = init_input();
-    io_output output = init_output();
-
-    while (!state.fatal) {
-        update(&state, &input, &output);
-        io(&input, &output);
-    }
+    printf("hello world");
 }
 
 
