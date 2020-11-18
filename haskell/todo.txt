@@ -1,7 +1,4 @@
-+ DONE update AuthStatus
-+ DONE rename MyStatic to MyStaticNoise
-+ DONE make a ToServer and an encoder rather than doing it ad hoc
-+ DONE update FromServer and its parser
++ update Header type to match new API
 + make sure that all FromServer branches are used
     + update InboxMessage type for new API
         + DONE change Blob so that it optionally stores a blob ID and symmetric key

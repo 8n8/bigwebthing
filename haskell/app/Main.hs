@@ -467,8 +467,9 @@ data Init
 
 data Header
     = Header
-        { time :: PosixSeconds
-        , shares :: [Sender]
+        { messageId :: MessageId
+        , time :: PosixSeconds
+        , shares :: [PublicNoise]
         , subject :: T.Text
         , mainBox :: T.Text
         , blobs :: [Blob]
