@@ -5,12 +5,12 @@ module Hydrogen
     ( init_
     , hydroKxKeygen
     , hydroKxKk1
-    , HydroHashState(..)
+    , HydroHashState
     , hydroKxKk2
+    , hydroKxKk3
     ) where
 
 import qualified Language.C.Inline as C
-import qualified Foreign.C.Types as Ft
 import qualified Foreign.Marshal.Array as Fa
 import qualified Foreign.Marshal.Alloc as Alloc
 import qualified Data.ByteString as B
@@ -18,12 +18,15 @@ import qualified System.IO.Unsafe as Unsafe
 import qualified GHC.Word as W
 import qualified Foreign.Storable as Storable
 
+
 C.context (C.baseCtx <> C.bsCtx)
 C.include "hydrogen.h"
 
-init_ :: IO Ft.CInt
-init_ =
-    [C.exp| int{ hydro_init() } |]
+
+init_ :: IO Bool
+init_ = do
+    err <- [C.exp| int{ hydro_init() } |]
+    return $ err == 0
 
 
 data StaticKp
@@ -97,15 +100,23 @@ hydroKxKeygen =
 
 
 data HydroKxState
-    = HydroKxState EphemeralKeyPair HydroHashState
+    = HydroKxState_ EphemeralKeyPair HydroHashState
 
 
 data HydroHashState
-    = HydroHashState
-        { state :: B.ByteString
-        , bufOff :: W.Word8
-        , align :: B.ByteString
-        }
+    = HydroHashState HsState HsBufOff HsAlign
+
+
+newtype HsState
+    = HsState B.ByteString
+
+
+newtype HsBufOff
+    = HsBufOff W.Word8
+
+
+newtype HsAlign
+    = HsAlign B.ByteString
 
 
 newtype EphemeralKeyPair
@@ -118,6 +129,73 @@ data HydroKxKeyPair
 
 newtype Packet1
     = Packet1 B.ByteString
+
+
+-- The things that I want back from this function are:
+--
+-- 1. session key pair
+--
+-- and that's it.
+hydroKxKk3
+    :: StaticKp
+    -> HydroKxState
+    -> Packet2
+    -> IO (Maybe SessionKp)
+hydroKxKk3
+    (StaticKp (Pk myPk) (Sk mySk))
+    (HydroKxState_
+        (EphemeralKeyPair (HydroKxKeyPair (Pk ephPk) (Sk ephSk)))
+        (HydroHashState
+            (HsState hsState)
+            (HsBufOff bufOff)
+            (HsAlign align)))
+    (Packet2 packet2) =
+
+    Fa.allocaArray kx_SESSIONKEYBYTES $ \txPtr ->
+    Fa.allocaArray kx_SESSIONKEYBYTES $ \rxPtr -> do
+        err <- [C.block| int{
+                hydro_kx_state kx_state;
+                for (int i = 0; i < $bs-len:ephPk; i++) {
+                    kx_state.eph_kp.pk[i] = $bs-ptr:ephPk[i];
+                }
+                for (int i = 0; i < $bs-len:ephSk; i++) {
+                    kx_state.eph_kp.sk[i] = $bs-ptr:ephSk[i];
+                }
+                for (int i = 0; i < 12; i++) {
+                    kx_state.h_st.state[i] = $bs-ptr:hsState[i];
+                }
+                kx_state.h_st.buf_off = $(uint8_t bufOff);
+                for (int i = 0; i < 3; i++) {
+                    kx_state.h_st.align[i] = $bs-ptr:align[i];
+                }
+                hydro_kx_session_keypair session_kp;
+                hydro_kx_keypair my_static;
+                for (int i = 0; i < hydro_kx_PUBLICKEYBYTES; i++) {
+                    $bs-ptr:myPk[i] = my_static.pk[i];
+                }
+                for (int i = 0; i < hydro_kx_SECRETKEYBYTES; i++) {
+                    $bs-ptr:mySk[i] = my_static.sk[i];
+                }
+                int err = hydro_kx_kk_3(
+                    &kx_state,
+                    &session_kp,
+                    $bs-ptr:packet2,
+                    &my_static);
+                for (int i = 0; i < hydro_kx_SESSIONKEYBYTES; i++) {
+                    $(char* txPtr)[i] = session_kp.tx[i];
+                }
+                for (int i = 0; i < hydro_kx_SESSIONKEYBYTES; i++) {
+                    $(char* rxPtr)[i] = session_kp.rx[i];
+                }
+                return err;
+            }
+        |]
+        if err /= 0 then
+            return Nothing
+        else do
+            tx <- B.packCStringLen (txPtr, kx_SESSIONKEYBYTES)
+            rx <- B.packCStringLen (rxPtr, kx_SESSIONKEYBYTES)
+            return $ Just $ SessionKp (Tx tx) (Rx rx)
 
 
 -- The things that I want back from this function are:
@@ -251,9 +329,12 @@ hydroKxKk1 (Pk theirPk) (StaticKp (Pk myPk) (Sk mySk)) =
             hsBufOff <- Storable.peek hsBufOffPtr
             hsAlign <- B.packCStringLen (hsAlignPtr, 3)
             return $ Just
-                ( HydroKxState
+                ( HydroKxState_
                     (EphemeralKeyPair $
                      HydroKxKeyPair (Pk ephPk) (Sk ephSk))
-                    (HydroHashState hsState hsBufOff hsAlign)
+                    (HydroHashState
+                        (HsState hsState)
+                        (HsBufOff hsBufOff)
+                        (HsAlign hsAlign))
                 , Packet1 packet1
                 )
