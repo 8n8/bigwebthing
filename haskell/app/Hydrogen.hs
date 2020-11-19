@@ -6,6 +6,7 @@ module Hydrogen
     , hydroKxKeygen
     , hydroKxKk1
     , HydroHashState(..)
+    , hydroKxKk2
     ) where
 
 import qualified Language.C.Inline as C
@@ -52,6 +53,20 @@ kx_SECRETKEYBYTES =
     fromIntegral $
     Unsafe.unsafePerformIO
     [C.exp| int{hydro_kx_SECRETKEYBYTES} |]
+
+
+kx_SESSIONKEYBYTES :: Int
+kx_SESSIONKEYBYTES =
+    fromIntegral $
+    Unsafe.unsafePerformIO
+    [C.exp| int{hydro_kx_SESSIONKEYBYTES} |]
+
+
+kx_KK_PACKET2BYTES :: Int
+kx_KK_PACKET2BYTES =
+    fromIntegral $
+    Unsafe.unsafePerformIO
+    [C.exp| int{hydro_kx_KK_PACKET2BYTES} |]
 
 
 packet1bytes :: Int
@@ -103,6 +118,77 @@ data HydroKxKeyPair
 
 newtype Packet1
     = Packet1 B.ByteString
+
+
+-- The things that I want back from this function are:
+--
+-- 1. the packet to send to the initiator
+-- 2. the session secret sending key
+-- 3. the session secret receiving key
+hydroKxKk2
+    :: Pk
+    -> StaticKp
+    -> Packet1
+    -> IO (Maybe (Packet2, SessionKp))
+hydroKxKk2
+    (Pk theirPk)
+    (StaticKp (Pk myPk) (Sk mySk))
+    (Packet1 packet1) =
+
+    Fa.allocaArray kx_KK_PACKET2BYTES $ \packet2Ptr ->
+    Fa.allocaArray kx_SESSIONKEYBYTES $ \txPtr ->
+    Fa.allocaArray kx_SESSIONKEYBYTES $ \rxPtr -> do
+        err <- [C.block| int{
+                hydro_kx_session_keypair session_kp;
+                uint8_t packet2[hydro_kx_KK_PACKET2BYTES];
+                hydro_kx_keypair my_static;
+                for (int i = 0; i < hydro_kx_PUBLICKEYBYTES; i++) {
+                    $bs-ptr:myPk[i] = my_static.pk[i];
+                }
+                for (int i = 0; i < hydro_kx_SECRETKEYBYTES; i++) {
+                    $bs-ptr:mySk[i] = my_static.sk[i];
+                }
+                int err = hydro_kx_kk_2(
+                    &session_kp,
+                    $(char* packet2Ptr),
+                    $bs-ptr:packet1,
+                    $bs-ptr:theirPk,
+                    &my_static);
+                for (int i = 0; i < hydro_kx_KK_PACKET2BYTES; i++) {
+                    $(char* packet2Ptr)[i] = packet2[i];
+                }
+                for (int i = 0; i < hydro_kx_SESSIONKEYBYTES; i++) {
+                    $(char* txPtr)[i] = session_kp.tx[i];
+                }
+                for (int i = 0; i < hydro_kx_SESSIONKEYBYTES; i++) {
+                    $(char* rxPtr)[i] = session_kp.rx[i];
+                }
+                return err;
+            }
+        |]
+        if err /= 0 then
+            return Nothing
+        else do
+            packet2 <- B.packCStringLen (packet2Ptr, kx_KK_PACKET2BYTES)
+            tx <- B.packCStringLen (txPtr, kx_SESSIONKEYBYTES)
+            rx <- B.packCStringLen (rxPtr, kx_SESSIONKEYBYTES)
+            return $ Just (Packet2 packet2, SessionKp (Tx tx) (Rx rx))
+
+
+data SessionKp
+    = SessionKp Tx Rx
+
+
+newtype Tx
+    = Tx B.ByteString
+
+
+newtype Rx
+    = Rx B.ByteString
+
+
+newtype Packet2
+    = Packet2 B.ByteString
 
 
 -- So the things that I want back from this function are:
