@@ -18,14 +18,17 @@ init_ =
 
 data StaticKp
     = StaticKp Pk Sk
+    deriving (Show)
 
 
 newtype Pk
     = Pk B.ByteString
+    deriving (Show)
 
 
 newtype Sk
     = Sk B.ByteString
+    deriving (Show)
 
 
 publicKeyBytes :: Int
