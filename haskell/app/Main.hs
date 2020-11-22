@@ -4,51 +4,25 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
+import qualified Data.Text.IO as Tio
+import System.Environment (getArgs)
 import qualified Control.Exception as E
 import qualified Control.Concurrent.STM as Stm
-import Network.Wai.Handler.WebSockets (websocketsOr)
-import Network.Wai.Handler.Warp (run)
 import qualified Control.Concurrent.STM.TQueue as Q
-import Crypto.Noise.DH.Curve25519 (Curve25519)
-import Crypto.Noise.Hash.BLAKE2s (BLAKE2s)
-import Crypto.Noise.Cipher.ChaChaPoly1305 (ChaChaPoly1305)
-import Crypto.Noise.HandshakePatterns (noiseKK)
-import qualified Crypto.Noise.DH as Dh
-import qualified Crypto.Noise as Noise
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as Bl
-import qualified System.Directory as Dir
 import qualified Data.Text as T
-import System.FilePath ((</>))
 import qualified Data.Attoparsec.ByteString as P
-import qualified Graphics.UI.Webviewhs as Wv
-import qualified Web.Scotty as Sc
-import qualified Network.Wai as Wai
-import qualified Network.WebSockets as Ws
-import Control.Monad.IO.Class (liftIO)
-import qualified Crypto.Hash.BLAKE2.BLAKE2b as Blake
-import qualified Crypto.Cipher.ChaChaPoly1305 as ChaPoly
-import qualified System.IO as Io
 import qualified Data.ByteString.Base64.URL as B64
-import qualified Data.ByteString.Char8 as Bc
 import Data.Word (Word8)
 import Control.Concurrent (forkIO, threadDelay)
 import qualified Text.Hex
 import qualified Network.Simple.TCP as Tcp
-import qualified Data.Map as Map
-import Control.Exception.Base (SomeException)
-import qualified Data.Time.Clock as Clock
 import Data.Text.Encoding (encodeUtf8, decodeUtf8')
-import qualified Data.Bits as Bits
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
-import qualified Crypto.KDF.Argon2 as Argon2
-import qualified Crypto.Random as CryptoRand
-import qualified Crypto.Hash as Hash
 import qualified Data.ByteArray as Ba
-import qualified Data.Set as Set
 import qualified Crypto.PubKey.Ed25519 as Ed
-import qualified Hydrogen as H
 import qualified Data.IntSet as IntSet
+import System.IO.Error (isDoesNotExistError)
 
 
 main :: IO ()
@@ -87,6 +61,26 @@ secretKeyPath =
 io :: Output -> IO (Maybe Msg)
 io output =
     case output of
+    WriteKeyToFileO key -> do
+        B.writeFile secretKeyPath key
+        return Nothing
+
+    PrintO msg -> do
+        Tio.putStr msg
+        return Nothing
+
+    ReadMessageFromStdInO -> do
+        stdin <- B.getContents
+        return $ Just $ StdInM stdin
+
+    GenerateSecretKeyO -> do
+        key <- Ed.generateSecretKey
+        return $ Just $ NewSecretKeyM key
+
+    GetArgsO -> do
+        args <- getArgs
+        return $ Just $ ArgsM args
+
     ReadSecretKeyO -> do
         raw <- E.try $ B.readFile secretKeyPath
         return $ Just $ SecretKeyFileM raw
@@ -177,26 +171,29 @@ serverUrl =
 serverPort =
     "11453"
 
+
 data Output
     = GetArgsO
     | GenerateSecretKeyO
     | ReadSecretKeyO
     | PrintO T.Text
     | DoNothingO
-    | ReadFileO FilePath
     | BatchO [Output]
     | StartTcpClientO
     | BytesInQO Q B.ByteString
-    | WriteFileO FilePath B.ByteString
-    | ReadFileStrictO FilePath
+    | ReadMessageFromStdInO
+    | WriteKeyToFileO B.ByteString
 
 
 data Msg
     = StartM
+    | StdInM B.ByteString
+    | ArgsM [String]
     | SecretKeyFileM (Either E.IOException B.ByteString)
     | BatchM [Maybe Msg]
     | FromServerM B.ByteString
     | RestartingTcpM
+    | NewSecretKeyM Ed.SecretKey
 
 
 data State
@@ -209,14 +206,25 @@ data Init
     = EmptyI
     | GettingKeysFromFileI
     | GeneratingSecretKeyI
-    | ReadingArgsI Ed.SecretKey
 
 
 data Ready
     = Ready
         { secretKey :: Ed.SecretKey
-        , loggedIn :: Bool
+        , authStatus :: AuthStatus
+        , readingStdIn :: Maybe Ed.PublicKey
         }
+
+
+data AuthStatus
+    = LoggedInA
+    | NotLoggedInA NotLoggedIn
+
+
+data NotLoggedIn
+    = SendWhenLoggedIn Ed.PublicKey T.Text
+    | GetWhenLoggedIn
+    | JustNotLoggedIn
 
 
 type Q
@@ -232,24 +240,165 @@ updateReady model f =
     ReadyS ready ->
         f ready
 
-
-updateInit :: State -> (Init -> (Output, State)) -> (Output, State)
-updateInit model f =
-    case model of
-    InitS init_ ->
-        f init_
-
-    ReadyS _ ->
+    FinishedS ->
         (DoNothingO, model)
+
+
+usage :: T.Text
+usage =
+    "Get usage\n\
+    \\n\
+    \    $ bwt help\n\
+    \\n\
+    \Get my user ID\n\
+    \\n\
+    \    $ bwt myid\n\
+    \\n\
+    \Download a message to STDOUT\n\
+    \\n\
+    \    $ bwt get\n\
+    \\n\
+    \Send a message from STDIN\n\
+    \\n\
+    \    $ bwt send <recipient ID>\n"
 
 
 update :: State -> Msg -> (Output, State)
 update model msg =
+    let
+    pass = (DoNothingO, model)
+    in
     case msg of
     StartM ->
-        ( BatchO [StartTcpClientO, ReadSecretKeyO]
-        , InitS EmptyI
-        )
+        (ReadSecretKeyO, InitS EmptyI)
+
+    StdInM raw -> 
+        case P.eitherResult $ P.parse inboxMessageP raw of
+        Left err ->
+            ( toUser $ BadMessageU err
+            , FinishedS
+            )
+
+        Right newMsg ->
+            updateReady model $ \ready ->
+            case readingStdIn ready of
+            Nothing ->
+                pass
+
+            Just publicKey ->
+                ( sendToServer $ SendMessageT publicKey newMsg
+                , ReadyS ready
+                )
+
+    NewSecretKeyM key ->
+        case model of
+        InitS EmptyI ->
+            pass
+
+        InitS GettingKeysFromFileI ->
+            pass
+
+        InitS GeneratingSecretKeyI ->
+            ( BatchO
+                [ WriteKeyToFileO $ Ba.convert key
+                , StartTcpClientO
+                ]
+            , ReadyS $ Ready
+                { secretKey = key
+                , authStatus = NotLoggedInA JustNotLoggedIn
+                , readingStdIn = Nothing
+                }
+            )
+
+        ReadyS _ ->
+            pass
+
+        FinishedS ->
+            pass
+
+    ArgsM ["help"] ->
+        (PrintO usage, FinishedS)
+
+    ArgsM ["myid"] ->
+        case model of
+        InitS _ ->
+            (DoNothingO, model)
+
+        ReadyS ready ->
+            let
+            public = Ed.toPublic $ secretKey ready
+            idB64 = B64.encodeUnpadded $ Ba.convert public
+            in
+            case decodeUtf8' idB64 of
+            Left err ->
+                ( PrintO $
+                  mconcat
+                  [ "internal error:\n"
+                  , "could not convert public key to Base64:\n"
+                  , T.pack $ show err
+                  ]
+                , FinishedS
+                )
+
+            Right b64 ->
+                (PrintO b64, FinishedS)
+
+        FinishedS ->
+            (DoNothingO, model)
+
+    ArgsM ["get"] ->
+        case model of
+        ReadyS ready ->
+            case authStatus ready of
+            LoggedInA ->
+                ( sendToServer GetMessageT
+                , model
+                )
+
+            NotLoggedInA (SendWhenLoggedIn _ _) ->
+                pass
+
+            NotLoggedInA JustNotLoggedIn ->
+                ( DoNothingO
+                , ReadyS $ ready
+                    { authStatus = NotLoggedInA GetWhenLoggedIn }
+                )
+
+            NotLoggedInA GetWhenLoggedIn ->
+                pass
+
+        InitS EmptyI ->
+            (toUser NotConnectedU, FinishedS)
+
+        InitS GettingKeysFromFileI ->
+            (toUser NotConnectedU, FinishedS)
+
+        InitS GeneratingSecretKeyI ->
+            (toUser NotConnectedU, FinishedS)
+
+        FinishedS ->
+            pass
+
+    ArgsM ["send", rawRecipient] ->
+        case parseRecipient rawRecipient of
+        Left err ->
+            (PrintO $ "invalid recipient: " <> err, model)
+
+        Right recipient ->
+            case model of
+            ReadyS ready ->
+                ( ReadMessageFromStdInO
+                , ReadyS $ ready { readingStdIn = Just recipient }
+                )
+
+            InitS _ ->
+                (DoNothingO, model)
+
+            FinishedS ->
+                (DoNothingO, model)
+
+    ArgsM _ ->
+        (toUser BadArgsU, FinishedS)
 
     BatchM msgs ->
         let
@@ -258,12 +407,29 @@ update model msg =
         (BatchO outputs, newModel)
 
     SecretKeyFileM (Left ioErr) ->
+        if isDoesNotExistError ioErr then
         (GenerateSecretKeyO, InitS GeneratingSecretKeyI)
+        else
+        ( PrintO $
+          mconcat
+          [ "internal error in reading secret key file:\n"
+          , T.pack secretKeyPath
+          , ":\n"
+          , T.pack $ show ioErr
+          ]
+        , FinishedS
+        )
 
     SecretKeyFileM (Right raw) ->
         case model of
+        InitS EmptyI ->
+            pass
+
+        InitS GeneratingSecretKeyI ->
+            pass
+
         InitS GettingKeysFromFileI ->
-            case P.eitherResult $ P.parse parseCrypto raw of
+            case P.eitherResult $ P.parse secretSigningP raw of
             Left err ->
                 ( PrintO $
                   mconcat
@@ -271,12 +437,24 @@ update model msg =
                   , T.pack err
                   , ": \n"
                   , Text.Hex.encodeHex raw
-                  ] 
+                  ]
                 , FinishedS
                 )
 
             Right key ->
-                (GetArgsO, InitS $ ReadingArgsI key)
+                ( BatchO [GetArgsO, StartTcpClientO]
+                , ReadyS $ Ready
+                    { secretKey = key
+                    , authStatus = NotLoggedInA JustNotLoggedIn
+                    , readingStdIn = Nothing
+                    }
+                )
+
+        ReadyS _ ->
+            pass
+
+        FinishedS ->
+            pass
 
     FromServerM raw ->
         updateReady model $ fromServerUpdate raw
@@ -285,25 +463,65 @@ update model msg =
         updateReady model restartingTcpUpdate
 
 
+data ToUser
+    = NotConnectedU
+    | BadArgsU
+    | BadMessageU String
+
+
+toUser :: ToUser -> Output
+toUser =
+    PrintO . prettyMessage
+
+
+prettyMessage :: ToUser -> T.Text
+prettyMessage msg =
+    case msg of
+    BadMessageU err ->
+        "bad message:\n" <> T.pack err
+
+    NotConnectedU ->
+        "could not connect to the internet"
+
+    BadArgsU ->
+        "bad arguments\n\nUsage instructions:\n" <> usage
+
+
+parseRecipient :: String -> Either T.Text Ed.PublicKey
+parseRecipient raw =
+    case B64.decodeUnpadded $ encodeUtf8 $ T.pack raw of
+    Left err ->
+        Left $ "could not decode Base64: " <> T.pack err
+
+    Right bs ->
+        if B.length bs == Ed.publicKeySize then
+        case Ed.publicKey bs of
+        CryptoFailed err ->
+            Left $
+            mconcat
+            [ "could not parse public key:\n"
+            , T.pack $ show err
+            , ":\n"
+            , Text.Hex.encodeHex bs
+            ]
+
+        CryptoPassed key ->
+            Right key
+
+        else
+        Left $
+        mconcat
+        [ "decoded key should be "
+        , T.pack $ show Ed.publicKeySize
+        , " bytes long, but was "
+        , T.pack $ show $ B.length bs
+        ]
+
+
 -- Assocated data
 authCodeA :: B.ByteString
 authCodeA =
     B.pack [197, 154, 22, 2, 21, 159, 38, 105, 240, 15, 236, 142, 31, 124, 100, 71, 22, 117, 69, 163, 39, 221, 135, 100, 193, 244, 134, 63, 28, 226, 89, 31]
-
-
-encodeUint32 :: Int -> B.ByteString
-encodeUint32 i =
-    B.pack $ map (encodeUintHelp i) (take 4 [0..])
-
-
-encodeUintHelp :: Int -> Int -> Word8
-encodeUintHelp int counter =
-    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
-
-
-encodeUint16 :: Int -> B.ByteString
-encodeUint16 i =
-    B.pack $ map (encodeUintHelp i) [0, 1]
 
 
 sendToServer :: ToServer -> Output
@@ -314,26 +532,7 @@ sendToServer msg =
 data ToServer
     = SignedAuthCodeT Ed.PublicKey Ed.Signature
     | SendMessageT Ed.PublicKey T.Text
-    | GetMessage
-
-
-newtype MyId
-    = MyId Ed.PublicKey
-
-
-newtype TheirId
-    = TheirId Ed.PublicKey
-
-
-signPubKeyP :: P.Parser Ed.PublicKey
-signPubKeyP = do
-    raw <- P.take Ed.publicKeySize
-    case Ed.publicKey raw of
-        CryptoFailed err ->
-            fail $ show err
-
-        CryptoPassed key ->
-            return key
+    | GetMessageT
 
 
 encodeToServer :: ToServer -> B.ByteString
@@ -353,20 +552,20 @@ encodeToServer toServer =
         , encodeUtf8 message
         ]
 
-
-encodeSignature :: Ed.Signature -> B.ByteString
-encodeSignature sig =
-    Ba.convert sig
-
-
-newtype InboxMessage
-    = InboxMessage T.Text
+    GetMessageT ->
+        B.singleton 2
 
 
 restartingTcpUpdate :: Ready -> (Output, State)
 restartingTcpUpdate ready =
     ( DoNothingO
-    , ReadyS $ ready { loggedIn = False }
+    , ReadyS $
+      case authStatus ready of
+        LoggedInA ->
+            ready { authStatus = NotLoggedInA JustNotLoggedIn }
+
+        NotLoggedInA _ ->
+            ready
     )
 
 
@@ -408,32 +607,6 @@ fromServerUpdate raw ready =
             ( sendToServer $ SignedAuthCodeT publicKey signature
             , ReadyS ready
             )
-        
-
-encodeSizedString :: T.Text -> B.ByteString
-encodeSizedString string =
-    let
-    encoded = encodeUtf8 string
-    in
-    encodeUint32 (B.length encoded) <> encoded
-
-
-allRight :: [Either a b] -> Either a [b]
-allRight eithers =
-    allRightHelp eithers []
-
-
-allRightHelp :: [Either a b] -> [b] -> Either a [b]
-allRightHelp eithers accum =
-    case eithers of
-    [] ->
-        Right $ reverse accum
-
-    Left l : _ ->
-        Left l
-
-    Right r : remains ->
-        allRightHelp remains (r : accum)
 
 
 toServerQ :: Q
@@ -456,16 +629,6 @@ fromServerP = do
         ]
     P.endOfInput
     return msg
-
-
-newtype Sender
-    = Sender Ed.PublicKey
-
-
-senderP :: P.Parser Sender
-senderP = do
-    raw <- publicKeyP
-    return $ Sender raw
 
 
 authCodeLength :: Int
@@ -628,42 +791,6 @@ newtype AuthCode
     = AuthCode B.ByteString
 
 
-allJusts :: [Maybe a] -> Maybe [a]
-allJusts maybes =
-    allJustsHelp maybes []
-
-
-allJustsHelp :: [Maybe a ] -> [a] -> Maybe [a]
-allJustsHelp maybes justs =
-    case maybes of
-    [] ->
-        Just justs
-
-    Nothing:_ ->
-        Nothing
-
-    Just m:aybes ->
-        allJustsHelp aybes (m:justs)
-
-
-allOk :: [Either a b] -> Either a [b]
-allOk eithers =
-    allOkHelp eithers []
-
-
-allOkHelp :: [Either a b] -> [b] -> Either a [b]
-allOkHelp eithers accum =
-    case eithers of
-    [] ->
-        Right accum
-
-    Left a : _ ->
-        Left a
-
-    Right b : ithers ->
-        allOkHelp ithers (b:accum)
-
-
 batchUpdate :: State -> [Maybe Msg] -> [Output] -> ([Output], State)
 batchUpdate model msgs outputs =
     case msgs of
@@ -680,43 +807,6 @@ batchUpdate model msgs outputs =
         batchUpdate newModel sgs (output : outputs)
 
 
-encodeVarInt :: Integer -> B.ByteString
-encodeVarInt i =
-    let
-    wds = encodeVarIntHelp i []
-    len = fromIntegral $ length wds
-    in
-    B.singleton len <> B.pack wds
-
-
-encodeVarIntHelp :: Integer -> [Word8] -> [Word8]
-encodeVarIntHelp remaining accum =
-    if remaining == 0 then
-    accum
-    else 
-    encodeVarIntHelp
-        (remaining `Bits.shiftR` 8)
-        (fromIntegral (remaining Bits..&. 0xFF) : accum)
-
-
-varIntP :: P.Parser Integer
-varIntP = do
-    len <- P.anyWord8
-    varIntHelpP len 0 0
-
-varIntHelpP :: Word8 -> Integer -> Integer -> P.Parser Integer
-varIntHelpP len sofar counter =
-    if fromIntegral counter == len then
-    return sofar
-
-    else do
-        word <- P.anyWord8
-        varIntHelpP
-            len
-            (sofar + (fromIntegral word) * (256 ^ counter))
-            (counter + 1)
-
-
 secretSigningP :: P.Parser Ed.SecretKey
 secretSigningP = do
     raw <- P.take Ed.secretKeySize
@@ -726,15 +816,6 @@ secretSigningP = do
 
         CryptoPassed key ->
             return key
-
-
-uint32P :: P.Parser Int
-uint32P = do
-    b0 <- uint8P
-    b1 <- uint8P
-    b2 <- uint8P
-    b3 <- uint8P
-    return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
 
 
 uint16P :: P.Parser Int
@@ -752,14 +833,3 @@ parseLength bytes2 =
 uint8P :: P.Parser Int
 uint8P =
     fromIntegral <$> P.anyWord8
-
-
-parseCrypto :: P.Parser Ed.SecretKey
-parseCrypto = do
-    raw <- P.take Ed.secretKeySize
-    case Ed.secretKey raw of
-        CryptoFailed err ->
-            fail $ show err
-
-        CryptoPassed key ->
-            return key
