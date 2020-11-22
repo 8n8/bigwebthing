@@ -46,29 +46,27 @@ All messages should be prefixed by a 1-byte length.
 
 Client to server
     97 bytes: Signed auth code:
-        1 byte:
+        1 byte: 0
         32 bytes: public signing key
         64 bytes: signed auth code
     Send message
-        1 byte:
-        payment details
+        1 byte: 1
         32 bytes: recipient public static signing key
         <= 100 bytes: the message
             a sequence of these UTF-8 characters:
             1!2"3£4$5%6^7&8*9(0)-_+=abcdefghijklmnopqrstuvwxyz
             ABCDEFGHIJKLMNOPQRSTUVWXYZ|\<,>.?/ :;@'#~
     Get message
-        1 byte:
+        1 byte: 2
 Server to client
     Auth code to sign
-        1 byte:
+        1 byte: 0
         32 bytes: random
     Inbox message
-        1 byte:
-        8 bytes: POSIX timestamp of upload
+        1 byte: 1
         <= 100 bytes: inbox message
     No messages
-        1 byte:
+        1 byte: 2
 
 # Client to client
 
