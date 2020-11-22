@@ -23,10 +23,9 @@ purescript/output/
 purescript/.purs-repl
 purescript/.spago/
 static/main.js
-haskell/haskell.cabal
+client/client.cabal
 main.pdf
 *.hie
-haskell/haskell.cabal
 c/a.out
 elm/main.js
 server/server.cabal

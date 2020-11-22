@@ -1,5 +1,5 @@
-name:                haskell
-github:              "githubuser/haskell"
+name:                client
+github:              "githubuser/client"
 license:             BSD3
 author:              "Author name here"
 maintainer:          "example@example.com"
@@ -36,7 +36,7 @@ library:
   source-dirs: src
 
 executables:
-  haskell-exe:
+  bwtclient:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
@@ -52,14 +52,3 @@ executables:
     - -Wno-missing-deriving-strategies
     - -with-rtsopts=-N
     - -Werror
-
-tests:
-  haskell-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - haskell
