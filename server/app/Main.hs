@@ -4,9 +4,10 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
+import qualified Data.Set as Set
 import qualified System.Directory as Dir
-import System.IO.Error (isDoesNotExistError)
 import qualified Data.ByteArray as ByteArray
+import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.Attoparsec.ByteString as P
 import qualified Control.Concurrent.STM.TQueue as Q
 import qualified Control.Concurrent.STM as Stm
@@ -20,14 +21,11 @@ import qualified Control.Concurrent as CC
 import qualified Control.Exception as E
 import qualified Crypto.Random as CryptoRand
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
-import qualified Data.Time.Clock as Clock
-import qualified Data.Bits as Bits
 import Data.Word (Word8)
-import qualified Text.Hex as Hex
-import qualified Crypto.Hash as Hash
 import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Database.SQLite.Simple as Db
 import qualified Database.SQLite.Simple.ToField as DbTf
+import qualified Text.Hex
 
 
 main :: IO ()
@@ -41,30 +39,15 @@ authCodeA =
     B.pack [197, 154, 22, 2, 21, 159, 38, 105, 240, 15, 236, 142, 31, 124, 100, 71, 22, 117, 69, 163, 39, 221, 135, 100, 193, 244, 134, 63, 28, 226, 89, 31]
 
 
-accountsAd :: B.ByteString
-accountsAd =
-    B.pack [25, 167, 137, 174, 59, 72, 173, 96, 92, 204, 174, 149, 236, 102, 197, 62, 241, 201, 146, 98, 35, 128, 92, 11, 120, 177, 109, 10, 209, 58, 90, 162]
-
-
 data Msg
     = StartM
-    | FileContentsM FilePath (Either E.IOException B.ByteString)
     | TcpMsgInM Tcp.SockAddr B.ByteString
     | NewTcpConnM (Queue TcpInstruction) Tcp.SockAddr
     | DeadTcpM Tcp.SockAddr
-    | TheTimeM [Clock.UTCTime]
     | BatchM [Maybe Msg]
-    | UserAccountHashFromDbM B.ByteString [AccountsSigFromDb]
     | RandomGenM CryptoRand.ChaChaDRG
-    | ShortenFromDbM Sender [Shortenable]
-
-
-newtype AccountsSigFromDb
-    = AccountsSigFromDb B.ByteString
-
-
-instance Db.FromRow AccountsSigFromDb where
-    fromRow = AccountsSigFromDb <$> Db.field
+    | AccessListM (Either E.IOException B.ByteString)
+    | MessagesFromDbM Recipient [(B.ByteString, B.ByteString)]
 
 
 data State
@@ -75,43 +58,33 @@ data State
 
 data Init
     = EmptyI
-    | ReadingMemCacheI
-    | GettingTimeI MemCache
-    | GettingRandomI MemCache [Clock.UTCTime]
+    | ReadingAccessListI
+    | GettingRandomI (Set.Set PublicKey)
 
 
-makeUsername :: Counter -> Username
-makeUsername (Counter c) =
-    Username $ encodeUint64 c
+
+sendToClient :: Queue TcpInstruction -> ToClient -> Output
+sendToClient q msg =
+    (\bs -> (MsgInQO q) (Send bs)) $
+    case msg of
+    AuthCodeToSign code ->
+        B.singleton 0 <> code
+
+    NewMessage (Sender sender) (InboxMessage message) ->
+        mconcat
+        [ B.singleton 1
+        , ByteArray.convert sender
+        , message
+        ]
+
+    NoMessages ->
+        B.singleton 2
 
 
 data ToClient
-    = NewMessage Sender InboxMessage
-    | NewUsername Username
-    | Prices ShorteningPrice BlobPrice MessageUploadPrice
-    | Acknowledgement Hash32
-
-
-newtype ShorteningPrice
-    = ShorteningPrice Money
-
-
-newtype BlobPrice
-    = BlobPrice Money
-
-
-newtype MessageUploadPrice
-    = MessageUploadPrice Money
-
-
-newtype Sender
-    = Sender Ed.PublicKey
-    deriving Eq
-
-
-instance Ord Sender where
-    compare (Sender a) (Sender b) =
-        compare (pubToBytes a) (pubToBytes b)
+    = AuthCodeToSign B.ByteString
+    | NewMessage Sender InboxMessage
+    | NoMessages
 
 
 pubToBytes :: Ed.PublicKey -> B.ByteString
@@ -123,78 +96,21 @@ data Ready
     = Ready
         { tcpConns :: Map.Map Tcp.SockAddr TcpConn
         , randomGen :: CryptoRand.ChaChaDRG
-        , counter :: Counter
-        , time :: [Clock.UTCTime]
-        , shortening :: Jobs ShorteningStatus ShortenWaiting
-        , uploadingBlob :: Jobs UploadingBlob UploadingBlob
-        , downloadingBlob :: Jobs (Sender, BlobId) (Sender, BlobId)
-        , sending :: Jobs Sending Sending
+        , accessList :: Set.Set PublicKey
         }
-
-
-type ShortenWaiting
-    = (Sender, PaymentDetails, Shortenable)
-
-
-type Sending
-    = (Sender, PaymentDetails, Recipient, InboxMessage)
-
-
-type UploadingBlob
-    = (Sender, PaymentDetails, UploadedBlob, BlobId)
-
-data ShorteningStatus
-    = GettingAccountsHashFromDbH Sender PaymentDetails Shortenable
-    | CheckingForExisting Sender Shortenable
-
-
-data MemCache
-    = MemCache
-        { counterM :: Counter
-        }
-
-
-newtype Counter
-    = Counter Integer
-
-
-newtype Username
-    = Username B.ByteString
-    deriving (Ord, Eq)
-
-
-instance DbTf.ToField Username where
-    toField (Username u) =
-        DbTf.toField u
-
-
-sendNewUsername :: Ready -> Sender -> Username -> Output
-sendNewUsername ready sender username =
-    case getUserQ (tcpConns ready) sender of
-    Nothing ->
-        DoNothingO
-
-    Just q ->
-        MsgInQO q $ Send $ encodeToClient $ NewUsername username
 
 
 data Output
     = DoNothingO
-    | ReadFileO FilePath
+    | ReadAccessListO
     | StartTcpServerO
-    | WriteFileO FilePath B.ByteString
     | BatchO [Output]
     | MakeDirIfNotThereO FilePath
     | MsgInQO (Queue TcpInstruction) TcpInstruction
-    | GetTheTimeO
-    | GetUserAccountsHashDbO B.ByteString
     | DeleteInboxMessageDbO Sender Recipient InboxMessage
     | GetRandomGenO
-    | LookupShortenInDbO Sender
-    | SaveUserAccountsSigDbO Sender B.ByteString
     | SaveMessageToDbO Sender Recipient InboxMessage
-    | ShortenableInDbO Sender Username Shortenable
-    | UpdateShortenableInDbO Sender Shortenable
+    | GetMessageFromDbO Recipient
 
 
 rootPath :: FilePath
@@ -202,64 +118,48 @@ rootPath =
     "bwtdata"
 
 
-memCachePath :: FilePath
-memCachePath =
-    rootPath </> "memcache"
-
-
 dbPath :: FilePath
 dbPath =
     rootPath </> "database.sqlite"
 
 
-deleteMessage :: Sender -> Sender -> InboxMessage -> Output
-deleteMessage (Sender messageSender) (Sender sender) msg =
-    DeleteInboxMessageDbO
-        (Sender messageSender)
-        (Recipient sender)
-        msg
-
-
-uploadBlob
-    :: Ready
-    -> Ed.PublicKey
-    -> Ed.Signature
-    -> Maybe (Output, State)
-uploadBlob ready senderKeyFromDb accountsSignature =
-    case uploadingBlob ready of
-    NoJobs ->
+findConn
+    :: Recipient
+    -> Map.Map Tcp.SockAddr TcpConn
+    -> Maybe (Tcp.SockAddr, TcpConn)
+findConn recipient conns =
+    let
+    filtered = Map.filter (findConnHelp recipient) conns
+    in
+    case Map.toList filtered of
+    [] ->
         Nothing
 
-    Jobs (sender, paymentDetails, uploadedBlob, blobId) waiting ->
-        let
-        relevant = Sender senderKeyFromDb == sender
-        validSig = isValidSig sender paymentDetails accountsSignature
-        validPay = isUploadBlobPayment paymentDetails
-        in
-        if relevant && validSig && validPay then
-        Just
-            ( BatchO
-                [ saveNewAccountsSig sender paymentDetails
-                , saveBlob uploadedBlob blobId
-                ]
-            , ReadyS $
-                ready
-                    { uploadingBlob =
-                        case waiting of
-                        [] ->
-                            NoJobs
-
-                        w:aiting ->
-                            Jobs w aiting
-                    }
-            )
-        else
-        Nothing
+    found:_ ->
+        Just found
 
 
-saveBlob :: UploadedBlob -> BlobId -> Output
-saveBlob (UploadedBlob blob) blobId =
-    WriteFileO (makeBlobPath blobId) blob
+findConnHelp :: Recipient -> TcpConn -> Bool
+findConnHelp (Recipient r) (TcpConn _ auth) =
+    case auth of
+    Authenticated (Sender s) ->
+        s == r
+
+    Untrusted _ ->
+        False
+
+
+updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
+updateReady state f =
+    case state of
+    InitS _ ->
+        (DoNothingO, state)
+
+    ReadyS ready ->
+        f ready
+
+    FailedS _ ->
+        (DoNothingO, state)
 
 
 update :: State -> Msg -> (Output, State)
@@ -268,92 +168,12 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
-    ShortenFromDbM dbSender rows ->
+    AccessListM eitherRaw ->
         case model of
-        InitS _ ->
-            pass
-
-        FailedS _ ->
-            pass
-
-        ReadyS ready ->
-            case shortening ready of
-            NoJobs ->
-                pass
-
-            Jobs (GettingAccountsHashFromDbH _ _ _) _ ->
-                pass
-
-            Jobs (CheckingForExisting sender shortenable) waiting ->
-                if length rows == 1 then
-                if dbSender == sender then
-                if (head rows) == shortenable then
-                pass
-                else
-                ( UpdateShortenableInDbO sender shortenable
-                , ReadyS $
-                    ready
-                        { shortening =
-                            case waiting of
-                            [] ->
-                                NoJobs
-
-                            (newS, newP, newShortenable)  : aiting ->
-                                Jobs
-                                    (GettingAccountsHashFromDbH 
-                                        newS
-                                        newP
-                                        newShortenable)
-                                    aiting
-                        }
-                )
-                else
-                pass
-                else
-                if length rows == 0 then
-                let
-                username = makeUsername $ counter ready
-                newCounter :: Counter
-                newCounter =
-                    case counter ready of
-                    Counter c ->
-                        Counter $ c + 1
-                newReady = ready { counter = newCounter }
-                in
-                ( BatchO
-                    [ dumpCache newReady
-                    , sendNewUsername ready sender username
-                    , ShortenableInDbO sender username shortenable
-                    ]
-                , ReadyS newReady
-                )
-                else
-                pass
-
-    RandomGenM gen ->
-        case model of
-        InitS (GettingRandomI cache times) ->
-            ( DoNothingO
-            , ReadyS $
-                Ready
-                    { tcpConns = Map.empty
-                    , randomGen = gen
-                    , counter = counterM cache
-                    , time = times
-                    , shortening = NoJobs
-                    , uploadingBlob = NoJobs
-                    , downloadingBlob = NoJobs
-                    , sending = NoJobs
-                    }
-            )
-
         InitS EmptyI ->
             pass
 
-        InitS ReadingMemCacheI ->
-            pass
-
-        InitS (GettingTimeI _) ->
+        InitS (GettingRandomI _) ->
             pass
 
         ReadyS _ ->
@@ -362,65 +182,103 @@ update model msg =
         FailedS _ ->
             pass
 
-    UserAccountHashFromDbM _ [] ->
-        pass
+        InitS ReadingAccessListI ->
+            case eitherRaw of
+            Left err ->
+                ( DoNothingO
+                , FailedS $
+                  mconcat
+                  [ "could not read access list file:\n"
+                  , T.pack $ show err
+                  ]
+                )
 
-    UserAccountHashFromDbM rawSender [AccountsSigFromDb rawSig] ->
-        case (model, Ed.publicKey rawSender, Ed.signature rawSig) of
-        (InitS _, _, _) ->
+            Right raw ->
+                case P.eitherResult $ P.parse accessListP raw of
+                Left err ->
+                    ( DoNothingO
+                    , FailedS $
+                      mconcat
+                      [ "could not parse access list file:\n"
+                      , T.pack err
+                      , ":\n"
+                      , Text.Hex.encodeHex raw
+                      ]
+                    )
+
+                Right accessList ->
+                    (GetRandomGenO, InitS $ GettingRandomI accessList)
+
+    MessagesFromDbM recipient raw ->
+        updateReady model $ \ready ->
+        case findConn recipient $ tcpConns ready of
+        Nothing ->
             pass
 
-        (FailedS _, _, _) ->
+        Just (_, TcpConn _ (Untrusted _)) ->
             pass
 
-        (ReadyS ready, CryptoPassed senderKey, CryptoPassed sig) ->
-            case sendMessage ready senderKey sig of
-            Just r ->
-                r
+        Just (address, (TcpConn q (Authenticated _))) ->
+            case raw of
+            [] ->
+                ( BatchO
+                    [ sendToClient q NoMessages
+                    , MsgInQO q Die
+                    ]
+                , ReadyS $
+                  ready
+                    { tcpConns =
+                        Map.delete address $ tcpConns ready
+                    }
+                )
 
-            Nothing ->
-                case uploadBlob ready senderKey sig of
-                Just r ->
-                    r
+            (rawSender, rawMessage):_ ->
+                case Ed.publicKey rawSender of
+                CryptoFailed err ->
+                    ( DoNothingO
+                    , FailedS $
+                      mconcat
+                      [ "could not parse public key from server: "
+                      , Text.Hex.encodeHex rawSender
+                      , ":\n"
+                      , T.pack $ show err
+                      ]
+                    )
+                CryptoPassed sender ->
+                    ( BatchO
+                        [ sendToClient q $
+                          NewMessage
+                          (Sender sender)
+                          (InboxMessage rawMessage)
+                        , MsgInQO q Die
+                        , DeleteInboxMessageDbO
+                            (Sender sender)
+                            recipient
+                            (InboxMessage rawMessage)
+                        ]
+                    , ReadyS $ ready
+                        { tcpConns =
+                            Map.delete address $ tcpConns ready
+                        }
+                    )
 
-                Nothing ->
-                    shortenOnAccounts ready senderKey sig
 
-        (_, CryptoFailed keyErr, _) ->
-            ( DoNothingO
-            , FailedS $
-                mconcat
-                [ "could not parse Ed25519 public key from database: "
-                , T.pack $ show keyErr
-                ]
-            )
-
-        (_, _, CryptoFailed sigErr) ->
-            ( DoNothingO
-            , FailedS $
-                mconcat
-                [ "could not parse Ed25519 signature from database: "
-                , T.pack $ show sigErr
-                ]
-            )
-
-    UserAccountHashFromDbM _ _ ->
-        pass
-
-    TheTimeM times ->
+    RandomGenM randomGen ->
         case model of
-        InitS EmptyI ->
-            pass
-
-        InitS ReadingMemCacheI ->
-            pass
-
-        InitS (GettingTimeI memCache) ->
-            ( GetRandomGenO
-            , InitS $ GettingRandomI memCache times
+        InitS (GettingRandomI accessList) ->
+            ( DoNothingO
+            , ReadyS $
+                Ready
+                    { tcpConns = Map.empty
+                    , randomGen
+                    , accessList
+                    }
             )
 
-        InitS (GettingRandomI _ _) ->
+        InitS ReadingAccessListI ->
+            pass
+
+        InitS EmptyI ->
             pass
 
         ReadyS _ ->
@@ -452,10 +310,7 @@ update model msg =
                 )
 
     StartM ->
-        (ReadFileO memCachePath, InitS ReadingMemCacheI)
-
-    FileContentsM path contents ->
-        updateOnFileContents path contents model
+        (ReadAccessListO, InitS ReadingAccessListI)
 
     TcpMsgInM address rawMessage ->
         updateOnRawTcpMessage address rawMessage model
@@ -491,238 +346,64 @@ update model msg =
             )
 
 
-shortenOnAccounts
-    :: Ready
-    -> Ed.PublicKey
-    -> Ed.Signature
-    -> (Output, State)
-shortenOnAccounts ready senderKeyFromDb accountsSignature =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
-    case shortening ready of
-    Jobs (GettingAccountsHashFromDbH s p shortenable) waiting ->
+accessListP :: P.Parser (Set.Set PublicKey)
+accessListP = do
+    asList <- P.many1 oneAccessKeyP
+    P.endOfInput
+    return $ Set.fromList asList
+
+
+instance Ord PublicKey where
+    compare (PublicKey a) (PublicKey b) =
         let
-        relevant = Sender senderKeyFromDb == s
-        validSig = isValidSig s p accountsSignature
-        validPay = isShortenPayment p
+        a' :: B.ByteString
+        a' = ByteArray.convert a
+        b' :: B.ByteString
+        b' = ByteArray.convert b
         in
-        if relevant && validSig && validPay then
-        ( BatchO [LookupShortenInDbO s, saveNewAccountsSig s p]
-        , ReadyS $
-            ready
-                { shortening =
-                    Jobs (CheckingForExisting s shortenable) waiting
-                }
-        )
-        else
-        pass
-
-    Jobs (CheckingForExisting _ _) _ ->
-        pass
-
-    NoJobs ->
-        pass
+        compare a' b'
 
 
-sendMessage
-    :: Ready
-    -> Ed.PublicKey
-    -> Ed.Signature
-    -> Maybe (Output, State)
-sendMessage ready senderKeyFromDb accountsSignature =
-    case sending ready of
-    NoJobs ->
-        Nothing
+newtype PublicKey
+    = PublicKey Ed.PublicKey
+    deriving (Eq)
 
-    Jobs (sender, paymentDetails, recipient, inboxMessage) waiting ->
-        let
-        relevant = Sender senderKeyFromDb == sender
-        validSig = isValidSig sender paymentDetails accountsSignature
-        validPay = isSendPayment paymentDetails
-        in
-        if relevant && validSig && validPay then
-        Just
-            ( BatchO
-                [ forwardMessageIfPossible
-                    ready
-                    sender
-                    recipient
-                    inboxMessage
-                , SaveMessageToDbO sender recipient inboxMessage
-                , saveNewAccountsSig sender paymentDetails
-                , case waiting of
-                    [] ->
-                        DoNothingO
 
-                    (newSender, _, _, _):_ ->
-                        getPaymentHashFromDb newSender
+oneAccessKeyP :: P.Parser PublicKey
+oneAccessKeyP = do
+    b64 <- P.take 43 -- unpadded Base64 32-byte public key
+    _ <- P.word8 10 -- '\n'
+
+    case B64.decodeUnpadded b64 of
+        Left err ->
+            fail $
+                T.unpack $
+                mconcat
+                [ "could not decode Base64 access list item:\n"
+                , T.pack err
+                , Text.Hex.encodeHex b64
                 ]
-            , ReadyS $
-                ready
-                    { sending =
-                        case waiting of
-                        [] ->
-                            NoJobs
 
-                        w:aiting ->
-                            Jobs w aiting
-                    }
-            )
-        else
-        Nothing
+        Right bs ->
+            case Ed.publicKey bs of
+                CryptoFailed err ->
+                    fail $
+                        T.unpack $
+                        mconcat
+                        [ "could not convert bytestring to public "
+                        , "signing key:\n"
+                        , T.pack $ show err
+                        , ":\n"
+                        , Text.Hex.encodeHex bs
+                        ]
 
-
-forwardMessageIfPossible
-    :: Ready
-    -> Sender
-    -> Recipient
-    -> InboxMessage
-    -> Output
-forwardMessageIfPossible
-    ready
-    sender
-    (Recipient recipient)
-    inboxMessage =
-
-    case getUserQ (tcpConns ready) (Sender recipient) of
-    Nothing ->
-        DoNothingO
-
-    Just recipientQ ->
-        MsgInQO recipientQ $
-        Send $
-        encodeToClient $
-        NewMessage sender inboxMessage
-
-
-saveNewAccountsSig :: Sender -> PaymentDetails -> Output
-saveNewAccountsSig
-    sender
-    (PaymentDetails _ _ (AccountsSignature sig)) =
-
-    SaveUserAccountsSigDbO sender (ByteArray.convert sig)
-
-
-isValidSig :: Sender -> PaymentDetails -> Ed.Signature -> Bool
-isValidSig (Sender sender) (PaymentDetails old new newSig) oldSig =
-    let
-    oldHash =
-        case old of
-        OldTransaction (Transaction _ _ _ _ (Hash32 h)) ->
-            h
-    oldWithAd = accountsAd <> oldHash
-    newHash =
-        case new of
-        NewTransaction (Transaction _ _ _ _ h) ->
-            h
-    newWithAd = accountsAd <> (case newHash of
-        Hash32 h ->
-            h)
-    maybeExpecteNewHash =
-        hash32 $ oldHash <> (encodeTransactionToHash $
-        case new of
-        NewTransaction t ->
-            t)
-    in
-    case maybeExpecteNewHash of
-    Nothing ->
-        False
-
-    Just expectedNewHash ->
-        let
-        validOldSig = Ed.verify sender oldWithAd oldSig
-        validNewHash = newHash == expectedNewHash
-        validNewSig =
-            Ed.verify sender newWithAd $
-            case newSig of
-            AccountsSignature s ->
-                s
-        oldBalance =
-            case old of
-            OldTransaction (Transaction _ _ (Balance (Money balance)) _ _) ->
-                balance
-        newBalance =
-            case new of
-            NewTransaction (Transaction _ _ (Balance (Money balance)) _ _) ->
-                balance
-        newAmount =
-            case new of
-            NewTransaction (Transaction (Amount (Money a)) _ _ _ _) ->
-                a
-        balanceOk = (oldBalance + newAmount) == newBalance
-        in
-        validOldSig &&
-        validNewHash &&
-        validNewSig &&
-        balanceOk &&
-        (newBalance >= 0)
-
-
-encodeTransactionToHash :: Transaction -> B.ByteString
-encodeTransactionToHash (Transaction amount time balance payment _) =
-    mconcat
-    [ encodeAmount amount
-    , encodeTime time
-    , encodeBalance balance
-    , encodePayment payment
-    ]
-
-
-encodeAmount :: Amount -> B.ByteString
-encodeAmount (Amount m) =
-    encodeMoney m
-
-
-encodeTime :: PosixTime -> B.ByteString
-encodeTime (PosixTime t) =
-    encodeUint64 t
-
-
-encodeBalance :: Balance -> B.ByteString
-encodeBalance (Balance money) =
-    encodeMoney money
-
-
-encodeMoney :: Money -> B.ByteString
-encodeMoney (Money m) =
-    encodeUint32 m
-
-
-encodePayment :: Payment -> B.ByteString
-encodePayment payment =
-    case payment of
-    PaymentToServer (Hash32 h) ->
-        B.singleton 0 <> h
-
-    AccountTopUp (TopUpId t) ->
-        B.singleton 1 <> t
+                CryptoPassed key ->
+                    return $ PublicKey key
 
 
 authLength :: Int
 authLength =
     32
-
-
-isUploadBlobPayment :: PaymentDetails -> Bool
-isUploadBlobPayment
-    (PaymentDetails _ (NewTransaction (Transaction a _ _ _ _)) _) =
-
-    a == Amount blobPrice
-
-
-isSendPayment :: PaymentDetails -> Bool
-isSendPayment
-    (PaymentDetails _ (NewTransaction (Transaction a _ _ _ _)) _) =
-
-    a == Amount messageUploadPrice
-
-
-isShortenPayment :: PaymentDetails -> Bool
-isShortenPayment
-    (PaymentDetails _ (NewTransaction (Transaction a _ _ _ _)) _) =
-
-    a == Amount shorteningPrice
 
 
 batchUpdate :: State -> [Maybe Msg] -> [Output] -> ([Output], State)
@@ -773,68 +454,6 @@ updateOnRawTcpMessage address rawMessage model =
                 updateOnTcpMessage address ready untrusted
 
 
-shorteningPrice :: Money
-shorteningPrice =
-    Money 1
-
-
-blobPrice :: Money
-blobPrice =
-    Money 5
-
-
-messageUploadPrice :: Money
-messageUploadPrice =
-    Money 3
-
-
-prices :: ToClient
-prices =
-    Prices
-        (ShorteningPrice shorteningPrice)
-        (BlobPrice blobPrice)
-        (MessageUploadPrice messageUploadPrice)
-
-
-encodeToClient :: ToClient -> B.ByteString
-encodeToClient msg =
-    case msg of
-    NewMessage sender message ->
-        mconcat
-        [ B.singleton 5
-        , encodeSender sender
-        , encodeInboxMessage message
-        ]
-
-    NewUsername (Username u) ->
-        B.singleton 2 <> u
-
-    Prices
-        (ShorteningPrice (Money shortening))
-        (BlobPrice (Money blob))
-        (MessageUploadPrice (Money message)) ->
-
-        mconcat
-        [ B.singleton 1
-        , encodeUint32 shortening
-        , encodeUint32 blob
-        , encodeUint32 message
-        ]
-
-    Acknowledgement (Hash32 hash) ->
-        B.singleton 4 <> hash
-
-
-encodeInboxMessage :: InboxMessage -> B.ByteString
-encodeInboxMessage (InboxMessage m) =
-    m
-
-
-encodeSender :: Sender -> B.ByteString
-encodeSender (Sender s) =
-    pubToBytes s
-
-
 updateOnTcpMessage
     :: Tcp.SockAddr
     -> Ready
@@ -851,125 +470,24 @@ updateOnTcpMessage address ready untrusted =
     Just (TcpConn q (Authenticated sender)) ->
         case untrusted of
         SignedAuthCodeF _ _ ->
-            pass
+            (MsgInQO q Die, ReadyS ready)
 
-        GetPrices ->
-            (MsgInQO q $ Send $ encodeToClient prices, ReadyS ready)
+        SendMessage recipient inboxMessage ->
+            ( BatchO
+                [ SaveMessageToDbO sender recipient inboxMessage
+                , MsgInQO q Die
+                ]
+            , ReadyS ready
+            )
 
-        DeleteMessage messageSender message ->
-            (deleteMessage messageSender sender message, ReadyS ready)
+        GetMessage ->
+            ( BatchO
+                [ DoNothingO
+                , GetMessageFromDbO $ senderToRecipient sender
+                ]
+            , ReadyS ready
+            )
 
-        SendMessage paymentDetails recipient inboxMessage ->
-            case sending ready of
-            NoJobs ->
-                ( getPaymentHashFromDb sender
-                , ReadyS $
-                    ready
-                        { sending =
-                            Jobs
-                                ( sender
-                                , paymentDetails
-                                , recipient
-                                , inboxMessage
-                                )
-                                []
-                        }
-                )
-
-            Jobs current waiting ->
-                let
-                newJob =
-                    (sender, paymentDetails, recipient, inboxMessage)
-                in
-                ( DoNothingO
-                , ReadyS $
-                    ready
-                        { sending =
-                            Jobs
-                                current
-                                (reverse $ newJob : waiting)
-                        }
-                )
-
-        ShortenId paymentDetails shortenable ->
-            case shortening ready of
-            NoJobs ->
-                ( getPaymentHashFromDb sender
-                , ReadyS $
-                    ready
-                        { shortening =
-                            Jobs
-                            (GettingAccountsHashFromDbH
-                                sender
-                                paymentDetails
-                                shortenable)
-                            []
-                        }
-                )
-
-            Jobs current waiting ->
-                let
-                newJob = (sender, paymentDetails, shortenable)
-                in
-                ( DoNothingO
-                , ReadyS $
-                    ready
-                        { shortening
-                            = Jobs
-                                current
-                                (reverse $ newJob : waiting)
-                        }
-                )
-
-        UploadBlob paymentDetails blobId uploadedBlob ->
-            case uploadingBlob ready of
-            NoJobs ->
-                ( getPaymentHashFromDb sender
-                , ReadyS $
-                    ready
-                        { uploadingBlob =
-                            Jobs
-                                ( sender
-                                , paymentDetails
-                                , uploadedBlob
-                                , blobId
-                                )
-                                []
-                        }
-                )
-
-            Jobs current waiting ->
-                let
-                newJob =
-                    (sender, paymentDetails, uploadedBlob, blobId)
-                in
-                ( DoNothingO
-                , ReadyS $
-                    ready
-                        { uploadingBlob =
-                            Jobs current (reverse $ newJob : waiting)
-                        }
-                )
-
-        DownloadBlob blobId ->
-            case downloadingBlob ready of
-            NoJobs ->
-                ( downloadBlob blobId
-                , ReadyS $
-                    ready
-                        { downloadingBlob = Jobs (sender, blobId) [] }
-                )
-
-            Jobs current waiting ->
-                ( DoNothingO
-                , ReadyS $
-                    ready
-                        { downloadingBlob =
-                            Jobs
-                                current
-                                (reverse $ (sender, blobId) : waiting)
-                        }
-                ) 
 
     Just (TcpConn q (Untrusted authCode)) ->
         case untrusted of
@@ -988,102 +506,22 @@ updateOnTcpMessage address ready untrusted =
             else
             pass
 
-        GetPrices ->
+        SendMessage _ _ ->
             pass
 
-        ShortenId _ _ ->
-            pass
-
-        UploadBlob _ _ _ ->
-            pass
-
-        DownloadBlob _ ->
-            pass
-
-        SendMessage _ _ _ ->
-            pass
-
-        DeleteMessage _ _ ->
+        GetMessage ->
             pass
 
 
-downloadBlob :: BlobId -> Output
-downloadBlob blobId =
-    ReadFileO (makeBlobPath blobId)
-
-
-blobsPath :: FilePath
-blobsPath =
-    rootPath </> "blobs"
-
-
-makeBlobPath :: BlobId -> FilePath
-makeBlobPath (BlobId b) =
-    blobsPath </>
-    T.unpack (Hex.encodeHex $ ByteArray.convert b)
-
-
-getPaymentHashFromDb :: Sender -> Output
-getPaymentHashFromDb (Sender sender) =
-    GetUserAccountsHashDbO $ pubToBytes sender 
-
-
-validAuthSig :: AuthCode -> SignedAuthCode -> Sender -> Bool
-validAuthSig
-    (AuthCode authCode)
-    (SignedAuthCode signature)
-    (Sender sender) =
+validAuthSig :: AuthCode -> Ed.Signature -> Sender -> Bool
+validAuthSig (AuthCode authCode) signature (Sender sender) =
 
     Ed.verify sender (authCodeA <> authCode) signature
 
 
-data Jobs a b
-    = Jobs a [b]
-    | NoJobs
-
-
-dumpCache :: Ready -> Output
-dumpCache ready =
-    WriteFileO
-        memCachePath
-        (encodeCache $ readyToMemCache ready)
-
-
-encodeCache :: MemCache -> B.ByteString
-encodeCache cache =
-    encodeCounter $ counterM cache
-
-
-encodeCounter :: Counter -> B.ByteString
-encodeCounter (Counter c) =
-    encodeUint64 c
-
-
-encodeUint32 :: Int -> B.ByteString
-encodeUint32 i =
-    B.pack $ map (encodeUintHelp i) (take 4 [0..])
-
-
-encodeUintHelp :: Int -> Int -> Word8
-encodeUintHelp int counter =
-    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
-
-
-encodeUint64 :: Integer -> B.ByteString
-encodeUint64 i =
-    B.pack $ map (encodeUintegerHelp i) (take 8 [0..])
-
-
-encodeUintegerHelp :: Integer -> Int -> Word8
-encodeUintegerHelp int counter =
-    fromIntegral $ int `Bits.shiftR` (counter * 8) Bits..&. 0xFF
-
-
-readyToMemCache :: Ready -> MemCache
-readyToMemCache ready =
-    MemCache
-        { counterM = counter ready
-        }
+senderToRecipient :: Sender -> Recipient
+senderToRecipient (Sender s) =
+    Recipient s
 
 
 data TcpConn
@@ -1095,129 +533,14 @@ data AuthStatus
     | Untrusted AuthCode
 
 
--- The hash is the hash of the previous transaction hash combined
--- with the encoded transaction:
---
---     previousHash <> amount <> posixTime <> balance <> payment
---
-data Transaction
-    = Transaction Amount PosixTime Balance Payment Hash32
-
-
-data Payment
-    = PaymentToServer Hash32
-    | AccountTopUp TopUpId
-
-
 newtype AuthCode
     = AuthCode B.ByteString
 
 
 data FromClient
-    = SignedAuthCodeF Sender SignedAuthCode
-    | GetPrices
-    | ShortenId PaymentDetails Shortenable
-    | UploadBlob PaymentDetails BlobId UploadedBlob
-    | DownloadBlob BlobId
-    | SendMessage PaymentDetails Recipient InboxMessage
-    | DeleteMessage Sender InboxMessage
-
-
-paymentDetailsP :: P.Parser PaymentDetails
-paymentDetailsP = do
-    oldTransaction <- transactionP
-    newTransaction <- transactionP
-    signature <- signatureP
-    return $
-        PaymentDetails
-            (OldTransaction oldTransaction)
-            (NewTransaction newTransaction)
-            (AccountsSignature signature)
-
-
-transactionP :: P.Parser Transaction
-transactionP = do
-    amount <- moneyP
-    time <- timeP
-    balance <- moneyP
-    payment <- paymentP
-    hash <- hash32P
-    return $
-        Transaction
-            (Amount amount)
-            time
-            (Balance balance)
-            payment
-            hash
-
-
-paymentP :: P.Parser Payment
-paymentP = do
-    P.choice [paymentToServerP, accountTopUpP]
-
-
-accountTopUpP :: P.Parser Payment
-accountTopUpP = do
-    _ <- P.word8 1
-    topUpId <- topUpIdP
-    return $ AccountTopUp topUpId
-
-
-topUpIdP :: P.Parser TopUpId
-topUpIdP = do
-    raw <- P.take 32
-    return $ TopUpId raw
-
-
-moneyP :: P.Parser Money
-moneyP = do
-    raw <- uint32P
-    return $ Money raw
-
-
-paymentToServerP :: P.Parser Payment
-paymentToServerP = do
-    _ <- P.word8 0
-    hash <- hash32P
-    return $ PaymentToServer hash
-
-
-newtype BlobId
-    = BlobId B.ByteString
-
-
-newtype TopUpId
-    = TopUpId B.ByteString
-
-
-newtype Balance
-    = Balance Money
-
-
-newtype Money
-    = Money Int
-    deriving Eq
-
-
-newtype Amount
-    = Amount Money
-    deriving Eq
-
-
-data PaymentDetails
-    = PaymentDetails OldTransaction NewTransaction AccountsSignature
-
-
-newtype OldTransaction
-    = OldTransaction Transaction
-
-
-newtype NewTransaction
-    = NewTransaction Transaction
-
-
-newtype AccountsSignature
-    = AccountsSignature Ed.Signature
+    = SignedAuthCodeF Sender Ed.Signature
+    | SendMessage Recipient InboxMessage
+    | GetMessage
 
 
 fromClientP :: P.Parser FromClient
@@ -1226,51 +549,31 @@ fromClientP = do
         [ do
             _ <- P.word8 0
             sender <- senderP
-            signedAuth <- signedAuthCodeP
+            signedAuth <- signatureP
             return $ SignedAuthCodeF sender signedAuth
         , do
-            _ <- P.word8 4
-            return GetPrices
-        , do
-            _ <- P.word8 6
-            paymentDetails <- paymentDetailsP
-            shortenable <- shortenableP
-            return $ ShortenId paymentDetails shortenable
-        , do
-            _ <- P.word8 7
-            paymentDetails <- paymentDetailsP
-            blobId <- blobIdP
-            blob <- uploadedBlobP
-            return $ UploadBlob paymentDetails blobId blob
-        , do
-            _ <- P.word8 8
-            blobId <- blobIdP
-            return $ DownloadBlob blobId
-        , do
-            _ <- P.word8 9
-            paymentDetails <- paymentDetailsP
+            _ <- P.word8 1
             recipient <- recipientP
             message <- inboxMessageP
-            return $ SendMessage paymentDetails recipient message
+            return $ SendMessage recipient message
         , do
-            _ <- P.word8 10
-            sender <- senderP
-            message <- messageP
-            return $ DeleteMessage sender message
+            _ <- P.word8 2
+            return GetMessage
         ]
     P.endOfInput
     return msg
 
 
-shortenableLength :: Int
-shortenableLength =
-    61
+recipientP :: P.Parser Recipient
+recipientP = do
+    raw <- signingKeyP
+    return $ Recipient raw
 
 
-shortenableP :: P.Parser Shortenable
-shortenableP = do
-    raw <- P.take shortenableLength
-    return $ Shortenable raw
+senderP :: P.Parser Sender
+senderP = do
+    raw <- signingKeyP
+    return $ Sender raw
 
 
 signingKeyP :: P.Parser Ed.PublicKey
@@ -1284,30 +587,6 @@ signingKeyP = do
             fail $ show err
 
 
-hash32P :: P.Parser Hash32
-hash32P = do
-    raw <- P.take 32
-    return $ Hash32 raw
-
-
-blobIdP :: P.Parser BlobId
-blobIdP = do
-    raw <- P.take 32
-    return $ BlobId raw
-
-
-senderP :: P.Parser Sender
-senderP = do
-    key <- signingKeyP
-    return $ Sender key
-
-
-recipientP :: P.Parser Recipient
-recipientP = do
-    key <- signingKeyP
-    return $ Recipient key
-
-
 signatureP :: P.Parser Ed.Signature
 signatureP = do
     raw <- P.take Ed.signatureSize
@@ -1319,72 +598,19 @@ signatureP = do
             fail $ show err
 
 
-signedAuthCodeP :: P.Parser SignedAuthCode
-signedAuthCodeP = do
-    sig <- signatureP
-    return $ SignedAuthCode sig
-
-
-timeP :: P.Parser PosixTime
-timeP = do
-    raw <- uint64P
-    return $ PosixTime raw
-
-
--- Seconds since POSIX epoch.
-newtype PosixTime
-    = PosixTime Integer
-
-
-uint64P :: P.Parser Integer
-uint64P = do
-    raw <- P.take 8
-    let bytes = B.unpack raw
-    let withIndices = zip bytes ([0..] :: [Integer])
-    let powered =
-          map (\(b, i) -> fromIntegral b * 256 ^ i) withIndices
-    return $ sum powered
-
-
 inboxMessageP :: P.Parser InboxMessage
 inboxMessageP = do
-    raw <- P.take 32
+    _ <- P.word8 1
+    raw <- P.scan 0 msgScanner
     return $ InboxMessage raw
 
 
-messageP :: P.Parser InboxMessage
-messageP = do
-    raw <- P.take 32
-    return $ InboxMessage raw
-
-
-newtype SignedAuthCode
-    = SignedAuthCode Ed.Signature
-
-
-uploadedBlobP :: P.Parser UploadedBlob
-uploadedBlobP = do
-    blob <- P.takeByteString
-    return $ UploadedBlob blob
-
-
-newtype UploadedBlob
-    = UploadedBlob B.ByteString
-
-
-newtype Shortenable
-    = Shortenable B.ByteString
-    deriving Eq
-
-
-instance DbTf.ToField Shortenable where
-    toField (Shortenable s) =
-        DbTf.toField s
-
-
-instance Db.FromRow Shortenable where
-    fromRow =
-        fmap Shortenable Db.field
+msgScanner :: Int -> Word8 -> Maybe Int
+msgScanner counter _ =
+    if counter < 100 then
+    Just $ counter + 1
+    else
+    Nothing
 
 
 newtype InboxMessage
@@ -1395,149 +621,8 @@ newtype Recipient
     = Recipient Ed.PublicKey
 
 
-newtype Hash32
-    = Hash32 B.ByteString
-    deriving Eq
-
-
-memCacheP :: P.Parser MemCache
-memCacheP = do
-    counterM <- counterP
-    return $ MemCache { counterM }
-
-
-counterP :: P.Parser Counter
-counterP = do
-    raw <- uint64P
-    return $ Counter raw
-
-
-uint8P :: P.Parser Int
-uint8P =
-    fromIntegral <$> P.anyWord8
-
-
-uint32P :: P.Parser Int
-uint32P = do
-    b0 <- uint8P
-    b1 <- uint8P
-    b2 <- uint8P
-    b3 <- uint8P
-    return $ b0 + b1 * 256 + b2 * 256 * 256 + b3 * 256 * 256 * 256
-
-
-dumpInitCache :: Output
-dumpInitCache =
-    WriteFileO memCachePath $ encodeCache initMemCache
-
-
-initMemCache :: MemCache
-initMemCache =
-    MemCache
-        { counterM = Counter 0
-        }
-
-
-updateOnFileContents
-    :: FilePath
-    -> Either E.IOException B.ByteString
-    -> State
-    -> (Output, State)
-updateOnFileContents path result model =
-    let
-    pass = (DoNothingO, model)
-    in
-    case model of
-    InitS EmptyI ->
-        pass
-
-    InitS (GettingTimeI _) ->
-        pass
-
-    InitS (GettingRandomI _ _) ->
-        pass
-
-    InitS ReadingMemCacheI ->
-        if path == memCachePath then
-        case result of
-        Left exception ->
-            if isDoesNotExistError exception then
-            ( BatchO [dumpInitCache, GetTheTimeO]
-            , InitS $ GettingTimeI initMemCache
-            )
-            else
-            ( DoNothingO
-            , FailedS $
-                "could not read memory cache: " <>
-                T.pack (show exception)
-            )
-
-        Right contents ->
-            case P.eitherResult (P.parse memCacheP contents) of
-            Left err ->
-                ( DoNothingO
-                , FailedS $ "corrupt memory cache: " <> T.pack err
-                )
-
-            Right cache ->
-                (GetTheTimeO, InitS $ GettingTimeI cache)
-
-        else
-        pass
-
-    ReadyS _ ->
-        pass
-
-    FailedS _ ->
-        pass
-
-
-getUserQ
-    :: Map.Map Tcp.SockAddr TcpConn
-    -> Sender
-    -> Maybe (Queue TcpInstruction)
-getUserQ conns sender =
-    Map.lookup sender $ toUserConns conns
-
-
-toUserConns
-    :: Map.Map Tcp.SockAddr TcpConn
-    -> Map.Map Sender (Queue TcpInstruction)
-toUserConns =
-    Map.foldrWithKey toUserConnsHelp Map.empty
-
-
-toUserConnsHelp
-    :: Tcp.SockAddr
-    -> TcpConn
-    -> Map.Map Sender (Queue TcpInstruction)
-    -> Map.Map Sender (Queue TcpInstruction)
-toUserConnsHelp _ (TcpConn q auth) oldUserConns =
-    case auth of
-    Authenticated sender ->
-        Map.insert sender q oldUserConns
-
-    Untrusted _ ->
-        oldUserConns
-
-
-type Digest
-    = Hash.Digest Hash.Blake2b_256
-
-
-hash32 :: B.ByteString -> Maybe Hash32
-hash32 raw =
-    case makeDigest raw of
-    Nothing ->
-        Nothing
-
-    Just digest ->
-        Just $ Hash32 $ ByteArray.convert digest
-
-
-makeDigest :: B.ByteString -> Maybe Digest
-makeDigest =
-    Hash.digestFromByteString
+accessListPath =
+    rootPath </> "accessList.txt"
 
 
 io :: Output -> IO (Maybe Msg)
@@ -1546,20 +631,12 @@ io output =
     DoNothingO ->
         return Nothing
 
-    ReadFileO path -> do
-        result <- E.try $ B.readFile path
-        return $ Just $ FileContentsM path result
+    ReadAccessListO -> do
+        result <- E.try $ B.readFile accessListPath
+        return $ Just $ AccessListM result
 
     StartTcpServerO -> do
         _ <- CC.forkIO tcpServer
-        return Nothing
-
-    GetTheTimeO -> do
-        lazyTime <- mapM (\_ -> Clock.getCurrentTime) lazyInts
-        return $ Just $ TheTimeM lazyTime
-
-    WriteFileO path contents -> do
-        B.writeFile path contents
         return Nothing
 
     BatchO outputs -> do
@@ -1574,11 +651,6 @@ io output =
         Dir.createDirectoryIfMissing True path
         return Nothing
 
-    GetUserAccountsHashDbO sender -> do
-        result <- Db.withConnection dbPath $ \conn ->
-            Db.query conn getUserAccountsHashSql (Db.Only sender)
-        return $ Just $ UserAccountHashFromDbM sender result 
-
     DeleteInboxMessageDbO sender recipient message -> do
         Db.withConnection dbPath $ \conn ->
             Db.execute
@@ -1591,16 +663,6 @@ io output =
         drg <- CryptoRand.drgNew
         return $ Just $ RandomGenM drg
 
-    LookupShortenInDbO sender -> do
-        result <- Db.withConnection dbPath $ \conn ->
-            Db.query conn getShortenSql (Db.Only sender)
-        return $ Just $ ShortenFromDbM sender result
-
-    SaveUserAccountsSigDbO sender sigBytes -> do
-        Db.withConnection dbPath $ \conn ->
-            Db.execute conn insertAccountsSigSql (sender, sigBytes)
-        return Nothing
-
     SaveMessageToDbO sender recipient inboxMessage -> do
         Db.withConnection dbPath $ \conn ->
             Db.execute
@@ -1609,32 +671,13 @@ io output =
                 (sender, recipient, inboxMessage)
         return Nothing
 
-    ShortenableInDbO sender username shortenable -> do
-        Db.withConnection dbPath $ \conn ->
-            Db.execute
+    GetMessageFromDbO recipient -> do
+        result <- Db.withConnection dbPath $ \conn ->
+            Db.query
                 conn
-                shortenableInDbSql
-                (sender, username, shortenable)
-        return Nothing
-
-    UpdateShortenableInDbO sender shortenable -> do
-        Db.withConnection dbPath $ \conn ->
-            Db.execute
-                conn
-                updateShortenableInDbSql
-                (shortenable, sender)
-        return Nothing
-
-
-updateShortenableInDbSql :: Db.Query
-updateShortenableInDbSql =
-    "UPDATE shortenings SET shortenable = ? WHERE user = ?;" 
-
-
-shortenableInDbSql :: Db.Query
-shortenableInDbSql =
-    "INSERT INTO shortenings (user, short, shortenable) \
-    \VALUES (?, ?, ?);"
+                getMessageSql
+                (Db.Only recipient)
+        return $ Just $ MessagesFromDbM recipient result
 
 
 saveMessageSql :: Db.Query
@@ -1643,14 +686,25 @@ saveMessageSql =
     \VALUES (?, ?, ?);"
 
 
-insertAccountsSigSql :: Db.Query
-insertAccountsSigSql =
-    "INSERT INTO accountsignatures (user, signature) VALUES (?, ?);"
+getMessageSql :: Db.Query
+getMessageSql =
+    "SELECT (sender, message) FROM messages WHERE recipient=?;"
 
 
-getShortenSql :: Db.Query
-getShortenSql =
-    "SELECT shortened FROM shortenings WHERE user = ?;"
+newtype Sender
+    = Sender Ed.PublicKey
+    deriving (Eq)
+
+
+instance Ord Sender where
+    compare (Sender a) (Sender b) =
+        let
+        a' :: B.ByteString
+        a' = ByteArray.convert a
+        b' :: B.ByteString
+        b' = ByteArray.convert b
+        in
+        compare a' b'
 
 
 instance DbTf.ToField Sender where
@@ -1672,16 +726,6 @@ deleteMessageSql :: Db.Query
 deleteMessageSql =
     "DELETE FROM messages \
     \WHERE sender = ? AND recipient = ? and message = ?;"
-            
-
-getUserAccountsHashSql :: Db.Query
-getUserAccountsHashSql =
-    "SELECT signature FROM accountsignatures WHERE user = ?;"
-
-
-lazyInts :: [Integer]
-lazyInts =
-    [1..]
 
 
 tcpServer :: IO ()

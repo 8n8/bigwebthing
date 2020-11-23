@@ -64,6 +64,7 @@ Server to client
         32 bytes: random
     Inbox message
         1 byte: 1
+        32 bytes: sender public key
         <= 100 bytes: inbox message
     No messages
         1 byte: 2

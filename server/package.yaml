@@ -10,11 +10,11 @@ dependencies:
 - containers
 - network-simple
 - cryptonite
-- time
 - hex-text
 - memory
 - directory
 - sqlite-simple
+- base64-bytestring
 
 executables:
   server-exe:
