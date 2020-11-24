@@ -1,0 +1,16 @@
+'Done' means that it works, that the code is concise, neat and readable, that it has a complete test suite, and is well documented.
+
++ give it a try and fix problems
++ add TLS
++ give it a try and fix problems
++ remove as many files as possible
++ give it a try and fix problems
++ for each of the client and the server
+    - remove as much code as possible
+    - try to make names better
+    - LiquidHaskell
+    - export everything and try to Quickcheck everything
+    - write unit tests
++ give it a try and fix problems
++ write it up nicely, so everything is in a single Org-mode file
++ give it a try and fix problems
