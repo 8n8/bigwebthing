@@ -4,7 +4,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
-import Debug.Trace (trace)
 import qualified Data.Set as Set
 import qualified System.Directory as Dir
 import qualified Data.ByteArray as ByteArray
@@ -63,80 +62,16 @@ data Msg
     | MessagesFromDbM Recipient [(B.ByteString, B.ByteString)]
 
 
-instance Show Msg where
-    show msg =
-        case msg of
-        StartM ->
-            "StartM"
-
-        TcpMsgInM address bytes ->
-            "TcpMsgInM " <> show address <> show bytes
-
-        NewTcpConnM _ address ->
-            mconcat
-            [ "NewTcpConnM (Queue TcpInstruction) ("
-            , show address
-            , ")"
-            ]
-
-        DeadTcpM address ->
-            "DeadTcpM " <> show address
-
-        BatchM batch ->
-            "BatchM (" <> show batch <> ")"
-
-        RandomGenM _ ->
-            "RandomGenM CryptoRand.ChaChaDRG"
-
-        AccessListM (Left ioerr) ->
-            "AccessListM (Left " <> show ioerr <> ")"
-
-        AccessListM (Right access) ->
-            "AccessListM (Right " <> show access <> ")"
-
-        MessagesFromDbM recipient rows ->
-            mconcat
-            [ "MessagesFromDbM ("
-            , show recipient
-            , ") ("
-            , show rows
-            , ")"
-            ]
-
-
 data State
     = InitS Init
     | ReadyS Ready
     | FailedS
-    deriving Show
 
 
 data Init
     = EmptyI
     | ReadingAccessListI
     | GettingRandomI (Set.Set PublicKey)
-
-
-instance Show Init where
-    show init_ =
-        case init_ of
-        EmptyI ->
-            "EmptyI"
-
-        ReadingAccessListI ->
-            "ReadingAccessListI"
-
-        GettingRandomI keys ->
-            mconcat
-            [ "GettingRandomI {"
-            , mconcat $ map showKey $ Set.toList keys
-            , "}"
-            ]
-
-
-showKey :: PublicKey -> String
-showKey (PublicKey pub) =
-    show (ByteArray.convert pub :: B.ByteString)
 
 
 sendToClient :: Queue TcpInstruction -> ToClient -> Output
@@ -174,34 +109,6 @@ data Ready
         , randomGen :: CryptoRand.ChaChaDRG
         , accessList :: Set.Set PublicKey
         }
-
-
-instance Show Ready where
-    show (Ready conns _ access) =
-        mconcat
-        [ "{ tcpConns = "
-        , mconcat $ map showConn $ Map.toList conns
-        , "\n, randomGen = CryptoRand.ChaChaDRG\n, "
-        , "accessList = "
-        , mconcat $ map showKey $ Set.toList access
-        , "\n}"
-        ]
-
-
-showConn :: (Tcp.SockAddr, TcpConn) -> String
-showConn (address, TcpConn _ auth) =
-    mconcat
-    [ "("
-    , show address
-    , ", "
-    , case auth of
-        Authenticated sender ->
-            "Authenticated " <> show sender
-
-        Untrusted authCode ->
-            "Untrusted " <> show authCode
-    , ")"
-    ]
 
 
 data Output
@@ -270,18 +177,8 @@ updateReady state f =
 update :: State -> Msg -> (Output, State)
 update model msg =
     let
-    dbg =
-        mconcat
-        [ "model:\n"
-        , show model
-        , "\n"
-        , "msg:\n"
-        , show msg
-        , "\n"
-        ]
     pass = (DoNothingO, model)
     in
-    trace dbg $
     case msg of
     AccessListM eitherRaw ->
         case model of
@@ -650,7 +547,6 @@ data AuthStatus
 
 newtype AuthCode
     = AuthCode B.ByteString
-    deriving Show
 
 
 data FromClient
@@ -735,7 +631,6 @@ newtype InboxMessage
 
 newtype Recipient
     = Recipient Ed.PublicKey
-    deriving Show
 
 
 accessListPath =
@@ -807,7 +702,7 @@ getMessageSql =
 
 newtype Sender
     = Sender Ed.PublicKey
-    deriving (Eq, Show)
+    deriving Eq
 
 
 instance Ord Sender where
