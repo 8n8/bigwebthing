@@ -4,7 +4,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
-import Debug.Trace (trace)
+import System.FilePath ((</>))
 import qualified Data.Text.IO as Tio
 import System.Environment (getArgs)
 import qualified Control.Exception as E
@@ -25,6 +25,7 @@ import qualified Data.ByteArray as Ba
 import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Data.IntSet as IntSet
 import System.IO.Error (isDoesNotExistError)
+import qualified System.Directory as Dir
 
 
 main :: IO ()
@@ -48,15 +49,15 @@ msgQ =
     Q.newTQueue
 
 
-secretKeyPath =
-    "/home/t/.bigwebthingSECRET"
-
-
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
-    WriteKeyToFileO key -> do
-        B.writeFile secretKeyPath key
+    GetHomeDirO -> do
+        homeDir <- Dir.getHomeDirectory
+        updateIo mainState $ HomeDirM homeDir
+
+    WriteKeyToFileO path key -> do
+        B.writeFile path key
 
     PrintO msg -> do
         Tio.putStr msg
@@ -73,8 +74,8 @@ io mainState output =
         args <- getArgs
         updateIo mainState $ ArgsM args
 
-    ReadSecretKeyO -> do
-        raw <- E.try $ B.readFile secretKeyPath
+    ReadSecretKeyO path -> do
+        raw <- E.try $ B.readFile path
         updateIo mainState $ SecretKeyFileM raw
 
     DoNothingO ->
@@ -89,17 +90,24 @@ io mainState output =
             Q.writeTQueue q_ bytes
 
     StartTcpClientO ->
-        tcpClient
+        tcpClient mainState
 
 
 maxMessageLength =
     16000
 
 
-tcpClient =
-    Tcp.connect serverUrl serverPort $ \(conn, _) -> do
-        _ <- forkIO $ tcpListen conn
+tcpClient :: TVar.TVar State -> IO ()
+tcpClient model = do
+    res <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) -> do
+        _ <- forkIO $ tcpListen model conn
         tcpSend conn
+    case res of
+        Left err ->
+            updateIo model $ NoInternetM err
+
+        Right () ->
+            return ()
 
 
 tcpSend :: Tcp.Socket -> IO ()
@@ -111,21 +119,21 @@ tcpSend conn = do
     tcpSend conn
 
 
-restartTcp :: IO ()
-restartTcp = do
+restartTcp :: TVar.TVar State -> IO ()
+restartTcp model = do
     Stm.atomically $ do
         q <- msgQ
         Stm.writeTQueue q RestartingTcpM
     threadDelay tcpDelay
-    tcpClient
+    tcpClient model
 
 
-tcpListen :: Tcp.Socket -> IO ()
-tcpListen conn = do
+tcpListen :: TVar.TVar State -> Tcp.Socket -> IO ()
+tcpListen model conn = do
     maybeRawLength <- Tcp.recv conn 2
     case maybeRawLength of
         Nothing ->
-            restartTcp
+            restartTcp model
 
         Just rawLength ->
             case parseLength rawLength of
@@ -140,13 +148,13 @@ tcpListen conn = do
                     maybeMessage <- Tcp.recv conn len
                     case maybeMessage of
                         Nothing ->
-                            restartTcp
+                            restartTcp model
 
                         Just message -> do
                             Stm.atomically $ do
                                 q <- msgQ
                                 Q.writeTQueue q $ FromServerM $ message
-                            tcpListen conn
+                            tcpListen model conn
 
 
 tcpDelay =
@@ -154,7 +162,7 @@ tcpDelay =
 
 
 serverUrl =
-    "http://localhost"
+    "localhost"
 
 
 serverPort =
@@ -164,14 +172,15 @@ serverPort =
 data Output
     = GetArgsO
     | GenerateSecretKeyO
-    | ReadSecretKeyO
+    | ReadSecretKeyO FilePath
     | PrintO T.Text
     | DoNothingO
     | BatchO [Output]
     | StartTcpClientO
     | BytesInQO Q B.ByteString
     | ReadMessageFromStdInO
-    | WriteKeyToFileO B.ByteString
+    | WriteKeyToFileO FilePath B.ByteString
+    | GetHomeDirO
 
 
 data Msg
@@ -183,6 +192,8 @@ data Msg
     | FromServerM B.ByteString
     | RestartingTcpM
     | NewSecretKeyM Ed.SecretKey
+    | HomeDirM FilePath
+    | NoInternetM E.IOException
     deriving (Show)
 
 
@@ -195,8 +206,9 @@ data State
 
 data Init
     = EmptyI
-    | GettingKeysFromFileI
-    | GeneratingSecretKeyI
+    | GettingHomeDirI
+    | GettingKeysFromFileI FilePath
+    | GeneratingSecretKeyI FilePath
     deriving Show
 
 
@@ -258,26 +270,51 @@ usage =
     \    $ bwt send <recipient ID>\n"
 
 
+keysPath :: FilePath -> FilePath
+keysPath homeDir =
+    homeDir </> ".bigwebthingSECRET"
+
+
 update :: State -> Msg -> (Output, State)
 update model msg =
     let
-    dbg =
-        mconcat
-        [ "model:\n"
-        , show model
-        , "\n"
-        , "msg:\n"
-        , show msg
-        , "\n"
-        ]
     pass = (DoNothingO, model)
     in
-    trace dbg $
     case msg of
-    StartM ->
-        (ReadSecretKeyO, InitS GettingKeysFromFileI)
+    NoInternetM ioErr ->
+        ( BatchO
+            [ toUser NotConnectedU
+            , PrintO $ T.pack $ show ioErr
+            ]
+        , FinishedS
+        )
 
-    StdInM raw -> 
+    StartM ->
+        (GetHomeDirO, InitS GettingHomeDirI)
+
+    HomeDirM homeDir ->
+        case model of
+        InitS GettingHomeDirI ->
+            ( ReadSecretKeyO $ keysPath homeDir
+            , InitS $ GettingKeysFromFileI homeDir
+            )
+
+        InitS EmptyI ->
+            pass
+
+        InitS (GettingKeysFromFileI _) ->
+            pass
+
+        InitS (GeneratingSecretKeyI _) ->
+            pass
+
+        ReadyS _ ->
+            pass
+
+        FinishedS ->
+            pass
+
+    StdInM raw ->
         case P.eitherResult $ P.parse inboxMessageP raw of
         Left err ->
             ( toUser $ BadMessageU err
@@ -297,15 +334,18 @@ update model msg =
 
     NewSecretKeyM key ->
         case model of
+        InitS GettingHomeDirI ->
+            pass
+
         InitS EmptyI ->
             pass
 
-        InitS GettingKeysFromFileI ->
+        InitS (GettingKeysFromFileI _) ->
             pass
 
-        InitS GeneratingSecretKeyI ->
+        InitS (GeneratingSecretKeyI homeDir) ->
             ( BatchO
-                [ WriteKeyToFileO $ Ba.convert key
+                [ WriteKeyToFileO (keysPath homeDir) $ Ba.convert key
                 , GetArgsO
                 ]
             , ReadyS $ Ready
@@ -346,7 +386,7 @@ update model msg =
                 )
 
             Right b64 ->
-                (PrintO b64, FinishedS)
+                (PrintO $ b64 <> "\n", FinishedS)
 
         FinishedS ->
             (DoNothingO, model)
@@ -370,14 +410,17 @@ update model msg =
             NotLoggedInA GetWhenLoggedIn ->
                 pass
 
+        InitS GettingHomeDirI ->
+            pass
+
         InitS EmptyI ->
-            (toUser NotConnectedU, FinishedS)
+            pass
 
-        InitS GettingKeysFromFileI ->
-            (toUser NotConnectedU, FinishedS)
+        InitS (GettingKeysFromFileI _) ->
+            pass
 
-        InitS GeneratingSecretKeyI ->
-            (toUser NotConnectedU, FinishedS)
+        InitS (GeneratingSecretKeyI _) ->
+            pass
 
         FinishedS ->
             pass
@@ -411,13 +454,28 @@ update model msg =
 
     SecretKeyFileM (Left ioErr) ->
         if isDoesNotExistError ioErr then
-        (GenerateSecretKeyO, InitS GeneratingSecretKeyI)
+        case model of
+        ReadyS _ ->
+            pass
+
+        InitS (GettingKeysFromFileI homeDir) ->
+            (GenerateSecretKeyO, InitS (GeneratingSecretKeyI homeDir))
+
+        InitS EmptyI ->
+            pass
+
+        InitS GettingHomeDirI ->
+            pass
+
+        InitS (GeneratingSecretKeyI _) ->
+            pass
+
+        FinishedS ->
+            pass
         else
         ( PrintO $
           mconcat
           [ "internal error in reading secret key file:\n"
-          , T.pack secretKeyPath
-          , ":\n"
           , T.pack $ show ioErr
           ]
         , FinishedS
@@ -428,10 +486,13 @@ update model msg =
         InitS EmptyI ->
             pass
 
-        InitS GeneratingSecretKeyI ->
+        InitS (GeneratingSecretKeyI _) ->
             pass
 
-        InitS GettingKeysFromFileI ->
+        InitS GettingHomeDirI ->
+            pass
+
+        InitS (GettingKeysFromFileI _) ->
             case P.eitherResult $ P.parse secretSigningP raw of
             Left err ->
                 ( PrintO $
@@ -481,13 +542,13 @@ prettyMessage :: ToUser -> T.Text
 prettyMessage msg =
     case msg of
     BadMessageU err ->
-        "bad message:\n" <> T.pack err
+        "bad message:\n" <> T.pack err <> "\n"
 
     NotConnectedU ->
-        "could not connect to the internet"
+        "could not connect to the internet\n"
 
     BadArgsU ->
-        "bad arguments\n\nUsage instructions:\n" <> usage
+        "bad arguments\n\nUsage instructions:\n" <> usage <> "\n"
 
 
 parseRecipient :: String -> Either T.Text Ed.PublicKey
