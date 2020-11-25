@@ -52,6 +52,10 @@ msgQ =
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
+    MakeTQueueO -> do
+        q <- Q.newTQueueIO
+        updateIo mainState $ NewTQueueM q
+        
     GetHomeDirO -> do
         homeDir <- Dir.getHomeDirectory
         updateIo mainState $ HomeDirM homeDir
@@ -86,22 +90,21 @@ io mainState output =
 
     BytesInQO q bytes ->
         Stm.atomically $ do
-            q_ <- q
-            Q.writeTQueue q_ bytes
+            Q.writeTQueue q bytes
 
-    StartTcpClientO ->
-        tcpClient mainState
+    StartTcpClientO toServerQ ->
+        tcpClient toServerQ mainState
 
 
 maxMessageLength =
     16000
 
 
-tcpClient :: TVar.TVar State -> IO ()
-tcpClient model = do
+tcpClient :: Q -> TVar.TVar State -> IO ()
+tcpClient toServerQ model = do
     res <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) -> do
-        _ <- forkIO $ tcpListen model conn
-        tcpSend conn
+        _ <- forkIO $ tcpListen toServerQ model conn
+        tcpSend toServerQ conn
     case res of
         Left err ->
             updateIo model $ NoInternetM err
@@ -110,30 +113,29 @@ tcpClient model = do
             return ()
 
 
-tcpSend :: Tcp.Socket -> IO ()
-tcpSend conn = do
+tcpSend :: Q -> Tcp.Socket -> IO ()
+tcpSend toServerQ conn = do
     msg <- Stm.atomically $ do
-       q <- toServerQ
-       Q.readTQueue q
+       Q.readTQueue toServerQ
     Tcp.send conn msg
-    tcpSend conn
+    tcpSend toServerQ conn
 
 
-restartTcp :: TVar.TVar State -> IO ()
-restartTcp model = do
+restartTcp :: Q -> TVar.TVar State -> IO ()
+restartTcp toServerQ model = do
     Stm.atomically $ do
         q <- msgQ
         Stm.writeTQueue q RestartingTcpM
     threadDelay tcpDelay
-    tcpClient model
+    tcpClient toServerQ model
 
 
-tcpListen :: TVar.TVar State -> Tcp.Socket -> IO ()
-tcpListen model conn = do
+tcpListen :: Q -> TVar.TVar State -> Tcp.Socket -> IO ()
+tcpListen toServerQ model conn = do
     maybeRawLength <- Tcp.recv conn 2
     case maybeRawLength of
         Nothing ->
-            restartTcp model
+            restartTcp toServerQ model
 
         Just rawLength ->
             case parseLength rawLength of
@@ -148,13 +150,13 @@ tcpListen model conn = do
                     maybeMessage <- Tcp.recv conn len
                     case maybeMessage of
                         Nothing ->
-                            restartTcp model
+                            restartTcp toServerQ model
 
                         Just message -> do
                             Stm.atomically $ do
                                 q <- msgQ
                                 Q.writeTQueue q $ FromServerM $ message
-                            tcpListen model conn
+                            tcpListen toServerQ model conn
 
 
 tcpDelay =
@@ -176,10 +178,11 @@ data Output
     | PrintO T.Text
     | DoNothingO
     | BatchO [Output]
-    | StartTcpClientO
+    | StartTcpClientO Q
     | BytesInQO Q B.ByteString
     | ReadMessageFromStdInO
     | WriteKeyToFileO FilePath B.ByteString
+    | MakeTQueueO
     | GetHomeDirO
 
 
@@ -194,14 +197,13 @@ data Msg
     | NewSecretKeyM Ed.SecretKey
     | HomeDirM FilePath
     | NoInternetM E.IOException
-    deriving (Show)
+    | NewTQueueM Q
 
 
 data State
     = ReadyS Ready
     | InitS Init
     | FinishedS
-    deriving (Show)
 
 
 data Init
@@ -209,6 +211,7 @@ data Init
     | GettingHomeDirI
     | GettingKeysFromFileI FilePath
     | GeneratingSecretKeyI FilePath
+    | MakingTQueueI Ed.SecretKey
     deriving Show
 
 
@@ -217,8 +220,8 @@ data Ready
         { secretKey :: Ed.SecretKey
         , authStatus :: AuthStatus
         , readingStdIn :: Maybe Ed.PublicKey
+        , toServerQR :: Q
         }
-        deriving Show
 
 
 data AuthStatus
@@ -235,7 +238,7 @@ data NotLoggedIn
 
 
 type Q
-    = Stm.STM (Q.TQueue B.ByteString)
+    = Q.TQueue B.ByteString
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -281,6 +284,36 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
+    NewTQueueM q ->
+        case model of
+        ReadyS _ ->
+            pass
+
+        FinishedS ->
+            pass
+
+        InitS GettingHomeDirI ->
+            pass
+
+        InitS EmptyI ->
+            pass
+
+        InitS (GettingKeysFromFileI _) ->
+            pass
+
+        InitS (GeneratingSecretKeyI _) ->
+            pass
+
+        InitS (MakingTQueueI key) ->
+            ( GetArgsO
+            , ReadyS $ Ready
+                { secretKey = key
+                , authStatus = NotLoggedInA JustNotLoggedIn
+                , readingStdIn = Nothing
+                , toServerQR = q
+                }
+            )
+
     NoInternetM ioErr ->
         ( BatchO
             [ toUser NotConnectedU
@@ -308,6 +341,9 @@ update model msg =
         InitS (GeneratingSecretKeyI _) ->
             pass
 
+        InitS (MakingTQueueI _) ->
+            pass
+
         ReadyS _ ->
             pass
 
@@ -328,13 +364,18 @@ update model msg =
                 pass
 
             Just publicKey ->
-                ( sendToServer $ SendMessageT publicKey newMsg
+                ( sendToServer
+                    (toServerQR ready) $
+                    SendMessageT publicKey newMsg
                 , ReadyS ready
                 )
 
     NewSecretKeyM key ->
         case model of
         InitS GettingHomeDirI ->
+            pass
+
+        InitS (MakingTQueueI _) ->
             pass
 
         InitS EmptyI ->
@@ -346,13 +387,9 @@ update model msg =
         InitS (GeneratingSecretKeyI homeDir) ->
             ( BatchO
                 [ WriteKeyToFileO (keysPath homeDir) $ Ba.convert key
-                , GetArgsO
+                , MakeTQueueO
                 ]
-            , ReadyS $ Ready
-                { secretKey = key
-                , authStatus = NotLoggedInA JustNotLoggedIn
-                , readingStdIn = Nothing
-                }
+            , InitS $ MakingTQueueI key
             )
 
         ReadyS _ ->
@@ -402,13 +439,16 @@ update model msg =
                 pass
 
             NotLoggedInA JustNotLoggedIn ->
-                ( StartTcpClientO
+                ( StartTcpClientO $ toServerQR ready
                 , ReadyS $ ready
                     { authStatus = NotLoggedInA GetWhenLoggedIn }
                 )
 
             NotLoggedInA GetWhenLoggedIn ->
                 pass
+
+        InitS (MakingTQueueI _) ->
+            pass
 
         InitS GettingHomeDirI ->
             pass
@@ -470,6 +510,9 @@ update model msg =
         InitS (GeneratingSecretKeyI _) ->
             pass
 
+        InitS (MakingTQueueI _) ->
+            pass
+
         FinishedS ->
             pass
         else
@@ -492,6 +535,9 @@ update model msg =
         InitS GettingHomeDirI ->
             pass
 
+        InitS (MakingTQueueI _) ->
+            pass
+
         InitS (GettingKeysFromFileI _) ->
             case P.eitherResult $ P.parse secretSigningP raw of
             Left err ->
@@ -506,13 +552,7 @@ update model msg =
                 )
 
             Right key ->
-                ( GetArgsO
-                , ReadyS $ Ready
-                    { secretKey = key
-                    , authStatus = NotLoggedInA JustNotLoggedIn
-                    , readingStdIn = Nothing
-                    }
-                )
+                (MakeTQueueO, InitS $ MakingTQueueI key)
 
         ReadyS _ ->
             pass
@@ -588,8 +628,8 @@ authCodeA =
     B.pack [197, 154, 22, 2, 21, 159, 38, 105, 240, 15, 236, 142, 31, 124, 100, 71, 22, 117, 69, 163, 39, 221, 135, 100, 193, 244, 134, 63, 28, 226, 89, 31]
 
 
-sendToServer :: ToServer -> Output
-sendToServer msg =
+sendToServer :: Q -> ToServer -> Output
+sendToServer toServerQ msg =
     BytesInQO toServerQ $ encodeToServer msg
 
 
@@ -644,7 +684,7 @@ fromServerUpdate raw ready =
           , T.pack err
           ]
         , FinishedS
-        ) 
+        )
 
     Right (InboxMessageF sender message) ->
         case decodeUtf8' $ B64.encodeUnpadded $ Ba.convert sender of
@@ -663,19 +703,16 @@ fromServerUpdate raw ready =
             (PrintO $ b64 <> ": " <> message, FinishedS)
 
     Right (AuthCodeToSignF (AuthCode authCode)) ->
-            let
-            publicKey = Ed.toPublic $ secretKey ready
-            toSign = authCodeA <> authCode
-            signature = Ed.sign (secretKey ready) publicKey toSign
-            in
-            ( sendToServer $ SignedAuthCodeT publicKey signature
-            , ReadyS ready
-            )
-
-
-toServerQ :: Q
-toServerQ =
-    Q.newTQueue
+        let
+        publicKey = Ed.toPublic $ secretKey ready
+        toSign = authCodeA <> authCode
+        signature = Ed.sign (secretKey ready) publicKey toSign
+        in
+        ( sendToServer
+            (toServerQR ready) $
+            SignedAuthCodeT publicKey signature
+        , ReadyS ready
+        )
 
 
 fromServerP :: P.Parser FromServer
