@@ -4,7 +4,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
-import Debug.Trace (trace)
 import qualified Data.Set as Set
 import qualified System.Directory as Dir
 import qualified Data.ByteArray as ByteArray
@@ -182,28 +181,22 @@ update model msg =
     in
     case msg of
     AccessListM eitherRaw ->
-        trace "accessListM in update" $
         case model of
         InitS EmptyI ->
-            trace "update: InitS EmptyI" $
             pass
 
         InitS (GettingRandomI _) ->
-            trace "update: GettingRandomI _" $
             pass
 
         ReadyS _ ->
-            trace "update: ReadyS _" $
             pass
 
         FailedS ->
-            trace "update: FailedS" $
             pass
 
         InitS ReadingAccessListI ->
             case eitherRaw of
             Left err ->
-                trace "bad access list" $
                 ( PrintO $
                   mconcat
                   [ "could not read access list file:\n"
@@ -213,8 +206,7 @@ update model msg =
                 )
 
             Right raw ->
-                trace "got access list" $
-                case P.eitherResult $ P.parse accessListP raw of
+                case P.parseOnly accessListP raw of
                 Left err ->
                     ( PrintO $
                       mconcat
@@ -330,7 +322,6 @@ update model msg =
                 )
 
     StartM ->
-        trace "StartM in update" $
         (ReadAccessListO, InitS ReadingAccessListI)
 
     TcpMsgInM address rawMessage ->
@@ -369,7 +360,7 @@ update model msg =
 
 accessListP :: P.Parser (Set.Set PublicKey)
 accessListP = do
-    asList <- P.many1 oneAccessKeyP
+    asList <- fmap (\i -> [i]) oneAccessKeyP
     P.endOfInput
     return $ Set.fromList asList
 
@@ -462,7 +453,7 @@ updateOnRawTcpMessage address rawMessage model =
             (DoNothingO, model)
 
         Just (TcpConn q _) ->
-            case P.eitherResult (P.parse fromClientP rawMessage) of
+            case P.parseOnly fromClientP rawMessage of
             Left _ ->
                 let
                 newConns = Map.delete address (tcpConns ready)
@@ -653,32 +644,26 @@ io mainState output =
         Tio.putStrLn msg
 
     DoNothingO ->
-        Tio.putStrLn "DoNothingO"
+        return ()
 
     ReadAccessListO -> do
-        Tio.putStrLn "ReadAccessListO"
         result <- E.try $ B.readFile accessListPath
         updateIo mainState $ AccessListM result
 
     StartTcpServerO -> do
-        Tio.putStrLn "StartTcpServerO"
         _ <- CC.forkIO $ tcpServer mainState
         return ()
 
     BatchO outputs -> do
-        Tio.putStrLn "BatchO"
         mapM_ (io mainState) outputs
 
     MsgInQO q msg -> do
-        Tio.putStrLn "MsgInQO"
         writeQ q msg
 
     MakeDirIfNotThereO path -> do
-        Tio.putStrLn "MakeDirIfNotThereO"
         Dir.createDirectoryIfMissing True path
 
     DeleteInboxMessageDbO sender recipient message -> do
-        Tio.putStrLn "DeleteInboxMessageDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
@@ -686,12 +671,10 @@ io mainState output =
                 (sender, recipient, message)
 
     GetRandomGenO -> do
-        Tio.putStrLn "GetRandomGenO"
         drg <- CryptoRand.drgNew
         updateIo mainState $ RandomGenM drg
 
     SaveMessageToDbO sender recipient inboxMessage -> do
-        Tio.putStrLn "SaveMessageToDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
@@ -699,7 +682,6 @@ io mainState output =
                 (sender, recipient, inboxMessage)
 
     GetMessageFromDbO recipient -> do
-        Tio.putStrLn "GetMessageFromDbO"
         result <- Db.withConnection dbPath $ \conn ->
             Db.query
                 conn

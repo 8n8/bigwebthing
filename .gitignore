@@ -30,3 +30,4 @@ c/a.out
 elm/main.js
 server/server.cabal
 server/.stack-work
+server/bwtdata/
