@@ -4,6 +4,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
+import Debug.Trace (trace)
 import qualified Data.Set as Set
 import qualified System.Directory as Dir
 import qualified Data.ByteArray as ByteArray
@@ -11,10 +12,10 @@ import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.Attoparsec.ByteString as P
 import qualified Control.Concurrent.STM.TQueue as Q
 import qualified Control.Concurrent.STM as Stm
+import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Data.ByteString as B
 import System.FilePath ((</>))
 import qualified Data.Text as T
-import qualified Data.Text.IO as Tio
 import qualified Data.Map as Map
 import qualified Network.Simple.TCP as Tcp
 import qualified Control.Concurrent as CC
@@ -26,11 +27,23 @@ import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Database.SQLite.Simple as Db
 import qualified Database.SQLite.Simple.ToField as DbTf
 import qualified Text.Hex
+import qualified Data.Text.IO as Tio
 
 
 main :: IO ()
-main =
-    mainHelp (InitS EmptyI) StartM
+main = do
+    model <- TVar.newTVarIO (InitS EmptyI)
+    updateIo model StartM
+
+
+updateIo :: TVar.TVar State -> Msg -> IO ()
+updateIo mainState msg = do
+    output <- Stm.atomically $ do
+        model <- TVar.readTVar mainState
+        let (output, newModel) = update model msg
+        TVar.writeTVar mainState newModel
+        return output
+    io mainState output
 
 
 -- Assocated data
@@ -53,14 +66,13 @@ data Msg
 data State
     = InitS Init
     | ReadyS Ready
-    | FailedS T.Text
+    | FailedS
 
 
 data Init
     = EmptyI
     | ReadingAccessListI
     | GettingRandomI (Set.Set PublicKey)
-
 
 
 sendToClient :: Queue TcpInstruction -> ToClient -> Output
@@ -102,6 +114,7 @@ data Ready
 
 data Output
     = DoNothingO
+    | PrintO T.Text
     | ReadAccessListO
     | StartTcpServerO
     | BatchO [Output]
@@ -158,7 +171,7 @@ updateReady state f =
     ReadyS ready ->
         f ready
 
-    FailedS _ ->
+    FailedS ->
         (DoNothingO, state)
 
 
@@ -169,41 +182,48 @@ update model msg =
     in
     case msg of
     AccessListM eitherRaw ->
+        trace "accessListM in update" $
         case model of
         InitS EmptyI ->
+            trace "update: InitS EmptyI" $
             pass
 
         InitS (GettingRandomI _) ->
+            trace "update: GettingRandomI _" $
             pass
 
         ReadyS _ ->
+            trace "update: ReadyS _" $
             pass
 
-        FailedS _ ->
+        FailedS ->
+            trace "update: FailedS" $
             pass
 
         InitS ReadingAccessListI ->
             case eitherRaw of
             Left err ->
-                ( DoNothingO
-                , FailedS $
+                trace "bad access list" $
+                ( PrintO $
                   mconcat
                   [ "could not read access list file:\n"
                   , T.pack $ show err
                   ]
+                , FailedS
                 )
 
             Right raw ->
+                trace "got access list" $
                 case P.eitherResult $ P.parse accessListP raw of
                 Left err ->
-                    ( DoNothingO
-                    , FailedS $
+                    ( PrintO $
                       mconcat
                       [ "could not parse access list file:\n"
                       , T.pack err
                       , ":\n"
                       , Text.Hex.encodeHex raw
                       ]
+                    , FailedS
                     )
 
                 Right accessList ->
@@ -235,14 +255,14 @@ update model msg =
             (rawSender, rawMessage):_ ->
                 case Ed.publicKey rawSender of
                 CryptoFailed err ->
-                    ( DoNothingO
-                    , FailedS $
+                    ( PrintO $
                       mconcat
                       [ "could not parse public key from server: "
                       , Text.Hex.encodeHex rawSender
                       , ":\n"
                       , T.pack $ show err
                       ]
+                    , FailedS
                     )
                 CryptoPassed sender ->
                     ( BatchO
@@ -284,7 +304,7 @@ update model msg =
         ReadyS _ ->
             pass
 
-        FailedS _ ->
+        FailedS ->
             pass
 
     DeadTcpM address ->
@@ -292,7 +312,7 @@ update model msg =
         InitS _ ->
             pass
 
-        FailedS _ ->
+        FailedS ->
             pass
 
         ReadyS ready ->
@@ -310,6 +330,7 @@ update model msg =
                 )
 
     StartM ->
+        trace "StartM in update" $
         (ReadAccessListO, InitS ReadingAccessListI)
 
     TcpMsgInM address rawMessage ->
@@ -326,7 +347,7 @@ update model msg =
         InitS _ ->
             pass
 
-        FailedS _ ->
+        FailedS ->
             pass
 
         ReadyS ready ->
@@ -432,7 +453,7 @@ updateOnRawTcpMessage address rawMessage model =
     InitS _ ->
         (DoNothingO, model)
 
-    FailedS _ ->
+    FailedS ->
         (DoNothingO, model)
 
     ReadyS ready ->
@@ -625,59 +646,66 @@ accessListPath =
     rootPath </> "accessList.txt"
 
 
-io :: Output -> IO (Maybe Msg)
-io output =
+io :: TVar.TVar State -> Output -> IO ()
+io mainState output =
     case output of
+    PrintO msg ->
+        Tio.putStrLn msg
+
     DoNothingO ->
-        return Nothing
+        Tio.putStrLn "DoNothingO"
 
     ReadAccessListO -> do
+        Tio.putStrLn "ReadAccessListO"
         result <- E.try $ B.readFile accessListPath
-        return $ Just $ AccessListM result
+        updateIo mainState $ AccessListM result
 
     StartTcpServerO -> do
-        _ <- CC.forkIO tcpServer
-        return Nothing
+        Tio.putStrLn "StartTcpServerO"
+        _ <- CC.forkIO $ tcpServer mainState
+        return ()
 
     BatchO outputs -> do
-        inputs <- mapM io outputs
-        return $ Just $ BatchM inputs
+        Tio.putStrLn "BatchO"
+        mapM_ (io mainState) outputs
 
     MsgInQO q msg -> do
+        Tio.putStrLn "MsgInQO"
         writeQ q msg
-        return Nothing
 
     MakeDirIfNotThereO path -> do
+        Tio.putStrLn "MakeDirIfNotThereO"
         Dir.createDirectoryIfMissing True path
-        return Nothing
 
     DeleteInboxMessageDbO sender recipient message -> do
+        Tio.putStrLn "DeleteInboxMessageDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
                 deleteMessageSql
                 (sender, recipient, message)
-        return Nothing
 
     GetRandomGenO -> do
+        Tio.putStrLn "GetRandomGenO"
         drg <- CryptoRand.drgNew
-        return $ Just $ RandomGenM drg
+        updateIo mainState $ RandomGenM drg
 
     SaveMessageToDbO sender recipient inboxMessage -> do
+        Tio.putStrLn "SaveMessageToDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
                 saveMessageSql
                 (sender, recipient, inboxMessage)
-        return Nothing
 
     GetMessageFromDbO recipient -> do
+        Tio.putStrLn "GetMessageFromDbO"
         result <- Db.withConnection dbPath $ \conn ->
             Db.query
                 conn
                 getMessageSql
                 (Db.Only recipient)
-        return $ Just $ MessagesFromDbM recipient result
+        updateIo mainState $ MessagesFromDbM recipient result
 
 
 saveMessageSql :: Db.Query
@@ -728,9 +756,9 @@ deleteMessageSql =
     \WHERE sender = ? AND recipient = ? and message = ?;"
 
 
-tcpServer :: IO ()
-tcpServer =
-    Tcp.serve (Tcp.Host "127.0.0.1") "11453" tcpServerHelp
+tcpServer :: TVar.TVar State -> IO ()
+tcpServer mainState =
+    Tcp.serve (Tcp.Host "127.0.0.1") "11453" (tcpServerHelp mainState)
 
 
 readQ :: Stm.STM (Q.TQueue a) -> IO a
@@ -750,12 +778,12 @@ writeQ q value =
 type Queue a = Stm.STM (Stm.TQueue a)
 
 
-tcpServerHelp :: (Tcp.Socket, Tcp.SockAddr) -> IO ()
-tcpServerHelp (socket, address) = do
+tcpServerHelp :: TVar.TVar State -> (Tcp.Socket, Tcp.SockAddr) -> IO ()
+tcpServerHelp mainState (socket, address) = do
     let instructionsQ = Q.newTQueue :: Queue TcpInstruction
-    writeQ msgQ $ NewTcpConnM instructionsQ address
-    receiverId <- CC.forkIO $ tcpReceiver socket address
-    tcpSender address receiverId instructionsQ socket
+    updateIo mainState $ NewTcpConnM instructionsQ address
+    receiverId <- CC.forkIO $ tcpReceiver mainState socket address
+    tcpSender mainState address receiverId instructionsQ socket
 
 
 data TcpInstruction
@@ -769,12 +797,13 @@ tcpSend socket msg =
 
 
 tcpSender
-    :: Tcp.SockAddr
+    :: TVar.TVar State
+    -> Tcp.SockAddr
     -> CC.ThreadId
     -> Queue TcpInstruction
     -> Tcp.Socket
     -> IO ()
-tcpSender address receiverId instructionsQ socket = do
+tcpSender mainState address receiverId instructionsQ socket = do
     instruction <- readQ instructionsQ
     case instruction of
         Die ->
@@ -784,11 +813,11 @@ tcpSender address receiverId instructionsQ socket = do
             eitherOk <- tcpSend socket msg
             case eitherOk of
                 Left _ -> do
-                    writeQ msgQ $ DeadTcpM address
+                    updateIo mainState $ DeadTcpM address
                     CC.killThread receiverId
 
                 Right () ->
-                    tcpSender address receiverId instructionsQ socket
+                    tcpSender mainState address receiverId instructionsQ socket
 
 
 tcpRecv
@@ -798,45 +827,21 @@ tcpRecv socket =
     E.try $ Tcp.recv socket maxMessageLength
 
 
-tcpReceiver :: Tcp.Socket -> Tcp.SockAddr -> IO ()
-tcpReceiver socket address = do
+tcpReceiver :: TVar.TVar State -> Tcp.Socket -> Tcp.SockAddr -> IO ()
+tcpReceiver mainState socket address = do
     eitherMsg <- tcpRecv socket
     case eitherMsg of
         Left _ ->
-            writeQ msgQ $ DeadTcpM address
+            updateIo mainState $ DeadTcpM address
 
         Right Nothing ->
-            writeQ msgQ $ DeadTcpM address
+            updateIo mainState $ DeadTcpM address
 
         Right (Just msg) -> do
-            writeQ msgQ $ TcpMsgInM address msg
-            tcpReceiver socket address
+            updateIo mainState $ TcpMsgInM address msg
+            tcpReceiver mainState socket address
 
 
 maxMessageLength :: Int
 maxMessageLength =
     16000
-        
-        
-msgQ :: Stm.STM (Q.TQueue Msg)
-msgQ =
-    Q.newTQueue
-
-
-mainHelp :: State -> Msg -> IO ()
-mainHelp oldState oldMsg =
-    case oldState of
-    FailedS err ->
-        Tio.putStrLn err
-
-    _ -> do
-        let (output, newState) = update oldState oldMsg
-        maybeMsg <- io output
-        newMsg <- case maybeMsg of
-            Nothing ->
-                Stm.atomically $ do
-                    q <- msgQ
-                    Q.readTQueue q
-            Just m ->
-                return m
-        mainHelp newState newMsg
