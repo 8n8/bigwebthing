@@ -9,6 +9,7 @@ import System.Environment (getArgs)
 import qualified Control.Exception as E
 import qualified Control.Concurrent.STM as Stm
 import qualified Control.Concurrent.STM.TQueue as Q
+import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Data.ByteString as B
 import qualified Data.Text as T
 import qualified Data.Attoparsec.ByteString as P
@@ -26,8 +27,19 @@ import System.IO.Error (isDoesNotExistError)
 
 
 main :: IO ()
-main =
-    mainHelp (InitS EmptyI) StartM
+main = do
+    model <- TVar.newTVarIO (InitS EmptyI)
+    updateIo model StartM
+
+
+updateIo :: TVar.TVar State -> Msg -> IO ()
+updateIo mainState msg = do
+    output <- Stm.atomically $ do
+        model <- TVar.readTVar mainState
+        let (output, newModel) = update model msg
+        TVar.writeTVar mainState newModel
+        return output
+    io mainState output
 
 
 msgQ :: Stm.STM (Q.TQueue Msg)
@@ -35,72 +47,48 @@ msgQ =
     Q.newTQueue
 
 
-mainHelp :: State -> Msg -> IO ()
-mainHelp oldState oldMsg = do
-    let (output, newState) = update oldState oldMsg
-    maybeMsg <- io output
-    newMsg <- case maybeMsg of
-        Nothing ->
-            Stm.atomically $ do
-                q <- msgQ
-                Q.readTQueue q
-        Just m ->
-            return m
-    case newState of
-        FinishedS ->
-            return ()
-
-        _ ->
-            mainHelp newState newMsg
-
-
 secretKeyPath =
     "~/.bigwebthingSECRET"
 
 
-io :: Output -> IO (Maybe Msg)
-io output =
+io :: TVar.TVar State -> Output -> IO ()
+io mainState output =
     case output of
     WriteKeyToFileO key -> do
         B.writeFile secretKeyPath key
-        return Nothing
 
     PrintO msg -> do
         Tio.putStr msg
-        return Nothing
 
     ReadMessageFromStdInO -> do
         stdin <- B.getContents
-        return $ Just $ StdInM stdin
+        updateIo mainState $ StdInM stdin
 
     GenerateSecretKeyO -> do
         key <- Ed.generateSecretKey
-        return $ Just $ NewSecretKeyM key
+        updateIo mainState $ NewSecretKeyM key
 
     GetArgsO -> do
         args <- getArgs
-        return $ Just $ ArgsM args
+        updateIo mainState $ ArgsM args
 
     ReadSecretKeyO -> do
         raw <- E.try $ B.readFile secretKeyPath
-        return $ Just $ SecretKeyFileM raw
+        updateIo mainState $ SecretKeyFileM raw
 
     DoNothingO ->
-        return Nothing
+        return ()
 
     BatchO outputs -> do
-        inputs <- mapM io outputs
-        return $ Just $ BatchM inputs
+        mapM_ (io mainState) outputs
 
-    BytesInQO q bytes -> do
+    BytesInQO q bytes ->
         Stm.atomically $ do
             q_ <- q
             Q.writeTQueue q_ bytes
-        return Nothing
 
-    StartTcpClientO -> do
+    StartTcpClientO ->
         tcpClient
-        return Nothing
 
 
 maxMessageLength =

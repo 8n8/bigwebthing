@@ -36,7 +36,7 @@ library:
   source-dirs: src
 
 executables:
-  bwtclient:
+  client-exe:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
