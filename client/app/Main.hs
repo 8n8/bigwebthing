@@ -4,6 +4,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
+import Debug.Trace (trace)
 import qualified Data.Text.IO as Tio
 import System.Environment (getArgs)
 import qualified Control.Exception as E
@@ -48,7 +49,7 @@ msgQ =
 
 
 secretKeyPath =
-    "~/.bigwebthingSECRET"
+    "/home/t/.bigwebthingSECRET"
 
 
 io :: TVar.TVar State -> Output -> IO ()
@@ -182,18 +183,21 @@ data Msg
     | FromServerM B.ByteString
     | RestartingTcpM
     | NewSecretKeyM Ed.SecretKey
+    deriving (Show)
 
 
 data State
     = ReadyS Ready
     | InitS Init
     | FinishedS
+    deriving (Show)
 
 
 data Init
     = EmptyI
     | GettingKeysFromFileI
     | GeneratingSecretKeyI
+    deriving Show
 
 
 data Ready
@@ -202,17 +206,20 @@ data Ready
         , authStatus :: AuthStatus
         , readingStdIn :: Maybe Ed.PublicKey
         }
+        deriving Show
 
 
 data AuthStatus
     = LoggedInA
     | NotLoggedInA NotLoggedIn
+    deriving Show
 
 
 data NotLoggedIn
     = SendWhenLoggedIn Ed.PublicKey T.Text
     | GetWhenLoggedIn
     | JustNotLoggedIn
+    deriving Show
 
 
 type Q
@@ -254,11 +261,21 @@ usage =
 update :: State -> Msg -> (Output, State)
 update model msg =
     let
+    dbg =
+        mconcat
+        [ "model:\n"
+        , show model
+        , "\n"
+        , "msg:\n"
+        , show msg
+        , "\n"
+        ]
     pass = (DoNothingO, model)
     in
+    trace dbg $
     case msg of
     StartM ->
-        (ReadSecretKeyO, InitS EmptyI)
+        (ReadSecretKeyO, InitS GettingKeysFromFileI)
 
     StdInM raw -> 
         case P.eitherResult $ P.parse inboxMessageP raw of
@@ -289,7 +306,7 @@ update model msg =
         InitS GeneratingSecretKeyI ->
             ( BatchO
                 [ WriteKeyToFileO $ Ba.convert key
-                , StartTcpClientO
+                , GetArgsO
                 ]
             , ReadyS $ Ready
                 { secretKey = key
@@ -339,15 +356,13 @@ update model msg =
         ReadyS ready ->
             case authStatus ready of
             LoggedInA ->
-                ( sendToServer GetMessageT
-                , model
-                )
+                pass
 
             NotLoggedInA (SendWhenLoggedIn _ _) ->
                 pass
 
             NotLoggedInA JustNotLoggedIn ->
-                ( DoNothingO
+                ( StartTcpClientO
                 , ReadyS $ ready
                     { authStatus = NotLoggedInA GetWhenLoggedIn }
                 )
@@ -430,7 +445,7 @@ update model msg =
                 )
 
             Right key ->
-                ( BatchO [GetArgsO, StartTcpClientO]
+                ( GetArgsO
                 , ReadyS $ Ready
                     { secretKey = key
                     , authStatus = NotLoggedInA JustNotLoggedIn
