@@ -37,13 +37,11 @@ main = do
 
 updateIo :: TVar.TVar State -> Msg -> IO ()
 updateIo mainState msg = do
-    Tio.putStrLn "top of updateIo"
     output <- Stm.atomically $ do
         model <- TVar.readTVar mainState
         let (output, newModel) = update model msg
         TVar.writeTVar mainState newModel
         return output
-    Tio.putStrLn "finished updateIo STM block"
     io mainState output
 
 
@@ -746,42 +744,30 @@ accessListPath =
 
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output = do
-  Tio.putStrLn "top of IO"
-  putStrLn ">>>>>>>>>>>"
-  print output
-  putStrLn "<<<<<<<<<<<"
   case output of
     PrintO msg ->
         Tio.putStrLn msg
 
     DoNothingO -> do
-        Tio.putStrLn "io DoNothingO"
         return ()
 
     ReadAccessListO -> do
-        Tio.putStrLn "io ReadAccessListO"
         result <- E.try $ B.readFile accessListPath
-        Tio.putStrLn "io finished reading access list"
         updateIo mainState $ AccessListM result
 
     StartTcpServerO -> do
-        Tio.putStrLn "io StartTcpServerO"
         tcpServer mainState
 
     BatchO outputs -> do
-        Tio.putStrLn "io BatchO"
         mapM_ (io mainState) outputs
 
     MsgInQO q msg -> do
-        Tio.putStrLn "io MsgInQO"
         writeQ q msg
 
     MakeDirIfNotThereO path -> do
-        Tio.putStrLn "io MakeDirIfNotThereO"
         Dir.createDirectoryIfMissing True path
 
     DeleteInboxMessageDbO sender recipient message -> do
-        Tio.putStrLn "io DeleteInboxMessageDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
@@ -789,12 +775,10 @@ io mainState output = do
                 (sender, recipient, message)
 
     GetRandomGenO -> do
-        Tio.putStrLn "io GetRandomGenO"
         drg <- CryptoRand.drgNew
         updateIo mainState $ RandomGenM drg
 
     SaveMessageToDbO sender recipient inboxMessage -> do
-        Tio.putStrLn "io SaveMessageToDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
@@ -802,7 +786,6 @@ io mainState output = do
                 (sender, recipient, inboxMessage)
 
     GetMessageFromDbO recipient -> do
-        Tio.putStrLn "io GetMessageFromDbO"
         result <- Db.withConnection dbPath $ \conn ->
             Db.query
                 conn
