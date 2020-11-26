@@ -16,7 +16,7 @@ import qualified Data.Text as T
 import qualified Data.Attoparsec.ByteString as P
 import qualified Data.ByteString.Base64.URL as B64
 import Data.Word (Word8)
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (forkIO)
 import qualified Text.Hex
 import qualified Network.Simple.TCP as Tcp
 import Data.Text.Encoding (encodeUtf8, decodeUtf8')
@@ -44,18 +44,13 @@ updateIo mainState msg = do
     io mainState output
 
 
-msgQ :: Stm.STM (Q.TQueue Msg)
-msgQ =
-    Q.newTQueue
-
-
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
     MakeTQueueO -> do
         q <- Q.newTQueueIO
         updateIo mainState $ NewTQueueM q
-        
+
     GetHomeDirO -> do
         homeDir <- Dir.getHomeDirectory
         updateIo mainState $ HomeDirM homeDir
@@ -121,21 +116,12 @@ tcpSend toServerQ conn = do
     tcpSend toServerQ conn
 
 
-restartTcp :: Q -> TVar.TVar State -> IO ()
-restartTcp toServerQ model = do
-    Stm.atomically $ do
-        q <- msgQ
-        Stm.writeTQueue q RestartingTcpM
-    threadDelay tcpDelay
-    tcpClient toServerQ model
-
-
 tcpListen :: Q -> TVar.TVar State -> Tcp.Socket -> IO ()
 tcpListen toServerQ model conn = do
     maybeRawLength <- Tcp.recv conn 2
     case maybeRawLength of
         Nothing ->
-            restartTcp toServerQ model
+            return ()
 
         Just rawLength ->
             case parseLength rawLength of
@@ -150,17 +136,11 @@ tcpListen toServerQ model conn = do
                     maybeMessage <- Tcp.recv conn len
                     case maybeMessage of
                         Nothing ->
-                            restartTcp toServerQ model
+                            return ()
 
                         Just message -> do
-                            Stm.atomically $ do
-                                q <- msgQ
-                                Q.writeTQueue q $ FromServerM $ message
+                            updateIo model $ FromServerM message
                             tcpListen toServerQ model conn
-
-
-tcpDelay =
-    20 * 1000000
 
 
 serverUrl =
