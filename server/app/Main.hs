@@ -107,8 +107,12 @@ data Init
 
 
 sendToClient :: Queue TcpInstruction -> ToClient -> Output
-sendToClient q msg =
-    (MsgInQO q . Send) $
+sendToClient q =
+    MsgInQO q . Send . encodeToClient
+
+
+encodeToClient :: ToClient -> B.ByteString
+encodeToClient msg =
     case msg of
     AuthCodeToSign code ->
         B.singleton 0 <> code
