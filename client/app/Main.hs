@@ -640,6 +640,8 @@ data ToUser
     = NotConnectedU
     | BadArgsU
     | BadMessageU String
+    | NoMessagesU
+    | NewMessageU Ed.PublicKey T.Text
 
 
 toUser :: ToUser -> Output
@@ -658,6 +660,22 @@ prettyMessage msg =
 
     BadArgsU ->
         "bad arguments\n\nUsage instructions:\n" <> usage <> "\n"
+
+    NoMessagesU ->
+        "no messages"
+
+    NewMessageU sender message ->
+        case decodeUtf8' $ B64.encodeUnpadded $ Ba.convert sender of
+        Left err ->
+            mconcat
+            [ "internal error: could not decode Base64 ByteString:\n"
+            , T.pack $ show err
+            , ":\n"
+            , Text.Hex.encodeHex $ Ba.convert sender
+            ]
+
+        Right b64 ->
+            b64 <> ": " <> message
 
 
 parseRecipient :: String -> Either T.Text Ed.PublicKey
@@ -751,20 +769,9 @@ fromServerUpdate raw ready =
         )
 
     Right (InboxMessageF sender message) ->
-        case decodeUtf8' $ B64.encodeUnpadded $ Ba.convert sender of
-        Left err ->
-            ( PrintO $
-              mconcat
-              [ "internal error: could not decode Base64 ByteString:\n"
-              , T.pack $ show err
-              , ":\n"
-              , Text.Hex.encodeHex $ Ba.convert sender
-              ]
-            , FinishedS
-            )
-
-        Right b64 ->
-            (PrintO $ b64 <> ": " <> message, FinishedS)
+        ( toUser $ NewMessageU sender message
+        , FinishedS
+        )
 
     Right (AuthCodeToSignF (AuthCode authCode)) ->
         let
@@ -777,6 +784,9 @@ fromServerUpdate raw ready =
         , ReadyS ready
         )
 
+    Right NoMessagesF ->
+        (toUser NoMessagesU, FinishedS)
+
 
 fromServerP :: P.Parser FromServer
 fromServerP = do
@@ -785,9 +795,12 @@ fromServerP = do
             _ <- P.word8 0
             AuthCodeToSignF <$> authCodeP
         , do
-            _ <- P.word8 5
+            _ <- P.word8 1
             sender <- publicKeyP
             InboxMessageF sender <$> inboxMessageP
+        , do
+            _ <- P.word8 2
+            return NoMessagesF
         ]
     P.endOfInput
     return msg
@@ -944,6 +957,7 @@ publicKeyP = do
 data FromServer
     = AuthCodeToSignF AuthCode
     | InboxMessageF Ed.PublicKey T.Text
+    | NoMessagesF
 
 
 newtype AuthCode
