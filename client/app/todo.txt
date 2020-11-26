@@ -1,3 +1,0 @@
-+ DONE make a 'normalinit' function to do the stuff in 'Library initialization' in the libsignal README
-
-+ make an 'install_init' function to do the stuff in the 'Client install time' secion in the libsignal README

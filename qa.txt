@@ -2,8 +2,7 @@
 
 + DONE remove as many files as possible
 + for each of the client and the server
-    - remove as much code as possible
-    - try to make names better
+    - fix Hlint warnings
     - LiquidHaskell
     - export everything and try to Quickcheck everything
     - write unit tests
