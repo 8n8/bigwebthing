@@ -37,11 +37,13 @@ main = do
 
 updateIo :: TVar.TVar State -> Msg -> IO ()
 updateIo mainState msg = do
+    Tio.putStrLn "top of updateIo"
     output <- Stm.atomically $ do
         model <- TVar.readTVar mainState
         let (output, newModel) = update model msg
         TVar.writeTVar mainState newModel
         return output
+    Tio.putStrLn "finished updateIo STM block"
     io mainState output
 
 
@@ -62,16 +64,49 @@ data Msg
     | MessagesFromDbM Recipient [(B.ByteString, B.ByteString)]
 
 
+instance Show Msg where
+    show msg =
+        case msg of
+        StartM ->
+            "StartM"
+
+        TcpMsgInM address raw ->
+            "TcpMsgIn (" <> show address <> ") (" <> show raw <> ")"
+
+        NewTcpConnM _ address ->
+            mconcat
+            [ "NewTcpConnM (Queue TcpInstruction) ("
+            , show address
+            , ")"
+            ]
+
+        DeadTcpM address ->
+            "DeadTcpM " <> show address
+
+        BatchM msgs ->
+            "BatchM " <> show msgs
+
+        RandomGenM _ ->
+            "RandomGenM CryptoRand.ChaChaDRG"
+
+        a@(AccessListM _) ->
+            show a
+
+        m@(MessagesFromDbM _ _) ->
+            show m
+
 data State
     = InitS Init
     | ReadyS Ready
     | FailedS
+    deriving Show
 
 
 data Init
     = EmptyI
     | ReadingAccessListI
     | GettingRandomI (Set.Set PublicKey)
+    deriving Show
 
 
 sendToClient :: Queue TcpInstruction -> ToClient -> Output
@@ -111,6 +146,18 @@ data Ready
         }
 
 
+instance Show Ready where
+    show (Ready conns _ accessList) =
+        mconcat
+        [ "Ready {\n"
+        , "    tcpConns = "
+        , show conns
+        , "\n    accessList = "
+        , show accessList
+        , "\n}"
+        ]
+
+
 data Output
     = DoNothingO
     | PrintO T.Text
@@ -123,6 +170,59 @@ data Output
     | GetRandomGenO
     | SaveMessageToDbO Sender Recipient InboxMessage
     | GetMessageFromDbO Recipient
+
+
+instance Show Output where
+    show output =
+        case output of
+        GetMessageFromDbO recipient ->
+            "GetMessageFromDbO " <> show recipient
+
+        GetRandomGenO ->
+            "GetRandomGenO"
+
+        SaveMessageToDbO sender recipient msg ->
+            mconcat
+            [ "SaveMessageToDbO ("
+            , show sender
+            , ") ("
+            , show recipient
+            , ") ("
+            , show msg
+            , ")"
+            ]
+
+        DoNothingO ->
+            "DoNothingO"
+
+        PrintO txt ->
+            "PrintO " <> T.unpack txt
+
+        ReadAccessListO ->
+            "ReadAccessListO"
+
+        StartTcpServerO ->
+            "StartTcpServerO"
+
+        BatchO outputs ->
+            "BatchO " <> mconcat (map show outputs)
+
+        MakeDirIfNotThereO path ->
+            "MakeDirIfNotThereO " <> path
+
+        MsgInQO _ instruction ->
+            "MsgInQO " <> show instruction
+
+        DeleteInboxMessageDbO sender recipient msg ->
+            mconcat
+            [ "DeleteInboxMessageDbO ("
+            , show sender
+            , ") ("
+            , show recipient
+            , ") ("
+            , show msg
+            , ")"
+            ]
 
 
 rootPath :: FilePath
@@ -378,7 +478,7 @@ instance Ord PublicKey where
 
 newtype PublicKey
     = PublicKey Ed.PublicKey
-    deriving (Eq)
+    deriving (Eq, Show)
 
 
 oneAccessKeyP :: P.Parser PublicKey
@@ -493,10 +593,7 @@ updateOnTcpMessage address ready untrusted =
             )
 
         GetMessage ->
-            ( BatchO
-                [ DoNothingO
-                , GetMessageFromDbO $ senderToRecipient sender
-                ]
+            ( GetMessageFromDbO $ senderToRecipient sender
             , ReadyS ready
             )
 
@@ -540,19 +637,27 @@ data TcpConn
     = TcpConn (Queue TcpInstruction) AuthStatus
 
 
+instance Show TcpConn where
+    show (TcpConn _ authStatus) =
+        "TcpConn (Queue TcpInstruction) " <> show authStatus
+
+
 data AuthStatus
     = Authenticated Sender
     | Untrusted AuthCode
+    deriving Show
 
 
 newtype AuthCode
     = AuthCode B.ByteString
+    deriving Show
 
 
 data FromClient
     = SignedAuthCodeF Sender Ed.Signature
     | SendMessage Recipient InboxMessage
     | GetMessage
+    deriving Show
 
 
 fromClientP :: P.Parser FromClient
@@ -627,10 +732,12 @@ msgScanner counter _ =
 
 newtype InboxMessage
     = InboxMessage B.ByteString
+    deriving Show
 
 
 newtype Recipient
     = Recipient Ed.PublicKey
+    deriving Show
 
 
 accessListPath =
@@ -638,31 +745,43 @@ accessListPath =
 
 
 io :: TVar.TVar State -> Output -> IO ()
-io mainState output =
-    case output of
+io mainState output = do
+  Tio.putStrLn "top of IO"
+  putStrLn ">>>>>>>>>>>"
+  print output
+  putStrLn "<<<<<<<<<<<"
+  case output of
     PrintO msg ->
         Tio.putStrLn msg
 
-    DoNothingO ->
+    DoNothingO -> do
+        Tio.putStrLn "io DoNothingO"
         return ()
 
     ReadAccessListO -> do
+        Tio.putStrLn "io ReadAccessListO"
         result <- E.try $ B.readFile accessListPath
+        Tio.putStrLn "io finished reading access list"
         updateIo mainState $ AccessListM result
 
     StartTcpServerO -> do
+        Tio.putStrLn "io StartTcpServerO"
         tcpServer mainState
 
     BatchO outputs -> do
+        Tio.putStrLn "io BatchO"
         mapM_ (io mainState) outputs
 
     MsgInQO q msg -> do
+        Tio.putStrLn "io MsgInQO"
         writeQ q msg
 
     MakeDirIfNotThereO path -> do
+        Tio.putStrLn "io MakeDirIfNotThereO"
         Dir.createDirectoryIfMissing True path
 
     DeleteInboxMessageDbO sender recipient message -> do
+        Tio.putStrLn "io DeleteInboxMessageDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
@@ -670,10 +789,12 @@ io mainState output =
                 (sender, recipient, message)
 
     GetRandomGenO -> do
+        Tio.putStrLn "io GetRandomGenO"
         drg <- CryptoRand.drgNew
         updateIo mainState $ RandomGenM drg
 
     SaveMessageToDbO sender recipient inboxMessage -> do
+        Tio.putStrLn "io SaveMessageToDbO"
         Db.withConnection dbPath $ \conn ->
             Db.execute
                 conn
@@ -681,6 +802,7 @@ io mainState output =
                 (sender, recipient, inboxMessage)
 
     GetMessageFromDbO recipient -> do
+        Tio.putStrLn "io GetMessageFromDbO"
         result <- Db.withConnection dbPath $ \conn ->
             Db.query
                 conn
@@ -702,7 +824,7 @@ getMessageSql =
 
 newtype Sender
     = Sender Ed.PublicKey
-    deriving Eq
+    deriving (Eq, Show)
 
 
 instance Ord Sender where
@@ -770,6 +892,7 @@ tcpServerHelp mainState (socket, address) = do
 data TcpInstruction
     = Die
     | Send B.ByteString
+    deriving Show
 
 
 tcpSend :: Tcp.Socket -> B.ByteString -> IO (Either E.IOException ())
