@@ -16,7 +16,7 @@ import qualified Data.Text as T
 import qualified Data.Attoparsec.ByteString as P
 import qualified Data.ByteString.Base64.URL as B64
 import Data.Word (Word8)
-import Control.Concurrent (forkIO)
+import Control.Concurrent (ThreadId, forkIO, killThread)
 import qualified Text.Hex
 import qualified Network.Simple.TCP as Tcp
 import Data.Text.Encoding (encodeUtf8, decodeUtf8')
@@ -47,9 +47,19 @@ updateIo mainState msg = do
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
-    MakeTQueueO -> do
-        q <- Q.newTQueueIO
-        updateIo mainState $ NewTQueueM q
+    KillThreadO threadId ->
+        killThread threadId
+
+    GetTcpSocketO ->
+        makeTcpConn mainState
+
+    StartTcpListenerO socket -> do
+        listenerId <- forkIO $ tcpListen mainState socket
+        updateIo mainState $ TcpListenerIdM listenerId
+
+    TcpSendO socket msg -> do
+        eitherError <- E.try $ Tcp.send socket msg
+        updateIo mainState $ TcpSendResultM eitherError
 
     GetHomeDirO -> do
         homeDir <- Dir.getHomeDirectory
@@ -87,19 +97,19 @@ io mainState output =
         Stm.atomically $ do
             Q.writeTQueue q bytes
 
-    StartTcpClientO toServerQ ->
-        tcpClient toServerQ mainState
+    MakeTcpConnO -> do
+        _ <- forkIO $ makeTcpConn mainState
+        return ()
 
 
 maxMessageLength =
     16000
 
 
-tcpClient :: Q -> TVar.TVar State -> IO ()
-tcpClient toServerQ model = do
-    res <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) -> do
-        _ <- forkIO $ tcpListen toServerQ model conn
-        tcpSend toServerQ conn
+makeTcpConn :: TVar.TVar State -> IO ()
+makeTcpConn model = do
+    res <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) ->
+            updateIo model $ TcpConnM conn
     case res of
         Left err ->
             updateIo model $ NoInternetM err
@@ -108,39 +118,30 @@ tcpClient toServerQ model = do
             return ()
 
 
-tcpSend :: Q -> Tcp.Socket -> IO ()
-tcpSend toServerQ conn = do
-    msg <- Stm.atomically $ do
-       Q.readTQueue toServerQ
-    Tcp.send conn msg
-    tcpSend toServerQ conn
-
-
-tcpListen :: Q -> TVar.TVar State -> Tcp.Socket -> IO ()
-tcpListen toServerQ model conn = do
+tcpListen :: TVar.TVar State -> Tcp.Socket -> IO ()
+tcpListen model conn = do
     maybeRawLength <- Tcp.recv conn 2
     case maybeRawLength of
         Nothing ->
-            return ()
+            updateIo model BadTcpRecvM
 
         Just rawLength ->
             case parseLength rawLength of
-            Left err ->
-                error err
+            Left _ ->
+                updateIo model BadTcpRecvM
 
             Right len ->
                 if len > maxMessageLength then
-                error $
-                    "TCP too long: " ++ show len
+                updateIo model BadTcpRecvM
                 else do
                     maybeMessage <- Tcp.recv conn len
                     case maybeMessage of
                         Nothing ->
-                            return ()
+                            updateIo model BadTcpRecvM
 
                         Just message -> do
                             updateIo model $ FromServerM message
-                            tcpListen toServerQ model conn
+                            tcpListen model conn
 
 
 serverUrl =
@@ -153,21 +154,27 @@ serverPort =
 
 data Output
     = GetArgsO
+    | StartTcpListenerO Tcp.Socket
     | GenerateSecretKeyO
+    | GetTcpSocketO
+    | TcpSendO Tcp.Socket B.ByteString
     | ReadSecretKeyO FilePath
     | PrintO T.Text
+    | KillThreadO ThreadId
     | DoNothingO
     | BatchO [Output]
-    | StartTcpClientO Q
+    | MakeTcpConnO
     | BytesInQO Q B.ByteString
     | ReadMessageFromStdInO
     | WriteKeyToFileO FilePath B.ByteString
-    | MakeTQueueO
     | GetHomeDirO
 
 
 data Msg
     = StartM
+    | TcpSendResultM (Either E.IOException ())
+    | TcpListenerIdM ThreadId
+    | BadTcpRecvM
     | StdInM B.ByteString
     | ArgsM [String]
     | SecretKeyFileM (Either E.IOException B.ByteString)
@@ -177,7 +184,7 @@ data Msg
     | NewSecretKeyM Ed.SecretKey
     | HomeDirM FilePath
     | NoInternetM E.IOException
-    | NewTQueueM Q
+    | TcpConnM Tcp.Socket
 
 
 data State
@@ -191,7 +198,8 @@ data Init
     | GettingHomeDirI
     | GettingKeysFromFileI FilePath
     | GeneratingSecretKeyI FilePath
-    | MakingTQueueI Ed.SecretKey
+    | GettingTcpSocketI Ed.SecretKey
+    | GettingTcpThreadIdI Ed.SecretKey Tcp.Socket
     deriving Show
 
 
@@ -200,7 +208,8 @@ data Ready
         { secretKey :: Ed.SecretKey
         , authStatus :: AuthStatus
         , readingStdIn :: Maybe Ed.PublicKey
-        , toServerQR :: Q
+        , tcpConnR :: Tcp.Socket
+        , threadIdR :: ThreadId
         }
 
 
@@ -264,18 +273,27 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
-    NewTQueueM q ->
-        case model of
-        ReadyS _ ->
-            pass
+    BadTcpRecvM ->
+        updateReady model $ \ready ->
+        ( BatchO
+            [ toUser NotConnectedU
+            , KillThreadO $ threadIdR ready
+            ]
+        , FinishedS
+        )
 
+    TcpListenerIdM threadId ->
+        case model of
         FinishedS ->
             pass
 
-        InitS GettingHomeDirI ->
+        ReadyS _ ->
             pass
 
         InitS EmptyI ->
+            pass
+
+        InitS GettingHomeDirI ->
             pass
 
         InitS (GettingKeysFromFileI _) ->
@@ -284,15 +302,56 @@ update model msg =
         InitS (GeneratingSecretKeyI _) ->
             pass
 
-        InitS (MakingTQueueI key) ->
-            ( GetArgsO
-            , ReadyS $ Ready
+        InitS (GettingTcpSocketI _) ->
+            pass
+
+        InitS (GettingTcpThreadIdI key socket) ->
+            ( DoNothingO
+            , ReadyS $
+              Ready
                 { secretKey = key
                 , authStatus = NotLoggedInA JustNotLoggedIn
                 , readingStdIn = Nothing
-                , toServerQR = q
+                , tcpConnR = socket
+                , threadIdR = threadId
                 }
             )
+
+    TcpSendResultM (Right ()) ->
+        pass
+
+    TcpSendResultM (Left _) ->
+        ( toUser NotConnectedU
+        , FinishedS
+        )
+
+    TcpConnM conn ->
+        case model of
+        FinishedS ->
+            pass
+
+        ReadyS _ ->
+            pass
+
+        InitS EmptyI ->
+            pass
+
+        InitS GettingHomeDirI ->
+            pass
+
+        InitS (GettingKeysFromFileI _) ->
+            pass
+
+        InitS (GeneratingSecretKeyI _) ->
+            pass
+
+        InitS (GettingTcpSocketI key) ->
+            ( StartTcpListenerO conn
+            , InitS $ GettingTcpThreadIdI key conn
+            )
+
+        InitS (GettingTcpThreadIdI _ _) ->
+            pass
 
     NoInternetM ioErr ->
         ( BatchO
@@ -312,6 +371,12 @@ update model msg =
             , InitS $ GettingKeysFromFileI homeDir
             )
 
+        InitS (GettingTcpSocketI _) ->
+            pass
+
+        InitS (GettingTcpThreadIdI _ _) ->
+            pass
+
         InitS EmptyI ->
             pass
 
@@ -319,9 +384,6 @@ update model msg =
             pass
 
         InitS (GeneratingSecretKeyI _) ->
-            pass
-
-        InitS (MakingTQueueI _) ->
             pass
 
         ReadyS _ ->
@@ -344,18 +406,20 @@ update model msg =
                 pass
 
             Just publicKey ->
-                ( sendToServer
-                    (toServerQR ready) $
-                    SendMessageT publicKey newMsg
+                let
+                toSend =
+                    encodeToServer $ SendMessageT publicKey newMsg
+                in
+                ( TcpSendO (tcpConnR ready) toSend
                 , ReadyS ready
                 )
 
     NewSecretKeyM key ->
         case model of
-        InitS GettingHomeDirI ->
+        InitS (GettingTcpSocketI _) ->
             pass
 
-        InitS (MakingTQueueI _) ->
+        InitS GettingHomeDirI ->
             pass
 
         InitS EmptyI ->
@@ -364,12 +428,15 @@ update model msg =
         InitS (GettingKeysFromFileI _) ->
             pass
 
+        InitS (GettingTcpThreadIdI _ _) ->
+            pass
+
         InitS (GeneratingSecretKeyI homeDir) ->
             ( BatchO
                 [ WriteKeyToFileO (keysPath homeDir) $ Ba.convert key
-                , MakeTQueueO
+                , GetTcpSocketO
                 ]
-            , InitS $ MakingTQueueI key
+            , InitS $ GettingTcpSocketI key
             )
 
         ReadyS _ ->
@@ -419,7 +486,7 @@ update model msg =
                 pass
 
             NotLoggedInA JustNotLoggedIn ->
-                ( StartTcpClientO $ toServerQR ready
+                ( MakeTcpConnO
                 , ReadyS $ ready
                     { authStatus = NotLoggedInA GetWhenLoggedIn }
                 )
@@ -427,10 +494,13 @@ update model msg =
             NotLoggedInA GetWhenLoggedIn ->
                 pass
 
-        InitS (MakingTQueueI _) ->
+        InitS GettingHomeDirI ->
             pass
 
-        InitS GettingHomeDirI ->
+        InitS (GettingTcpSocketI _) ->
+            pass
+
+        InitS (GettingTcpThreadIdI _ _) ->
             pass
 
         InitS EmptyI ->
@@ -490,11 +560,15 @@ update model msg =
         InitS (GeneratingSecretKeyI _) ->
             pass
 
-        InitS (MakingTQueueI _) ->
+        InitS (GettingTcpSocketI _) ->
+            pass
+
+        InitS (GettingTcpThreadIdI _ _) ->
             pass
 
         FinishedS ->
             pass
+
         else
         ( PrintO $
           mconcat
@@ -512,10 +586,13 @@ update model msg =
         InitS (GeneratingSecretKeyI _) ->
             pass
 
+        InitS (GettingTcpThreadIdI _ _) ->
+            pass
+
         InitS GettingHomeDirI ->
             pass
 
-        InitS (MakingTQueueI _) ->
+        InitS (GettingTcpSocketI _) ->
             pass
 
         InitS (GettingKeysFromFileI _) ->
@@ -532,7 +609,7 @@ update model msg =
                 )
 
             Right key ->
-                (MakeTQueueO, InitS $ MakingTQueueI key)
+                (GetTcpSocketO, InitS $ GettingTcpSocketI key)
 
         ReadyS _ ->
             pass
@@ -606,11 +683,6 @@ parseRecipient raw =
 authCodeA :: B.ByteString
 authCodeA =
     B.pack [197, 154, 22, 2, 21, 159, 38, 105, 240, 15, 236, 142, 31, 124, 100, 71, 22, 117, 69, 163, 39, 221, 135, 100, 193, 244, 134, 63, 28, 226, 89, 31]
-
-
-sendToServer :: Q -> ToServer -> Output
-sendToServer toServerQ msg =
-    BytesInQO toServerQ $ encodeToServer msg
 
 
 data ToServer
@@ -687,10 +759,9 @@ fromServerUpdate raw ready =
         publicKey = Ed.toPublic $ secretKey ready
         toSign = authCodeA <> authCode
         signature = Ed.sign (secretKey ready) publicKey toSign
+        toSend = encodeToServer $ SignedAuthCodeT publicKey signature
         in
-        ( sendToServer
-            (toServerQR ready) $
-            SignedAuthCodeT publicKey signature
+        ( TcpSendO (tcpConnR ready) toSend
         , ReadyS ready
         )
 
