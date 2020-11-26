@@ -118,40 +118,44 @@ makeTcpConn model = do
             return ()
 
 
+tcpRecv :: Tcp.Socket -> Int -> IO (Maybe B.ByteString)
+tcpRecv socket size = do
+    eitherMaybe <- E.try $ Tcp.recv socket size
+    case eitherMaybe :: Either E.IOException (Maybe B.ByteString) of
+        Left _ ->
+            return $ Nothing
+
+        Right Nothing ->
+            return $ Nothing
+
+        Right (Just message) ->
+            return $ Just message
+
+
 tcpListen :: TVar.TVar State -> Tcp.Socket -> IO ()
 tcpListen model conn = do
-    eitherMaybeRawLength <- E.try $ Tcp.recv conn 2
-    case eitherMaybeRawLength :: Either E.IOException (Maybe B.ByteString) of
-        Left _ ->
+    maybeRawLength <- tcpRecv conn 2
+    case maybeRawLength of
+        Nothing ->
             updateIo model BadTcpRecvM
 
-        Right maybeRawLength ->
-            case maybeRawLength of
-            Nothing ->
+        Just rawLength ->
+            case parseLength rawLength of
+            Left _ ->
                 updateIo model BadTcpRecvM
 
-            Just rawLength ->
-                case parseLength rawLength of
-                Left _ ->
-                    updateIo model BadTcpRecvM
+            Right len ->
+                if len > maxMessageLength then
+                updateIo model BadTcpRecvM
+                else do
+                    maybeMessage <- tcpRecv conn len
+                    case maybeMessage of
+                        Nothing ->
+                            updateIo model BadTcpRecvM
 
-                Right len ->
-                    if len > maxMessageLength then
-                    updateIo model BadTcpRecvM
-                    else do
-                        eitherMaybeMessage <- E.try $ Tcp.recv conn len
-                        case eitherMaybeMessage :: Either E.IOException (Maybe B.ByteString) of
-                            Left _ ->
-                                updateIo model BadTcpRecvM
-
-                            Right maybeMessage ->
-                                case maybeMessage of
-                                    Nothing ->
-                                        updateIo model BadTcpRecvM
-
-                                    Just message -> do
-                                        updateIo model $ FromServerM message
-                                        tcpListen model conn
+                        Just message -> do
+                            updateIo model $ FromServerM message
+                            tcpListen model conn
 
 
 serverUrl =
