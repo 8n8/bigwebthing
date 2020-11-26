@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
@@ -109,7 +108,7 @@ data Init
 
 sendToClient :: Queue TcpInstruction -> ToClient -> Output
 sendToClient q msg =
-    (\bs -> (MsgInQO q) (Send bs)) $
+    (MsgInQO q . Send) $
     case msg of
     AuthCodeToSign code ->
         B.singleton 0 <> code
@@ -328,7 +327,7 @@ update model msg =
         Just (_, TcpConn _ (Untrusted _)) ->
             pass
 
-        Just (address, (TcpConn q (Authenticated _))) ->
+        Just (address, TcpConn q (Authenticated _)) ->
             case raw of
             [] ->
                 ( BatchO
@@ -458,7 +457,7 @@ update model msg =
 
 accessListP :: P.Parser (Set.Set PublicKey)
 accessListP = do
-    asList <- fmap (\i -> [i]) oneAccessKeyP
+    asList <- fmap (: []) oneAccessKeyP
     P.endOfInput
     return $ Set.fromList asList
 
@@ -664,13 +663,11 @@ fromClientP = do
         [ do
             _ <- P.word8 0
             sender <- senderP
-            signedAuth <- signatureP
-            return $ SignedAuthCodeF sender signedAuth
+            SignedAuthCodeF sender <$> signatureP
         , do
             _ <- P.word8 1
             recipient <- recipientP
-            message <- inboxMessageP
-            return $ SendMessage recipient message
+            SendMessage recipient <$> inboxMessageP
         , do
             _ <- P.word8 2
             return GetMessage
@@ -681,14 +678,12 @@ fromClientP = do
 
 recipientP :: P.Parser Recipient
 recipientP = do
-    raw <- signingKeyP
-    return $ Recipient raw
+    Recipient <$> signingKeyP
 
 
 senderP :: P.Parser Sender
 senderP = do
-    raw <- signingKeyP
-    return $ Sender raw
+    Sender <$> signingKeyP
 
 
 signingKeyP :: P.Parser Ed.PublicKey
