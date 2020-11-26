@@ -1,7 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE DisambiguateRecordFields #-}
-{-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
 import System.FilePath ((</>))
@@ -123,10 +121,10 @@ tcpRecv socket size = do
     eitherMaybe <- E.try $ Tcp.recv socket size
     case eitherMaybe :: Either E.IOException (Maybe B.ByteString) of
         Left _ ->
-            return $ Nothing
+            return Nothing
 
         Right Nothing ->
-            return $ Nothing
+            return Nothing
 
         Right (Just message) ->
             return $ Just message
@@ -785,13 +783,11 @@ fromServerP = do
     msg <- P.choice
         [ do
             _ <- P.word8 0
-            authCode <- authCodeP
-            return $ AuthCodeToSignF authCode
+            AuthCodeToSignF <$> authCodeP
         , do
             _ <- P.word8 5
             sender <- publicKeyP
-            inboxMessage <- inboxMessageP
-            return $ InboxMessageF sender inboxMessage
+            InboxMessageF sender <$> inboxMessageP
         ]
     P.endOfInput
     return msg
@@ -822,11 +818,8 @@ inboxMessageP = do
 
 msgScanner :: Int -> Word8 -> Maybe Int
 msgScanner counter byte =
-    if counter < 100 then
-    if validByte byte then
+    if counter < 100 && validByte byte then
     Just $ counter + 1
-    else
-    Nothing
     else
     Nothing
 

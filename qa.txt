@@ -2,7 +2,7 @@
 
 + DONE remove as many files as possible
 + for each of the client and the server
-    - fix Hlint warnings
+    - check FromServer etc types and parsers against spec
     - LiquidHaskell
     - export everything and try to Quickcheck everything
     - write unit tests

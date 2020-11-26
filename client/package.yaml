@@ -29,7 +29,6 @@ dependencies:
 - network-simple
 - cryptonite
 - memory
-- inline-c
 - directory
 - filepath
 
