@@ -120,28 +120,38 @@ makeTcpConn model = do
 
 tcpListen :: TVar.TVar State -> Tcp.Socket -> IO ()
 tcpListen model conn = do
-    maybeRawLength <- Tcp.recv conn 2
-    case maybeRawLength of
-        Nothing ->
+    eitherMaybeRawLength <- E.try $ Tcp.recv conn 2
+    case eitherMaybeRawLength :: Either E.IOException (Maybe B.ByteString) of
+        Left _ ->
             updateIo model BadTcpRecvM
 
-        Just rawLength ->
-            case parseLength rawLength of
-            Left _ ->
+        Right maybeRawLength ->
+            case maybeRawLength of
+            Nothing ->
                 updateIo model BadTcpRecvM
 
-            Right len ->
-                if len > maxMessageLength then
-                updateIo model BadTcpRecvM
-                else do
-                    maybeMessage <- Tcp.recv conn len
-                    case maybeMessage of
-                        Nothing ->
-                            updateIo model BadTcpRecvM
+            Just rawLength ->
+                case parseLength rawLength of
+                Left _ ->
+                    updateIo model BadTcpRecvM
 
-                        Just message -> do
-                            updateIo model $ FromServerM message
-                            tcpListen model conn
+                Right len ->
+                    if len > maxMessageLength then
+                    updateIo model BadTcpRecvM
+                    else do
+                        eitherMaybeMessage <- E.try $ Tcp.recv conn len
+                        case eitherMaybeMessage :: Either E.IOException (Maybe B.ByteString) of
+                            Left _ ->
+                                updateIo model BadTcpRecvM
+
+                            Right maybeMessage ->
+                                case maybeMessage of
+                                    Nothing ->
+                                        updateIo model BadTcpRecvM
+
+                                    Just message -> do
+                                        updateIo model $ FromServerM message
+                                        tcpListen model conn
 
 
 serverUrl =
