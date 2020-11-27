@@ -2,8 +2,7 @@
 
 + DONE remove as many files as possible
 + for each of the client and the server
-    - check FromServer etc types and parsers against spec
-    - LiquidHaskell
+    - CS check FromServer etc types and parsers against spec
     - export everything and try to Quickcheck everything
     - write unit tests
 + add TLS

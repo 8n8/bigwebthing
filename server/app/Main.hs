@@ -3,6 +3,8 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Main (main) where
 
+import Data.Bits ((.&.), shiftR)
+import Debug.Trace (trace)
 import qualified Data.Set as Set
 import qualified System.Directory as Dir
 import qualified Data.ByteArray as ByteArray
@@ -16,7 +18,6 @@ import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import qualified Network.Simple.TCP as Tcp
-import qualified Control.Concurrent as CC
 import qualified Control.Exception as E
 import qualified Crypto.Random as CryptoRand
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
@@ -86,11 +87,11 @@ instance Show Msg where
         RandomGenM _ ->
             "RandomGenM CryptoRand.ChaChaDRG"
 
-        a@(AccessListM _) ->
-            show a
+        AccessListM a ->
+            "AccessListM " <> show a
 
-        m@(MessagesFromDbM _ _) ->
-            show m
+        MessagesFromDbM recipient rows ->
+            "MessagesFromDbM " <> show recipient <> " " <> show rows
 
 data State
     = InitS Init
@@ -111,21 +112,33 @@ sendToClient q =
     MsgInQO q . Send . encodeToClient
 
 
+encodeUint16 :: Int -> B.ByteString
+encodeUint16 i =
+    B.pack
+    [ fromIntegral $ i .&. 0xFF
+    , fromIntegral $ (shiftR i 8) .&. 0xFF
+    ]
+
+
 encodeToClient :: ToClient -> B.ByteString
 encodeToClient msg =
-    case msg of
-    AuthCodeToSign code ->
-        B.singleton 0 <> code
+    let
+    raw =
+        case msg of
+        AuthCodeToSign code ->
+            B.singleton 0 <> code
 
-    NewMessage (Sender sender) (InboxMessage message) ->
-        mconcat
-        [ B.singleton 1
-        , ByteArray.convert sender
-        , message
-        ]
+        NewMessage (Sender sender) (InboxMessage message) ->
+            mconcat
+            [ B.singleton 1
+            , ByteArray.convert sender
+            , message
+            ]
 
-    NoMessages ->
-        B.singleton 2
+        NoMessages ->
+            B.singleton 2
+    in
+    encodeUint16 (B.length raw) <> raw
 
 
 data ToClient
@@ -279,7 +292,16 @@ update :: State -> Msg -> (Output, State)
 update model msg =
     let
     pass = (DoNothingO, model)
+    dbg =
+        mconcat
+        [ "model: "
+        , show model
+        , "\nmsg: "
+        , show msg
+        , "\n"
+        ]
     in
+    trace dbg $
     case msg of
     AccessListM eitherRaw ->
         case model of
@@ -454,7 +476,7 @@ update model msg =
                     (TcpConn q (Untrusted (AuthCode auth)))
                     (tcpConns ready)
             in
-            ( DoNothingO
+            ( sendToClient q $ AuthCodeToSign auth
             , ReadyS $ ready {tcpConns = newConns, randomGen = gen}
             )
 
@@ -867,8 +889,8 @@ tcpServerHelp :: TVar.TVar State -> (Tcp.Socket, Tcp.SockAddr) -> IO ()
 tcpServerHelp mainState (socket, address) = do
     let instructionsQ = Q.newTQueue :: Queue TcpInstruction
     updateIo mainState $ NewTcpConnM instructionsQ address
-    receiverId <- CC.forkIO $ tcpReceiver mainState socket address
-    tcpSender mainState address receiverId instructionsQ socket
+    tcpReceiver mainState socket address
+    tcpSender mainState address instructionsQ socket
 
 
 data TcpInstruction
@@ -885,47 +907,84 @@ tcpSend socket msg =
 tcpSender
     :: TVar.TVar State
     -> Tcp.SockAddr
-    -> CC.ThreadId
     -> Queue TcpInstruction
     -> Tcp.Socket
     -> IO ()
-tcpSender mainState address receiverId instructionsQ socket = do
+tcpSender mainState address instructionsQ socket = do
     instruction <- readQ instructionsQ
     case instruction of
         Die ->
-            CC.killThread receiverId
+            return ()
 
         Send msg -> do
             eitherOk <- tcpSend socket msg
             case eitherOk of
                 Left _ -> do
+                    Tio.putStrLn "0"
                     updateIo mainState $ DeadTcpM address
-                    CC.killThread receiverId
 
                 Right () ->
-                    tcpSender mainState address receiverId instructionsQ socket
+                    tcpSender mainState address instructionsQ socket
 
 
 tcpRecv
     :: Tcp.Socket
+    -> Int
     -> IO (Either E.IOException (Maybe B.ByteString))
-tcpRecv socket =
-    E.try $ Tcp.recv socket maxMessageLength
+tcpRecv socket len =
+    E.try $ Tcp.recv socket len
+
+
+uint16P :: P.Parser Int
+uint16P = do
+    b0 <- uint8P
+    b1 <- uint8P
+    return $ b0 + b1 * 256
 
 
 tcpReceiver :: TVar.TVar State -> Tcp.Socket -> Tcp.SockAddr -> IO ()
 tcpReceiver mainState socket address = do
-    eitherMsg <- tcpRecv socket
-    case eitherMsg of
-        Left _ ->
+    eitherMsgLen <- tcpRecv socket 2
+    case eitherMsgLen of
+        Left err -> do
+            Tio.putStrLn "1"
+            Tio.putStrLn $ "tcpRecv error: " <> T.pack (show err)
             updateIo mainState $ DeadTcpM address
 
-        Right Nothing ->
+        Right Nothing -> do
+            Tio.putStrLn "2"
             updateIo mainState $ DeadTcpM address
 
-        Right (Just msg) -> do
-            updateIo mainState $ TcpMsgInM address msg
-            tcpReceiver mainState socket address
+        Right (Just rawLen) ->
+            case P.eitherResult $ P.parse uint16P rawLen of
+            Left _ -> do
+                Tio.putStrLn "3"
+                updateIo mainState $ DeadTcpM address
+
+            Right len -> do
+                if len < maxMessageLength then do
+                    eitherMsg <- tcpRecv socket len
+                    case eitherMsg of
+                        Left _ -> do
+                            Tio.putStrLn "4"
+                            updateIo mainState $ DeadTcpM address
+
+                        Right Nothing -> do
+                            Tio.putStrLn "5"
+                            updateIo mainState $ DeadTcpM address
+
+                        Right (Just msg) -> do
+                            updateIo mainState $ TcpMsgInM address msg
+                            tcpReceiver mainState socket address
+
+                else do
+                    Tio.putStrLn "6"
+                    updateIo mainState $ DeadTcpM address
+
+
+uint8P :: P.Parser Int
+uint8P =
+    fromIntegral <$> P.anyWord8
 
 
 maxMessageLength :: Int
