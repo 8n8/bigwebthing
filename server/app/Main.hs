@@ -10,7 +10,6 @@ import qualified System.Directory as Dir
 import qualified Data.ByteArray as ByteArray
 import qualified Data.ByteString.Base64.URL as B64
 import qualified Data.Attoparsec.ByteString as P
-import qualified Control.Concurrent.STM.TQueue as Q
 import qualified Control.Concurrent.STM as Stm
 import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Data.ByteString as B
@@ -54,7 +53,8 @@ authCodeA =
 data Msg
     = StartM
     | TcpMsgInM Tcp.SockAddr B.ByteString
-    | NewTcpConnM (Queue TcpInstruction) Tcp.SockAddr
+    | TcpSendResultM Tcp.SockAddr (Either E.IOException ())
+    | NewTcpConnM Tcp.Socket Tcp.SockAddr
     | DeadTcpM Tcp.SockAddr
     | BatchM [Maybe Msg]
     | RandomGenM CryptoRand.ChaChaDRG
@@ -67,6 +67,15 @@ instance Show Msg where
         case msg of
         StartM ->
             "StartM"
+
+        TcpSendResultM address eitherErr ->
+            mconcat
+            [ "TcpSendResultM ("
+            , show address
+            , ") ("
+            , show eitherErr
+            , ")"
+            ]
 
         TcpMsgInM address raw ->
             "TcpMsgIn (" <> show address <> ") (" <> show raw <> ")"
@@ -107,9 +116,9 @@ data Init
     deriving Show
 
 
-sendToClient :: Queue TcpInstruction -> ToClient -> Output
-sendToClient q =
-    MsgInQO q . Send . encodeToClient
+sendToClient :: Tcp.SockAddr -> Tcp.Socket -> ToClient -> Output
+sendToClient address socket =
+    MsgInSocketO address socket . encodeToClient
 
 
 encodeUint16 :: Int -> B.ByteString
@@ -174,69 +183,18 @@ instance Show Ready where
 
 data Output
     = DoNothingO
+    | CloseSocketO Tcp.Socket
+    | MsgInSocketO Tcp.SockAddr Tcp.Socket B.ByteString
     | PrintO T.Text
     | ReadAccessListO
     | StartTcpServerO
     | BatchO [Output]
     | MakeDirIfNotThereO FilePath
-    | MsgInQO (Queue TcpInstruction) TcpInstruction
     | DeleteInboxMessageDbO Sender Recipient InboxMessage
     | GetRandomGenO
     | SaveMessageToDbO Sender Recipient InboxMessage
     | GetMessageFromDbO Recipient
-
-
-instance Show Output where
-    show output =
-        case output of
-        GetMessageFromDbO recipient ->
-            "GetMessageFromDbO " <> show recipient
-
-        GetRandomGenO ->
-            "GetRandomGenO"
-
-        SaveMessageToDbO sender recipient msg ->
-            mconcat
-            [ "SaveMessageToDbO ("
-            , show sender
-            , ") ("
-            , show recipient
-            , ") ("
-            , show msg
-            , ")"
-            ]
-
-        DoNothingO ->
-            "DoNothingO"
-
-        PrintO txt ->
-            "PrintO " <> T.unpack txt
-
-        ReadAccessListO ->
-            "ReadAccessListO"
-
-        StartTcpServerO ->
-            "StartTcpServerO"
-
-        BatchO outputs ->
-            "BatchO " <> mconcat (map show outputs)
-
-        MakeDirIfNotThereO path ->
-            "MakeDirIfNotThereO " <> path
-
-        MsgInQO _ instruction ->
-            "MsgInQO " <> show instruction
-
-        DeleteInboxMessageDbO sender recipient msg ->
-            mconcat
-            [ "DeleteInboxMessageDbO ("
-            , show sender
-            , ") ("
-            , show recipient
-            , ") ("
-            , show msg
-            , ")"
-            ]
+    deriving Show
 
 
 rootPath :: FilePath
@@ -344,6 +302,26 @@ update model msg =
                 Right accessList ->
                     (GetRandomGenO, InitS $ GettingRandomI accessList)
 
+    TcpSendResultM address eitherError ->
+        updateReady model $ \ready ->
+        case eitherError of
+        Right () ->
+            pass
+
+        Left _ ->
+            case Map.lookup address $ tcpConns ready of
+            Nothing ->
+                pass
+
+            Just (TcpConn socket _) ->
+                ( CloseSocketO socket
+                , ReadyS $
+                    ready
+                        { tcpConns =
+                            Map.delete address $ tcpConns ready
+                        }
+                )
+
     MessagesFromDbM recipient raw ->
         updateReady model $ \ready ->
         case findConn recipient $ tcpConns ready of
@@ -353,12 +331,12 @@ update model msg =
         Just (_, TcpConn _ (Untrusted _)) ->
             pass
 
-        Just (address, TcpConn q (Authenticated _)) ->
+        Just (address, TcpConn socket (Authenticated _)) ->
             case raw of
             [] ->
                 ( BatchO
-                    [ sendToClient q NoMessages
-                    , MsgInQO q Die
+                    [ sendToClient address socket NoMessages
+                    , CloseSocketO socket
                     ]
                 , ReadyS $
                   ready
@@ -381,11 +359,11 @@ update model msg =
                     )
                 CryptoPassed sender ->
                     ( BatchO
-                        [ sendToClient q $
+                        [ sendToClient address socket $
                           NewMessage
                           (Sender sender)
                           (InboxMessage rawMessage)
-                        , MsgInQO q Die
+                        , CloseSocketO socket
                         , DeleteInboxMessageDbO
                             (Sender sender)
                             recipient
@@ -435,8 +413,8 @@ update model msg =
             Nothing ->
                 pass
 
-            Just (TcpConn q _) ->
-                ( MsgInQO q Die
+            Just (TcpConn socket _) ->
+                ( CloseSocketO socket
                 , ReadyS $
                     ready
                         { tcpConns =
@@ -456,7 +434,7 @@ update model msg =
         in
         (BatchO outputs, newModel)
 
-    NewTcpConnM q address ->
+    NewTcpConnM socket address ->
         case model of
         InitS _ ->
             pass
@@ -473,10 +451,10 @@ update model msg =
             newConns =
                 Map.insert
                     address
-                    (TcpConn q (Untrusted (AuthCode auth)))
+                    (TcpConn socket (Untrusted (AuthCode auth)))
                     (tcpConns ready)
             in
-            ( sendToClient q $ AuthCodeToSign auth
+            ( sendToClient address socket $ AuthCodeToSign auth
             , ReadyS $ ready {tcpConns = newConns, randomGen = gen}
             )
 
@@ -575,13 +553,13 @@ updateOnRawTcpMessage address rawMessage model =
         Nothing ->
             (DoNothingO, model)
 
-        Just (TcpConn q _) ->
+        Just (TcpConn socket _) ->
             case P.parseOnly fromClientP rawMessage of
             Left _ ->
                 let
                 newConns = Map.delete address (tcpConns ready)
                 in
-                ( MsgInQO q Die
+                ( CloseSocketO socket
                 , ReadyS $ ready { tcpConns = newConns}
                 )
 
@@ -602,15 +580,15 @@ updateOnTcpMessage address ready untrusted =
     Nothing ->
         (DoNothingO, ReadyS ready)
 
-    Just (TcpConn q (Authenticated sender)) ->
+    Just (TcpConn socket (Authenticated sender)) ->
         case untrusted of
         SignedAuthCodeF _ _ ->
-            (MsgInQO q Die, ReadyS ready)
+            (CloseSocketO socket, ReadyS ready)
 
         SendMessage recipient inboxMessage ->
             ( BatchO
                 [ SaveMessageToDbO sender recipient inboxMessage
-                , MsgInQO q Die
+                , CloseSocketO socket
                 ]
             , ReadyS ready
             )
@@ -621,7 +599,7 @@ updateOnTcpMessage address ready untrusted =
             )
 
 
-    Just (TcpConn q (Untrusted authCode)) ->
+    Just (TcpConn socket (Untrusted authCode)) ->
         case untrusted of
         SignedAuthCodeF sender signed ->
             if validAuthSig authCode signed sender then
@@ -631,7 +609,7 @@ updateOnTcpMessage address ready untrusted =
                     { tcpConns =
                         Map.insert
                             address
-                            (TcpConn q (Authenticated sender))
+                            (TcpConn socket (Authenticated sender))
                             (tcpConns ready)
                     }
             )
@@ -657,7 +635,7 @@ senderToRecipient (Sender s) =
 
 
 data TcpConn
-    = TcpConn (Queue TcpInstruction) AuthStatus
+    = TcpConn Tcp.Socket AuthStatus
 
 
 instance Show TcpConn where
@@ -766,6 +744,13 @@ accessListPath =
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output = do
   case output of
+    MsgInSocketO address socket msg -> do
+        result <- E.try $ Tcp.send socket msg
+        updateIo mainState $ TcpSendResultM address result
+
+    CloseSocketO socket ->
+        Tcp.closeSock socket
+
     PrintO msg ->
         Tio.putStrLn msg
 
@@ -781,9 +766,6 @@ io mainState output = do
 
     BatchO outputs -> do
         mapM_ (io mainState) outputs
-
-    MsgInQO q msg -> do
-        writeQ q msg
 
     MakeDirIfNotThereO path -> do
         Dir.createDirectoryIfMissing True path
@@ -868,63 +850,10 @@ tcpServer mainState =
     Tcp.serve (Tcp.Host "127.0.0.1") "11453" (tcpServerHelp mainState)
 
 
-readQ :: Stm.STM (Q.TQueue a) -> IO a
-readQ q =
-    Stm.atomically $ do
-        q_ <- q
-        Q.readTQueue q_
-
-
-writeQ :: Stm.STM (Q.TQueue a) -> a -> IO ()
-writeQ q value =
-    Stm.atomically $ do
-        q_ <- q
-        Q.writeTQueue q_ value
-
-
-type Queue a = Stm.STM (Stm.TQueue a)
-
-
 tcpServerHelp :: TVar.TVar State -> (Tcp.Socket, Tcp.SockAddr) -> IO ()
 tcpServerHelp mainState (socket, address) = do
-    let instructionsQ = Q.newTQueue :: Queue TcpInstruction
-    updateIo mainState $ NewTcpConnM instructionsQ address
+    updateIo mainState $ NewTcpConnM socket address
     tcpReceiver mainState socket address
-    tcpSender mainState address instructionsQ socket
-
-
-data TcpInstruction
-    = Die
-    | Send B.ByteString
-    deriving Show
-
-
-tcpSend :: Tcp.Socket -> B.ByteString -> IO (Either E.IOException ())
-tcpSend socket msg =
-    E.try $ Tcp.send socket msg
-
-
-tcpSender
-    :: TVar.TVar State
-    -> Tcp.SockAddr
-    -> Queue TcpInstruction
-    -> Tcp.Socket
-    -> IO ()
-tcpSender mainState address instructionsQ socket = do
-    instruction <- readQ instructionsQ
-    case instruction of
-        Die ->
-            return ()
-
-        Send msg -> do
-            eitherOk <- tcpSend socket msg
-            case eitherOk of
-                Left _ -> do
-                    Tio.putStrLn "0"
-                    updateIo mainState $ DeadTcpM address
-
-                Right () ->
-                    tcpSender mainState address instructionsQ socket
 
 
 tcpRecv
