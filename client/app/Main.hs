@@ -24,6 +24,7 @@ import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Data.IntSet as IntSet
 import System.IO.Error (isDoesNotExistError)
 import qualified System.Directory as Dir
+import Data.Bits ((.&.), shiftR)
 
 
 main :: IO ()
@@ -45,9 +46,6 @@ updateIo mainState msg = do
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
-    GetTcpSocketO ->
-        makeTcpConn mainState
-
     TcpSendO socket msg -> do
         eitherError <- E.try $ Tcp.send socket msg
         updateIo mainState $ TcpSendResultM eitherError
@@ -161,7 +159,6 @@ serverPort =
 data Output
     = GetArgsO
     | GenerateSecretKeyO
-    | GetTcpSocketO
     | TcpSendO Tcp.Socket B.ByteString
     | ReadSecretKeyO FilePath
     | PrintO T.Text
@@ -183,7 +180,6 @@ data Msg
     | SecretKeyFileM (Either E.IOException B.ByteString)
     | BatchM [Maybe Msg]
     | FromServerM B.ByteString
-    | RestartingTcpM
     | NewSecretKeyM Ed.SecretKey
     | HomeDirM FilePath
     | NoInternetM E.IOException
@@ -203,7 +199,6 @@ data Init
     | GettingHomeDirI
     | GettingKeysFromFileI FilePath
     | GeneratingSecretKeyI FilePath
-    | GettingTcpSocketI Ed.SecretKey
     deriving Show
 
 
@@ -212,20 +207,18 @@ data Ready
         { secretKey :: Ed.SecretKey
         , authStatus :: AuthStatus
         , readingStdIn :: Maybe Ed.PublicKey
-        , tcpConnR :: Tcp.Socket
         }
         deriving Show
 
 
 data AuthStatus
-    = LoggedInA
+    = LoggedInA Tcp.Socket
     | NotLoggedInA NotLoggedIn
     deriving Show
 
 
 data NotLoggedIn
-    = SendWhenLoggedIn Ed.PublicKey T.Text
-    | GetWhenLoggedIn
+    = SendWhenLoggedIn (Maybe Tcp.Socket) ToServer
     | JustNotLoggedIn
     deriving Show
 
@@ -303,35 +296,24 @@ update model msg =
         , FinishedS
         )
 
-    TcpConnM conn ->
-        case model of
-        FinishedS ->
-            pass
+    TcpConnM socket ->
+        updateReady model $ \ready ->
+        ( DoNothingO
+        , ReadyS $
+            ready
+            { authStatus =
+                case authStatus ready of
+                LoggedInA _ ->
+                    authStatus ready
 
-        ReadyS _ ->
-            pass
+                NotLoggedInA JustNotLoggedIn ->
+                    authStatus ready
 
-        InitS EmptyI ->
-            pass
-
-        InitS GettingHomeDirI ->
-            pass
-
-        InitS (GettingKeysFromFileI _) ->
-            pass
-
-        InitS (GeneratingSecretKeyI _) ->
-            pass
-
-        InitS (GettingTcpSocketI key) ->
-            ( GetArgsO
-            , ReadyS $ Ready
-                { secretKey = key
-                , authStatus = NotLoggedInA JustNotLoggedIn
-                , readingStdIn = Nothing
-                , tcpConnR = conn
-                }
-            )
+                NotLoggedInA (SendWhenLoggedIn _ toServer) ->
+                    NotLoggedInA $
+                    SendWhenLoggedIn (Just socket) toServer
+            }
+        )
 
     NoInternetM ioErr ->
         ( BatchO
@@ -351,9 +333,6 @@ update model msg =
             , InitS $ GettingKeysFromFileI homeDir
             )
 
-        InitS (GettingTcpSocketI _) ->
-            pass
-
         InitS EmptyI ->
             pass
 
@@ -370,7 +349,7 @@ update model msg =
             pass
 
     StdInM raw ->
-        case P.eitherResult $ P.parse inboxMessageP raw of
+        case P.parseOnly inboxMessageP raw of
         Left err ->
             ( toUser $ BadMessageU err
             , FinishedS
@@ -383,19 +362,29 @@ update model msg =
                 pass
 
             Just publicKey ->
-                let
-                toSend =
-                    encodeToServer $ SendMessageT publicKey newMsg
-                in
-                ( TcpSendO (tcpConnR ready) toSend
-                , ReadyS ready
-                )
+                case authStatus ready of
+                LoggedInA _ ->
+                    pass
+
+                NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+                    pass
+
+                NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
+                    pass
+
+                NotLoggedInA JustNotLoggedIn ->
+                    ( MakeTcpConnO
+                    , ReadyS $
+                      ready
+                        { authStatus =
+                            NotLoggedInA $
+                            SendWhenLoggedIn Nothing $
+                            SendMessageT publicKey newMsg
+                        }
+                    )
 
     NewSecretKeyM key ->
         case model of
-        InitS (GettingTcpSocketI _) ->
-            pass
-
         InitS GettingHomeDirI ->
             pass
 
@@ -408,9 +397,14 @@ update model msg =
         InitS (GeneratingSecretKeyI homeDir) ->
             ( BatchO
                 [ WriteKeyToFileO (keysPath homeDir) $ Ba.convert key
-                , GetTcpSocketO
+                , GetArgsO
                 ]
-            , InitS $ GettingTcpSocketI key
+            , ReadyS $
+              Ready
+                { secretKey = key
+                , authStatus = NotLoggedInA JustNotLoggedIn
+                , readingStdIn = Nothing
+                }
             )
 
         ReadyS _ ->
@@ -453,25 +447,25 @@ update model msg =
         case model of
         ReadyS ready ->
             case authStatus ready of
-            LoggedInA ->
-                pass
-
-            NotLoggedInA (SendWhenLoggedIn _ _) ->
+            LoggedInA _ ->
                 pass
 
             NotLoggedInA JustNotLoggedIn ->
                 ( MakeTcpConnO
                 , ReadyS $ ready
-                    { authStatus = NotLoggedInA GetWhenLoggedIn }
+                    { authStatus =
+                        NotLoggedInA $
+                        SendWhenLoggedIn Nothing GetMessageT
+                    }
                 )
 
-            NotLoggedInA GetWhenLoggedIn ->
+            NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
+                pass
+
+            NotLoggedInA (SendWhenLoggedIn Nothing _) ->
                 pass
 
         InitS GettingHomeDirI ->
-            pass
-
-        InitS (GettingTcpSocketI _) ->
             pass
 
         InitS EmptyI ->
@@ -531,9 +525,6 @@ update model msg =
         InitS (GeneratingSecretKeyI _) ->
             pass
 
-        InitS (GettingTcpSocketI _) ->
-            pass
-
         FinishedS ->
             pass
 
@@ -557,11 +548,8 @@ update model msg =
         InitS GettingHomeDirI ->
             pass
 
-        InitS (GettingTcpSocketI _) ->
-            pass
-
         InitS (GettingKeysFromFileI _) ->
-            case P.eitherResult $ P.parse secretSigningP raw of
+            case P.parseOnly secretSigningP raw of
             Left err ->
                 ( PrintO $
                   mconcat
@@ -574,7 +562,14 @@ update model msg =
                 )
 
             Right key ->
-                (GetTcpSocketO, InitS $ GettingTcpSocketI key)
+                ( GetArgsO
+                , ReadyS $
+                  Ready
+                    { secretKey = key
+                    , authStatus = NotLoggedInA JustNotLoggedIn
+                    , readingStdIn = Nothing
+                    }
+                )
 
         ReadyS _ ->
             pass
@@ -584,9 +579,6 @@ update model msg =
 
     FromServerM raw ->
         updateReady model $ fromServerUpdate raw
-
-    RestartingTcpM ->
-        updateReady model restartingTcpUpdate
 
 
 data ToUser
@@ -672,10 +664,28 @@ data ToServer
     = SignedAuthCodeT Ed.PublicKey Ed.Signature
     | SendMessageT Ed.PublicKey T.Text
     | GetMessageT
+    deriving Show
 
 
 encodeToServer :: ToServer -> B.ByteString
 encodeToServer toServer =
+    let
+    encoded = encodeToServerHelp toServer
+    len = B.length encoded
+    in
+    encodeUint16 len <> encoded
+
+
+encodeUint16 :: Int -> B.ByteString
+encodeUint16 i =
+    B.pack
+    [ fromIntegral $ i .&. 0xFF
+    , fromIntegral $ (shiftR i 8) .&. 0xFF
+    ]
+
+
+encodeToServerHelp :: ToServer -> B.ByteString
+encodeToServerHelp toServer =
     case toServer of
     SignedAuthCodeT publicKey signature ->
         mconcat
@@ -695,22 +705,9 @@ encodeToServer toServer =
         B.singleton 2
 
 
-restartingTcpUpdate :: Ready -> (Output, State)
-restartingTcpUpdate ready =
-    ( DoNothingO
-    , ReadyS $
-      case authStatus ready of
-        LoggedInA ->
-            ready { authStatus = NotLoggedInA JustNotLoggedIn }
-
-        NotLoggedInA _ ->
-            ready
-    )
-
-
 fromServerUpdate :: B.ByteString -> Ready -> (Output, State)
 fromServerUpdate raw ready =
-    case P.eitherResult $ P.parse fromServerP raw of
+    case P.parseOnly fromServerP raw of
     Left err ->
         ( PrintO $
           mconcat
@@ -728,14 +725,30 @@ fromServerUpdate raw ready =
 
     Right (AuthCodeToSignF (AuthCode authCode)) ->
         let
+        pass = (DoNothingO, ReadyS ready)
         publicKey = Ed.toPublic $ secretKey ready
         toSign = authCodeA <> authCode
         signature = Ed.sign (secretKey ready) publicKey toSign
-        toSend = encodeToServer $ SignedAuthCodeT publicKey signature
         in
-        ( TcpSendO (tcpConnR ready) toSend
-        , ReadyS ready
-        )
+        case authStatus ready of
+        LoggedInA _ ->
+            pass
+
+        NotLoggedInA JustNotLoggedIn ->
+            pass
+
+        NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+            pass
+
+        NotLoggedInA (SendWhenLoggedIn (Just socket) toServer) ->
+            ( BatchO
+                [ TcpSendO socket $
+                    encodeToServer $
+                    SignedAuthCodeT publicKey signature
+                , TcpSendO socket $ encodeToServer $ toServer
+                ] 
+            , ReadyS $ ready { authStatus = LoggedInA socket }
+            )
 
     Right NoMessagesF ->
         (toUser NoMessagesU, FinishedS)
@@ -953,7 +966,7 @@ uint16P = do
 
 parseLength :: B.ByteString -> Either String Int
 parseLength bytes2 =
-    P.eitherResult $ P.parse uint16P bytes2
+    P.parseOnly uint16P bytes2
 
 
 uint8P :: P.Parser Int

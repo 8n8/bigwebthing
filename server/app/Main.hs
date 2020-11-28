@@ -885,7 +885,7 @@ tcpReceiver mainState socket address = do
             updateIo mainState $ DeadTcpM address
 
         Right (Just rawLen) ->
-            case P.eitherResult $ P.parse uint16P rawLen of
+            case P.parseOnly uint16P rawLen of
             Left _ -> do
                 Tio.putStrLn "3"
                 updateIo mainState $ DeadTcpM address
@@ -908,6 +908,8 @@ tcpReceiver mainState socket address = do
 
                 else do
                     Tio.putStrLn "6"
+                    Tio.putStrLn $
+                        "length: " <> T.pack (show len) <> "\n====="
                     updateIo mainState $ DeadTcpM address
 
 
