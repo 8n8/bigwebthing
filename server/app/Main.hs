@@ -464,7 +464,7 @@ update model msg =
 
 accessListP :: P.Parser (Set.Set PublicKey)
 accessListP = do
-    asList <- fmap (: []) oneAccessKeyP
+    asList <- P.many1 oneAccessKeyP
     P.endOfInput
     return $ Set.fromList asList
 
@@ -726,7 +726,6 @@ signatureP = do
 
 inboxMessageP :: P.Parser InboxMessage
 inboxMessageP = do
-    _ <- P.word8 1
     raw <- P.scan 0 msgScanner
     return $ InboxMessage raw
 
