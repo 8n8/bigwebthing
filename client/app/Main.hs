@@ -745,11 +745,19 @@ fromServerUpdate raw ready =
                     SignedAuthCodeT publicKey signature
                 , TcpSendO socket $ encodeToServer $ toServer
                 ]
-            , ReadyS $ ready { authStatus = LoggedInA socket }
+            , case toServer of
+                SignedAuthCodeT _ _ ->
+                    ReadyS $ ready { authStatus = LoggedInA socket }
+
+                GetMessageT ->
+                    ReadyS $ ready { authStatus = LoggedInA socket }
+
+                SendMessageT _ _ ->
+                    FinishedS
             )
 
     Right NoMessagesF ->
-        ( BatchO 
+        ( BatchO
             [ toUser NoMessagesU
             , killConn $ authStatus ready
             ]
