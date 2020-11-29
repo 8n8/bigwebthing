@@ -306,7 +306,7 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
-    BadTcpRecvM debug ->
+    BadTcpRecvM _ ->
         let
         errMsg = (toUser NotConnectedU, FinishedS)
         in
