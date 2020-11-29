@@ -183,6 +183,7 @@ instance Show Ready where
 
 data Output
     = DoNothingO
+    | SetupDbO
     | CloseSocketO Tcp.Socket
     | MsgInSocketO Tcp.SockAddr Tcp.Socket B.ByteString
     | PrintO T.Text
@@ -423,7 +424,9 @@ update model msg =
                 )
 
     StartM ->
-        (ReadAccessListO, InitS ReadingAccessListI)
+        ( BatchO [SetupDbO, ReadAccessListO ]
+        , InitS ReadingAccessListI
+        )
 
     TcpMsgInM address rawMessage ->
         updateOnRawTcpMessage address rawMessage model
@@ -796,6 +799,20 @@ io mainState output = do
                 (Db.Only recipient)
         updateIo mainState $ MessagesFromDbM recipient result
 
+    SetupDbO -> do
+        Tio.putStrLn "just before setting up DB"
+        Db.withConnection dbPath $ \conn -> do
+            Db.execute_ conn makeMessagesTableSql
+
+
+makeMessagesTableSql :: Db.Query
+makeMessagesTableSql =
+    "CREATE TABLE IF NOT EXISTS messages \
+    \(sender BLOB NOT NULL,\
+    \ recipient BLOB NOT NULL,\
+    \ message BLOB NOT NULL,\
+    \ PRIMARY KEY (sender, recipient, message));"
+
 
 saveMessageSql :: Db.Query
 saveMessageSql =
@@ -805,7 +822,7 @@ saveMessageSql =
 
 getMessageSql :: Db.Query
 getMessageSql =
-    "SELECT (sender, message) FROM messages WHERE recipient=?;"
+    "SELECT sender, message FROM messages WHERE recipient=?;"
 
 
 newtype Sender
