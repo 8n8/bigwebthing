@@ -464,7 +464,7 @@ update model msg =
 
 accessListP :: P.Parser (Set.Set PublicKey)
 accessListP = do
-    asList <- P.many1 oneAccessKeyP
+    asList <- fmap (: []) oneAccessKeyP
     P.endOfInput
     return $ Set.fromList asList
 
@@ -559,7 +559,6 @@ updateOnRawTcpMessage address rawMessage model =
         Just (TcpConn socket _) ->
             case P.parseOnly fromClientP rawMessage of
             Left _ ->
-                trace "<parse of message in failed>" $
                 let
                 newConns = Map.delete address (tcpConns ready)
                 in
@@ -568,7 +567,6 @@ updateOnRawTcpMessage address rawMessage model =
                 )
 
             Right untrusted ->
-                trace "<parse of message in succeeded>" $
                 updateOnTcpMessage address ready untrusted
 
 
@@ -728,6 +726,7 @@ signatureP = do
 
 inboxMessageP :: P.Parser InboxMessage
 inboxMessageP = do
+    _ <- P.word8 1
     raw <- P.scan 0 msgScanner
     return $ InboxMessage raw
 
