@@ -576,9 +576,6 @@ updateOnTcpMessage
     -> FromClient
     -> (Output, State)
 updateOnTcpMessage address ready untrusted =
-    let
-    pass = (DoNothingO, ReadyS ready)
-    in
     case Map.lookup address $ tcpConns ready of
     Nothing ->
         (DoNothingO, ReadyS ready)
@@ -601,11 +598,18 @@ updateOnTcpMessage address ready untrusted =
             , ReadyS ready
             )
 
-
     Just (TcpConn socket (Untrusted authCode)) ->
+        let
+        closeSocket = (CloseSocketO socket, ReadyS ready)
+        in
         case untrusted of
         SignedAuthCodeF sender signed ->
-            if validAuthSig authCode signed sender then
+            let
+            validSig = validAuthSig authCode signed sender
+            allowed =
+                Set.member (senderToPub sender) (accessList ready)
+            in
+            if validSig && allowed then
             ( DoNothingO
             , ReadyS $
                 ready
@@ -617,13 +621,18 @@ updateOnTcpMessage address ready untrusted =
                     }
             )
             else
-            pass
+            closeSocket
 
         SendMessage _ _ ->
-            pass
+            closeSocket
 
         GetMessage ->
-            pass
+            closeSocket
+
+
+senderToPub :: Sender -> PublicKey
+senderToPub (Sender s) =
+    PublicKey s
 
 
 validAuthSig :: AuthCode -> Ed.Signature -> Sender -> Bool
