@@ -188,7 +188,6 @@ instance Show Msg where
             "StartM"
 
         TcpSendResultM except ->
-
             "TcpSendResultM (" <> show except <> ")"
 
         BadTcpRecvM err ->
@@ -745,7 +744,7 @@ fromServerUpdate raw ready =
                     SignedAuthCodeT publicKey signature
                 , TcpSendO socket $ encodeToServer $ toServer
                 ]
-            , ReadyS $ ready { authStatus = LoggedInA socket }
+            , FinishedS
             )
 
     Right NoMessagesF ->
@@ -804,7 +803,6 @@ authCodeP = do
 
 inboxMessageP :: P.Parser T.Text
 inboxMessageP = do
-    _ <- P.word8 1
     raw <- P.scan 0 msgScanner
     case decodeUtf8' raw of
         Left err ->
