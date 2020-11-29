@@ -2,7 +2,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 module Main (main) where
 
-import System.FilePath ((</>))
 import qualified Data.Text.IO as Tio
 import System.Environment (getArgs)
 import qualified Control.Exception as E
@@ -22,7 +21,6 @@ import qualified Data.ByteArray as Ba
 import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Data.IntSet as IntSet
 import System.IO.Error (isDoesNotExistError)
-import qualified System.Directory as Dir
 import Data.Bits ((.&.), shiftR)
 
 
@@ -52,12 +50,8 @@ io mainState output =
         eitherError <- E.try $ Tcp.send socket msg
         updateIo mainState $ TcpSendResultM eitherError
 
-    GetHomeDirO -> do
-        homeDir <- Dir.getHomeDirectory
-        updateIo mainState $ HomeDirM homeDir
-
-    WriteKeyToFileO path key -> do
-        B.writeFile path key
+    WriteKeyToFileO key -> do
+        B.writeFile keysPath key
 
     PrintO msg -> do
         Tio.putStr msg
@@ -74,8 +68,8 @@ io mainState output =
         args <- getArgs
         updateIo mainState $ ArgsM args
 
-    ReadSecretKeyO path -> do
-        raw <- E.try $ B.readFile path
+    ReadSecretKeyO -> do
+        raw <- E.try $ B.readFile keysPath
         updateIo mainState $ SecretKeyFileM raw
 
     DoNothingO ->
@@ -163,15 +157,14 @@ data Output
     | GenerateSecretKeyO
     | CloseTcpO Tcp.Socket
     | TcpSendO Tcp.Socket B.ByteString
-    | ReadSecretKeyO FilePath
+    | ReadSecretKeyO
     | PrintO T.Text
     | DoNothingO
     | BatchO [Output]
     | MakeTcpConnO
     | BytesInQO Q B.ByteString
     | ReadMessageFromStdInO
-    | WriteKeyToFileO FilePath B.ByteString
-    | GetHomeDirO
+    | WriteKeyToFileO B.ByteString
 
 
 data Msg
@@ -184,7 +177,6 @@ data Msg
     | BatchM [Maybe Msg]
     | FromServerM B.ByteString
     | NewSecretKeyM Ed.SecretKey
-    | HomeDirM FilePath
     | NoInternetM E.IOException
     | TcpConnM Tcp.Socket
 
@@ -220,9 +212,6 @@ instance Show Msg where
         NewSecretKeyM key ->
             "NewSecretKeyM " <> show key
 
-        HomeDirM dir ->
-            "HomeDirM " <> dir
-
         NoInternetM except ->
             "NoInternetM " <> show except
 
@@ -244,9 +233,8 @@ data State
 
 data Init
     = EmptyI
-    | GettingHomeDirI
-    | GettingKeysFromFileI FilePath
-    | GeneratingSecretKeyI FilePath
+    | GettingKeysFromFileI
+    | GeneratingSecretKeyI
     deriving Show
 
 
@@ -307,9 +295,9 @@ usage =
     \    $ bwt send <recipient ID>\n"
 
 
-keysPath :: FilePath -> FilePath
-keysPath homeDir =
-    homeDir </> ".bigwebthingSECRET"
+keysPath :: FilePath
+keysPath =
+    "bigwebthingSECRET"
 
 
 update :: State -> Msg -> (Output, State)
@@ -374,29 +362,7 @@ update model msg =
         )
 
     StartM ->
-        (GetHomeDirO, InitS GettingHomeDirI)
-
-    HomeDirM homeDir ->
-        case model of
-        InitS GettingHomeDirI ->
-            ( ReadSecretKeyO $ keysPath homeDir
-            , InitS $ GettingKeysFromFileI homeDir
-            )
-
-        InitS EmptyI ->
-            pass
-
-        InitS (GettingKeysFromFileI _) ->
-            pass
-
-        InitS (GeneratingSecretKeyI _) ->
-            pass
-
-        ReadyS _ ->
-            pass
-
-        FinishedS ->
-            pass
+        (ReadSecretKeyO, InitS GettingKeysFromFileI)
 
     StdInM raw ->
         case P.parseOnly inboxMessageP raw of
@@ -435,18 +401,15 @@ update model msg =
 
     NewSecretKeyM key ->
         case model of
-        InitS GettingHomeDirI ->
-            pass
-
         InitS EmptyI ->
             pass
 
-        InitS (GettingKeysFromFileI _) ->
+        InitS GettingKeysFromFileI ->
             pass
 
-        InitS (GeneratingSecretKeyI homeDir) ->
+        InitS GeneratingSecretKeyI ->
             ( BatchO
-                [ WriteKeyToFileO (keysPath homeDir) $ Ba.convert key
+                [ WriteKeyToFileO $ Ba.convert key
                 , GetArgsO
                 ]
             , ReadyS $
@@ -515,16 +478,13 @@ update model msg =
             NotLoggedInA (SendWhenLoggedIn Nothing _) ->
                 pass
 
-        InitS GettingHomeDirI ->
-            pass
-
         InitS EmptyI ->
             pass
 
-        InitS (GettingKeysFromFileI _) ->
+        InitS GettingKeysFromFileI ->
             pass
 
-        InitS (GeneratingSecretKeyI _) ->
+        InitS GeneratingSecretKeyI ->
             pass
 
         FinishedS ->
@@ -563,16 +523,13 @@ update model msg =
         ReadyS _ ->
             pass
 
-        InitS (GettingKeysFromFileI homeDir) ->
-            (GenerateSecretKeyO, InitS (GeneratingSecretKeyI homeDir))
+        InitS GettingKeysFromFileI ->
+            (GenerateSecretKeyO, InitS GeneratingSecretKeyI)
 
         InitS EmptyI ->
             pass
 
-        InitS GettingHomeDirI ->
-            pass
-
-        InitS (GeneratingSecretKeyI _) ->
+        InitS GeneratingSecretKeyI ->
             pass
 
         FinishedS ->
@@ -592,13 +549,10 @@ update model msg =
         InitS EmptyI ->
             pass
 
-        InitS (GeneratingSecretKeyI _) ->
+        InitS GeneratingSecretKeyI ->
             pass
 
-        InitS GettingHomeDirI ->
-            pass
-
-        InitS (GettingKeysFromFileI _) ->
+        InitS GettingKeysFromFileI ->
             case P.parseOnly secretSigningP raw of
             Left err ->
                 ( PrintO $

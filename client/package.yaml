@@ -29,8 +29,6 @@ dependencies:
 - network-simple
 - cryptonite
 - memory
-- directory
-- filepath
 
 executables:
   client-exe:
