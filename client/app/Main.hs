@@ -2,7 +2,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 module Main (main) where
 
-import Debug.Trace (trace)
 import System.FilePath ((</>))
 import qualified Data.Text.IO as Tio
 import System.Environment (getArgs)
@@ -317,17 +316,7 @@ update :: State -> Msg -> (Output, State)
 update model msg =
     let
     pass = (DoNothingO, model)
-    dbg =
-        mconcat
-        [ "model: "
-        , show model
-        , "\n"
-        , "msg: "
-        , show msg
-        , "\n"
-        ]
     in
-    trace dbg $
     case msg of
     BadTcpRecvM debug ->
         let
@@ -839,18 +828,18 @@ killConn auth =
 fromServerP :: P.Parser FromServer
 fromServerP = do
     msg <- P.choice
-        [ trace "AuthCodeToSign parser" $ do
+        [ do
             _ <- P.word8 0
             AuthCodeToSignF <$> authCodeP
-        , trace "InboxMessageF parser" $ do
+        , do
             _ <- P.word8 1
             sender <- publicKeyP
             InboxMessageF sender <$> inboxMessageP
-        , trace "NoMessagesF parser" $ do
+        , do
             _ <- P.word8 2
             return NoMessagesF
         ]
-    trace "endOfInput parser" P.endOfInput
+    P.endOfInput
     return msg
 
 
