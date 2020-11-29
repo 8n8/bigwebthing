@@ -308,13 +308,7 @@ update model msg =
     case msg of
     BadTcpRecvM debug ->
         let
-        errMsg =
-            ( BatchO
-                [ PrintO $ T.pack debug
-                , toUser NotConnectedU
-                ]
-            , FinishedS
-            )
+        errMsg = (toUser NotConnectedU, FinishedS)
         in
         case model of
         FinishedS ->
