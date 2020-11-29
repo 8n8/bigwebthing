@@ -46,6 +46,9 @@ updateIo mainState msg = do
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
+    CloseTcpO socket ->
+        Tcp.closeSock socket
+
     TcpSendO socket msg -> do
         eitherError <- E.try $ Tcp.send socket msg
         updateIo mainState $ TcpSendResultM eitherError
@@ -159,6 +162,7 @@ serverPort =
 data Output
     = GetArgsO
     | GenerateSecretKeyO
+    | CloseTcpO Tcp.Socket
     | TcpSendO Tcp.Socket B.ByteString
     | ReadSecretKeyO FilePath
     | PrintO T.Text
@@ -184,7 +188,52 @@ data Msg
     | HomeDirM FilePath
     | NoInternetM E.IOException
     | TcpConnM Tcp.Socket
-    deriving Show
+
+
+instance Show Msg where
+    show msg =
+        case msg of
+        StartM ->
+            "StartM"
+
+        TcpSendResultM except ->
+
+            "TcpSendResultM (" <> show except <> ")"
+
+        BadTcpRecvM err ->
+            "BadTcpRecvM " <> err
+
+        StdInM bytes ->
+            "StdInM " <> showBytes bytes
+
+        ArgsM args ->
+            "ArgsM " <> show args
+
+        SecretKeyFileM f ->
+            "SecretKeyFileM " <> show f
+
+        BatchM _ ->
+            "BatchM"
+
+        FromServerM m ->
+            "FromServerM " <> showBytes m
+
+        NewSecretKeyM key ->
+            "NewSecretKeyM " <> show key
+
+        HomeDirM dir ->
+            "HomeDirM " <> dir
+
+        NoInternetM except ->
+            "NoInternetM " <> show except
+
+        TcpConnM conn ->
+            "TcpConnM " <> show conn
+
+
+showBytes :: B.ByteString -> String
+showBytes bytes =
+    T.unpack $ Text.Hex.encodeHex bytes
 
 
 data State
@@ -281,12 +330,24 @@ update model msg =
     trace dbg $
     case msg of
     BadTcpRecvM debug ->
-        ( BatchO
-            [ PrintO $ T.pack debug
-            , toUser NotConnectedU
-            ]
-        , FinishedS
-        )
+        let
+        errMsg =
+            ( BatchO
+                [ PrintO $ T.pack debug
+                , toUser NotConnectedU
+                ]
+            , FinishedS
+            )
+        in
+        case model of
+        FinishedS ->
+            (DoNothingO, model)
+
+        ReadyS _ ->
+            errMsg
+
+        InitS _ ->
+            errMsg
 
     TcpSendResultM (Right ()) ->
         pass
@@ -607,7 +668,7 @@ prettyMessage msg =
         "bad arguments\n\nUsage instructions:\n" <> usage <> "\n"
 
     NoMessagesU ->
-        "no messages"
+        "no messages\n"
 
     NewMessageU sender message ->
         case decodeUtf8' $ B64.encodeUnpadded $ Ba.convert sender of
@@ -746,29 +807,50 @@ fromServerUpdate raw ready =
                     encodeToServer $
                     SignedAuthCodeT publicKey signature
                 , TcpSendO socket $ encodeToServer $ toServer
-                ] 
+                ]
             , ReadyS $ ready { authStatus = LoggedInA socket }
             )
 
     Right NoMessagesF ->
-        (toUser NoMessagesU, FinishedS)
+        ( BatchO 
+            [ toUser NoMessagesU
+            , killConn $ authStatus ready
+            ]
+        , FinishedS
+        )
+
+
+killConn :: AuthStatus -> Output
+killConn auth =
+    case auth of
+    LoggedInA socket ->
+        CloseTcpO socket
+
+    NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+        DoNothingO
+
+    NotLoggedInA (SendWhenLoggedIn (Just socket) _) ->
+        CloseTcpO socket
+
+    NotLoggedInA JustNotLoggedIn ->
+        DoNothingO
 
 
 fromServerP :: P.Parser FromServer
 fromServerP = do
     msg <- P.choice
-        [ do
+        [ trace "AuthCodeToSign parser" $ do
             _ <- P.word8 0
             AuthCodeToSignF <$> authCodeP
-        , do
+        , trace "InboxMessageF parser" $ do
             _ <- P.word8 1
             sender <- publicKeyP
             InboxMessageF sender <$> inboxMessageP
-        , do
+        , trace "NoMessagesF parser" $ do
             _ <- P.word8 2
             return NoMessagesF
         ]
-    P.endOfInput
+    trace "endOfInput parser" P.endOfInput
     return msg
 
 
