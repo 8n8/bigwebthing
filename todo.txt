@@ -1,6 +1,5 @@
 'Done' means that it works, that the code is concise, neat and readable, that it has a complete test suite, and is well documented.
 
-+ get rid of "could not connect to the internet" message when successfully sending messages
 + for each of the client and the server
     - export everything and try to Quickcheck everything
     - write unit tests
