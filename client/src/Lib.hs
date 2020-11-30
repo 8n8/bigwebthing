@@ -424,6 +424,116 @@ updateOnMyIdArg model =
         (DoNothingO, model)
 
 
+updateOnGetArg :: State -> (Output, State)
+updateOnGetArg model =
+    let
+    pass = (DoNothingO, model)
+    in
+    updateReady model $ \ready ->
+    case authStatus ready of
+    LoggedInA _ ->
+        pass
+
+    NotLoggedInA JustNotLoggedIn ->
+        ( MakeTcpConnO
+        , ReadyS $ ready
+            { authStatus =
+                NotLoggedInA $
+                SendWhenLoggedIn Nothing GetMessageT
+            }
+        )
+
+    NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
+        pass
+
+    NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+        pass
+
+
+updateOnSendArg :: State -> String -> (Output, State)
+updateOnSendArg model rawRecipient =
+    case parseRecipient rawRecipient of
+    Left err ->
+        (toUser $ InvalidRecipientU err, model)
+
+    Right recipient ->
+        updateReady model $ \ready ->
+        ( ReadMessageFromStdInO
+        , ReadyS $ ready { readingStdIn = Just recipient }
+        )
+
+
+updateOnBadSecretKeyFile :: State -> IOError -> (Output, State)
+updateOnBadSecretKeyFile model ioErr =
+    let
+    pass = (DoNothingO, model)
+    in
+    if isDoesNotExistError ioErr then
+    case model of
+    ReadyS _ ->
+        pass
+
+    InitS GettingKeysFromFileI ->
+        (GenerateSecretKeyO, InitS GeneratingSecretKeyI)
+
+    InitS EmptyI ->
+        pass
+
+    InitS GeneratingSecretKeyI ->
+        pass
+
+    FinishedS ->
+        pass
+
+    else
+    ( toUser $ InternalErrorU $
+        "could not read secret key file:\n" <> T.pack (show ioErr)
+    , FinishedS
+    )
+
+
+updateOnGoodSecretKeyFile :: State -> B.ByteString -> (Output, State)
+updateOnGoodSecretKeyFile model raw =
+    let
+    pass = (DoNothingO, model)
+    in
+    case model of
+    InitS EmptyI ->
+        pass
+
+    InitS GeneratingSecretKeyI ->
+        pass
+
+    InitS GettingKeysFromFileI ->
+        case P.parseOnly secretSigningP raw of
+        Left err ->
+            ( toUser $ InternalErrorU $
+              mconcat
+              [ "corrupted secret key file: \n"
+              , T.pack err
+              , ": \n"
+              , Text.Hex.encodeHex raw
+              ]
+            , FinishedS
+            )
+
+        Right key ->
+            ( GetArgsO
+            , ReadyS $
+              Ready
+                { secretKey = key
+                , authStatus = NotLoggedInA JustNotLoggedIn
+                , readingStdIn = Nothing
+                }
+            )
+
+    ReadyS _ ->
+        pass
+
+    FinishedS ->
+        pass
+
+
 update :: State -> Msg -> (Output, State)
 update model msg =
     let
@@ -461,56 +571,10 @@ update model msg =
         updateOnMyIdArg model
 
     ArgsM ["get"] ->
-        case model of
-        ReadyS ready ->
-            case authStatus ready of
-            LoggedInA _ ->
-                pass
-
-            NotLoggedInA JustNotLoggedIn ->
-                ( MakeTcpConnO
-                , ReadyS $ ready
-                    { authStatus =
-                        NotLoggedInA $
-                        SendWhenLoggedIn Nothing GetMessageT
-                    }
-                )
-
-            NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
-                pass
-
-            NotLoggedInA (SendWhenLoggedIn Nothing _) ->
-                pass
-
-        InitS EmptyI ->
-            pass
-
-        InitS GettingKeysFromFileI ->
-            pass
-
-        InitS GeneratingSecretKeyI ->
-            pass
-
-        FinishedS ->
-            pass
+        updateOnGetArg model
 
     ArgsM ["send", rawRecipient] ->
-        case parseRecipient rawRecipient of
-        Left err ->
-            (toUser $ InvalidRecipientU err, model)
-
-        Right recipient ->
-            case model of
-            ReadyS ready ->
-                ( ReadMessageFromStdInO
-                , ReadyS $ ready { readingStdIn = Just recipient }
-                )
-
-            InitS _ ->
-                (DoNothingO, model)
-
-            FinishedS ->
-                (DoNothingO, model)
+        updateOnSendArg model rawRecipient
 
     ArgsM _ ->
         (toUser BadArgsU, FinishedS)
@@ -522,65 +586,10 @@ update model msg =
         (BatchO outputs, newModel)
 
     SecretKeyFileM (Left ioErr) ->
-        if isDoesNotExistError ioErr then
-        case model of
-        ReadyS _ ->
-            pass
-
-        InitS GettingKeysFromFileI ->
-            (GenerateSecretKeyO, InitS GeneratingSecretKeyI)
-
-        InitS EmptyI ->
-            pass
-
-        InitS GeneratingSecretKeyI ->
-            pass
-
-        FinishedS ->
-            pass
-
-        else
-        ( toUser $ InternalErrorU $
-            "could not read secret key file:\n" <> T.pack (show ioErr)
-        , FinishedS
-        )
+        updateOnBadSecretKeyFile model ioErr
 
     SecretKeyFileM (Right raw) ->
-        case model of
-        InitS EmptyI ->
-            pass
-
-        InitS GeneratingSecretKeyI ->
-            pass
-
-        InitS GettingKeysFromFileI ->
-            case P.parseOnly secretSigningP raw of
-            Left err ->
-                ( toUser $ InternalErrorU $
-                  mconcat
-                  [ "corrupted secret key file: \n"
-                  , T.pack err
-                  , ": \n"
-                  , Text.Hex.encodeHex raw
-                  ]
-                , FinishedS
-                )
-
-            Right key ->
-                ( GetArgsO
-                , ReadyS $
-                  Ready
-                    { secretKey = key
-                    , authStatus = NotLoggedInA JustNotLoggedIn
-                    , readingStdIn = Nothing
-                    }
-                )
-
-        ReadyS _ ->
-            pass
-
-        FinishedS ->
-            pass
+        updateOnGoodSecretKeyFile model raw
 
     FromServerM raw ->
         updateReady model $ fromServerUpdate raw
