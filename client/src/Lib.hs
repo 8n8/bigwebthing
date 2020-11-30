@@ -409,17 +409,16 @@ updateOnMyIdArg model =
         in
         case decodeUtf8' idB64 of
         Left err ->
-            ( PrintO $
-              mconcat
-              [ "internal error:\n"
-              , "could not convert public key to Base64:\n"
-              , T.pack $ show err
-              ]
+            ( toUser $ InternalErrorU $
+                mconcat
+                [ "could not convert public key to Base64:\n"
+                , T.pack $ show err
+                ]
             , FinishedS
             )
 
         Right b64 ->
-            (PrintO $ b64 <> "\n", FinishedS)
+            (toUser $ MyIdU b64, FinishedS)
 
     FinishedS ->
         (DoNothingO, model)
@@ -456,7 +455,7 @@ update model msg =
         updateOnNewSecretKey model key
 
     ArgsM ["help"] ->
-        (PrintO usage, FinishedS)
+        (toUser UsageU, FinishedS)
 
     ArgsM ["myid"] ->
         updateOnMyIdArg model
@@ -498,7 +497,7 @@ update model msg =
     ArgsM ["send", rawRecipient] ->
         case parseRecipient rawRecipient of
         Left err ->
-            (PrintO $ "invalid recipient: " <> err, model)
+            (toUser $ InvalidRecipientU err, model)
 
         Right recipient ->
             case model of
@@ -541,11 +540,8 @@ update model msg =
             pass
 
         else
-        ( PrintO $
-          mconcat
-          [ "internal error in reading secret key file:\n"
-          , T.pack $ show ioErr
-          ]
+        ( toUser $ InternalErrorU $
+            "could not read secret key file:\n" <> T.pack (show ioErr)
         , FinishedS
         )
 
@@ -560,9 +556,9 @@ update model msg =
         InitS GettingKeysFromFileI ->
             case P.parseOnly secretSigningP raw of
             Left err ->
-                ( PrintO $
+                ( toUser $ InternalErrorU $
                   mconcat
-                  [ "internal error: corrupted secret key file: \n"
+                  [ "corrupted secret key file: \n"
                   , T.pack err
                   , ": \n"
                   , Text.Hex.encodeHex raw
@@ -597,27 +593,34 @@ data ToUser
     | NoMessagesU
     | NewMessageU Ed.PublicKey T.Text
     | BadMessageFromServerU B.ByteString String
+    | InternalErrorU T.Text
+    | MyIdU T.Text
+    | UsageU
+    | InvalidRecipientU T.Text
 
 
 toUser :: ToUser -> Output
-toUser =
-    PrintO . prettyMessage
+toUser message =
+    PrintO $ prettyMessage message <> "\n"
 
 
 prettyMessage :: ToUser -> T.Text
 prettyMessage msg =
     case msg of
+    InvalidRecipientU err ->
+        "invalid recipient:\n" <> err
+
     BadMessageU err ->
-        "bad message:\n" <> T.pack err <> "\n"
+        "bad message:\n" <> T.pack err
 
     NotConnectedU ->
-        "could not connect to the internet\n"
+        "could not connect to the internet"
 
     BadArgsU ->
-        "bad arguments\n\nUsage instructions:\n" <> usage <> "\n"
+        "bad arguments\n\nUsage instructions:\n" <> usage
 
     NoMessagesU ->
-        "no messages\n"
+        "no messages"
 
     NewMessageU sender message ->
         case decodeUtf8' $ B64.encodeUnpadded $ Ba.convert sender of
@@ -639,6 +642,15 @@ prettyMessage msg =
         , "\nparse error: "
         , T.pack parseErr
         ]
+
+    InternalErrorU err ->
+        "Internal error. This is a bug in the program.\n" <> err
+
+    MyIdU id_ ->
+        id_
+
+    UsageU ->
+        usage
 
 
 parseRecipient :: String -> Either T.Text Ed.PublicKey
