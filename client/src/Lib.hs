@@ -86,6 +86,7 @@ io mainState output =
         makeTcpConn mainState
 
 
+maxMessageLength :: Int
 maxMessageLength =
     16000
 
@@ -95,9 +96,9 @@ makeTcpConn model = do
     res <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) -> do
             updateIo model $ TcpConnM conn
             tcpListen model conn
-    case res of
-        Left err ->
-            updateIo model $ NoInternetM err
+    case res :: Either E.IOException () of
+        Left _ ->
+            updateIo model NoInternetM
 
         Right () ->
             return ()
@@ -144,10 +145,12 @@ tcpListen model conn = do
                             tcpListen model conn
 
 
+serverUrl :: Tcp.HostName
 serverUrl =
     "localhost"
 
 
+serverPort :: Tcp.ServiceName
 serverPort =
     "11453"
 
@@ -177,7 +180,7 @@ data Msg
     | BatchM [Maybe Msg]
     | FromServerM B.ByteString
     | NewSecretKeyM Ed.SecretKey
-    | NoInternetM E.IOException
+    | NoInternetM
     | TcpConnM Tcp.Socket
 
 
@@ -212,8 +215,8 @@ instance Show Msg where
         NewSecretKeyM key ->
             "NewSecretKeyM " <> show key
 
-        NoInternetM except ->
-            "NoInternetM " <> show except
+        NoInternetM ->
+            "NoInternetM"
 
         TcpConnM conn ->
             "TcpConnM " <> show conn
@@ -300,6 +303,128 @@ keysPath =
     "bigwebthingSECRET"
 
 
+updateOnBadTcpRecvM :: State -> (Output, State)
+updateOnBadTcpRecvM model =
+    let
+    errMsg = (toUser NotConnectedU, FinishedS)
+    in
+    case model of
+    FinishedS ->
+        (DoNothingO, model)
+
+    ReadyS _ ->
+        errMsg
+
+    InitS _ ->
+        errMsg
+
+
+updateOnTcpConn :: State -> Tcp.Socket -> (Output, State)
+updateOnTcpConn model socket =
+    updateReady model $ \ready ->
+    ( DoNothingO
+    , ReadyS $
+        ready
+        { authStatus =
+            case authStatus ready of
+            LoggedInA _ ->
+                authStatus ready
+
+            NotLoggedInA JustNotLoggedIn ->
+                authStatus ready
+
+            NotLoggedInA (SendWhenLoggedIn _ toServer) ->
+                NotLoggedInA $
+                SendWhenLoggedIn (Just socket) toServer
+        }
+    )
+
+
+updateOnStdIn :: State -> B.ByteString -> (Output, State)
+updateOnStdIn model raw =
+    let
+    pass = (DoNothingO, model)
+    in
+    case P.parseOnly inboxMessageP raw of
+    Left err ->
+        (toUser $ BadMessageU err, FinishedS)
+
+    Right newMsg ->
+        updateReady model $ \ready ->
+        case readingStdIn ready of
+        Nothing ->
+            pass
+
+        Just publicKey ->
+            ( MakeTcpConnO
+            , ReadyS $
+              ready
+                { authStatus =
+                    NotLoggedInA $
+                    SendWhenLoggedIn Nothing $
+                    SendMessageT publicKey newMsg
+                }
+            )
+
+
+updateOnNewSecretKey :: State -> Ed.SecretKey -> (Output, State)
+updateOnNewSecretKey model key =
+    let
+    pass = (DoNothingO, model)
+    in
+    case model of
+    InitS EmptyI ->
+        pass
+
+    InitS GettingKeysFromFileI ->
+        pass
+
+    InitS GeneratingSecretKeyI ->
+        ( BatchO [WriteKeyToFileO $ Ba.convert key, GetArgsO]
+        , ReadyS $
+          Ready
+            { secretKey = key
+            , authStatus = NotLoggedInA JustNotLoggedIn
+            , readingStdIn = Nothing
+            }
+        )
+
+    ReadyS _ ->
+        pass
+
+    FinishedS ->
+        pass
+
+
+updateOnMyIdArg :: State -> (Output, State)
+updateOnMyIdArg model =
+    case model of
+    InitS _ ->
+        (DoNothingO, model)
+
+    ReadyS ready ->
+        let
+        public = Ed.toPublic $ secretKey ready
+        idB64 = B64.encodeUnpadded $ Ba.convert public
+        in
+        case decodeUtf8' idB64 of
+        Left err ->
+            ( PrintO $
+              mconcat
+              [ "internal error:\n"
+              , "could not convert public key to Base64:\n"
+              , T.pack $ show err
+              ]
+            , FinishedS
+            )
+
+        Right b64 ->
+            (PrintO $ b64 <> "\n", FinishedS)
+
+    FinishedS ->
+        (DoNothingO, model)
+
+
 update :: State -> Msg -> (Output, State)
 update model msg =
     let
@@ -307,148 +432,34 @@ update model msg =
     in
     case msg of
     BadTcpRecvM _ ->
-        let
-        errMsg = (toUser NotConnectedU, FinishedS)
-        in
-        case model of
-        FinishedS ->
-            (DoNothingO, model)
-
-        ReadyS _ ->
-            errMsg
-
-        InitS _ ->
-            errMsg
+        updateOnBadTcpRecvM model
 
     TcpSendResultM (Right ()) ->
         pass
 
     TcpSendResultM (Left _) ->
-        ( toUser NotConnectedU
-        , FinishedS
-        )
+        (toUser NotConnectedU, FinishedS)
 
     TcpConnM socket ->
-        updateReady model $ \ready ->
-        ( DoNothingO
-        , ReadyS $
-            ready
-            { authStatus =
-                case authStatus ready of
-                LoggedInA _ ->
-                    authStatus ready
+        updateOnTcpConn model socket
 
-                NotLoggedInA JustNotLoggedIn ->
-                    authStatus ready
-
-                NotLoggedInA (SendWhenLoggedIn _ toServer) ->
-                    NotLoggedInA $
-                    SendWhenLoggedIn (Just socket) toServer
-            }
-        )
-
-    NoInternetM ioErr ->
-        ( BatchO
-            [ toUser NotConnectedU
-            , PrintO $ T.pack $ show ioErr
-            ]
-        , FinishedS
-        )
+    NoInternetM ->
+        (toUser NotConnectedU, FinishedS)
 
     StartM ->
         (ReadSecretKeyO, InitS GettingKeysFromFileI)
 
     StdInM raw ->
-        case P.parseOnly inboxMessageP raw of
-        Left err ->
-            ( toUser $ BadMessageU err
-            , FinishedS
-            )
-
-        Right newMsg ->
-            updateReady model $ \ready ->
-            case readingStdIn ready of
-            Nothing ->
-                pass
-
-            Just publicKey ->
-                case authStatus ready of
-                LoggedInA _ ->
-                    pass
-
-                NotLoggedInA (SendWhenLoggedIn Nothing _) ->
-                    pass
-
-                NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
-                    pass
-
-                NotLoggedInA JustNotLoggedIn ->
-                    ( MakeTcpConnO
-                    , ReadyS $
-                      ready
-                        { authStatus =
-                            NotLoggedInA $
-                            SendWhenLoggedIn Nothing $
-                            SendMessageT publicKey newMsg
-                        }
-                    )
+        updateOnStdIn model raw
 
     NewSecretKeyM key ->
-        case model of
-        InitS EmptyI ->
-            pass
-
-        InitS GettingKeysFromFileI ->
-            pass
-
-        InitS GeneratingSecretKeyI ->
-            ( BatchO
-                [ WriteKeyToFileO $ Ba.convert key
-                , GetArgsO
-                ]
-            , ReadyS $
-              Ready
-                { secretKey = key
-                , authStatus = NotLoggedInA JustNotLoggedIn
-                , readingStdIn = Nothing
-                }
-            )
-
-        ReadyS _ ->
-            pass
-
-        FinishedS ->
-            pass
+        updateOnNewSecretKey model key
 
     ArgsM ["help"] ->
         (PrintO usage, FinishedS)
 
     ArgsM ["myid"] ->
-        case model of
-        InitS _ ->
-            (DoNothingO, model)
-
-        ReadyS ready ->
-            let
-            public = Ed.toPublic $ secretKey ready
-            idB64 = B64.encodeUnpadded $ Ba.convert public
-            in
-            case decodeUtf8' idB64 of
-            Left err ->
-                ( PrintO $
-                  mconcat
-                  [ "internal error:\n"
-                  , "could not convert public key to Base64:\n"
-                  , T.pack $ show err
-                  ]
-                , FinishedS
-                )
-
-            Right b64 ->
-                (PrintO $ b64 <> "\n", FinishedS)
-
-        FinishedS ->
-            (DoNothingO, model)
+        updateOnMyIdArg model
 
     ArgsM ["get"] ->
         case model of
@@ -585,6 +596,7 @@ data ToUser
     | BadMessageU String
     | NoMessagesU
     | NewMessageU Ed.PublicKey T.Text
+    | BadMessageFromServerU B.ByteString String
 
 
 toUser :: ToUser -> Output
@@ -619,6 +631,14 @@ prettyMessage msg =
 
         Right b64 ->
             b64 <> ": " <> message
+
+    BadMessageFromServerU badMsg parseErr ->
+        mconcat
+        [ "Received bad message from server:\nraw bytes: "
+        , Text.Hex.encodeHex badMsg
+        , "\nparse error: "
+        , T.pack parseErr
+        ]
 
 
 parseRecipient :: String -> Either T.Text Ed.PublicKey
@@ -707,19 +727,10 @@ fromServerUpdate :: B.ByteString -> Ready -> (Output, State)
 fromServerUpdate raw ready =
     case P.parseOnly fromServerP raw of
     Left err ->
-        ( PrintO $
-          mconcat
-          [ "Received bad message from server:\n"
-          , Text.Hex.encodeHex raw
-          , T.pack err
-          ]
-        , FinishedS
-        )
+        (toUser $ BadMessageFromServerU raw err, FinishedS)
 
     Right (InboxMessageF sender message) ->
-        ( toUser $ NewMessageU sender message
-        , FinishedS
-        )
+        (toUser $ NewMessageU sender message, FinishedS)
 
     Right (AuthCodeToSignF (AuthCode authCode)) ->
         let

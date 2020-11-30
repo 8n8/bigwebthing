@@ -33,6 +33,20 @@ dependencies:
 - tasty-hedgehog
 - hedgehog
 
+ghc-options:
+- -Weverything
+- -Wno-prepositive-qualified-module
+- -Wno-unsafe
+- -Wno-safe
+- -Wno-missing-safe-haskell-mode
+- -Wno-implicit-prelude
+- -Wno-monomorphism-restriction
+- -Wno-missing-deriving-strategies
+- -Wno-missed-specialisations
+- -Wno-unused-packages
+- -Wno-missing-export-lists
+- -Werror
+
 library:
   source-dirs: src
 
@@ -43,18 +57,7 @@ executables:
     ghc-options:
     - -threaded
     - -rtsopts
-    - -Weverything
-    - -Wno-prepositive-qualified-module
-    - -Wno-unsafe
-    - -Wno-safe
-    - -Wno-missing-safe-haskell-mode
-    - -Wno-implicit-prelude
-    - -Wno-monomorphism-restriction
-    - -Wno-missing-deriving-strategies
-    - -Wno-missed-specialisations
-    - -Wno-unused-packages
     - -with-rtsopts=-N
-    - -Werror
     dependencies:
     - client
 
