@@ -1,13 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-module Lib where
+module Update
+    ( update
+    , Msg(..)
+    , State(..)
+    , Output(..)
+    , Init(..)
+    , AuthStatus(..)
+    , NotLoggedIn(..)
+    , Ready(..)
+    ) where
 
-import qualified Data.Text.IO as Tio
-import System.Environment (getArgs)
 import qualified Control.Exception as E
-import qualified Control.Concurrent.STM as Stm
-import qualified Control.Concurrent.STM.TQueue as Q
-import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Data.ByteString as B
 import qualified Data.Text as T
 import qualified Data.Attoparsec.ByteString as P
@@ -24,133 +28,6 @@ import System.IO.Error (isDoesNotExistError)
 import Data.Bits ((.&.), shiftR)
 
 
-main :: IO ()
-main = do
-    model <- TVar.newTVarIO (InitS EmptyI)
-    updateIo model StartM
-
-
-updateIo :: TVar.TVar State -> Msg -> IO ()
-updateIo mainState msg = do
-    output <- Stm.atomically $ do
-        model <- TVar.readTVar mainState
-        let (output, newModel) = update model msg
-        TVar.writeTVar mainState newModel
-        return output
-    io mainState output
-
-
-io :: TVar.TVar State -> Output -> IO ()
-io mainState output =
-    case output of
-    CloseTcpO socket ->
-        Tcp.closeSock socket
-
-    TcpSendO socket msg -> do
-        eitherError <- E.try $ Tcp.send socket msg
-        updateIo mainState $ TcpSendResultM eitherError
-
-    WriteKeyToFileO key -> do
-        B.writeFile keysPath key
-
-    PrintO msg -> do
-        Tio.putStr msg
-
-    ReadMessageFromStdInO -> do
-        stdin <- B.getContents
-        updateIo mainState $ StdInM stdin
-
-    GenerateSecretKeyO -> do
-        key <- Ed.generateSecretKey
-        updateIo mainState $ NewSecretKeyM key
-
-    GetArgsO -> do
-        args <- getArgs
-        updateIo mainState $ ArgsM args
-
-    ReadSecretKeyO -> do
-        raw <- E.try $ B.readFile keysPath
-        updateIo mainState $ SecretKeyFileM raw
-
-    DoNothingO ->
-        return ()
-
-    BatchO outputs -> do
-        mapM_ (io mainState) outputs
-
-    MakeTcpConnO ->
-        makeTcpConn mainState
-
-
-maxMessageLength :: Int
-maxMessageLength =
-    16000
-
-
-makeTcpConn :: TVar.TVar State -> IO ()
-makeTcpConn model = do
-    res <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) -> do
-            updateIo model $ TcpConnM conn
-            tcpListen model conn
-    case res :: Either E.IOException () of
-        Left _ ->
-            updateIo model NoInternetM
-
-        Right () ->
-            return ()
-
-
-tcpRecv :: Tcp.Socket -> Int -> IO (Either String B.ByteString)
-tcpRecv socket size = do
-    eitherMaybe <- E.try $ Tcp.recv socket size
-    case eitherMaybe :: Either E.IOException (Maybe B.ByteString) of
-        Left err ->
-            return $ Left $ show err
-
-        Right Nothing ->
-            return $ Left "Nothing"
-
-        Right (Just message) ->
-            return $ Right message
-
-
-tcpListen :: TVar.TVar State -> Tcp.Socket -> IO ()
-tcpListen model conn = do
-    maybeRawLength <- tcpRecv conn 2
-    case maybeRawLength of
-        Left err ->
-            updateIo model $
-            BadTcpRecvM $ "could not get length: " <> err <> "\n"
-
-        Right rawLength ->
-            case parseLength rawLength of
-            Left err ->
-                updateIo model $ BadTcpRecvM err
-
-            Right len ->
-                if len > maxMessageLength then
-                updateIo model $ BadTcpRecvM "message too long"
-                else do
-                    maybeMessage <- tcpRecv conn len
-                    case maybeMessage of
-                        Left err ->
-                            updateIo model $ BadTcpRecvM err
-
-                        Right message -> do
-                            updateIo model $ FromServerM message
-                            tcpListen model conn
-
-
-serverUrl :: Tcp.HostName
-serverUrl =
-    "localhost"
-
-
-serverPort :: Tcp.ServiceName
-serverPort =
-    "11453"
-
-
 data Output
     = GetArgsO
     | GenerateSecretKeyO
@@ -163,64 +40,23 @@ data Output
     | MakeTcpConnO
     | ReadMessageFromStdInO
     | WriteKeyToFileO B.ByteString
+    | TcpListenO Tcp.Socket Int
     deriving (Eq, Show)
 
 
 data Msg
     = StartM
+    | TcpConnM (Either E.IOException (Tcp.Socket, Tcp.SockAddr))
     | TcpSendResultM (Either E.IOException ())
     | BadTcpRecvM String
     | StdInM B.ByteString
     | ArgsM [String]
     | SecretKeyFileM (Either E.IOException B.ByteString)
     | BatchM [Maybe Msg]
-    | FromServerM B.ByteString
+    | FromServerM (Either E.IOException (Maybe B.ByteString))
     | NewSecretKeyM Ed.SecretKey
     | NoInternetM
-    | TcpConnM Tcp.Socket
-
-
-instance Show Msg where
-    show msg =
-        case msg of
-        StartM ->
-            "StartM"
-
-        TcpSendResultM except ->
-
-            "TcpSendResultM (" <> show except <> ")"
-
-        BadTcpRecvM err ->
-            "BadTcpRecvM " <> err
-
-        StdInM bytes ->
-            "StdInM " <> showBytes bytes
-
-        ArgsM args ->
-            "ArgsM " <> show args
-
-        SecretKeyFileM f ->
-            "SecretKeyFileM " <> show f
-
-        BatchM _ ->
-            "BatchM"
-
-        FromServerM m ->
-            "FromServerM " <> showBytes m
-
-        NewSecretKeyM key ->
-            "NewSecretKeyM " <> show key
-
-        NoInternetM ->
-            "NoInternetM"
-
-        TcpConnM conn ->
-            "TcpConnM " <> show conn
-
-
-showBytes :: B.ByteString -> String
-showBytes bytes =
-    T.unpack $ Text.Hex.encodeHex bytes
+    deriving Show
 
 
 data State
@@ -246,20 +82,22 @@ data Ready
         deriving Show
 
 
+data ListenStatus
+    = GettingLength
+    | GettingBody
+    deriving Show
+
+
 data AuthStatus
-    = LoggedInA Tcp.Socket
+    = LoggedInA (Tcp.Socket, ListenStatus)
     | NotLoggedInA NotLoggedIn
     deriving Show
 
 
 data NotLoggedIn
-    = SendWhenLoggedIn (Maybe Tcp.Socket) ToServer
+    = SendWhenLoggedIn (Maybe (Tcp.Socket, ListenStatus)) ToServer
     | JustNotLoggedIn
     deriving Show
-
-
-type Q
-    = Q.TQueue B.ByteString
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -294,11 +132,6 @@ usage =
     \    $ bwt send <recipient ID>\n"
 
 
-keysPath :: FilePath
-keysPath =
-    "bigwebthingSECRET"
-
-
 updateOnBadTcpRecvM :: State -> (Output, State)
 updateOnBadTcpRecvM model =
     let
@@ -315,10 +148,13 @@ updateOnBadTcpRecvM model =
         errMsg
 
 
-updateOnTcpConn :: State -> Tcp.Socket -> (Output, State)
+updateOnTcpConn
+    :: State
+    -> Tcp.Socket
+    -> (Output, State)
 updateOnTcpConn model socket =
     updateReady model $ \ready ->
-    ( DoNothingO
+    ( TcpListenO socket 2
     , ReadyS $
         ready
         { authStatus =
@@ -331,7 +167,9 @@ updateOnTcpConn model socket =
 
             NotLoggedInA (SendWhenLoggedIn _ toServer) ->
                 NotLoggedInA $
-                SendWhenLoggedIn (Just socket) toServer
+                SendWhenLoggedIn
+                (Just (socket, GettingLength))
+                toServer
         }
     )
 
@@ -545,7 +383,10 @@ update model msg =
     TcpSendResultM (Left _) ->
         (toUser NotConnectedU, FinishedS)
 
-    TcpConnM socket ->
+    TcpConnM (Left _) ->
+        (toUser NotConnectedU, FinishedS)
+
+    TcpConnM (Right (socket, _)) ->
         updateOnTcpConn model socket
 
     NoInternetM ->
@@ -587,7 +428,13 @@ update model msg =
     SecretKeyFileM (Right raw) ->
         updateOnGoodSecretKeyFile model raw
 
-    FromServerM raw ->
+    FromServerM (Left _) ->
+        (toUser NotConnectedU, FinishedS)
+
+    FromServerM (Right Nothing) ->
+        (toUser NotConnectedU, FinishedS)
+
+    FromServerM (Right (Just raw)) ->
         updateReady model $ fromServerUpdate raw
 
 
@@ -740,21 +587,78 @@ encodeToServerHelp toServer =
         B.singleton 2
 
 
-fromServerUpdate :: B.ByteString -> Ready -> (Output, State)
-fromServerUpdate raw ready =
+onBodyFromServer :: Ready -> B.ByteString -> (Output, State)
+onBodyFromServer ready raw =
     case P.parseOnly fromServerP raw of
     Left err ->
-        (toUser $ BadMessageFromServerU raw err, FinishedS)
+        ( BatchO
+            [ toUser $ BadMessageFromServerU raw err
+            , killConn $ authStatus ready
+            ]
+        , FinishedS
+        )
 
     Right ok ->
         updateOnGoodFromServer ready ok
+
+
+onLengthFromServer
+    :: Ready
+    -> Tcp.Socket
+    -> B.ByteString
+    -> (Output, State)
+onLengthFromServer ready socket raw =
+    case P.parseOnly uint16P raw of
+    Left err ->
+        ( BatchO
+            [ toUser $ BadMessageFromServerU raw err
+            , killConn $ authStatus ready
+            ]
+        , FinishedS
+        )
+
+    Right len ->
+        ( TcpListenO socket len
+        , ReadyS $
+          ready { authStatus = LoggedInA (socket, GettingBody) }
+        )
+
+
+fromServerUpdate :: B.ByteString -> Ready -> (Output, State)
+fromServerUpdate raw ready =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    in
+    case authStatus ready of
+    LoggedInA (_, GettingBody) ->
+        onBodyFromServer ready raw
+
+    LoggedInA (socket, GettingLength) ->
+        onLengthFromServer ready socket raw
+
+    NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+        pass
+
+    NotLoggedInA (SendWhenLoggedIn (Just (_, GettingBody)) _) ->
+        onBodyFromServer ready raw
+
+    NotLoggedInA (SendWhenLoggedIn (Just (conn, GettingLength)) _) ->
+        onLengthFromServer ready conn raw
+
+    NotLoggedInA JustNotLoggedIn ->
+        pass
 
 
 updateOnGoodFromServer :: Ready -> FromServer -> (Output, State)
 updateOnGoodFromServer ready fromServer =
     case fromServer of
     InboxMessageF sender message ->
-        (toUser $ NewMessageU sender message, FinishedS)
+        ( BatchO
+            [ toUser $ NewMessageU sender message
+            , killConn $ authStatus ready
+            ]
+        , FinishedS
+        )
 
     AuthCodeToSignF authCode ->
         updateOnAuthCode ready authCode
@@ -786,19 +690,36 @@ updateOnAuthCode ready (AuthCode authCode) =
     NotLoggedInA (SendWhenLoggedIn Nothing _) ->
         pass
 
-    NotLoggedInA (SendWhenLoggedIn (Just socket) toServer) ->
+    NotLoggedInA (SendWhenLoggedIn (Just (socket, _)) toServer) ->
         ( BatchO
             [ TcpSendO socket $
                 encodeToServer $
                 SignedAuthCodeT publicKey signature
             , TcpSendO socket $ encodeToServer $ toServer
+            , case toServer of
+                SignedAuthCodeT _ _ ->
+                    DoNothingO
+
+                GetMessageT ->
+                    TcpListenO socket 2
+
+                SendMessageT _ _ ->
+                    CloseTcpO socket
             ]
         , case toServer of
             SignedAuthCodeT _ _ ->
-                ReadyS $ ready { authStatus = LoggedInA socket }
+                ReadyS $
+                ready
+                    { authStatus =
+                        LoggedInA (socket, GettingLength)
+                    }
 
             GetMessageT ->
-                ReadyS $ ready { authStatus = LoggedInA socket }
+                ReadyS $
+                ready
+                    { authStatus =
+                        LoggedInA (socket, GettingLength)
+                    }
 
             SendMessageT _ _ ->
                 FinishedS
@@ -808,13 +729,13 @@ updateOnAuthCode ready (AuthCode authCode) =
 killConn :: AuthStatus -> Output
 killConn auth =
     case auth of
-    LoggedInA socket ->
+    LoggedInA (socket, _) ->
         CloseTcpO socket
 
     NotLoggedInA (SendWhenLoggedIn Nothing _) ->
         DoNothingO
 
-    NotLoggedInA (SendWhenLoggedIn (Just socket) _) ->
+    NotLoggedInA (SendWhenLoggedIn (Just (socket, _)) _) ->
         CloseTcpO socket
 
     NotLoggedInA JustNotLoggedIn ->
@@ -1028,11 +949,6 @@ uint16P = do
     b0 <- uint8P
     b1 <- uint8P
     return $ b0 + b1 * 256
-
-
-parseLength :: B.ByteString -> Either String Int
-parseLength bytes2 =
-    P.parseOnly uint16P bytes2
 
 
 uint8P :: P.Parser Int

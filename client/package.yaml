@@ -46,6 +46,7 @@ ghc-options:
 - -Wno-unused-packages
 - -Wno-missing-export-lists
 - -Werror
+- -Wno-missing-import-lists
 
 library:
   source-dirs: src
@@ -63,7 +64,7 @@ executables:
 
 tests:
   client-test:
-    main: Test.hs
+    main: Main.hs
     source-dirs: test
     ghc-options:
     - -threaded
