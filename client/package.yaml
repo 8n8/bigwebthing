@@ -32,6 +32,7 @@ dependencies:
 - tasty
 - tasty-hedgehog
 - hedgehog
+- network
 
 ghc-options:
 - -Weverything

@@ -9,6 +9,8 @@ module Update
     , AuthStatus(..)
     , NotLoggedIn(..)
     , Ready(..)
+    , ListenStatus(..)
+    , ToServer(..)
     ) where
 
 import qualified Control.Exception as E
@@ -48,14 +50,12 @@ data Msg
     = StartM
     | TcpConnM (Either E.IOException (Tcp.Socket, Tcp.SockAddr))
     | TcpSendResultM (Either E.IOException ())
-    | BadTcpRecvM String
     | StdInM B.ByteString
     | ArgsM [String]
     | SecretKeyFileM (Either E.IOException B.ByteString)
     | BatchM [Maybe Msg]
     | FromServerM (Either E.IOException (Maybe B.ByteString))
     | NewSecretKeyM Ed.SecretKey
-    | NoInternetM
     deriving Show
 
 
@@ -63,14 +63,14 @@ data State
     = ReadyS Ready
     | InitS Init
     | FinishedS
-    deriving Show
+    deriving (Show, Eq)
 
 
 data Init
     = EmptyI
     | GettingKeysFromFileI
     | GeneratingSecretKeyI
-    deriving Show
+    deriving (Show, Eq)
 
 
 data Ready
@@ -79,25 +79,25 @@ data Ready
         , authStatus :: AuthStatus
         , readingStdIn :: Maybe Ed.PublicKey
         }
-        deriving Show
+        deriving (Show, Eq)
 
 
 data ListenStatus
     = GettingLength
     | GettingBody
-    deriving Show
+    deriving (Show, Eq)
 
 
 data AuthStatus
     = LoggedInA (Tcp.Socket, ListenStatus)
     | NotLoggedInA NotLoggedIn
-    deriving Show
+    deriving (Show, Eq)
 
 
 data NotLoggedIn
     = SendWhenLoggedIn (Maybe (Tcp.Socket, ListenStatus)) ToServer
     | JustNotLoggedIn
-    deriving Show
+    deriving (Show, Eq)
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -130,22 +130,6 @@ usage =
     \Send a message from STDIN\n\
     \\n\
     \    $ bwt send <recipient ID>\n"
-
-
-updateOnBadTcpRecvM :: State -> (Output, State)
-updateOnBadTcpRecvM model =
-    let
-    errMsg = (toUser NotConnectedU, FinishedS)
-    in
-    case model of
-    FinishedS ->
-        (DoNothingO, model)
-
-    ReadyS _ ->
-        errMsg
-
-    InitS _ ->
-        errMsg
 
 
 updateOnTcpConn
@@ -374,23 +358,20 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
-    BadTcpRecvM _ ->
-        updateOnBadTcpRecvM model
-
     TcpSendResultM (Right ()) ->
         pass
 
     TcpSendResultM (Left _) ->
-        (toUser NotConnectedU, FinishedS)
+        updateReady model $ \ready ->
+        ( BatchO [toUser NotConnectedU, killConn $ authStatus ready]
+        , FinishedS
+        )
 
     TcpConnM (Left _) ->
         (toUser NotConnectedU, FinishedS)
 
     TcpConnM (Right (socket, _)) ->
         updateOnTcpConn model socket
-
-    NoInternetM ->
-        (toUser NotConnectedU, FinishedS)
 
     StartM ->
         (ReadSecretKeyO, InitS GettingKeysFromFileI)
@@ -429,10 +410,30 @@ update model msg =
         updateOnGoodSecretKeyFile model raw
 
     FromServerM (Left _) ->
-        (toUser NotConnectedU, FinishedS)
+        ( BatchO
+            [ toUser NotConnectedU
+            , case model of
+                ReadyS ready ->
+                    killConn $ authStatus ready
+
+                _ ->
+                    DoNothingO
+            ]
+        , FinishedS
+        )
 
     FromServerM (Right Nothing) ->
-        (toUser NotConnectedU, FinishedS)
+        ( BatchO
+            [ toUser NotConnectedU
+            , case model of
+                ReadyS ready ->
+                    killConn $ authStatus ready
+
+                _ ->
+                    DoNothingO
+            ]
+        , FinishedS
+        )
 
     FromServerM (Right (Just raw)) ->
         updateReady model $ fromServerUpdate raw

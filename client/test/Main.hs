@@ -8,6 +8,17 @@ import qualified Hedgehog as H
 import qualified Update as L
 import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import qualified Crypto.PubKey.Ed25519 as Ed
+import qualified Control.Exception as E
+import qualified GHC.IO.Exception as Ge
+import qualified Network.Simple.TCP as Tcp
+import qualified Network.Socket as NS
+import System.IO.Unsafe (unsafePerformIO)
+import qualified Data.Text as T
+
+
+dummyTcpSocket :: Tcp.Socket
+dummyTcpSocket =
+    unsafePerformIO $ NS.mkSocket 0
 
 
 main :: IO ()
@@ -20,13 +31,76 @@ properties =
     Tasty.testGroup ""
     [ Th.testProperty "reverse" propReverse
     , Th.testProperty "updateStartM" updateStartM
+    , Th.testProperty "tcpSocketNotClosed" tcpSocketClosed
+    , Th.testProperty "finishedSonBad" tcpFinishedOnBad
     ]
+
+
+tcpFinishedOnBad :: H.Property
+tcpFinishedOnBad =
+    H.property $ do
+        msg <- H.forAll badMsgG
+        model <- H.forAll stateG
+        let (_, model') = L.update model msg
+        model' H.=== L.FinishedS
+
+
+dummyException :: E.IOException
+dummyException =
+    Ge.IOError Nothing Ge.AlreadyExists "" "" Nothing Nothing
+
+
+tcpSocketClosed :: H.Property
+tcpSocketClosed =
+    H.property $ do
+        msg <- H.forAll badServerG
+        model <- H.forAll $ fmap L.ReadyS readySocketG
+        let (output, _) = L.update model msg
+        H.assert $ outputContainsTcpClose output
+
+
+badServerG :: H.Gen L.Msg
+badServerG =
+    Gen.choice
+    [ return $ L.FromServerM $ Right Nothing
+    , return $ L.FromServerM $ Left dummyException
+    ]
+
+
+badMsgG :: H.Gen L.Msg
+badMsgG =
+    Gen.choice
+    [ do
+        args <- Gen.list
+            (Range.linear 3 10) -- deliberately making too many args
+            (Gen.string (Range.linear 1 10) Gen.unicode)
+        return $ L.ArgsM args
+    , return $ L.SecretKeyFileM (Left dummyException)
+    , do
+        msgs <- Gen.list (Range.linear 1 5) (fmap Just badMsgG)
+        return $ L.BatchM msgs
+    , return $ L.FromServerM $ Right Nothing
+    , return $ L.FromServerM $ Left dummyException
+    ]
+
+
+outputContainsTcpClose :: L.Output -> Bool
+outputContainsTcpClose output =
+    case output of
+    L.CloseTcpO _ ->
+        True
+
+    L.BatchO outputs ->
+        any outputContainsTcpClose outputs
+
+    _ ->
+        False
 
 
 updateStartM :: H.Property
 updateStartM =
     H.property $ do
-        state <- H.forAll stateG
+        state <- H.forAll $ fmap L.ReadyS readyG
         let (output, newState) = L.update state L.StartM
         case newState of
             L.InitS _ ->
@@ -44,6 +118,22 @@ propReverse =
     H.property $ do
         xs <- H.forAll $ Gen.list (Range.linear 0 100) Gen.alpha
         reverse (reverse xs) H.=== xs
+
+
+readySocketG :: H.Gen L.Ready
+readySocketG = do
+    secretKey <- secretKeyG
+    readingStdIn <- readingStdInG
+    authStatus <- authSocketG
+    return $ L.Ready secretKey authStatus readingStdIn
+
+
+readyG :: H.Gen L.Ready
+readyG = do
+    secretKey <- secretKeyG
+    readingStdIn <- readingStdInG
+    authStatus <- authStatusG
+    return $ L.Ready secretKey authStatus readingStdIn
 
 
 stateG :: H.Gen L.State
@@ -64,13 +154,73 @@ initG =
     ]
 
 
-readyG :: H.Gen L.Ready
-readyG = do
-    secretKey <- secretKeyG
-    readingStdIn <- readingStdInG
-    return $
-        L.Ready
-            secretKey (L.NotLoggedInA L.JustNotLoggedIn) readingStdIn
+authSocketG :: H.Gen L.AuthStatus
+authSocketG =
+    Gen.choice
+    [ do
+        sockety <- socketyG
+        return $ L.LoggedInA sockety
+    , do
+        toServer <- toServerG
+        mb <- fmap Just socketyG
+        return $ L.NotLoggedInA $ L.SendWhenLoggedIn mb toServer
+    ]
+
+
+authStatusG :: H.Gen L.AuthStatus
+authStatusG =
+    Gen.choice
+    [ do
+        sockety <- socketyG
+        return $ L.LoggedInA sockety
+    , do
+        toServer <- toServerG
+        mb <- Gen.maybe socketyG
+        return $ L.NotLoggedInA $ L.SendWhenLoggedIn mb toServer
+    , return $ L.NotLoggedInA L.JustNotLoggedIn
+    ]
+
+
+socketyG :: H.Gen (Tcp.Socket, L.ListenStatus)
+socketyG = do
+    listen <- listenStatusG
+    return (dummyTcpSocket, listen)
+
+
+listenStatusG :: H.Gen L.ListenStatus
+listenStatusG =
+    Gen.element [L.GettingLength, L.GettingBody] 
+
+
+toServerG :: H.Gen L.ToServer
+toServerG =
+    Gen.choice
+    [ do
+        key <- publicKeyG
+        sig <- signatureG
+        return $ L.SignedAuthCodeT key sig
+    , do
+        key <- publicKeyG
+        txt <- messageG
+        return $ L.SendMessageT key txt
+    , return L.GetMessageT
+    ]
+
+
+signatureG :: H.Gen Ed.Signature
+signatureG = do
+    raw <- Gen.bytes (Range.singleton Ed.signatureSize)
+    case Ed.signature raw of
+        CryptoPassed sig ->
+            return sig
+
+        CryptoFailed err ->
+            fail $ show err
+
+
+messageG :: H.Gen T.Text
+messageG =
+    Gen.text (Range.constant 0 100) Gen.ascii
 
 
 secretKeyG :: H.Gen Ed.SecretKey
