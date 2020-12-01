@@ -703,7 +703,7 @@ data ToServer
     = SignedAuthCodeT Ed.PublicKey Ed.Signature
     | SendMessageT Ed.PublicKey T.Text
     | GetMessageT
-    deriving Show
+    deriving (Eq, Show)
 
 
 encodeToServer :: ToServer -> B.ByteString
