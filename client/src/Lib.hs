@@ -78,10 +78,6 @@ io mainState output =
     BatchO outputs -> do
         mapM_ (io mainState) outputs
 
-    BytesInQO q bytes ->
-        Stm.atomically $
-            Q.writeTQueue q bytes
-
     MakeTcpConnO ->
         makeTcpConn mainState
 
@@ -165,9 +161,9 @@ data Output
     | DoNothingO
     | BatchO [Output]
     | MakeTcpConnO
-    | BytesInQO Q B.ByteString
     | ReadMessageFromStdInO
     | WriteKeyToFileO B.ByteString
+    deriving (Eq, Show)
 
 
 data Msg
@@ -750,50 +746,62 @@ fromServerUpdate raw ready =
     Left err ->
         (toUser $ BadMessageFromServerU raw err, FinishedS)
 
-    Right (InboxMessageF sender message) ->
+    Right ok ->
+        updateOnGoodFromServer ready ok
+
+
+updateOnGoodFromServer :: Ready -> FromServer -> (Output, State)
+updateOnGoodFromServer ready fromServer =
+    case fromServer of
+    InboxMessageF sender message ->
         (toUser $ NewMessageU sender message, FinishedS)
 
-    Right (AuthCodeToSignF (AuthCode authCode)) ->
-        let
-        pass = (DoNothingO, ReadyS ready)
-        publicKey = Ed.toPublic $ secretKey ready
-        toSign = authCodeA <> authCode
-        signature = Ed.sign (secretKey ready) publicKey toSign
-        in
-        case authStatus ready of
-        LoggedInA _ ->
-            pass
+    AuthCodeToSignF authCode ->
+        updateOnAuthCode ready authCode
 
-        NotLoggedInA JustNotLoggedIn ->
-            pass
-
-        NotLoggedInA (SendWhenLoggedIn Nothing _) ->
-            pass
-
-        NotLoggedInA (SendWhenLoggedIn (Just socket) toServer) ->
-            ( BatchO
-                [ TcpSendO socket $
-                    encodeToServer $
-                    SignedAuthCodeT publicKey signature
-                , TcpSendO socket $ encodeToServer $ toServer
-                ]
-            , case toServer of
-                SignedAuthCodeT _ _ ->
-                    ReadyS $ ready { authStatus = LoggedInA socket }
-
-                GetMessageT ->
-                    ReadyS $ ready { authStatus = LoggedInA socket }
-
-                SendMessageT _ _ ->
-                    FinishedS
-            )
-
-    Right NoMessagesF ->
+    NoMessagesF ->
         ( BatchO
             [ toUser NoMessagesU
             , killConn $ authStatus ready
             ]
         , FinishedS
+        )
+
+
+updateOnAuthCode :: Ready -> AuthCode -> (Output, State)
+updateOnAuthCode ready (AuthCode authCode) =
+    let
+    pass = (DoNothingO, ReadyS ready)
+    publicKey = Ed.toPublic $ secretKey ready
+    toSign = authCodeA <> authCode
+    signature = Ed.sign (secretKey ready) publicKey toSign
+    in
+    case authStatus ready of
+    LoggedInA _ ->
+        pass
+
+    NotLoggedInA JustNotLoggedIn ->
+        pass
+
+    NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+        pass
+
+    NotLoggedInA (SendWhenLoggedIn (Just socket) toServer) ->
+        ( BatchO
+            [ TcpSendO socket $
+                encodeToServer $
+                SignedAuthCodeT publicKey signature
+            , TcpSendO socket $ encodeToServer $ toServer
+            ]
+        , case toServer of
+            SignedAuthCodeT _ _ ->
+                ReadyS $ ready { authStatus = LoggedInA socket }
+
+            GetMessageT ->
+                ReadyS $ ready { authStatus = LoggedInA socket }
+
+            SendMessageT _ _ ->
+                FinishedS
         )
 
 
