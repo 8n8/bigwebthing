@@ -51,7 +51,33 @@ properties =
     , Th.testProperty "emptyMessage" emptyMessage
     , Th.testProperty "noArgs" noArgs
     , Th.testProperty "badArgs" badArgs
+    , Th.testProperty "argGet" argGet
+    , Th.testProperty "argPrint" argPrint
     ]
+
+
+argPrint :: H.Property
+argPrint =
+    H.property $ do
+        ready <- H.forAll readyG
+        arg <- H.forAll $ Gen.element ["help", "myid"]
+        let (out, model) = L.update (L.ReadyS ready) $ L.ArgsM [arg]
+        model H.=== L.FinishedS
+        case out of
+            L.PrintO _ ->
+                return ()
+
+            _ ->
+                H.failure
+
+
+argGet :: H.Property
+argGet =
+    H.property $ do
+        ready <- H.forAll readyG
+        let (out, model) = L.update (L.ReadyS ready) $ L.ArgsM ["get"]
+        model H./== L.FinishedS
+        H.assert $ not $ isPrintO out
 
 
 badArgs :: H.Property
