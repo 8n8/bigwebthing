@@ -49,7 +49,17 @@ properties =
     , Th.testProperty "goodTcpSend" goodTcpSend
     , Th.testProperty "tooLongMessage" tooLongMessage
     , Th.testProperty "emptyMessage" emptyMessage
+    , Th.testProperty "noArgs" noArgs
     ]
+
+
+noArgs :: H.Property
+noArgs =
+    H.property $ do
+        ready <- H.forAll readyG
+        let (out, model') = L.update (L.ReadyS ready) $ L.ArgsM []
+        model' H.=== L.FinishedS
+        H.assert $ isPrintO out
 
 
 dontMessWithSecretKey :: H.Property
