@@ -53,7 +53,59 @@ properties =
     , Th.testProperty "badArgs" badArgs
     , Th.testProperty "argGet" argGet
     , Th.testProperty "argPrint" argPrint
+    , Th.testProperty "goodArgSend" goodArgSend
+    , Th.testProperty "sendNoRecipient" sendNoRecipient
+    , Th.testProperty "sendBadRecipient" sendBadRecipient
     ]
+
+
+sendBadRecipient :: H.Property
+sendBadRecipient =
+    H.property $ do
+        ready <- H.forAll readyG
+        badRecipient <- H.forAll $ Gen.choice
+                [ Gen.string (Range.linear 44 100) Gen.unicodeAll
+                , Gen.string (Range.linear 0 42) Gen.unicodeAll
+                ]
+        let (out, model) = L.update (L.ReadyS ready) $
+                L.ArgsM ["send", badRecipient]
+        model H.=== L.FinishedS
+        H.assert $ isPrintO out
+
+
+sendNoRecipient :: H.Property
+sendNoRecipient =
+    H.property $ do
+        ready <- H.forAll readyG
+        let (out, model) = L.update (L.ReadyS ready) $ L.ArgsM ["send"]
+        model H.=== L.FinishedS
+        H.assert $ isPrintO out
+
+
+goodArgSend :: H.Property
+goodArgSend =
+    H.property $ do
+        ready <- H.forAll readyG
+        recipient <- H.forAll $
+                Gen.string (Range.singleton 43) Gen.alphaNum
+        let (out, model) = L.update (L.ReadyS ready) $
+                L.ArgsM ["send", recipient]
+        model H./== L.FinishedS
+        H.assert $ not $ isPrintO out
+        H.assert $ isGetStdIn out
+
+
+isGetStdIn :: L.Output -> Bool
+isGetStdIn out =
+    case out of
+    L.ReadMessageFromStdInO ->
+        True
+
+    L.BatchO bs ->
+        any isGetStdIn bs
+
+    _ ->
+        False
 
 
 argPrint :: H.Property

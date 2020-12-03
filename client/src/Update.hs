@@ -279,7 +279,7 @@ updateOnSendArg :: State -> String -> (Output, State)
 updateOnSendArg model rawRecipient =
     case parseRecipient rawRecipient of
     Left err ->
-        (toUser $ InvalidRecipientU err, model)
+        (toUser $ InvalidRecipientU err, FinishedS)
 
     Right recipient ->
         updateReady model $ \ready ->
