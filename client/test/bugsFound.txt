@@ -1,1 +1,2 @@
 + the STDIN message parser was not checking length
++ the STDIN message parser was not failing on zero length input

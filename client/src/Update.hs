@@ -782,12 +782,15 @@ authCodeP = do
 inboxMessageP :: P.Parser T.Text
 inboxMessageP = do
     raw <- P.scan 0 msgScanner
-    case decodeUtf8' raw of
-        Left err ->
-            fail $ show err
+    if B.null raw then
+        fail "empty"
+    else
+        case decodeUtf8' raw of
+            Left err ->
+                fail $ show err
 
-        Right valid -> do
-            return valid
+            Right valid -> do
+                return valid
 
 
 

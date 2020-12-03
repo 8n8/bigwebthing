@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
 import qualified Test.Tasty as Tasty
@@ -43,10 +44,11 @@ properties =
     , Th.testProperty "updateStartM" updateStartM
     , Th.testProperty "tcpSocketNotClosed" tcpSocketClosed
     , Th.testProperty "finishedSonBad" tcpFinishedOnBad
+    , Th.testProperty "dontMessWithSecretKey" dontMessWithSecretKey
     , Th.testProperty "goodTcpConnM" goodTcpConnM
     , Th.testProperty "goodTcpSend" goodTcpSend
     , Th.testProperty "tooLongMessage" tooLongMessage
-    , Th.testProperty "dontMessWithSecretKey" dontMessWithSecretKey
+    , Th.testProperty "emptyMessage" emptyMessage
     ]
 
 
@@ -64,18 +66,32 @@ dontMessWithSecretKey =
                 return ()
 
 
+emptyMessage :: H.Property
+emptyMessage =
+    H.property $ do
+        model <- H.forAll $ fmap L.ReadyS readyStdInG
+        let (out, model') = L.update model $ L.StdInM ""
+        model' H.=== L.FinishedS
+        H.assert $ isPrintO out
+
+
 tooLongMessage :: H.Property
 tooLongMessage =
     H.property $ do
-        model <- H.forAll $ do
-            secretKey <- secretKeyG
-            authStatus <- authStatusG
-            stdIn <- fmap Just publicKeyG
-            return $ L.ReadyS $ L.Ready secretKey authStatus stdIn
+        model <- H.forAll $ fmap L.ReadyS readyStdInG
         msg <- H.forAll $ Gen.bytes (Range.constant 101 1000)
         let (out, model') = L.update model $ L.StdInM msg
         model' H.=== L.FinishedS
         H.assert $ isPrintO out
+
+
+
+readyStdInG :: H.Gen L.Ready
+readyStdInG = do
+    secretKey <- secretKeyG
+    authStatus <- authStatusG
+    stdIn <- fmap Just publicKeyG
+    return $ L.Ready secretKey authStatus stdIn
 
 
 isPrintO :: L.Output -> Bool
