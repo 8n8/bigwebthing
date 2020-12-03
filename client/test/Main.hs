@@ -21,6 +21,16 @@ dummyTcpSocket =
     unsafePerformIO $ NS.mkSocket 0
 
 
+dummySocketAddress :: Tcp.SockAddr
+dummySocketAddress =
+    NS.SockAddrUnix ""
+
+
+dummyTcp :: (Tcp.Socket, Tcp.SockAddr)
+dummyTcp =
+    (dummyTcpSocket, dummySocketAddress)
+
+
 main :: IO ()
 main =
     Tasty.defaultMain properties
@@ -33,7 +43,46 @@ properties =
     , Th.testProperty "updateStartM" updateStartM
     , Th.testProperty "tcpSocketNotClosed" tcpSocketClosed
     , Th.testProperty "finishedSonBad" tcpFinishedOnBad
+    , Th.testProperty "goodTcpConnM" goodTcpConnM
+    , Th.testProperty "goodTcpSend" goodTcpSend
     ]
+
+
+goodTcpSend :: H.Property
+goodTcpSend =
+    H.property $ do
+        model <- H.forAll $ fmap L.ReadyS readyG
+        let result = L.update model $ L.TcpSendResultM $ Right ()
+        result H.=== (L.DoNothingO, model)
+
+
+goodTcpConnM :: H.Property
+goodTcpConnM =
+    H.property $ do
+        model <- H.forAll $ fmap L.ReadyS readyG
+        let (out, model') =
+                L.update model $ L.TcpConnM $ Right dummyTcp
+        case model' of
+            L.ReadyS _ ->
+                return ()
+
+            _ ->
+                H.failure
+
+        H.assert $ isTcpListen out
+
+
+isTcpListen :: L.Output -> Bool
+isTcpListen o =
+    case o of
+        L.TcpListenO _ _ ->
+            True
+
+        L.BatchO bs ->
+            any isTcpListen bs
+
+        _ ->
+            False
 
 
 tcpFinishedOnBad :: H.Property
