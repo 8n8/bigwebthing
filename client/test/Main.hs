@@ -46,7 +46,22 @@ properties =
     , Th.testProperty "goodTcpConnM" goodTcpConnM
     , Th.testProperty "goodTcpSend" goodTcpSend
     , Th.testProperty "tooLongMessage" tooLongMessage
+    , Th.testProperty "dontMessWithSecretKey" dontMessWithSecretKey
     ]
+
+
+dontMessWithSecretKey :: H.Property
+dontMessWithSecretKey =
+    H.property $ do
+        oldReady <- H.forAll readyG
+        msg <- H.forAll msgG
+        let (_, model') = L.update (L.ReadyS oldReady) msg
+        case model' of
+            L.ReadyS ready ->
+                L.secretKey ready H.=== L.secretKey oldReady
+
+            _ ->
+                return ()
 
 
 tooLongMessage :: H.Property
@@ -142,6 +157,35 @@ badServerG =
     [ return $ L.FromServerM $ Right Nothing
     , return $ L.FromServerM $ Left dummyException
     ]
+
+
+msgG :: H.Gen L.Msg
+msgG =
+    Gen.choice
+    [ return L.StartM
+    , return $ L.TcpConnM $ Left dummyException
+    , return $ L.TcpConnM $ Right dummyTcp
+    , return $ L.TcpSendResultM $ Left dummyException
+    , return $ L.TcpSendResultM $ Right ()
+    , do
+        bytes <- Gen.bytes (Range.constant 0 500)
+        return $ L.StdInM bytes
+    , do
+        args <- Gen.list
+            (Range.linear 0 5)
+            (Gen.string (Range.linear 1 10) Gen.unicode)
+        return $ L.ArgsM args
+    , return $ L.SecretKeyFileM $ Left dummyException
+    , do
+        bytes <- Gen.bytes (Range.linear 30 50)
+        return $ L.SecretKeyFileM $ Right bytes
+    , return $ L.FromServerM $ Left dummyException
+    , do
+        mb <- Gen.maybe $ Gen.bytes $ Range.linear 2 100
+        return $ L.FromServerM $ Right mb
+    , L.NewSecretKeyM <$> secretKeyG
+    ]
+
 
 
 badMsgG :: H.Gen L.Msg
