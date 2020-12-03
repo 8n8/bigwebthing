@@ -50,7 +50,20 @@ properties =
     , Th.testProperty "tooLongMessage" tooLongMessage
     , Th.testProperty "emptyMessage" emptyMessage
     , Th.testProperty "noArgs" noArgs
+    , Th.testProperty "badArgs" badArgs
     ]
+
+
+badArgs :: H.Property
+badArgs =
+    H.property $ do
+        ready <- H.forAll readyG
+        args <- H.forAll $ Gen.list
+            (Range.linear 4 10)
+            (Gen.string (Range.linear 1 10) Gen.unicode)
+        let (out, model') = L.update (L.ReadyS ready) $ L.ArgsM args
+        model' H.=== L.FinishedS
+        H.assert $ isPrintO out
 
 
 noArgs :: H.Property
