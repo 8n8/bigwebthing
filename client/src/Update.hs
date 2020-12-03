@@ -158,12 +158,19 @@ updateOnTcpConn model socket =
     )
 
 
+stdInP :: P.Parser T.Text
+stdInP = do
+    msg <- inboxMessageP
+    P.endOfInput
+    return msg
+
+
 updateOnStdIn :: State -> B.ByteString -> (Output, State)
 updateOnStdIn model raw =
     let
     pass = (DoNothingO, model)
     in
-    case P.parseOnly inboxMessageP raw of
+    case P.parseOnly stdInP raw of
     Left err ->
         (toUser $ BadMessageU err, FinishedS)
 
@@ -779,8 +786,9 @@ inboxMessageP = do
         Left err ->
             fail $ show err
 
-        Right valid ->
+        Right valid -> do
             return valid
+
 
 
 msgScanner :: Int -> Word8 -> Maybe Int

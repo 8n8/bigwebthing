@@ -45,8 +45,36 @@ properties =
     , Th.testProperty "finishedSonBad" tcpFinishedOnBad
     , Th.testProperty "goodTcpConnM" goodTcpConnM
     , Th.testProperty "goodTcpSend" goodTcpSend
+    , Th.testProperty "tooLongMessage" tooLongMessage
     ]
 
+
+tooLongMessage :: H.Property
+tooLongMessage =
+    H.property $ do
+        model <- H.forAll $ do
+            secretKey <- secretKeyG
+            authStatus <- authStatusG
+            stdIn <- fmap Just publicKeyG
+            return $ L.ReadyS $ L.Ready secretKey authStatus stdIn
+        msg <- H.forAll $ Gen.bytes (Range.constant 101 1000)
+        let (out, model') = L.update model $ L.StdInM msg
+        model' H.=== L.FinishedS
+        H.assert $ isPrintO out
+
+
+isPrintO :: L.Output -> Bool
+isPrintO out =
+    case out of
+    L.PrintO _ ->
+        True
+
+    L.BatchO bs ->
+        any isPrintO bs
+
+    _ ->
+        False
+        
 
 goodTcpSend :: H.Property
 goodTcpSend =
