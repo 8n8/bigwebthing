@@ -39,24 +39,57 @@ main =
 
 properties :: Tasty.TestTree
 properties =
+    let
+    t = Th.testProperty
+    in
     Tasty.testGroup ""
-    [ Th.testProperty "reverse" propReverse
-    , Th.testProperty "updateStartM" updateStartM
-    , Th.testProperty "tcpSocketNotClosed" tcpSocketClosed
-    , Th.testProperty "finishedSonBad" tcpFinishedOnBad
-    , Th.testProperty "dontMessWithSecretKey" dontMessWithSecretKey
-    , Th.testProperty "goodTcpConnM" goodTcpConnM
-    , Th.testProperty "goodTcpSend" goodTcpSend
-    , Th.testProperty "tooLongMessage" tooLongMessage
-    , Th.testProperty "emptyMessage" emptyMessage
-    , Th.testProperty "noArgs" noArgs
-    , Th.testProperty "badArgs" badArgs
-    , Th.testProperty "argGet" argGet
-    , Th.testProperty "argPrint" argPrint
-    , Th.testProperty "goodArgSend" goodArgSend
-    , Th.testProperty "sendNoRecipient" sendNoRecipient
-    , Th.testProperty "sendBadRecipient" sendBadRecipient
+    [ t "reverse" propReverse
+    , t "updateStartM" updateStartM
+    , t "tcpSocketNotClosed" tcpSocketClosed
+    , t "finishedSonBad" tcpFinishedOnBad
+    , t "dontMessWithSecretKey" dontMessWithSecretKey
+    , t "goodTcpConnM" goodTcpConnM
+    , t "goodTcpSend" goodTcpSend
+    , t "tooLongMessage" tooLongMessage
+    , t "emptyMessage" emptyMessage
+    , t "noArgs" noArgs
+    , t "badArgs" badArgs
+    , t "argGet" argGet
+    , t "argPrint" argPrint
+    , t "goodArgSend" goodArgSend
+    , t "sendNoRecipient" sendNoRecipient
+    , t "sendBadRecipient" sendBadRecipient
+    , t "goodKeyFile" goodKeyFile
+    , t "shortKeyFile" $ badKeyFile 0 (Ed.secretKeySize - 1)
+    , t "longKeyFile" $ badKeyFile (Ed.secretKeySize + 1) 500
     ]
+
+
+badKeyFile :: Int -> Int -> H.Property
+badKeyFile start stop =
+    H.property $ do
+        raw <- H.forAll $ Gen.bytes $ Range.linear start stop
+        let model = L.InitS L.GettingKeysFromFileI
+        let msg = L.SecretKeyFileM $ Right raw
+        let (out, model') = L.update model msg
+        model' H.=== L.FinishedS
+        H.assert $ isPrintO out
+
+
+goodKeyFile :: H.Property
+goodKeyFile =
+    H.property $ do
+        raw <- H.forAll $ Gen.bytes $ Range.singleton Ed.secretKeySize
+        let model = L.InitS L.GettingKeysFromFileI
+        let msg = L.SecretKeyFileM $ Right raw
+        let (out, model') = L.update model msg
+        case model' of
+            L.ReadyS _ ->
+                return ()
+
+            _ ->
+                H.failure
+        H.assert $ not $ isPrintO out
 
 
 sendBadRecipient :: H.Property

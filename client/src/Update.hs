@@ -948,12 +948,14 @@ batchUpdate model msgs outputs =
 secretSigningP :: P.Parser Ed.SecretKey
 secretSigningP = do
     raw <- P.take Ed.secretKeySize
-    case Ed.secretKey raw of
-        CryptoFailed err ->
-            fail $ show err
+    key <- case Ed.secretKey raw of
+            CryptoFailed err ->
+                fail $ show err
 
-        CryptoPassed key ->
-            return key
+            CryptoPassed key ->
+                return key
+    P.endOfInput
+    return key
 
 
 uint16P :: P.Parser Int
