@@ -15,6 +15,7 @@ import qualified Network.Simple.TCP as Tcp
 import qualified Network.Socket as NS
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Text as T
+import qualified Data.ByteString as B
 
 
 dummyTcpSocket :: Tcp.Socket
@@ -64,7 +65,106 @@ properties =
     , t "longKeyFile" $ badKeyFile (Ed.secretKeySize + 1) 500
     , t "fromServerTooShort" $ badFromServer 0 1
     , t "fromServerTooLong" $ badFromServer 200 300
+    , t "newSecretKey" newSecretKey
+    , t "goodAuthCode" goodAuthCode
+    , t "goodNewMessage" goodNewMessage
+    , t "goodNoMessages" goodNoMessages
     ]
+
+
+newSecretKey :: H.Property
+newSecretKey =
+    H.property $ do
+        key <- H.forAll $ secretKeyG
+        let msg = L.NewSecretKeyM key
+        let model = L.InitS L.GeneratingSecretKeyI
+        let (out, model') = L.update model msg
+        case model' of
+            L.ReadyS _ ->
+                return ()
+
+            _ ->
+                H.failure
+
+        H.assert $ isWriteO out
+
+
+isWriteO :: L.Output -> Bool
+isWriteO out =
+    case out of
+    L.WriteKeyToFileO _ ->
+        True
+
+    L.BatchO bs ->
+        any isWriteO bs
+
+    _ ->
+        False
+
+
+goodNoMessages :: H.Property
+goodNoMessages =
+    H.property $ do
+    let msg = L.FromServerM $ Right $ Just $ B.singleton 2
+    model <- H.forAll $ fmap L.ReadyS readySocketG
+    let (out, model') = L.update model msg
+    model' H.=== L.FinishedS
+    H.assert $ isPrintO out
+
+
+goodNewMessage :: H.Property
+goodNewMessage =
+    H.property $ do
+    raw <- H.forAll $ do
+        sender <- Gen.bytes $ Range.singleton 32
+        msg <- Gen.utf8 (Range.linear 1 100) Gen.alphaNum
+        return $ B.singleton 1 <> sender <> msg
+    let msg = L.FromServerM $ Right $ Just raw
+    model <- H.forAll $ fmap L.ReadyS readySocketG
+    let (out, model') = L.update model msg
+    model' H.=== L.FinishedS
+    H.assert $ isPrintO out
+
+
+goodAuthCode :: H.Property
+goodAuthCode =
+    H.property $ do
+    raw <- H.forAll $ do
+            authCode <- Gen.bytes $ Range.singleton 32
+            return (B.singleton 0 <> authCode)
+    let msg = L.FromServerM $ Right $ Just raw
+    model <- H.forAll $ do
+            secretKey <- secretKeyG
+            readingStdIn <- readingStdInG
+            authStatus <- do
+                toServer <- toServerG
+                let sock = Just (dummyTcpSocket, L.GettingBody)
+                return $ L.NotLoggedInA $
+                        L.SendWhenLoggedIn sock toServer
+            return $ L.ReadyS $
+                L.Ready secretKey authStatus readingStdIn
+    let (out, model') = L.update model msg
+    case model' of
+        L.InitS _ ->
+            H.failure
+
+        _ ->
+            return ()
+
+    H.assert $ isTcpSend out
+
+
+isTcpSend :: L.Output -> Bool
+isTcpSend out =
+    case out of
+    L.TcpSendO _ _ ->
+        True
+
+    L.BatchO bs ->
+        any isTcpSend bs
+
+    _ ->
+        False
 
 
 badFromServer :: Int -> Int -> H.Property
