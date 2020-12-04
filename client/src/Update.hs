@@ -610,13 +610,20 @@ onBodyFromServer ready raw =
         updateOnGoodFromServer ready ok
 
 
+onlyLengthP :: P.Parser Int
+onlyLengthP = do
+    l <- uint16P
+    P.endOfInput
+    return l
+
+
 onLengthFromServer
     :: Ready
     -> Tcp.Socket
     -> B.ByteString
     -> (Output, State)
 onLengthFromServer ready socket raw =
-    case P.parseOnly uint16P raw of
+    case P.parseOnly onlyLengthP raw of
     Left err ->
         ( BatchO
             [ toUser $ BadMessageFromServerU raw err

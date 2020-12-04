@@ -62,7 +62,20 @@ properties =
     , t "goodKeyFile" goodKeyFile
     , t "shortKeyFile" $ badKeyFile 0 (Ed.secretKeySize - 1)
     , t "longKeyFile" $ badKeyFile (Ed.secretKeySize + 1) 500
+    , t "fromServerTooShort" $ badFromServer 0 1
+    , t "fromServerTooLong" $ badFromServer 200 300
     ]
+
+
+badFromServer :: Int -> Int -> H.Property
+badFromServer start stop =
+    H.property $ do
+        raw <- H.forAll $ Gen.bytes $ Range.linear start stop
+        model <- H.forAll $ fmap L.ReadyS socketyReadyG
+        let msg = L.FromServerM $ Right $ Just raw
+        let (out, model') = L.update model msg
+        model' H.=== L.FinishedS
+        H.assert $ isPrintO out
 
 
 badKeyFile :: Int -> Int -> H.Property
@@ -399,6 +412,21 @@ readySocketG = do
     return $ L.Ready secretKey authStatus readingStdIn
 
 
+socketyReadyG :: H.Gen L.Ready
+socketyReadyG = do
+    secretKey <- secretKeyG
+    readingStdIn <- readingStdInG
+    authStatus <- Gen.choice
+            [ fmap L.LoggedInA socketyG
+            , do
+                toServer <- toServerG
+                sock <- fmap Just socketyG
+                return $ L.NotLoggedInA $
+                    L.SendWhenLoggedIn sock toServer
+            ]
+    return $ L.Ready secretKey authStatus readingStdIn
+
+
 readyG :: H.Gen L.Ready
 readyG = do
     secretKey <- secretKeyG
@@ -519,3 +547,5 @@ publicKeyG = do
 readingStdInG :: H.Gen (Maybe Ed.PublicKey)
 readingStdInG =
     Gen.maybe publicKeyG
+
+

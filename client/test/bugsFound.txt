@@ -1,3 +1,4 @@
 + the STDIN message parser was not checking length
 + the STDIN message parser was not failing on zero length input
 + the secret key file parser was not checking for end of input
++ the from server message length parser was not checking for end of input
