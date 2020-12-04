@@ -53,6 +53,7 @@ properties =
     , t "goodTcpSend" goodTcpSend
     , t "tooLongMessage" tooLongMessage
     , t "emptyMessage" emptyMessage
+    , t "goodMessage" goodMessage
     , t "noArgs" noArgs
     , t "badArgs" badArgs
     , t "argGet" argGet
@@ -331,6 +332,20 @@ tooLongMessage =
         model' H.=== L.FinishedS
         H.assert $ isPrintO out
 
+
+goodMessage :: H.Property
+goodMessage =
+    H.property $ do
+        model <- H.forAll $ fmap L.ReadyS readyStdInG
+        msg <- H.forAll $ Gen.utf8 (Range.linear 1 100) Gen.alphaNum
+        let (out, model') = L.update model $ L.StdInM msg
+        case model' of
+            L.ReadyS _ ->
+                return ()
+
+            _ ->
+                H.failure
+        H.assert $ not $ isPrintO out
 
 
 readyStdInG :: H.Gen L.Ready
