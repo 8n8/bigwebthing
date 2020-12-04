@@ -70,7 +70,19 @@ properties =
     , t "goodAuthCode" goodAuthCode
     , t "goodNewMessage" goodNewMessage
     , t "goodNoMessages" goodNoMessages
+    , t "noSecretKeyFile" noSecretKeyFile
     ]
+
+
+noSecretKeyFile :: H.Property
+noSecretKeyFile =
+    H.property $ do
+    let msg = L.SecretKeyFileM $ Left $
+            Ge.IOError Nothing Ge.NoSuchThing "" "" Nothing Nothing
+    let model = L.InitS L.GettingKeysFromFileI
+    let (out, model') = L.update model msg
+    out H.=== L.GenerateSecretKeyO
+    model' H.=== L.InitS L.GeneratingSecretKeyI
 
 
 newSecretKey :: H.Property
@@ -662,5 +674,3 @@ publicKeyG = do
 readingStdInG :: H.Gen (Maybe Ed.PublicKey)
 readingStdInG =
     Gen.maybe publicKeyG
-
-
