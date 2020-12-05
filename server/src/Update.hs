@@ -65,7 +65,7 @@ pubToBytes =
 
 
 findConnHelp :: Recipient -> TcpConn -> Bool
-findConnHelp (Recipient r) (TcpConn _ auth) =
+findConnHelp (Recipient r) (TcpConn _ auth _) =
     case auth of
     Authenticated (Sender s) ->
         s == r
@@ -123,8 +123,8 @@ senderToRecipient (Sender s) =
 
 
 instance Show TcpConn where
-    show (TcpConn _ authStatus) =
-        "TcpConn (Queue TcpInstruction) " <> show authStatus
+    show (TcpConn _ authStatus g) =
+        "TcpConn (Queue TcpInstruction) " <> show authStatus <> show g
 
 
 fromClientP :: P.Parser FromClient
@@ -201,13 +201,13 @@ authCodeA =
 data Output
     = DoNothingO
     | SetupDbO
+    | TcpRecvO Tcp.SockAddr Tcp.Socket Int
     | CloseSocketO Tcp.Socket
     | MsgInSocketO Tcp.SockAddr Tcp.Socket B.ByteString
     | PrintO T.Text
     | ReadAccessListO
     | StartTcpServerO
     | BatchO [Output]
-    | MakeDirIfNotThereO FilePath
     | DeleteInboxMessageDbO Sender Recipient InboxMessage
     | GetRandomGenO
     | SaveMessageToDbO Sender Recipient InboxMessage
@@ -273,7 +273,13 @@ newtype AuthCode
 
 
 data TcpConn
-    = TcpConn Tcp.Socket AuthStatus
+    = TcpConn Tcp.Socket AuthStatus TcpGetting
+
+
+data TcpGetting
+    = LengthG
+    | BodyG
+    deriving Show
 
 
 data State
@@ -337,12 +343,26 @@ data FromClient
     deriving Show
 
 
+uint16P :: P.Parser Int
+uint16P = do
+    b0 <- uint8P
+    b1 <- uint8P
+    return $ b0 + b1 * 256
+
+
+tcpLengthP :: P.Parser Int
+tcpLengthP = do
+    len <- uint16P
+    P.endOfInput
+    return len
+
+
 updateOnRawTcpMessage
     :: Tcp.SockAddr
-    -> B.ByteString
+    -> Either E.IOException (Maybe B.ByteString)
     -> State
     -> (Output, State)
-updateOnRawTcpMessage address rawMessage model =
+updateOnRawTcpMessage address eitherRaw model =
     case model of
     InitS _ ->
         (DoNothingO, model)
@@ -355,18 +375,62 @@ updateOnRawTcpMessage address rawMessage model =
         Nothing ->
             (DoNothingO, model)
 
-        Just (TcpConn socket _) ->
-            case P.parseOnly fromClientP rawMessage of
-            Left _ ->
+        Just (TcpConn socket auth getting) ->
+            let
+            onBad =
                 let
                 newConns = Map.delete address (tcpConns ready)
                 in
                 ( CloseSocketO socket
                 , ReadyS $ ready { tcpConns = newConns}
                 )
+            in
+            case eitherRaw of
+            Left _ ->
+                onBad
 
-            Right untrusted ->
-                updateOnTcpMessage address ready untrusted
+            Right Nothing ->
+                onBad
+
+            Right (Just raw) ->
+                case getting of
+                BodyG ->
+                    case P.parseOnly fromClientP raw of
+                    Left _ ->
+                        onBad
+
+                    Right untrusted ->
+                        updateOnTcpMessage address ready untrusted
+
+                LengthG ->
+                    case P.parseOnly tcpLengthP raw of
+                    Left _ ->
+                        onBad
+
+                    Right len ->
+                        let
+                        newConns =
+                            Map.insert
+                            address
+                            (TcpConn socket auth BodyG)
+                            (tcpConns ready)
+                        in
+                        if len > maxMessageLength then
+                        onBad
+                        else
+                        ( TcpRecvO address socket len
+                        , ReadyS $ ready { tcpConns = newConns }
+                        )
+
+
+maxMessageLength :: Int
+maxMessageLength =
+    200
+
+
+uint8P :: P.Parser Int
+uint8P =
+    fromIntegral <$> P.anyWord8
 
 
 updateOnTcpMessage
@@ -379,7 +443,7 @@ updateOnTcpMessage address ready untrusted =
     Nothing ->
         (DoNothingO, ReadyS ready)
 
-    Just (TcpConn socket (Authenticated sender)) ->
+    Just (TcpConn socket (Authenticated sender) _) ->
         case untrusted of
         SignedAuthCodeF _ _ ->
             (CloseSocketO socket, ReadyS ready)
@@ -397,7 +461,7 @@ updateOnTcpMessage address ready untrusted =
             , ReadyS ready
             )
 
-    Just (TcpConn socket (Untrusted authCode)) ->
+    Just (TcpConn socket (Untrusted authCode) _) ->
         let
         closeSocket = (CloseSocketO socket, ReadyS ready)
         in
@@ -409,13 +473,16 @@ updateOnTcpMessage address ready untrusted =
                 Set.member (senderToPub sender) (accessList ready)
             in
             if validSig && allowed then
-            ( DoNothingO
+            ( TcpRecvO address socket 2
             , ReadyS $
                 ready
                     { tcpConns =
                         Map.insert
                             address
-                            (TcpConn socket (Authenticated sender))
+                            (TcpConn
+                                socket
+                                (Authenticated sender)
+                                LengthG)
                             (tcpConns ready)
                     }
             )
@@ -482,7 +549,7 @@ data Init
 
 data Msg
     = StartM
-    | TcpMsgInM Tcp.SockAddr B.ByteString
+    | TcpMsgInM Tcp.SockAddr (Either E.IOException (Maybe B.ByteString))
     | TcpSendResultM Tcp.SockAddr (Either E.IOException ())
     | NewTcpConnM Tcp.Socket Tcp.SockAddr
     | DeadTcpM Tcp.SockAddr
@@ -608,7 +675,7 @@ update model msg =
             Nothing ->
                 pass
 
-            Just (TcpConn socket _) ->
+            Just (TcpConn socket _ _) ->
                 ( CloseSocketO socket
                 , ReadyS $
                     ready
@@ -623,10 +690,10 @@ update model msg =
         Nothing ->
             pass
 
-        Just (_, TcpConn _ (Untrusted _)) ->
+        Just (_, TcpConn _ (Untrusted _) _) ->
             pass
 
-        Just (address, TcpConn socket (Authenticated _)) ->
+        Just (address, TcpConn socket (Authenticated _) _) ->
             case raw of
             [] ->
                 ( BatchO
@@ -708,7 +775,7 @@ update model msg =
             Nothing ->
                 pass
 
-            Just (TcpConn socket _) ->
+            Just (TcpConn socket _ _) ->
                 ( CloseSocketO socket
                 , ReadyS $
                     ready
@@ -748,11 +815,13 @@ update model msg =
             newConns =
                 Map.insert
                     address
-                    (TcpConn socket (Untrusted (AuthCode auth)))
+                    (TcpConn
+                        socket (Untrusted (AuthCode auth)) LengthG)
                     (tcpConns ready)
             in
-            ( sendToClient address socket $ AuthCodeToSign auth
+            ( BatchO
+                [ sendToClient address socket $ AuthCodeToSign auth
+                , TcpRecvO address socket 2
+                ]
             , ReadyS $ ready {tcpConns = newConns, randomGen = gen}
             )
-
-

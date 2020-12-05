@@ -1,14 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DuplicateRecordFields #-}
 module Main (main) where
 
-import qualified System.Directory as Dir
-import qualified Data.Attoparsec.ByteString as P
 import qualified Control.Concurrent.STM as Stm
 import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Data.ByteString as B
 import System.FilePath ((</>))
-import qualified Data.Text as T
 import qualified Network.Simple.TCP as Tcp
 import qualified Control.Exception as E
 import qualified Crypto.Random as CryptoRand
@@ -34,14 +30,23 @@ updateIo mainState msg = do
 
 
 io :: TVar.TVar State -> Output -> IO ()
-io mainState output = do
-  case output of
+io mainState output =
+    case output of
+    CloseSocketO socket -> do
+        _ <- (E.try $ Tcp.closeSock socket)
+                :: IO (Either E.IOException ())
+        return ()
+
+    BatchO b ->
+        mapM_ (io mainState) b
+
+    TcpRecvO address socket len -> do
+        result <- E.try $ Tcp.recv socket len
+        updateIo mainState $ TcpMsgInM address result
+
     MsgInSocketO address socket msg -> do
         result <- E.try $ Tcp.send socket msg
         updateIo mainState $ TcpSendResultM address result
-
-    CloseSocketO socket ->
-        Tcp.closeSock socket
 
     PrintO msg ->
         Tio.putStrLn msg
@@ -54,13 +59,8 @@ io mainState output = do
         updateIo mainState $ AccessListM result
 
     StartTcpServerO ->
-        tcpServer mainState
-
-    BatchO outputs ->
-        mapM_ (io mainState) outputs
-
-    MakeDirIfNotThereO path ->
-        Dir.createDirectoryIfMissing True path
+        Tcp.serve (Tcp.Host "127.0.0.1") "11453" $ \(sock, addr) ->
+        updateIo mainState $ NewTcpConnM sock addr
 
     DeleteInboxMessageDbO sender recipient message ->
         Db.withConnection dbPath $ \conn ->
@@ -119,79 +119,6 @@ deleteMessageSql =
     \WHERE sender = ? AND recipient = ? and message = ?;"
 
 
-tcpServer :: TVar.TVar State -> IO ()
-tcpServer mainState =
-    Tcp.serve (Tcp.Host "127.0.0.1") "11453" (tcpServerHelp mainState)
-
-
-tcpServerHelp :: TVar.TVar State -> (Tcp.Socket, Tcp.SockAddr) -> IO ()
-tcpServerHelp mainState (socket, address) = do
-    updateIo mainState $ NewTcpConnM socket address
-    tcpReceiver mainState socket address
-
-
-tcpRecv
-    :: Tcp.Socket
-    -> Int
-    -> IO (Either E.IOException (Maybe B.ByteString))
-tcpRecv socket len =
-    E.try $ Tcp.recv socket len
-
-
-uint16P :: P.Parser Int
-uint16P = do
-    b0 <- uint8P
-    b1 <- uint8P
-    return $ b0 + b1 * 256
-
-
-tcpReceiver :: TVar.TVar State -> Tcp.Socket -> Tcp.SockAddr -> IO ()
-tcpReceiver mainState socket address = do
-    eitherMsgLen <- tcpRecv socket 2
-    case eitherMsgLen of
-        Left err -> do
-            Tio.putStrLn "1"
-            Tio.putStrLn $ "tcpRecv error: " <> T.pack (show err)
-            updateIo mainState $ DeadTcpM address
-
-        Right Nothing -> do
-            Tio.putStrLn "2"
-            updateIo mainState $ DeadTcpM address
-
-        Right (Just rawLen) ->
-            case P.parseOnly uint16P rawLen of
-            Left _ -> do
-                Tio.putStrLn "3"
-                updateIo mainState $ DeadTcpM address
-
-            Right len -> do
-                if len < maxMessageLength then do
-                    eitherMsg <- tcpRecv socket len
-                    case eitherMsg of
-                        Left _ -> do
-                            Tio.putStrLn "4"
-                            updateIo mainState $ DeadTcpM address
-
-                        Right Nothing -> do
-                            Tio.putStrLn "5"
-                            updateIo mainState $ DeadTcpM address
-
-                        Right (Just msg) -> do
-                            updateIo mainState $ TcpMsgInM address msg
-                            tcpReceiver mainState socket address
-
-                else do
-                    Tio.putStrLn "6"
-                    Tio.putStrLn $
-                        "length: " <> T.pack (show len) <> "\n====="
-                    updateIo mainState $ DeadTcpM address
-
-
-uint8P :: P.Parser Int
-uint8P =
-    fromIntegral <$> P.anyWord8
-
-
 rootPath :: FilePath
 rootPath =
     "bwtdata"
@@ -202,10 +129,6 @@ dbPath =
     rootPath </> "database.sqlite"
 
 
+accessListPath :: FilePath
 accessListPath =
     rootPath </> "accessList.txt"
-
-
-maxMessageLength :: Int
-maxMessageLength =
-    16000

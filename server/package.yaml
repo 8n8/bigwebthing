@@ -41,11 +41,9 @@ executables:
     - stm
     - filepath
     - bytestring
-    - attoparsec
     - text
     - network-simple
     - cryptonite
-    - directory
     - sqlite-simple
     - server
 
