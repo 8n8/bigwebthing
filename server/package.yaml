@@ -12,7 +12,22 @@ ghc-options:
 - -Wno-implicit-prelude
 - -Wno-monomorphism-restriction
 - -Wno-missing-deriving-strategies
+- -Wno-missing-import-lists
 - -Werror
+
+library:
+  source-dirs: src
+  dependencies:
+  - bytestring
+  - attoparsec
+  - text
+  - containers
+  - network-simple
+  - cryptonite
+  - hex-text
+  - memory
+  - sqlite-simple
+  - base64-bytestring
 
 executables:
   server-exe:
@@ -28,14 +43,11 @@ executables:
     - bytestring
     - attoparsec
     - text
-    - containers
     - network-simple
     - cryptonite
-    - hex-text
-    - memory
     - directory
     - sqlite-simple
-    - base64-bytestring
+    - server
 
 tests:
   server-test:
