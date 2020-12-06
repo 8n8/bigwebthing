@@ -38,7 +38,17 @@ properties =
     , t "tcpSendMessage" tcpSendMessage
     , t "tcpGetMessage" tcpGetMessage
     , t "newTcpConn" newTcpConn
+    , t "deadTcp" deadTcp
     ]
+
+
+deadTcp :: H.Property
+deadTcp =
+    H.property $ do
+    let msg = U.DeadTcpM dummySocketAddress
+    ready <- H.forAll readyG
+    let (out, _) = U.update (U.ReadyS ready) msg
+    out H.=== U.CloseSocketO dummyTcpSocket
 
 
 newTcpConn :: H.Property
