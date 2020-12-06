@@ -46,12 +46,23 @@ properties =
     , t "badAccessList" badAccessList
     , t "goodAccessList" goodAccessList
     , t "emptyMessagesFromDb" emptyMessagesFromDb
-    , t "tcpSendResult" tcpSendResult
+    , t "goodMessagesFromDb" goodMessagesFromDb
+    , t "tcpBadSendResult" tcpBadSendResult
+    , t "tcpGoodSendResult" tcpGoodSendResult
     ]
 
 
-tcpSendResult :: H.Property
-tcpSendResult =
+tcpGoodSendResult :: H.Property
+tcpGoodSendResult =
+    H.property $ do
+    let msg = U.TcpSendResultM dummySocketAddress $ Right ()
+    ready <- H.forAll readyG
+    let (out, _) = U.update (U.ReadyS ready) msg
+    out H.=== U.DoNothingO
+
+
+tcpBadSendResult :: H.Property
+tcpBadSendResult =
     H.property $ do
     let msg = U.TcpSendResultM dummySocketAddress (Left dummyException)
     ready <- H.forAll readyG
@@ -72,6 +83,29 @@ emptyMessagesFromDb =
 
         _ ->
             H.failure
+
+
+goodMessagesFromDb :: H.Property
+goodMessagesFromDb =
+    H.property $ do
+    recipient <- H.forAll publicKeyG
+    rows <- H.forAll $ Gen.list (Range.linear 1 10) dbRowG
+    let msg = U.MessagesFromDbM (U.Recipient recipient) rows
+    ready <- H.forAll readyG
+    let (_, model') = U.update (U.ReadyS ready) msg
+    case model' of
+        U.ReadyS _ ->
+            return ()
+
+        _ ->
+            H.failure
+
+
+dbRowG :: H.Gen (B.ByteString, B.ByteString)
+dbRowG = do
+    sender <- Gen.bytes $ Range.singleton Ed.publicKeySize
+    msg <- Gen.bytes $ Range.linear 1 100
+    return (sender, msg)
 
 
 goodAccessList :: H.Property
