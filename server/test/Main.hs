@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
 import qualified Hedgehog as H
@@ -17,6 +18,7 @@ import qualified Data.Set as Set
 import qualified Data.Map as Map
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.ByteString as B
+import Control.Monad.IO.Class (liftIO)
 
 
 main :: IO ()
@@ -42,7 +44,24 @@ properties =
     , t "randomGenT" randomGenT
     , t "noAccessList" noAccessList
     , t "badAccessList" badAccessList
+    , t "goodAccessList" goodAccessList
     ]
+
+
+goodAccessList :: H.Property
+goodAccessList =
+    H.property $ do
+    rawAccess <- H.forAll rawAccessG
+    let msg = U.AccessListM $ Right rawAccess
+    let state = U.InitS U.ReadingAccessListI
+    let (_, model') = U.update state msg
+    case model' of
+        U.InitS (U.GettingRandomI _) ->
+            return ()
+
+        bad -> do
+            liftIO $ print bad
+            H.failure
 
 
 badAccessList :: H.Property
@@ -223,6 +242,13 @@ isCloseSocket o =
 
     _ ->
         False
+
+
+rawAccessG :: H.Gen B.ByteString
+rawAccessG = do
+    asList <- Gen.list (Range.linear 1 10) $
+            Gen.utf8 (Range.singleton 43) Gen.alphaNum
+    return $ mconcat $ map (\b -> b <> "\n") asList
 
 
 readyGetBodyG :: H.Gen U.Ready
