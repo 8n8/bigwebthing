@@ -41,7 +41,18 @@ properties =
     , t "deadTcp" deadTcp
     , t "randomGenT" randomGenT
     , t "noAccessList" noAccessList
+    , t "badAccessList" badAccessList
     ]
+
+
+badAccessList :: H.Property
+badAccessList =
+    H.property $ do
+    bytes <- H.forAll $ Gen.bytes $ Range.linear 0 42
+    let msg = U.AccessListM $ Right bytes
+    let state = U.InitS U.ReadingAccessListI
+    let (_, model') = U.update state msg
+    model' H.=== U.FailedS
 
 
 noAccessList :: H.Property
