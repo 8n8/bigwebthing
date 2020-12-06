@@ -8,12 +8,18 @@ module Update
     , State(..)
     , Output(..)
     , Init(..)
+    , PublicKey(..)
+    , TcpConn(..)
+    , TcpGetting(..)
+    , AuthStatus(..)
+    , Sender(..)
+    , AuthCode(..)
+    , authLength
     ) where
 
 
 import qualified Data.Map as Map
 import Data.Bits ((.&.), shiftR)
-import Debug.Trace (trace)
 import qualified Data.Set as Set
 import qualified Data.ByteArray as ByteArray
 import qualified Data.ByteString.Base64.URL as B64
@@ -549,7 +555,9 @@ data Init
 
 data Msg
     = StartM
-    | TcpMsgInM Tcp.SockAddr (Either E.IOException (Maybe B.ByteString))
+    | TcpMsgInM
+        Tcp.SockAddr
+        (Either E.IOException (Maybe B.ByteString))
     | TcpSendResultM Tcp.SockAddr (Either E.IOException ())
     | NewTcpConnM Tcp.Socket Tcp.SockAddr
     | DeadTcpM Tcp.SockAddr
@@ -612,16 +620,7 @@ update :: State -> Msg -> (Output, State)
 update model msg =
     let
     pass = (DoNothingO, model)
-    dbg =
-        mconcat
-        [ "model: "
-        , show model
-        , "\nmsg: "
-        , show msg
-        , "\n"
-        ]
     in
-    trace dbg $
     case msg of
     AccessListM eitherRaw ->
         case model of

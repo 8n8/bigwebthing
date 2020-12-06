@@ -59,3 +59,8 @@ tests:
     - tasty
     - tasty-hedgehog
     - hedgehog
+    - server
+    - network
+    - network-simple
+    - cryptonite
+    - containers
