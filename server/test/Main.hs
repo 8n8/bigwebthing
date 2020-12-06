@@ -39,7 +39,32 @@ properties =
     , t "tcpGetMessage" tcpGetMessage
     , t "newTcpConn" newTcpConn
     , t "deadTcp" deadTcp
+    , t "randomGenT" randomGenT
+    , t "noAccessList" noAccessList
     ]
+
+
+noAccessList :: H.Property
+noAccessList =
+    H.property $ do
+    let msg = U.AccessListM $ Left dummyException
+    let state = U.InitS U.ReadingAccessListI
+    let (_, model') = U.update state msg
+    model' H.=== U.FailedS
+
+
+randomGenT :: H.Property
+randomGenT =
+    H.property $ do
+    let msg = U.RandomGenM $ CryptoRand.drgNewTest (0, 0, 0, 0, 0)
+    let model = U.InitS $ U.GettingRandomI Set.empty
+    let (_, model') = U.update model msg
+    case model' of
+        U.ReadyS _ ->
+            return ()
+
+        _ ->
+            H.failure
 
 
 deadTcp :: H.Property
@@ -126,7 +151,7 @@ dummySocketAddress =
 
 dummyException :: E.IOException
 dummyException =
-    Ge.IOError Nothing Ge.AlreadyExists "" "" Nothing Nothing
+    Ge.IOError Nothing Ge.NoSuchThing "" "" Nothing Nothing
 
 
 tcpBadRightIn :: Int -> Int -> H.Property

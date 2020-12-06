@@ -293,7 +293,7 @@ data State
     = InitS Init
     | ReadyS Ready
     | FailedS
-    deriving Show
+    deriving (Show, Eq)
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -551,7 +551,7 @@ data Init
     = EmptyI
     | ReadingAccessListI
     | GettingRandomI (Set.Set PublicKey)
-    deriving Show
+    deriving (Show, Eq)
 
 
 data Msg
@@ -615,6 +615,11 @@ data Ready
         , randomGen :: CryptoRand.ChaChaDRG
         , accessList :: Set.Set PublicKey
         }
+
+
+instance Eq Ready where
+    (==) (Ready t1 _ a1) (Ready t2 _ a2) =
+        t1 == t2 && a1 == a2
 
 
 update :: State -> Msg -> (Output, State)
@@ -737,14 +742,14 @@ update model msg =
                         }
                     )
 
-    RandomGenM randomGen ->
+    RandomGenM gen ->
         case model of
         InitS (GettingRandomI accessList) ->
             ( StartTcpServerO
             , ReadyS $
                 Ready
                     { tcpConns = Map.empty
-                    , randomGen
+                    , randomGen = gen
                     , accessList
                     }
             )
