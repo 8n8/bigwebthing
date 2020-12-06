@@ -45,7 +45,23 @@ properties =
     , t "noAccessList" noAccessList
     , t "badAccessList" badAccessList
     , t "goodAccessList" goodAccessList
+    , t "emptyMessagesFromDb" emptyMessagesFromDb
     ]
+
+
+emptyMessagesFromDb :: H.Property
+emptyMessagesFromDb =
+    H.property $ do
+    recipient <- H.forAll publicKeyG
+    let msg = U.MessagesFromDbM (U.Recipient recipient) []
+    ready <- H.forAll readyG
+    let (_, model') = U.update (U.ReadyS ready) msg
+    case model' of
+        U.ReadyS _ ->
+            return ()
+
+        _ ->
+            H.failure
 
 
 goodAccessList :: H.Property

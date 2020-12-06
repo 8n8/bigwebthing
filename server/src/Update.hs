@@ -14,6 +14,7 @@ module Update
     , AuthStatus(..)
     , Sender(..)
     , AuthCode(..)
+    , Recipient(..)
     , authLength
     ) where
 
