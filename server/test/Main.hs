@@ -29,7 +29,8 @@ properties =
     t = Th.testProperty
     in
     Tasty.testGroup ""
-    [ t "badTcpMsgIn" badTcpMsgIn
+    [ t "tcpExceptIn" tcpExceptIn
+    , t "tcpNothingIn" tcpNothingIn
     ]
 
 
@@ -48,8 +49,21 @@ dummyException =
     Ge.IOError Nothing Ge.AlreadyExists "" "" Nothing Nothing
 
 
-badTcpMsgIn :: H.Property
-badTcpMsgIn =
+tcpNothingIn :: H.Property
+tcpNothingIn =
+    let
+    msg = U.TcpMsgInM dummySocketAddress $ Right Nothing
+    in
+    H.property $
+    do
+    ready <- H.forAll readyG
+    let (out, model') = U.update (U.ReadyS ready) msg
+    isCloseSocket out
+    H.assert $ isReady model'
+
+
+tcpExceptIn :: H.Property
+tcpExceptIn =
     let
     msg = U.TcpMsgInM dummySocketAddress $ Left dummyException
     in
