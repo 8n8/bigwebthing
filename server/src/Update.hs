@@ -218,7 +218,7 @@ data Output
     | GetRandomGenO
     | SaveMessageToDbO Sender Recipient InboxMessage
     | GetMessageFromDbO Recipient
-    deriving Show
+    deriving (Show, Eq)
 
 
 newtype Sender
@@ -254,12 +254,12 @@ instance DbTf.ToField InboxMessage where
 
 newtype InboxMessage
     = InboxMessage B.ByteString
-    deriving Show
+    deriving (Show, Eq)
 
 
 newtype Recipient
     = Recipient Ed.PublicKey
-    deriving Show
+    deriving (Show, Eq)
 
 
 newtype PublicKey
@@ -270,22 +270,23 @@ newtype PublicKey
 data AuthStatus
     = Authenticated Sender
     | Untrusted AuthCode
-    deriving Show
+    deriving (Show, Eq)
 
 
 newtype AuthCode
     = AuthCode B.ByteString
-    deriving Show
+    deriving (Show, Eq)
 
 
 data TcpConn
     = TcpConn Tcp.Socket AuthStatus TcpGetting
+    deriving Eq
 
 
 data TcpGetting
     = LengthG
     | BodyG
-    deriving Show
+    deriving (Show, Eq)
 
 
 data State
@@ -735,7 +736,6 @@ update model msg =
                             Map.delete address $ tcpConns ready
                         }
                     )
-
 
     RandomGenM randomGen ->
         case model of

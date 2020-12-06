@@ -64,3 +64,4 @@ tests:
     - network-simple
     - cryptonite
     - containers
+    - bytestring
