@@ -46,7 +46,17 @@ properties =
     , t "badAccessList" badAccessList
     , t "goodAccessList" goodAccessList
     , t "emptyMessagesFromDb" emptyMessagesFromDb
+    , t "tcpSendResult" tcpSendResult
     ]
+
+
+tcpSendResult :: H.Property
+tcpSendResult =
+    H.property $ do
+    let msg = U.TcpSendResultM dummySocketAddress (Left dummyException)
+    ready <- H.forAll readyG
+    let (out, _) = U.update (U.ReadyS ready) msg
+    H.assert $ isCloseSocket out
 
 
 emptyMessagesFromDb :: H.Property
