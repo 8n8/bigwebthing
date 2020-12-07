@@ -51,6 +51,8 @@ ghc-options:
 
 library:
   source-dirs: src
+  ghc-options:
+    - -Wno-missed-specialisations
 
 executables:
   client-exe:

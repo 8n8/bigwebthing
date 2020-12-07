@@ -158,19 +158,12 @@ updateOnTcpConn model socket =
     )
 
 
-stdInP :: P.Parser T.Text
-stdInP = do
-    msg <- inboxMessageP
-    P.endOfInput
-    return msg
-
-
 updateOnStdIn :: State -> B.ByteString -> (Output, State)
 updateOnStdIn model raw =
     let
     pass = (DoNothingO, model)
     in
-    case P.parseOnly stdInP raw of
+    case P.parseOnly inboxMessageP raw of
     Left err ->
         (toUser $ BadMessageU err, FinishedS)
 
@@ -619,10 +612,9 @@ onlyLengthP = do
 
 onLengthFromServer
     :: Ready
-    -> Tcp.Socket
     -> B.ByteString
     -> (Output, State)
-onLengthFromServer ready socket raw =
+onLengthFromServer ready raw =
     case P.parseOnly onlyLengthP raw of
     Left err ->
         ( BatchO
@@ -633,10 +625,30 @@ onLengthFromServer ready socket raw =
         )
 
     Right len ->
-        ( TcpListenO socket len
-        , ReadyS $
-          ready { authStatus = LoggedInA (socket, GettingBody) }
-        )
+        case authStatus ready of
+        LoggedInA (socket, _) ->
+            ( TcpListenO socket len
+            , ReadyS $
+              ready { authStatus = LoggedInA (socket, GettingBody) }
+            )
+
+        NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+            (DoNothingO, ReadyS ready)
+
+        NotLoggedInA (SendWhenLoggedIn (Just (socket, _)) to) ->
+            ( TcpListenO socket len
+            , ReadyS $
+                ready
+                    { authStatus =
+                        NotLoggedInA $
+                        SendWhenLoggedIn
+                        (Just (socket, GettingBody)) to
+                    }
+            )
+
+        NotLoggedInA JustNotLoggedIn ->
+            (DoNothingO, ReadyS ready)
+
 
 
 fromServerUpdate :: B.ByteString -> Ready -> (Output, State)
@@ -648,8 +660,8 @@ fromServerUpdate raw ready =
     LoggedInA (_, GettingBody) ->
         onBodyFromServer ready raw
 
-    LoggedInA (socket, GettingLength) ->
-        onLengthFromServer ready socket raw
+    LoggedInA (_, GettingLength) ->
+        onLengthFromServer ready raw
 
     NotLoggedInA (SendWhenLoggedIn Nothing _) ->
         pass
@@ -657,8 +669,8 @@ fromServerUpdate raw ready =
     NotLoggedInA (SendWhenLoggedIn (Just (_, GettingBody)) _) ->
         onBodyFromServer ready raw
 
-    NotLoggedInA (SendWhenLoggedIn (Just (conn, GettingLength)) _) ->
-        onLengthFromServer ready conn raw
+    NotLoggedInA (SendWhenLoggedIn (Just (_, GettingLength)) _) ->
+        onLengthFromServer ready raw
 
     NotLoggedInA JustNotLoggedIn ->
         pass
