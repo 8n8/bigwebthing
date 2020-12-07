@@ -62,25 +62,25 @@ io mainState output =
         Tcp.serve (Tcp.Host "127.0.0.1") "11453" $ \(sock, addr) ->
         updateIo mainState $ NewTcpConnM sock addr
 
-    DeleteInboxMessageDbO sender recipient message -> do
+    DeleteInboxMessageDbO sender@(Sender s) recipient message -> do
         eitherErr <- E.try $ Db.withConnection dbPath $ \conn ->
                 Db.execute
                     conn
                     deleteMessageSql
                     (sender, recipient, message)
-        updateIo mainState $ DbDeleteErrorM eitherErr
+        updateIo mainState $ DbErrM s eitherErr
 
     GetRandomGenO -> do
         drg <- CryptoRand.drgNew
         updateIo mainState $ RandomGenM drg
 
-    SaveMessageToDbO sender recipient inboxMessage -> do
+    SaveMessageToDbO sender@(Sender s) recipient inboxMessage -> do
         eitherErr <- E.try $ Db.withConnection dbPath $ \conn ->
                 Db.execute
                     conn
                     saveMessageSql
                     (sender, recipient, inboxMessage)
-        updateIo mainState $ DbSaveErrorM eitherErr
+        updateIo mainState $ DbErrM s eitherErr
 
     GetMessageFromDbO recipient -> do
         result <- E.try $ Db.withConnection dbPath $ \conn ->
@@ -90,10 +90,9 @@ io mainState output =
                 (Db.Only recipient)
         updateIo mainState $ MessagesFromDbM recipient result
 
-    SetupDbO -> do
-        eitherError <- E.try $ Db.withConnection dbPath $ \conn ->
+    SetupDbO ->
+        Db.withConnection dbPath $ \conn ->
                 Db.execute_ conn makeMessagesTableSql
-        updateIo mainState $ SetUpDbErrorM eitherError
 
 
 makeMessagesTableSql :: Db.Query

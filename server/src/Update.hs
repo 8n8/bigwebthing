@@ -73,11 +73,11 @@ pubToBytes =
     ByteArray.convert
 
 
-findConnHelp :: Recipient -> TcpConn -> Bool
-findConnHelp (Recipient r) (TcpConn _ auth _) =
+findConnHelp :: Ed.PublicKey -> TcpConn -> Bool
+findConnHelp initiator (TcpConn _ auth _) =
     case auth of
     Authenticated (Sender s) ->
-        s == r
+        s == initiator
 
     Untrusted _ ->
         False
@@ -331,12 +331,12 @@ instance Ord PublicKey where
 
 
 findConn
-    :: Recipient
+    :: Ed.PublicKey
     -> Map.Map Tcp.SockAddr TcpConn
     -> Maybe (Tcp.SockAddr, TcpConn)
-findConn recipient conns =
+findConn initiator conns =
     let
-    filtered = Map.filter (findConnHelp recipient) conns
+    filtered = Map.filter (findConnHelp initiator) conns
     in
     case Map.toList filtered of
     [] ->
@@ -471,7 +471,8 @@ updateOnTcpMessage address ready untrusted =
                 [ SaveMessageToDbO sender recipient inboxMessage
                 , CloseSocketO socket
                 ]
-            , ReadyS ready
+            , ReadyS $ ready
+                { tcpConns = Map.delete address $ tcpConns ready }
             )
 
         GetMessage ->
@@ -579,22 +580,14 @@ data Msg
     | MessagesFromDbM
         Recipient
         (Either Db.SQLError [(B.ByteString, B.ByteString)])
-    | SetUpDbErrorM (Either Db.SQLError ())
-    | DbSaveErrorM (Either Db.SQLError ())
-    | DbDeleteErrorM (Either Db.SQLError ())
+    | DbErrM Ed.PublicKey (Either Db.SQLError ())
 
 
 instance Show Msg where
     show msg =
         case msg of
-        DbDeleteErrorM err ->
-            "DbDeleteErrorM " <> show err
-
-        DbSaveErrorM err ->
-            "DbSaveErrorM " <> show err
-
-        SetUpDbErrorM err ->
-            "SetUpDbErrorM " <> show err
+        DbErrM id_ err ->
+            "DbErrM " <> show id_ <> " " <> show err
 
         StartM ->
             "StartM"
@@ -722,17 +715,56 @@ updateOnTcpSend model address eitherError =
             )
 
 
+updateOnDbErr
+    :: State
+    -> Ed.PublicKey
+    -> Either Db.SQLError ()
+    -> (Output, State)
+updateOnDbErr model initiator eitherErr =
+    let
+    pass = (DoNothingO, model)
+    in
+    updateReady model $ \ready ->
+    case eitherErr of
+    Right () ->
+        pass
+
+    Left _ ->
+        case findConn initiator $ tcpConns ready of
+        Nothing ->
+            pass
+
+        Just (_, TcpConn _ (Untrusted _) _) ->
+            pass
+
+        Just (address, TcpConn socket (Authenticated _) _) ->
+            ( BatchO
+                [ sendToClient address socket NoMessages
+                , CloseSocketO socket
+                ]
+            , ReadyS $
+              ready
+                { tcpConns =
+                    Map.delete address $ tcpConns ready
+                }
+            )
+
+
 updateOnMessagesFromDb
     :: State
     -> Recipient
     -> Either Db.SQLError [(B.ByteString, B.ByteString)]
     -> (Output, State)
-updateOnMessagesFromDb model recipient eitherRaw =
+updateOnMessagesFromDb
+    model
+    recipient@(Recipient initiator)
+    eitherRaw =
+
     let
     pass = (DoNothingO, model)
     in
     updateReady model $ \ready ->
-    case findConn recipient $ tcpConns ready of
+    case findConn initiator $ tcpConns ready of
     Nothing ->
         pass
 
@@ -889,23 +921,8 @@ update model msg =
     trace ("msg: " <> show msg <> "\n") $
     trace ("model: " <> show model) $
     case msg of
-    DbDeleteErrorM (Right ()) ->
-        (DoNothingO, model)
-
-    DbDeleteErrorM (Left err) ->
-        (PrintO $ T.pack $ show err, model)
-
-    DbSaveErrorM (Right ()) ->
-        (DoNothingO, model)
-
-    DbSaveErrorM (Left err) ->
-        (PrintO $ T.pack $ show err, model)
-
-    SetUpDbErrorM (Right ()) ->
-        (DoNothingO, model)
-
-    SetUpDbErrorM (Left err) ->
-        (PrintO $ T.pack $ show err, FailedS)
+    DbErrM id_ err ->
+        updateOnDbErr model id_ err
 
     AccessListM eitherRaw ->
         updateOnAccessList model eitherRaw
