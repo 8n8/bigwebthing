@@ -13,6 +13,7 @@ ghc-options:
 - -Wno-monomorphism-restriction
 - -Wno-missing-deriving-strategies
 - -Wno-missing-import-lists
+- -Wno-all-missed-specialisations
 - -Werror
 
 library:

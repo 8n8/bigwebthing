@@ -43,7 +43,7 @@ ghc-options:
 - -Wno-implicit-prelude
 - -Wno-monomorphism-restriction
 - -Wno-missing-deriving-strategies
-- -Wno-missed-specialisations
+- -Wno-all-missed-specialisations
 - -Wno-unused-packages
 - -Wno-missing-export-lists
 - -Werror

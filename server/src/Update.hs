@@ -19,7 +19,6 @@ module Update
     ) where
 
 
-import Debug.Trace (trace)
 import qualified Data.Map as Map
 import Data.Bits ((.&.), shiftR)
 import qualified Data.Set as Set
@@ -918,8 +917,6 @@ updateOnNewTcpConn model socket address =
 
 update :: State -> Msg -> (Output, State)
 update model msg =
-    trace ("msg: " <> show msg <> "\n") $
-    trace ("model: " <> show model) $
     case msg of
     DbErrM id_ err ->
         updateOnDbErr model id_ err
