@@ -623,187 +623,208 @@ instance Eq Ready where
         t1 == t2 && a1 == a2
 
 
-update :: State -> Msg -> (Output, State)
-update model msg =
+updateOnAccessList
+    :: State
+    -> Either E.IOException B.ByteString
+    -> (Output, State)
+updateOnAccessList model eitherRaw =
     let
     pass = (DoNothingO, model)
     in
-    case msg of
-    AccessListM eitherRaw ->
-        case model of
-        InitS EmptyI ->
-            pass
+    case model of
+    InitS EmptyI ->
+        pass
 
-        InitS (GettingRandomI _) ->
-            pass
+    InitS (GettingRandomI _) ->
+        pass
 
-        ReadyS _ ->
-            pass
+    ReadyS _ ->
+        pass
 
-        FailedS ->
-            pass
+    FailedS ->
+        pass
 
-        InitS ReadingAccessListI ->
-            case eitherRaw of
+    InitS ReadingAccessListI ->
+        case eitherRaw of
+        Left err ->
+            ( PrintO $
+              mconcat
+              [ "could not read access list file:\n"
+              , T.pack $ show err
+              ]
+            , FailedS
+            )
+
+        Right raw ->
+            case P.parseOnly accessListP raw of
             Left err ->
                 ( PrintO $
                   mconcat
-                  [ "could not read access list file:\n"
-                  , T.pack $ show err
+                  [ "could not parse access list file:\n"
+                  , T.pack err
+                  , ":\n"
+                  , Text.Hex.encodeHex raw
                   ]
                 , FailedS
                 )
 
-            Right raw ->
-                case P.parseOnly accessListP raw of
-                Left err ->
-                    ( PrintO $
-                      mconcat
-                      [ "could not parse access list file:\n"
-                      , T.pack err
-                      , ":\n"
-                      , Text.Hex.encodeHex raw
-                      ]
-                    , FailedS
-                    )
+            Right accessList ->
+                (GetRandomGenO, InitS $ GettingRandomI accessList)
 
-                Right accessList ->
-                    (GetRandomGenO, InitS $ GettingRandomI accessList)
 
-    TcpSendResultM address eitherError ->
-        updateReady model $ \ready ->
-        case eitherError of
-        Right () ->
-            pass
+updateOnTcpSend
+    :: State
+    -> Tcp.SockAddr
+    -> Either E.IOException ()
+    -> (Output, State)
+updateOnTcpSend model address eitherError =
+    updateReady model $ \ready ->
+    case eitherError of
+    Right () ->
+        (DoNothingO, model)
 
-        Left _ ->
-            case Map.lookup address $ tcpConns ready of
-            Nothing ->
-                pass
-
-            Just (TcpConn socket _ _) ->
-                ( CloseSocketO socket
-                , ReadyS $
-                    ready
-                        { tcpConns =
-                            Map.delete address $ tcpConns ready
-                        }
-                )
-
-    MessagesFromDbM recipient raw ->
-        updateReady model $ \ready ->
-        case findConn recipient $ tcpConns ready of
+    Left _ ->
+        case Map.lookup address $ tcpConns ready of
         Nothing ->
-            pass
+            (DoNothingO, model)
 
-        Just (_, TcpConn _ (Untrusted _) _) ->
-            pass
+        Just (TcpConn socket _ _) ->
+            ( CloseSocketO socket
+            , ReadyS $
+                ready
+                    { tcpConns =
+                        Map.delete address $ tcpConns ready
+                    }
+            )
 
-        Just (address, TcpConn socket (Authenticated _) _) ->
-            case raw of
-            [] ->
+
+updateOnMessagesFromDb
+    :: State
+    -> Recipient
+    -> [(B.ByteString, B.ByteString)]
+    -> (Output, State)
+updateOnMessagesFromDb model recipient raw =
+    let
+    pass = (DoNothingO, model)
+    in
+    updateReady model $ \ready ->
+    case findConn recipient $ tcpConns ready of
+    Nothing ->
+        pass
+
+    Just (_, TcpConn _ (Untrusted _) _) ->
+        pass
+
+    Just (address, TcpConn socket (Authenticated _) _) ->
+        case raw of
+        [] ->
+            ( BatchO
+                [ sendToClient address socket NoMessages
+                , CloseSocketO socket
+                ]
+            , ReadyS $
+              ready
+                { tcpConns =
+                    Map.delete address $ tcpConns ready
+                }
+            )
+
+        (rawSender, rawMessage):_ ->
+            case Ed.publicKey rawSender of
+            CryptoFailed err ->
+                ( PrintO $
+                  mconcat
+                  [ "could not parse public key from server: "
+                  , Text.Hex.encodeHex rawSender
+                  , ":\n"
+                  , T.pack $ show err
+                  ]
+                , FailedS
+                )
+            CryptoPassed sender ->
                 ( BatchO
-                    [ sendToClient address socket NoMessages
+                    [ sendToClient address socket $
+                      NewMessage
+                      (Sender sender)
+                      (InboxMessage rawMessage)
                     , CloseSocketO socket
+                    , DeleteInboxMessageDbO
+                        (Sender sender)
+                        recipient
+                        (InboxMessage rawMessage)
                     ]
-                , ReadyS $
-                  ready
+                , ReadyS $ ready
                     { tcpConns =
                         Map.delete address $ tcpConns ready
                     }
                 )
 
-            (rawSender, rawMessage):_ ->
-                case Ed.publicKey rawSender of
-                CryptoFailed err ->
-                    ( PrintO $
-                      mconcat
-                      [ "could not parse public key from server: "
-                      , Text.Hex.encodeHex rawSender
-                      , ":\n"
-                      , T.pack $ show err
-                      ]
-                    , FailedS
-                    )
-                CryptoPassed sender ->
-                    ( BatchO
-                        [ sendToClient address socket $
-                          NewMessage
-                          (Sender sender)
-                          (InboxMessage rawMessage)
-                        , CloseSocketO socket
-                        , DeleteInboxMessageDbO
-                            (Sender sender)
-                            recipient
-                            (InboxMessage rawMessage)
-                        ]
-                    , ReadyS $ ready
-                        { tcpConns =
-                            Map.delete address $ tcpConns ready
-                        }
-                    )
 
-    RandomGenM gen ->
-        case model of
-        InitS (GettingRandomI accessList) ->
-            ( StartTcpServerO
+updateOnRandomGen :: State -> CryptoRand.ChaChaDRG -> (Output, State)
+updateOnRandomGen model gen =
+    let
+    pass = (DoNothingO, model)
+    in
+    case model of
+    InitS (GettingRandomI accessList) ->
+        ( StartTcpServerO
+        , ReadyS $
+            Ready
+                { tcpConns = Map.empty
+                , randomGen = gen
+                , accessList
+                }
+        )
+
+    InitS ReadingAccessListI ->
+        pass
+
+    InitS EmptyI ->
+        pass
+
+    ReadyS _ ->
+        pass
+
+    FailedS ->
+        pass
+
+
+updateOnDeadTcp :: State -> Tcp.SockAddr -> (Output, State)
+updateOnDeadTcp model address =
+    let
+    pass = (DoNothingO, model)
+    in
+    case model of
+    InitS _ ->
+        pass
+
+    FailedS ->
+        pass
+
+    ReadyS ready ->
+        case Map.lookup address (tcpConns ready) of
+        Nothing ->
+            pass
+
+        Just (TcpConn socket _ _) ->
+            ( CloseSocketO socket
             , ReadyS $
-                Ready
-                    { tcpConns = Map.empty
-                    , randomGen = gen
-                    , accessList
+                ready
+                    { tcpConns =
+                        Map.delete address (tcpConns ready)
                     }
             )
 
-        InitS ReadingAccessListI ->
-            pass
 
-        InitS EmptyI ->
-            pass
-
-        ReadyS _ ->
-            pass
-
-        FailedS ->
-            pass
-
-    DeadTcpM address ->
-        case model of
-        InitS _ ->
-            pass
-
-        FailedS ->
-            pass
-
-        ReadyS ready ->
-            case Map.lookup address (tcpConns ready) of
-            Nothing ->
-                pass
-
-            Just (TcpConn socket _ _) ->
-                ( CloseSocketO socket
-                , ReadyS $
-                    ready
-                        { tcpConns =
-                            Map.delete address (tcpConns ready)
-                        }
-                )
-
-    StartM ->
-        ( BatchO [SetupDbO, ReadAccessListO ]
-        , InitS ReadingAccessListI
-        )
-
-    TcpMsgInM address rawMessage ->
-        updateOnRawTcpMessage address rawMessage model
-
-    BatchM msgs ->
-        let
-        (outputs, newModel) = batchUpdate model msgs []
-        in
-        (BatchO outputs, newModel)
-
-    NewTcpConnM socket address ->
+updateOnNewTcpConn
+    :: State
+    -> Tcp.Socket
+    -> Tcp.SockAddr
+    -> (Output, State)
+updateOnNewTcpConn model socket address =
+    let
+    pass = (DoNothingO, model)
+    in
         case model of
         InitS _ ->
             pass
@@ -830,3 +851,39 @@ update model msg =
                 ]
             , ReadyS $ ready {tcpConns = newConns, randomGen = gen}
             )
+
+
+update :: State -> Msg -> (Output, State)
+update model msg =
+    case msg of
+    AccessListM eitherRaw ->
+        updateOnAccessList model eitherRaw
+
+    TcpSendResultM address eitherError ->
+        updateOnTcpSend model address eitherError
+
+    MessagesFromDbM recipient raw ->
+        updateOnMessagesFromDb model recipient raw
+
+    RandomGenM gen ->
+        updateOnRandomGen model gen
+
+    DeadTcpM address ->
+        updateOnDeadTcp model address
+
+    StartM ->
+        ( BatchO [SetupDbO, ReadAccessListO ]
+        , InitS ReadingAccessListI
+        )
+
+    TcpMsgInM address rawMessage ->
+        updateOnRawTcpMessage address rawMessage model
+
+    BatchM msgs ->
+        let
+        (outputs, newModel) = batchUpdate model msgs []
+        in
+        (BatchO outputs, newModel)
+
+    NewTcpConnM socket address ->
+        updateOnNewTcpConn model socket address
