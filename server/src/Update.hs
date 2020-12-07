@@ -19,6 +19,7 @@ module Update
     ) where
 
 
+import Debug.Trace (trace)
 import qualified Data.Map as Map
 import Data.Bits ((.&.), shiftR)
 import qualified Data.Set as Set
@@ -34,6 +35,7 @@ import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
 import Data.Word (Word8)
 import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Database.SQLite.Simple.ToField as DbTf
+import qualified Database.SQLite.Simple as Db
 import qualified Text.Hex
 
 
@@ -441,6 +443,11 @@ uint8P =
     fromIntegral <$> P.anyWord8
 
 
+-- senderEqRecipient :: Sender -> Recipient -> Bool
+-- senderEqRecipient (Sender s) (Recipient r) =
+--     s == r
+
+
 updateOnTcpMessage
     :: Tcp.SockAddr
     -> Ready
@@ -457,6 +464,9 @@ updateOnTcpMessage address ready untrusted =
             (CloseSocketO socket, ReadyS ready)
 
         SendMessage recipient inboxMessage ->
+            -- if senderEqRecipient sender recipient then
+            -- (DoNothingO, ReadyS ready)
+            -- else
             ( BatchO
                 [ SaveMessageToDbO sender recipient inboxMessage
                 , CloseSocketO socket
@@ -566,12 +576,26 @@ data Msg
     | BatchM [Maybe Msg]
     | RandomGenM CryptoRand.ChaChaDRG
     | AccessListM (Either E.IOException B.ByteString)
-    | MessagesFromDbM Recipient [(B.ByteString, B.ByteString)]
+    | MessagesFromDbM
+        Recipient
+        (Either Db.SQLError [(B.ByteString, B.ByteString)])
+    | SetUpDbErrorM (Either Db.SQLError ())
+    | DbSaveErrorM (Either Db.SQLError ())
+    | DbDeleteErrorM (Either Db.SQLError ())
 
 
 instance Show Msg where
     show msg =
         case msg of
+        DbDeleteErrorM err ->
+            "DbDeleteErrorM " <> show err
+
+        DbSaveErrorM err ->
+            "DbSaveErrorM " <> show err
+
+        SetUpDbErrorM err ->
+            "SetUpDbErrorM " <> show err
+
         StartM ->
             "StartM"
 
@@ -701,9 +725,9 @@ updateOnTcpSend model address eitherError =
 updateOnMessagesFromDb
     :: State
     -> Recipient
-    -> [(B.ByteString, B.ByteString)]
+    -> Either Db.SQLError [(B.ByteString, B.ByteString)]
     -> (Output, State)
-updateOnMessagesFromDb model recipient raw =
+updateOnMessagesFromDb model recipient eitherRaw =
     let
     pass = (DoNothingO, model)
     in
@@ -716,8 +740,8 @@ updateOnMessagesFromDb model recipient raw =
         pass
 
     Just (address, TcpConn socket (Authenticated _) _) ->
-        case raw of
-        [] ->
+        let
+        noMessages =
             ( BatchO
                 [ sendToClient address socket NoMessages
                 , CloseSocketO socket
@@ -728,8 +752,15 @@ updateOnMessagesFromDb model recipient raw =
                     Map.delete address $ tcpConns ready
                 }
             )
+        in
+        case eitherRaw of
+        Left _ ->
+            noMessages
 
-        (rawSender, rawMessage):_ ->
+        Right [] ->
+            noMessages
+
+        Right ((rawSender, rawMessage):_) ->
             case Ed.publicKey rawSender of
             CryptoFailed err ->
                 ( PrintO $
@@ -855,7 +886,27 @@ updateOnNewTcpConn model socket address =
 
 update :: State -> Msg -> (Output, State)
 update model msg =
+    trace ("msg: " <> show msg <> "\n") $
+    trace ("model: " <> show model) $
     case msg of
+    DbDeleteErrorM (Right ()) ->
+        (DoNothingO, model)
+
+    DbDeleteErrorM (Left err) ->
+        (PrintO $ T.pack $ show err, model)
+
+    DbSaveErrorM (Right ()) ->
+        (DoNothingO, model)
+
+    DbSaveErrorM (Left err) ->
+        (PrintO $ T.pack $ show err, model)
+
+    SetUpDbErrorM (Right ()) ->
+        (DoNothingO, model)
+
+    SetUpDbErrorM (Left err) ->
+        (PrintO $ T.pack $ show err, FailedS)
+
     AccessListM eitherRaw ->
         updateOnAccessList model eitherRaw
 

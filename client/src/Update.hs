@@ -13,6 +13,7 @@ module Update
     , ToServer(..)
     ) where
 
+import Debug.Trace (trace)
 import qualified Control.Exception as E
 import qualified Data.ByteString as B
 import qualified Data.Text as T
@@ -362,6 +363,8 @@ updateOnGoodSecretKeyFile model raw =
 
 update :: State -> Msg -> (Output, State)
 update model msg =
+    trace ("msg: " <> show msg) $
+    trace ("model: " <> show model <> "\n") $
     let
     pass = (DoNothingO, model)
     in
@@ -370,13 +373,17 @@ update model msg =
         pass
 
     TcpSendResultM (Left _) ->
+        trace "TcpSendResultM (Left _)" $
         updateReady model $ \ready ->
         ( BatchO [toUser NotConnectedU, killConn $ authStatus ready]
         , FinishedS
         )
 
-    TcpConnM (Left _) ->
-        (toUser NotConnectedU, FinishedS)
+    TcpConnM (Left err) ->
+        trace ("TcpConnM " <> show err) $
+        ( toUser NotConnectedU
+        , FinishedS
+        )
 
     TcpConnM (Right (socket, _)) ->
         updateOnTcpConn model socket
@@ -418,6 +425,7 @@ update model msg =
         updateOnGoodSecretKeyFile model raw
 
     FromServerM (Left _) ->
+        trace "FromServerM (Left _)" $
         ( BatchO
             [ toUser NotConnectedU
             , case model of
@@ -431,6 +439,7 @@ update model msg =
         )
 
     FromServerM (Right Nothing) ->
+        trace "FromServerM (Right Nothing)" $
         ( BatchO
             [ toUser NotConnectedU
             , case model of

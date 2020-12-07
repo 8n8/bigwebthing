@@ -74,7 +74,7 @@ emptyMessagesFromDb :: H.Property
 emptyMessagesFromDb =
     H.property $ do
     recipient <- H.forAll publicKeyG
-    let msg = U.MessagesFromDbM (U.Recipient recipient) []
+    let msg = U.MessagesFromDbM (U.Recipient recipient) (Right [])
     ready <- H.forAll readyG
     let (_, model') = U.update (U.ReadyS ready) msg
     case model' of
@@ -90,7 +90,7 @@ goodMessagesFromDb =
     H.property $ do
     recipient <- H.forAll publicKeyG
     rows <- H.forAll $ Gen.list (Range.linear 1 10) dbRowG
-    let msg = U.MessagesFromDbM (U.Recipient recipient) rows
+    let msg = U.MessagesFromDbM (U.Recipient recipient) (Right rows)
     ready <- H.forAll readyG
     let (_, model') = U.update (U.ReadyS ready) msg
     case model' of

@@ -62,35 +62,38 @@ io mainState output =
         Tcp.serve (Tcp.Host "127.0.0.1") "11453" $ \(sock, addr) ->
         updateIo mainState $ NewTcpConnM sock addr
 
-    DeleteInboxMessageDbO sender recipient message ->
-        Db.withConnection dbPath $ \conn ->
-            Db.execute
-                conn
-                deleteMessageSql
-                (sender, recipient, message)
+    DeleteInboxMessageDbO sender recipient message -> do
+        eitherErr <- E.try $ Db.withConnection dbPath $ \conn ->
+                Db.execute
+                    conn
+                    deleteMessageSql
+                    (sender, recipient, message)
+        updateIo mainState $ DbDeleteErrorM eitherErr
 
     GetRandomGenO -> do
         drg <- CryptoRand.drgNew
         updateIo mainState $ RandomGenM drg
 
-    SaveMessageToDbO sender recipient inboxMessage ->
-        Db.withConnection dbPath $ \conn ->
-            Db.execute
-                conn
-                saveMessageSql
-                (sender, recipient, inboxMessage)
+    SaveMessageToDbO sender recipient inboxMessage -> do
+        eitherErr <- E.try $ Db.withConnection dbPath $ \conn ->
+                Db.execute
+                    conn
+                    saveMessageSql
+                    (sender, recipient, inboxMessage)
+        updateIo mainState $ DbSaveErrorM eitherErr
 
     GetMessageFromDbO recipient -> do
-        result <- Db.withConnection dbPath $ \conn ->
+        result <- E.try $ Db.withConnection dbPath $ \conn ->
             Db.query
                 conn
                 getMessageSql
                 (Db.Only recipient)
         updateIo mainState $ MessagesFromDbM recipient result
 
-    SetupDbO ->
-        Db.withConnection dbPath $ \conn ->
-            Db.execute_ conn makeMessagesTableSql
+    SetupDbO -> do
+        eitherError <- E.try $ Db.withConnection dbPath $ \conn ->
+                Db.execute_ conn makeMessagesTableSql
+        updateIo mainState $ SetUpDbErrorM eitherError
 
 
 makeMessagesTableSql :: Db.Query
