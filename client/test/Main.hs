@@ -349,7 +349,8 @@ goodMessage :: H.Property
 goodMessage =
     H.property $ do
         model <- H.forAll $ fmap L.ReadyS readyStdInG
-        msg <- H.forAll $ Gen.utf8 (Range.linear 1 100) Gen.alphaNum
+        msg <- H.forAll $ fmap (<> "\n") $
+                Gen.utf8 (Range.linear 1 100) Gen.alphaNum
         let (out, model') = L.update model $ L.StdInM msg
         case model' of
             L.ReadyS _ ->
