@@ -1,6 +1,5 @@
 'Done' means that it works, that the code is concise, neat and readable, that it has a complete test suite, and is documented well enough for a technical peer to understand how it works.
 
 + for each of the client and the server
-    - export everything and try to Quickcheck everything
-    - write unit tests
+    - have a read through and refactor
 + add TLS

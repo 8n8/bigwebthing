@@ -63,7 +63,7 @@ io mainState output =
     WriteKeyToFileO key -> do
         B.writeFile keysPath key
 
-    PrintO msg -> do
+    PrintO msg ->
         Tio.putStr msg
 
     ReadMessageFromStdInO -> do
