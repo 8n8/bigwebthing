@@ -464,7 +464,10 @@ updateOnTcpMessage address ready untrusted =
 
         SendMessage recipient inboxMessage ->
             if senderEqRecipient sender recipient then
-            (CloseSocketO socket, ReadyS ready)
+            ( CloseSocketO socket
+            , ReadyS $ ready
+                { tcpConns = Map.delete address $ tcpConns ready }
+            )
             else
             ( BatchO
                 [ SaveMessageToDbO sender recipient inboxMessage
