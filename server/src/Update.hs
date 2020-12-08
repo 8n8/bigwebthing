@@ -442,9 +442,9 @@ uint8P =
     fromIntegral <$> P.anyWord8
 
 
--- senderEqRecipient :: Sender -> Recipient -> Bool
--- senderEqRecipient (Sender s) (Recipient r) =
---     s == r
+senderEqRecipient :: Sender -> Recipient -> Bool
+senderEqRecipient (Sender s) (Recipient r) =
+    s == r
 
 
 updateOnTcpMessage
@@ -463,9 +463,9 @@ updateOnTcpMessage address ready untrusted =
             (CloseSocketO socket, ReadyS ready)
 
         SendMessage recipient inboxMessage ->
-            -- if senderEqRecipient sender recipient then
-            -- (DoNothingO, ReadyS ready)
-            -- else
+            if senderEqRecipient sender recipient then
+            (CloseSocketO socket, ReadyS ready)
+            else
             ( BatchO
                 [ SaveMessageToDbO sender recipient inboxMessage
                 , CloseSocketO socket
