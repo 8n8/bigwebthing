@@ -1,5 +1,3 @@
-*Note that this project is in rapid progress, with new things added most days, but is not working yet.*
-
 # Overview
 
 BigWebThing is for sending 100-byte messages conveniently, via the command line.
@@ -69,33 +67,15 @@ Server to client
     No messages
         1 byte: 2
 
-# Client to client
-
-## API
-
-There are several layers to the API, as follows.
-
-## Crypto
-
-All client-server traffic is encrypted with TLS.
-
-# Encodings
-
-## User ID encoding
+# User ID encoding
 
 The user ID is a Base64-encoded public signing key.
 
 # Client cache
 
-A file called .bigwebthingSECRETkey containing the secret signing key.
+A file called bigwebthingSECRETkey containing the secret signing key.
 
 # Server cache
-
-memCache
-    A binary file containing a dump of the in-memory cache.
-
-log.txt
-    Log messages for debugging.
 
 database
     messages
@@ -103,5 +83,5 @@ database
         recipient
         message
 
-users.txt
+accessList.txt
     Contains one user public signing key per line, encoded in Base64.
