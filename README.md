@@ -3,9 +3,7 @@ BigWebThing version 1
 
 # Overview
 
-BigWebThing is for sending 100-byte messages conveniently, via the command line.
-
-User data is kept on their own machine.
+BigWebThing is for storing messages in the cloud conveniently, via the command line. Messages are symmetrically encrypted. Users can share the keys with each other instead of sharing the files.
 
 There is a message-passing server for sharing data between people.
 
@@ -27,17 +25,13 @@ It's a command-line app. The commands are:
 
         $ bwt help
 
-    Get my user ID
-
-        $ bwt myid
-
     Download a message to STDOUT:
 
-        $ bwt get
+        $ bwt get <message ID>
 
     Send a message from STDIN:
 
-        $ bwt send <recipient ID>
+        $ bwt send
 
 # Server API
 
@@ -52,27 +46,30 @@ Client to server
         64 bytes: signed auth code
     Send message
         1 byte: 1
-        32 bytes: recipient public static signing key
-        <= 100 bytes: the message
+        24 bytes: message ID
+        <= 116 bytes: encrypted message
             a sequence of these UTF-8 characters:
             1!2"3£4$5%6^7&8*9(0)-_+=abcdefghijklmnopqrstuvwxyz
             ABCDEFGHIJKLMNOPQRSTUVWXYZ|\<,>.?/ :;@'#~
     Get message
         1 byte: 2
+        24 bytes: message ID
+
 Server to client
     Auth code to sign
         1 byte: 0
         32 bytes: random
-    Inbox message
+    Message
         1 byte: 1
-        32 bytes: sender public key
-        <= 100 bytes: inbox message
-    No messages
+        24 bytes: message ID
+        <= 116 bytes: inbox message
+    No such message
         1 byte: 2
+        24 bytes: message ID
 
-# User ID encoding
+# Encodings
 
-The user ID is a Base64-encoded public signing key.
+Message IDs and secret keys are encoded as URL-safe Base64.
 
 # Client cache
 
@@ -82,8 +79,7 @@ A file called bigwebthingSECRETkey containing the secret signing key.
 
 database
     messages
-        sender
-        recipient
+        message ID
         message
 
 accessList.txt
