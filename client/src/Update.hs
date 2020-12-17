@@ -86,6 +86,7 @@ data Ready
         , authStatus :: AuthStatus
         , awaitingEncrypted :: Maybe SecretKey
         , randomGen :: Drg
+        , keyAndIdToPrint :: Maybe (SecretKey, MessageId)
         }
         deriving (Show, Eq)
 
@@ -238,10 +239,7 @@ updateOnStdIn model raw =
                 (toUser $ BadEncryptU, FinishedS)
 
             Ce.CryptoPassed encrypted ->
-                ( BatchO
-                    [ MakeTcpConnO
-                    , toUser $ KeyAndIdU secretKey messageId
-                    ]
+                ( MakeTcpConnO
                 , ReadyS $
                   ready
                     { authStatus =
@@ -249,6 +247,7 @@ updateOnStdIn model raw =
                         SendWhenLoggedIn Nothing $
                         SendMessageT messageId encrypted
                     , randomGen = gen3
+                    , keyAndIdToPrint = Just (secretKey, messageId)
                     }
                 )
 
@@ -277,13 +276,14 @@ updateOnRandomGen model drg =
         pass
 
     InitS (GettingRandomGenI signing) ->
-        ( GetArgsO 
+        ( GetArgsO
         , ReadyS $
             Ready
             { signingKey = signing
             , authStatus = NotLoggedInA JustNotLoggedIn
             , randomGen = drg
             , awaitingEncrypted = Nothing
+            , keyAndIdToPrint = Nothing
             }
         )
 
@@ -465,7 +465,15 @@ update model msg =
         updateOnRandomGen model gen
 
     TcpSendResultM (Right ()) ->
-        pass
+        updateReady model $ \ready ->
+        case keyAndIdToPrint ready of
+        Nothing ->
+            pass
+
+        Just (secretKey, messageId) ->
+            ( toUser $ KeyAndIdU secretKey messageId
+            , ReadyS $ ready { keyAndIdToPrint = Nothing }
+            )
 
     TcpSendResultM (Left _) ->
         (toUser NotConnectedU, FinishedS)
@@ -576,7 +584,7 @@ prettyMessage msg =
 
     NoSuchMessageU (MessageId _) ->
         "no such message"
-            
+
     BadEncryptU ->
         "internal error: could not encrypt message"
 
