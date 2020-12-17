@@ -53,6 +53,7 @@ data Output
 data Msg
     = StartM
     | RandomGenM Drg
+    | TcpConnErrM (Either E.IOException ())
     | TcpConnM Tcp.Socket
     | TcpSendResultM (Either E.IOException ())
     | StdInM B.ByteString
@@ -454,6 +455,12 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
+    TcpConnErrM (Right ()) ->
+        pass
+
+    TcpConnErrM (Left _) ->
+        (toUser NotConnectedU, FinishedS)
+
     RandomGenM gen ->
         updateOnRandomGen model gen
 

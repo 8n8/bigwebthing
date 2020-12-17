@@ -58,7 +58,7 @@ io mainState output =
     GetRandomGenO -> do
         drg <- getSystemDRG
         updateIo mainState $ RandomGenM $ Drg drg
-        
+
     TcpListenO socket len -> do
         result <- E.try $ Tcp.recv socket len
         updateIo mainState $ FromServerM result
@@ -96,5 +96,7 @@ io mainState output =
         mapM_ (io mainState) outputs
 
     MakeTcpConnO ->
-        Tcp.connect serverUrl serverPort $ \(conn, _) ->
-        updateIo mainState $ TcpConnM conn
+        do
+        err <- E.try $ Tcp.connect serverUrl serverPort $ \(conn, _) ->
+            updateIo mainState $ TcpConnM conn
+        updateIo mainState $ TcpConnErrM err

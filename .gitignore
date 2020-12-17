@@ -31,3 +31,4 @@ elm/main.js
 server/server.cabal
 server/.stack-work
 server/bwtdata/
+client/bigwebthingSECRET
