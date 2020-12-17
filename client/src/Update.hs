@@ -11,6 +11,7 @@ module Update
     , Ready(..)
     , ListenStatus(..)
     , ToServer(..)
+    , Drg(..)
     ) where
 
 import qualified Control.Exception as E
@@ -22,18 +23,21 @@ import Data.Word (Word8)
 import qualified Text.Hex
 import qualified Network.Simple.TCP as Tcp
 import Data.Text.Encoding (encodeUtf8, decodeUtf8')
-import Crypto.Error (CryptoFailable(CryptoFailed, CryptoPassed))
+import qualified Crypto.Error as Ce
 import qualified Data.ByteArray as Ba
 import qualified Crypto.PubKey.Ed25519 as Ed
 import qualified Data.IntSet as IntSet
 import System.IO.Error (isDoesNotExistError)
 import Data.Bits ((.&.), shiftR)
+import qualified Crypto.MAC.Poly1305 as Mac
+import qualified Crypto.Cipher.ChaChaPoly1305 as ChaChaP
+import qualified Crypto.Random as Rand
 
 
 data Output
     = GetArgsO
     | GenerateSecretKeyO
-    | CloseTcpO Tcp.Socket
+    | GetRandomGenO
     | TcpSendO Tcp.Socket B.ByteString
     | ReadSecretKeyO
     | PrintO T.Text
@@ -48,7 +52,8 @@ data Output
 
 data Msg
     = StartM
-    | TcpConnM (Either E.IOException (Tcp.Socket, Tcp.SockAddr))
+    | RandomGenM Drg
+    | TcpConnM Tcp.Socket
     | TcpSendResultM (Either E.IOException ())
     | StdInM B.ByteString
     | ArgsM [String]
@@ -70,16 +75,32 @@ data Init
     = EmptyI
     | GettingKeysFromFileI
     | GeneratingSecretKeyI
+    | GettingRandomGenI Ed.SecretKey
     deriving (Show, Eq)
 
 
 data Ready
     = Ready
-        { secretKey :: Ed.SecretKey
+        { signingKey :: Ed.SecretKey
         , authStatus :: AuthStatus
-        , readingStdIn :: Maybe Ed.PublicKey
+        , awaitingEncrypted :: Maybe SecretKey
+        , randomGen :: Drg
         }
         deriving (Show, Eq)
+
+
+newtype Drg
+    = Drg Rand.SystemDRG
+
+
+instance Show Drg where
+    show (Drg _) =
+        "SystemDRG"
+
+
+instance Eq Drg where
+    (==) _ _ =
+        True
 
 
 data ListenStatus
@@ -98,6 +119,21 @@ data NotLoggedIn
     = SendWhenLoggedIn (Maybe (Tcp.Socket, ListenStatus)) ToServer
     | JustNotLoggedIn
     deriving (Show, Eq)
+
+
+encrypt
+    :: B.ByteString
+    -> Nonce
+    -> SecretKey
+    -> Ce.CryptoFailable Encrypted
+encrypt plaintext (Nonce nonce) (SecretKey key) =
+    do
+    state1 <- ChaChaP.initialize key nonce
+    let
+        state2 = ChaChaP.finalizeAAD $ ChaChaP.appendAAD ad state1
+        (ciphertext, state3) = ChaChaP.encrypt plaintext state2
+        auth = ChaChaP.finalize state3
+    return $ Encrypted (Auth auth) (Nonce nonce) ciphertext
 
 
 updateReady :: State -> (Ready -> (Output, State)) -> (Output, State)
@@ -166,35 +202,70 @@ stdInP = do
     return msg
 
 
+makeMessageId :: Drg -> (MessageId, Drg)
+makeMessageId (Drg drg) =
+    let
+    (raw, gen') = Rand.randomBytesGenerate messageIdLength drg
+    in
+    (MessageId raw, Drg gen')
+
+
+makeNonce :: Drg -> Ce.CryptoFailable (Nonce, Drg)
+makeNonce (Drg drg) =
+    do
+    let (raw, gen') = Rand.randomBytesGenerate nonceLength drg
+    nonce <- ChaChaP.nonce12 (raw :: B.ByteString)
+    return (Nonce nonce, Drg gen')
+
+
 updateOnStdIn :: State -> B.ByteString -> (Output, State)
 updateOnStdIn model raw =
-    let
-    pass = (DoNothingO, model)
-    in
     case P.parseOnly stdInP raw of
     Left err ->
         (toUser $ BadMessageU err, FinishedS)
 
     Right newMsg ->
         updateReady model $ \ready ->
-        case readingStdIn ready of
-        Nothing ->
-            pass
+        let
+        (secretKey, gen1) = makeSecretKey $ randomGen ready
+        (messageId, gen2) = makeMessageId gen1
+        encoded = encodeUtf8 newMsg
+        in
+        case makeNonce gen2 of
+        Ce.CryptoFailed _ ->
+            (toUser $ BadEncryptU, FinishedS)
 
-        Just publicKey ->
-            ( MakeTcpConnO
-            , ReadyS $
-              ready
-                { authStatus =
-                    NotLoggedInA $
-                    SendWhenLoggedIn Nothing $
-                    SendMessageT publicKey newMsg
-                }
-            )
+        Ce.CryptoPassed (nonce, gen3) ->
+            case encrypt encoded nonce secretKey of
+            Ce.CryptoFailed _ ->
+                (toUser $ BadEncryptU, FinishedS)
+
+            Ce.CryptoPassed encrypted ->
+                ( BatchO
+                    [ MakeTcpConnO
+                    , toUser $ KeyAndIdU secretKey messageId
+                    ]
+                , ReadyS $
+                  ready
+                    { authStatus =
+                        NotLoggedInA $
+                        SendWhenLoggedIn Nothing $
+                        SendMessageT messageId encrypted
+                    , randomGen = gen3
+                    }
+                )
 
 
-updateOnNewSecretKey :: State -> Ed.SecretKey -> (Output, State)
-updateOnNewSecretKey model key =
+makeSecretKey :: Drg -> (SecretKey, Drg)
+makeSecretKey (Drg gen) =
+    let
+    (raw, gen') = Rand.randomBytesGenerate secretKeyLength gen
+    in
+    (SecretKey raw, Drg gen')
+
+
+updateOnRandomGen :: State -> Drg -> (Output, State)
+updateOnRandomGen model drg =
     let
     pass = (DoNothingO, model)
     in
@@ -206,12 +277,16 @@ updateOnNewSecretKey model key =
         pass
 
     InitS GeneratingSecretKeyI ->
-        ( BatchO [WriteKeyToFileO $ Ba.convert key, GetArgsO]
+        pass
+
+    InitS (GettingRandomGenI signing) ->
+        ( GetArgsO 
         , ReadyS $
-          Ready
-            { secretKey = key
+            Ready
+            { signingKey = signing
             , authStatus = NotLoggedInA JustNotLoggedIn
-            , readingStdIn = Nothing
+            , randomGen = drg
+            , awaitingEncrypted = Nothing
             }
         )
 
@@ -222,71 +297,89 @@ updateOnNewSecretKey model key =
         pass
 
 
-updateOnMyIdArg :: State -> (Output, State)
-updateOnMyIdArg model =
-    case model of
-    InitS _ ->
-        (DoNothingO, model)
-
-    ReadyS ready ->
-        let
-        public = Ed.toPublic $ secretKey ready
-        idB64 = B64.encodeUnpadded $ Ba.convert public
-        in
-        case decodeUtf8' idB64 of
-        Left err ->
-            ( toUser $ InternalErrorU $
-                mconcat
-                [ "could not convert public key to Base64:\n"
-                , T.pack $ show err
-                ]
-            , FinishedS
-            )
-
-        Right b64 ->
-            (toUser $ MyIdU b64, FinishedS)
-
-    FinishedS ->
-        (DoNothingO, model)
-
-
-updateOnGetArg :: State -> (Output, State)
-updateOnGetArg model =
+updateOnNewSecretKey :: State -> Ed.SecretKey -> (Output, State)
+updateOnNewSecretKey model key =
     let
     pass = (DoNothingO, model)
     in
-    updateReady model $ \ready ->
-    case authStatus ready of
-    LoggedInA _ ->
+    case model of
+    InitS (GettingRandomGenI _) ->
         pass
 
-    NotLoggedInA JustNotLoggedIn ->
-        ( MakeTcpConnO
-        , ReadyS $ ready
-            { authStatus =
-                NotLoggedInA $
-                SendWhenLoggedIn Nothing GetMessageT
-            }
+    InitS EmptyI ->
+        pass
+
+    InitS GettingKeysFromFileI ->
+        pass
+
+    InitS GeneratingSecretKeyI ->
+        ( BatchO [WriteKeyToFileO $ Ba.convert key, GetRandomGenO]
+        , InitS $ GettingRandomGenI key
         )
 
-    NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
+    ReadyS _ ->
         pass
 
-    NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+    FinishedS ->
         pass
 
 
-updateOnSendArg :: State -> String -> (Output, State)
-updateOnSendArg model rawRecipient =
-    case parseRecipient rawRecipient of
+parseKeyAndId :: String -> Either T.Text (SecretKey, MessageId)
+parseKeyAndId raw =
+    case B64.decodeUnpadded $ encodeUtf8 $ T.pack raw of
     Left err ->
-        (toUser $ InvalidRecipientU err, FinishedS)
+        Left $ "could not decode Base64: " <> T.pack err
 
-    Right recipient ->
+    Right bs ->
+        if B.length bs == (secretKeyLength + messageIdLength) then
+        Right
+            (SecretKey $ B.take secretKeyLength bs
+            , MessageId $ B.drop secretKeyLength bs
+            )
+        else
+        Left $ "bad length: " <> T.pack (show (B.length bs))
+
+
+secretKeyLength :: Int
+secretKeyLength =
+    32
+
+
+updateOnGetArg :: State -> String -> (Output, State)
+updateOnGetArg model rawKeyAndId =
+    let
+    pass = (DoNothingO, model)
+    in
+    case parseKeyAndId rawKeyAndId of
+    Left err ->
+        (toUser $ BadKeyAndIdU err, FinishedS)
+
+    Right (key, id_) ->
         updateReady model $ \ready ->
-        ( ReadMessageFromStdInO
-        , ReadyS $ ready { readingStdIn = Just recipient }
-        )
+        case authStatus ready of
+        LoggedInA _ ->
+            pass
+
+        NotLoggedInA JustNotLoggedIn ->
+            ( MakeTcpConnO
+            , ReadyS $ ready
+                { authStatus =
+                    NotLoggedInA $
+                    SendWhenLoggedIn Nothing (GetMessageT id_)
+                , awaitingEncrypted = Just key
+                }
+            )
+
+        NotLoggedInA (SendWhenLoggedIn (Just _) _) ->
+            pass
+
+        NotLoggedInA (SendWhenLoggedIn Nothing _) ->
+            pass
+
+
+updateOnSendArg :: State -> (Output, State)
+updateOnSendArg model =
+    (ReadMessageFromStdInO, model)
 
 
 updateOnBadSecretKeyFile :: State -> IOError -> (Output, State)
@@ -297,6 +390,9 @@ updateOnBadSecretKeyFile model ioErr =
     if isDoesNotExistError ioErr then
     case model of
     ReadyS _ ->
+        pass
+
+    InitS (GettingRandomGenI _) ->
         pass
 
     InitS GettingKeysFromFileI ->
@@ -327,6 +423,9 @@ updateOnGoodSecretKeyFile model raw =
     InitS EmptyI ->
         pass
 
+    InitS (GettingRandomGenI _) ->
+        pass
+
     InitS GeneratingSecretKeyI ->
         pass
 
@@ -344,14 +443,7 @@ updateOnGoodSecretKeyFile model raw =
             )
 
         Right key ->
-            ( GetArgsO
-            , ReadyS $
-              Ready
-                { secretKey = key
-                , authStatus = NotLoggedInA JustNotLoggedIn
-                , readingStdIn = Nothing
-                }
-            )
+            (GetRandomGenO, InitS $ GettingRandomGenI key)
 
     ReadyS _ ->
         pass
@@ -366,19 +458,16 @@ update model msg =
     pass = (DoNothingO, model)
     in
     case msg of
+    RandomGenM gen ->
+        updateOnRandomGen model gen
+
     TcpSendResultM (Right ()) ->
         pass
 
     TcpSendResultM (Left _) ->
-        updateReady model $ \ready ->
-        ( BatchO [toUser NotConnectedU, killConn $ authStatus ready]
-        , FinishedS
-        )
-
-    TcpConnM (Left _) ->
         (toUser NotConnectedU, FinishedS)
 
-    TcpConnM (Right (socket, _)) ->
+    TcpConnM socket ->
         updateOnTcpConn model socket
 
     StartM ->
@@ -393,14 +482,11 @@ update model msg =
     ArgsM ["help"] ->
         (toUser UsageU, FinishedS)
 
-    ArgsM ["myid"] ->
-        updateOnMyIdArg model
+    ArgsM ["get", rawKeyAndId] ->
+        updateOnGetArg model rawKeyAndId
 
-    ArgsM ["get"] ->
-        updateOnGetArg model
-
-    ArgsM ["send", rawRecipient] ->
-        updateOnSendArg model rawRecipient
+    ArgsM ["send"] ->
+        updateOnSendArg model
 
     ArgsM _ ->
         (toUser BadArgsU, FinishedS)
@@ -418,30 +504,12 @@ update model msg =
         updateOnGoodSecretKeyFile model raw
 
     FromServerM (Left _) ->
-        ( BatchO
-            [ toUser NotConnectedU
-            , case model of
-                ReadyS ready ->
-                    killConn $ authStatus ready
-
-                _ ->
-                    DoNothingO
-            ]
+        ( toUser NotConnectedU
         , FinishedS
         )
 
     FromServerM (Right Nothing) ->
-        ( BatchO
-            [ toUser NotConnectedU
-            , case model of
-                ReadyS ready ->
-                    killConn $ authStatus ready
-
-                _ ->
-                    DoNothingO
-            ]
-        , FinishedS
-        )
+        (toUser NotConnectedU, FinishedS)
 
     FromServerM (Right (Just raw)) ->
         updateReady model $ fromServerUpdate raw
@@ -449,15 +517,19 @@ update model msg =
 
 data ToUser
     = NotConnectedU
+    | KeyAndIdU SecretKey MessageId
     | BadArgsU
+    | BadEncryptU
     | BadMessageU String
     | NoMessagesU
-    | NewMessageU Ed.PublicKey T.Text
+    | NewMessageU SecretKey Encrypted
     | BadMessageFromServerU B.ByteString String
     | InternalErrorU T.Text
     | MyIdU T.Text
     | UsageU
     | InvalidRecipientU T.Text
+    | NoSuchMessageU MessageId
+    | BadKeyAndIdU T.Text
 
 
 toUser :: ToUser -> Output
@@ -465,9 +537,54 @@ toUser message =
     PrintO $ prettyMessage message <> "\n"
 
 
+-- Just some random bytes used as associated data for the crypto.
+ad :: B.ByteString
+ad =
+    B.pack
+    [128, 11, 120, 170, 239, 221, 204, 199, 167, 135, 201, 227, 50, 174, 205, 18, 185, 253, 235, 180, 216, 87, 122, 98, 115, 13, 228, 143, 66, 212, 211, 36]
+
+
+newtype SecretKey
+    = SecretKey B.ByteString
+    deriving (Eq, Show)
+
+
+decrypt :: SecretKey -> Encrypted -> Ce.CryptoFailable B.ByteString
+decrypt
+    (SecretKey key)
+    (Encrypted (Auth expectedAuth) (Nonce nonce) ciphertext) =
+    do
+    state1 <- ChaChaP.initialize key nonce
+    let
+        state2 = ChaChaP.finalizeAAD $ ChaChaP.appendAAD ad state1
+        (plain, state3) = ChaChaP.decrypt ciphertext state2
+        actualAuth = ChaChaP.finalize state3
+    if expectedAuth == actualAuth then
+        return $ Ba.convert plain
+    else
+        Ce.CryptoFailed Ce.CryptoError_MacKeyInvalid
+
+
 prettyMessage :: ToUser -> T.Text
 prettyMessage msg =
     case msg of
+    BadKeyAndIdU err ->
+        "bad lookup code: " <> err
+
+    NoSuchMessageU (MessageId _) ->
+        "no such message"
+            
+    BadEncryptU ->
+        "internal error: could not encrypt message"
+
+    KeyAndIdU (SecretKey secret) (MessageId messageId) ->
+        case decodeUtf8' $ B64.encodeUnpadded (secret <> messageId) of
+        Left _ ->
+            "internal error: could not decode UTF-8"
+
+        Right code ->
+            "lookup code:\n" <> code
+
     InvalidRecipientU err ->
         "invalid recipient:\n" <> err
 
@@ -483,18 +600,18 @@ prettyMessage msg =
     NoMessagesU ->
         "no messages"
 
-    NewMessageU sender message ->
-        case decodeUtf8' $ B64.encodeUnpadded $ Ba.convert sender of
-        Left err ->
-            mconcat
-            [ "internal error: could not decode Base64 ByteString:\n"
-            , T.pack $ show err
-            , ":\n"
-            , Text.Hex.encodeHex $ Ba.convert sender
-            ]
+    NewMessageU secretKey encrypted ->
+        case decrypt secretKey encrypted of
+        Ce.CryptoFailed _ ->
+            "could not decrypt message"
 
-        Right b64 ->
-            b64 <> ": " <> message
+        Ce.CryptoPassed plaintext ->
+            case decodeUtf8' plaintext of
+            Left _ ->
+                "corrupted message"
+
+            Right decoded ->
+                decoded
 
     BadMessageFromServerU badMsg parseErr ->
         mconcat
@@ -514,37 +631,6 @@ prettyMessage msg =
         usage
 
 
-parseRecipient :: String -> Either T.Text Ed.PublicKey
-parseRecipient raw =
-    case B64.decodeUnpadded $ encodeUtf8 $ T.pack raw of
-    Left err ->
-        Left $ "could not decode Base64: " <> T.pack err
-
-    Right bs ->
-        if B.length bs == Ed.publicKeySize then
-        case Ed.publicKey bs of
-        CryptoFailed err ->
-            Left $
-            mconcat
-            [ "could not parse public key:\n"
-            , T.pack $ show err
-            , ":\n"
-            , Text.Hex.encodeHex bs
-            ]
-
-        CryptoPassed key ->
-            Right key
-
-        else
-        Left $
-        mconcat
-        [ "decoded key should be "
-        , T.pack $ show Ed.publicKeySize
-        , " bytes long, but was "
-        , T.pack $ show $ B.length bs
-        ]
-
-
 -- Assocated data
 authCodeA :: B.ByteString
 authCodeA =
@@ -553,9 +639,100 @@ authCodeA =
 
 data ToServer
     = SignedAuthCodeT Ed.PublicKey Ed.Signature
-    | SendMessageT Ed.PublicKey T.Text
-    | GetMessageT
+    | SendMessageT MessageId Encrypted
+    | GetMessageT MessageId
     deriving (Eq, Show)
+
+
+data Encrypted
+    = Encrypted Auth Nonce B.ByteString
+    deriving (Eq, Show)
+
+
+newtype Nonce
+    = Nonce ChaChaP.Nonce
+
+
+instance Show Nonce where
+    show (Nonce n) =
+        show $ B.unpack $ Ba.convert n
+        
+
+instance Eq Nonce where
+    (==) (Nonce a) (Nonce b) =
+        (Ba.convert a :: B.ByteString) ==
+            (Ba.convert b :: B.ByteString)
+
+
+newtype Auth
+    = Auth Mac.Auth
+    deriving Eq
+
+
+instance Show Auth where
+    show (Auth mac) =
+        show $ B.unpack (Ba.convert mac :: B.ByteString)
+
+
+maxPlainLength :: Int
+maxPlainLength =
+    100
+
+
+authP :: P.Parser Auth
+authP =
+    do
+    raw <- P.take 16
+    case Mac.authTag raw of
+        Ce.CryptoPassed auth ->
+            return $ Auth auth
+
+        Ce.CryptoFailed err ->
+            fail $ show err
+
+
+encryptedP :: P.Parser Encrypted
+encryptedP =
+    do
+    auth <- authP
+    nonce <- nonceP
+    msg <- P.takeByteString
+    if B.length msg > maxPlainLength then
+        fail "message is too long"
+    else
+        return $ Encrypted auth nonce msg
+
+
+nonceLength :: Int
+nonceLength =
+    12
+
+
+nonceP :: P.Parser Nonce
+nonceP =
+    do
+    raw <- P.take nonceLength
+    case ChaChaP.nonce12 raw of
+        Ce.CryptoPassed nonce ->
+            return $ Nonce nonce
+
+        Ce.CryptoFailed err ->
+            fail $ show err
+
+
+newtype MessageId
+    = MessageId B.ByteString
+    deriving (Eq, Show)
+
+
+messageIdLength :: Int
+messageIdLength =
+    24
+
+
+messageIdP :: P.Parser MessageId
+messageIdP =
+    MessageId <$> P.take messageIdLength
 
 
 encodeToServer :: ToServer -> B.ByteString
@@ -585,27 +762,42 @@ encodeToServerHelp toServer =
         , Ba.convert signature
         ]
 
-    SendMessageT recipient message ->
+    SendMessageT messageId encrypted ->
         mconcat
         [ B.singleton 1
-        , Ba.convert recipient
-        , encodeUtf8 message
+        , encodeMessageId messageId
+        , encodeEncrypted encrypted
         ]
 
-    GetMessageT ->
-        B.singleton 2
+    GetMessageT (MessageId messageId) ->
+        B.singleton 2 <> messageId
+
+
+encodeMessageId :: MessageId -> B.ByteString
+encodeMessageId (MessageId id_) =
+    id_
+
+
+encodeEncrypted :: Encrypted -> B.ByteString
+encodeEncrypted (Encrypted auth nonce ciphertext) =
+    encodeAuth auth <> encodeNonce nonce <> ciphertext
+
+
+encodeAuth :: Auth -> B.ByteString
+encodeAuth (Auth auth) =
+    Ba.convert auth
+
+
+encodeNonce :: Nonce -> B.ByteString
+encodeNonce (Nonce n) =
+    Ba.convert n
 
 
 onBodyFromServer :: Ready -> B.ByteString -> (Output, State)
 onBodyFromServer ready raw =
     case P.parseOnly fromServerP raw of
     Left err ->
-        ( BatchO
-            [ toUser $ BadMessageFromServerU raw err
-            , killConn $ authStatus ready
-            ]
-        , FinishedS
-        )
+        (toUser $ BadMessageFromServerU raw err, FinishedS)
 
     Right ok ->
         updateOnGoodFromServer ready ok
@@ -625,12 +817,7 @@ onLengthFromServer
 onLengthFromServer ready raw =
     case P.parseOnly onlyLengthP raw of
     Left err ->
-        ( BatchO
-            [ toUser $ BadMessageFromServerU raw err
-            , killConn $ authStatus ready
-            ]
-        , FinishedS
-        )
+        (toUser $ BadMessageFromServerU raw err, FinishedS)
 
     Right len ->
         case authStatus ready of
@@ -687,33 +874,28 @@ fromServerUpdate raw ready =
 updateOnGoodFromServer :: Ready -> FromServer -> (Output, State)
 updateOnGoodFromServer ready fromServer =
     case fromServer of
-    InboxMessageF sender message ->
-        ( BatchO
-            [ toUser $ NewMessageU sender message
-            , killConn $ authStatus ready
-            ]
-        , FinishedS
-        )
+    InboxMessageF _ message ->
+        case awaitingEncrypted ready of
+        Nothing ->
+            (DoNothingO, ReadyS ready)
+
+        Just secret ->
+            (toUser $ NewMessageU secret message, FinishedS)
 
     AuthCodeToSignF authCode ->
         updateOnAuthCode ready authCode
 
-    NoMessagesF ->
-        ( BatchO
-            [ toUser NoMessagesU
-            , killConn $ authStatus ready
-            ]
-        , FinishedS
-        )
+    NoSuchMessageF messageId ->
+        (toUser $ NoSuchMessageU messageId, FinishedS)
 
 
 updateOnAuthCode :: Ready -> AuthCode -> (Output, State)
 updateOnAuthCode ready (AuthCode authCode) =
     let
     pass = (DoNothingO, ReadyS ready)
-    publicKey = Ed.toPublic $ secretKey ready
+    publicKey = Ed.toPublic $ signingKey ready
     toSign = authCodeA <> authCode
-    signature = Ed.sign (secretKey ready) publicKey toSign
+    signature = Ed.sign (signingKey ready) publicKey toSign
     in
     case authStatus ready of
     LoggedInA _ ->
@@ -735,11 +917,11 @@ updateOnAuthCode ready (AuthCode authCode) =
                 SignedAuthCodeT _ _ ->
                     DoNothingO
 
-                GetMessageT ->
+                GetMessageT _ ->
                     TcpListenO socket 2
 
                 SendMessageT _ _ ->
-                    CloseTcpO socket
+                    DoNothingO
             ]
         , case toServer of
             SignedAuthCodeT _ _ ->
@@ -749,7 +931,7 @@ updateOnAuthCode ready (AuthCode authCode) =
                         LoggedInA (socket, GettingLength)
                     }
 
-            GetMessageT ->
+            GetMessageT _ ->
                 ReadyS $
                 ready
                     { authStatus =
@@ -761,22 +943,6 @@ updateOnAuthCode ready (AuthCode authCode) =
         )
 
 
-killConn :: AuthStatus -> Output
-killConn auth =
-    case auth of
-    LoggedInA (socket, _) ->
-        CloseTcpO socket
-
-    NotLoggedInA (SendWhenLoggedIn Nothing _) ->
-        DoNothingO
-
-    NotLoggedInA (SendWhenLoggedIn (Just (socket, _)) _) ->
-        CloseTcpO socket
-
-    NotLoggedInA JustNotLoggedIn ->
-        DoNothingO
-
-
 fromServerP :: P.Parser FromServer
 fromServerP = do
     msg <- P.choice
@@ -785,11 +951,12 @@ fromServerP = do
             AuthCodeToSignF <$> authCodeP
         , do
             _ <- P.word8 1
-            sender <- publicKeyP
-            InboxMessageF sender <$> inboxMessageP
+            messageId <- messageIdP
+            encrypted <- encryptedP
+            return $ InboxMessageF messageId encrypted
         , do
             _ <- P.word8 2
-            return NoMessagesF
+            NoSuchMessageF <$> messageIdP
         ]
     P.endOfInput
     return msg
@@ -935,21 +1102,10 @@ validByte byte =
     IntSet.member (fromIntegral byte) validBytes
 
 
-publicKeyP :: P.Parser Ed.PublicKey
-publicKeyP = do
-    raw <- P.take Ed.publicKeySize
-    case Ed.publicKey raw of
-        CryptoFailed err ->
-            fail $ show err
-
-        CryptoPassed key ->
-            return key
-
-
 data FromServer
     = AuthCodeToSignF AuthCode
-    | InboxMessageF Ed.PublicKey T.Text
-    | NoMessagesF
+    | InboxMessageF MessageId Encrypted
+    | NoSuchMessageF MessageId
 
 
 newtype AuthCode
@@ -976,10 +1132,10 @@ secretSigningP :: P.Parser Ed.SecretKey
 secretSigningP = do
     raw <- P.take Ed.secretKeySize
     key <- case Ed.secretKey raw of
-            CryptoFailed err ->
+            Ce.CryptoFailed err ->
                 fail $ show err
 
-            CryptoPassed key ->
+            Ce.CryptoPassed key ->
                 return key
     P.endOfInput
     return key

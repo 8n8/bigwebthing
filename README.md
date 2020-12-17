@@ -47,7 +47,9 @@ Client to server
     Send message
         1 byte: 1
         24 bytes: message ID
-        <= 116 bytes: encrypted message
+        16 bytes: MAC
+        12 bytes: nonce
+        <= 100 bytes: encrypted message
             a sequence of these UTF-8 characters:
             1!2"3£4$5%6^7&8*9(0)-_+=abcdefghijklmnopqrstuvwxyz
             ABCDEFGHIJKLMNOPQRSTUVWXYZ|\<,>.?/ :;@'#~
@@ -62,7 +64,9 @@ Server to client
     Message
         1 byte: 1
         24 bytes: message ID
-        <= 116 bytes: inbox message
+        16 bytes: MAC
+        12 bytes: nonce
+        <= 100 bytes: encrypted inbox message
     No such message
         1 byte: 2
         24 bytes: message ID

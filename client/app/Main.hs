@@ -2,7 +2,14 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 module Main (main) where
 
-import Update (update, Msg(..), State(..), Output(..), Init(EmptyI))
+import Update
+    ( update
+    , Msg(..)
+    , State(..)
+    , Output(..)
+    , Init(EmptyI)
+    , Drg(..)
+    )
 import qualified Control.Concurrent.STM.TVar as TVar
 import qualified Control.Concurrent.STM as Stm
 import System.Environment (getArgs)
@@ -11,6 +18,7 @@ import qualified Network.Simple.TCP as Tcp
 import qualified Control.Exception as E
 import qualified Data.ByteString as B
 import qualified Crypto.PubKey.Ed25519 as Ed
+import Crypto.Random (getSystemDRG)
 
 
 main :: IO ()
@@ -47,14 +55,13 @@ updateIo mainState msg = do
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
+    GetRandomGenO -> do
+        drg <- getSystemDRG
+        updateIo mainState $ RandomGenM $ Drg drg
+        
     TcpListenO socket len -> do
         result <- E.try $ Tcp.recv socket len
         updateIo mainState $ FromServerM result
-
-    CloseTcpO socket -> do
-        _ <- E.try $ Tcp.closeSock socket
-            :: IO (Either E.IOException ())
-        return ()
 
     TcpSendO socket msg -> do
         eitherError <- E.try $ Tcp.send socket msg
@@ -88,6 +95,6 @@ io mainState output =
     BatchO outputs -> do
         mapM_ (io mainState) outputs
 
-    MakeTcpConnO -> do
-        eitherConn <- E.try $ Tcp.connectSock serverUrl serverPort
-        updateIo mainState $ TcpConnM eitherConn
+    MakeTcpConnO ->
+        Tcp.connect serverUrl serverPort $ \(conn, _) ->
+        updateIo mainState $ TcpConnM conn

@@ -1,5 +1,3 @@
-'Done' means that it works, that the code is concise, neat and readable, that it has a complete test suite, and is documented well enough for a technical peer to understand how it works.
+'Done' means that it works, that the code is concise, neat and readable, and is documented well enough for a technical peer to understand how it works.
 
-+ for each of the client and the server
-    - have a read through and refactor
-+ add TLS
++ update FromServer and ToServer in client for new API
