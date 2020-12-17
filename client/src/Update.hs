@@ -155,17 +155,13 @@ usage =
     \\n\
     \    $ bwt help\n\
     \\n\
-    \Get my user ID\n\
-    \\n\
-    \    $ bwt myid\n\
-    \\n\
     \Download a message to STDOUT\n\
     \\n\
-    \    $ bwt get\n\
+    \    $ bwt get <message ID>\n\
     \\n\
     \Send a message from STDIN\n\
     \\n\
-    \    $ bwt send <recipient ID>\n"
+    \    $ bwt send\n"
 
 
 updateOnTcpConn
@@ -595,7 +591,7 @@ prettyMessage msg =
         "could not connect to the internet"
 
     BadArgsU ->
-        "bad arguments\n\nUsage instructions:\n" <> usage
+        "bad arguments\n\nUsage instructions:\n\n" <> usage
 
     NoMessagesU ->
         "no messages"
