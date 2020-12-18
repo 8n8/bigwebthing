@@ -61,8 +61,8 @@ encodeToClient msg =
             , message
             ]
 
-        NoMessages ->
-            B.singleton 2
+        NoSuchMessage (MessageId messageId) ->
+            B.singleton 2 <> messageId
     in
     encodeUint16 (B.length raw) <> raw
 
@@ -347,8 +347,8 @@ findConn initiator conns =
 
 data FromClient
     = SignedAuthCodeF Sender Ed.Signature
-    | SendMessage Recipient InboxMessage
-    | GetMessage
+    | SendMessage MessageId Encrypted
+    | GetMessage MessageId
     deriving Show
 
 
@@ -545,8 +545,18 @@ sendToClient address socket =
 
 data ToClient
     = AuthCodeToSign B.ByteString
-    | NewMessage Sender InboxMessage
-    | NoMessages
+    | NewMessage MessageId Encrypted
+    | NoSuchMessage MessageId
+
+
+newtype Encrypted
+    = Encrypted B.ByteString
+    deriving Show
+
+
+newtype MessageId
+    = MessageId B.ByteString
+    deriving Show
 
 
 instance Show Ready where
@@ -580,7 +590,7 @@ data Msg
     | RandomGenM CryptoRand.ChaChaDRG
     | AccessListM (Either E.IOException B.ByteString)
     | MessagesFromDbM
-        Recipient
+        MessageId
         (Either Db.SQLError [(B.ByteString, B.ByteString)])
     | DbErrM Ed.PublicKey (Either Db.SQLError ())
 
@@ -754,13 +764,10 @@ updateOnDbErr model initiator eitherErr =
 
 updateOnMessagesFromDb
     :: State
-    -> Recipient
+    -> MessageId
     -> Either Db.SQLError [(B.ByteString, B.ByteString)]
     -> (Output, State)
-updateOnMessagesFromDb
-    model
-    recipient@(Recipient initiator)
-    eitherRaw =
+updateOnMessagesFromDb model messageId eitherRaw =
 
     let
     pass = (DoNothingO, model)
@@ -930,8 +937,8 @@ update model msg =
     TcpSendResultM address eitherError ->
         updateOnTcpSend model address eitherError
 
-    MessagesFromDbM recipient raw ->
-        updateOnMessagesFromDb model recipient raw
+    MessagesFromDbM messageId raw ->
+        updateOnMessagesFromDb model messageId raw
 
     RandomGenM gen ->
         updateOnRandomGen model gen
