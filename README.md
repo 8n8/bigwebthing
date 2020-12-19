@@ -1,4 +1,4 @@
-BigWebThing version 1
+BigWebThing version 2
 =====================
 
 # Overview
@@ -41,7 +41,7 @@ It's a command-line app. The commands are:
 
 The server runs a TCP server on port 53745.
 
-All messages should be prefixed by a 1-byte length.
+All messages should be prefixed by a 2-byte length.
 
 Client to server
     97 bytes: Signed auth code:
