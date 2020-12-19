@@ -25,6 +25,10 @@ It's a command-line app. The commands are:
 
         $ bwt help
 
+    Get my ID
+
+        $ bwt myid
+
     Download a message to STDOUT:
 
         $ bwt get <message ID>

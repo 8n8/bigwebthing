@@ -14,6 +14,7 @@ module Update
     , Drg(..)
     ) where
 
+import Debug.Trace (trace)
 import qualified Control.Exception as E
 import qualified Data.ByteString as B
 import qualified Data.Text as T
@@ -156,6 +157,9 @@ usage =
     "Get usage\n\
     \\n\
     \    $ bwt help\n\
+    \Get my id\n\
+    \\n\
+    \    $ bwt myid\n\
     \\n\
     \Download a message to STDOUT\n\
     \\n\
@@ -449,8 +453,37 @@ updateOnGoodSecretKeyFile model raw =
         pass
 
 
+updateOnMyIdArg :: State -> (Output, State)
+updateOnMyIdArg model =
+    case model of
+    InitS _ ->
+        (DoNothingO, model)
+
+    ReadyS ready ->
+        let
+        public = Ed.toPublic $ signingKey ready
+        idB64 = B64.encodeUnpadded $ Ba.convert public
+        in
+        case decodeUtf8' idB64 of
+        Left err ->
+            ( toUser $ InternalErrorU $
+                mconcat
+                [ "could not convert public key to Base64:\n"
+                , T.pack $ show err
+                ]
+            , FinishedS
+            )
+
+        Right b64 ->
+            (toUser $ MyIdU b64, FinishedS)
+
+    FinishedS ->
+        (DoNothingO, model)
+
+
 update :: State -> Msg -> (Output, State)
 update model msg =
+    trace ("model: " <> show model <> "\nmsg: " <> show msg <> "\n") $
     let
     pass = (DoNothingO, model)
     in
@@ -492,6 +525,9 @@ update model msg =
 
     ArgsM ["help"] ->
         (toUser UsageU, FinishedS)
+
+    ArgsM ["myid"] ->
+        updateOnMyIdArg model
 
     ArgsM ["get", rawKeyAndId] ->
         updateOnGetArg model rawKeyAndId
@@ -557,7 +593,12 @@ ad =
 
 newtype SecretKey
     = SecretKey B.ByteString
-    deriving (Eq, Show)
+    deriving (Eq)
+
+
+instance Show SecretKey where
+    show (SecretKey s) =
+        show $ B.unpack s
 
 
 decrypt :: SecretKey -> Encrypted -> Ce.CryptoFailable B.ByteString
@@ -667,7 +708,7 @@ newtype Nonce
 instance Show Nonce where
     show (Nonce n) =
         show $ B.unpack $ Ba.convert n
-        
+
 
 instance Eq Nonce where
     (==) (Nonce a) (Nonce b) =
@@ -923,7 +964,7 @@ updateOnAuthCode ready (AuthCode authCode) =
             [ TcpSendO socket $
                 encodeToServer $
                 SignedAuthCodeT publicKey signature
-            , TcpSendO socket $ encodeToServer $ toServer
+            , TcpSendO socket $ encodeToServer $ trace ("toServer: " <> show toServer) toServer
             , case toServer of
                 SignedAuthCodeT _ _ ->
                     DoNothingO
@@ -950,7 +991,7 @@ updateOnAuthCode ready (AuthCode authCode) =
                     }
 
             SendMessageT _ _ ->
-                FinishedS
+                ReadyS ready
         )
 
 
@@ -1125,9 +1166,10 @@ newtype AuthCode
 
 batchUpdate :: State -> [Maybe Msg] -> [Output] -> ([Output], State)
 batchUpdate model msgs outputs =
+    trace ("outputs: " <> show outputs) $
     case msgs of
     [] ->
-        (outputs, model)
+        (reverse outputs, model)
 
     Nothing : sgs ->
         batchUpdate model sgs outputs

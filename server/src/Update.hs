@@ -19,6 +19,7 @@ module Update
     ) where
 
 
+import Debug.Trace (trace)
 import qualified Data.Map as Map
 import Data.Bits ((.&.), shiftR)
 import qualified Data.Set as Set
@@ -54,11 +55,11 @@ encodeToClient msg =
         AuthCodeToSign code ->
             B.singleton 0 <> code
 
-        NewMessage (Sender sender) (InboxMessage message) ->
+        NewMessage (MessageId messageId) (Encrypted encrypted) ->
             mconcat
             [ B.singleton 1
-            , ByteArray.convert sender
-            , message
+            , messageId
+            , encrypted
             ]
 
         NoSuchMessage (MessageId messageId) ->
@@ -70,16 +71,6 @@ encodeToClient msg =
 pubToBytes :: Ed.PublicKey -> B.ByteString
 pubToBytes =
     ByteArray.convert
-
-
-findConnHelp :: Ed.PublicKey -> TcpConn -> Bool
-findConnHelp initiator (TcpConn _ auth _) =
-    case auth of
-    Authenticated (Sender s) ->
-        s == initiator
-
-    Untrusted _ ->
-        False
 
 
 oneAccessKeyP :: P.Parser PublicKey
@@ -125,11 +116,6 @@ validAuthSig (AuthCode authCode) signature (Sender sender) =
     Ed.verify sender (authCodeA <> authCode) signature
 
 
-senderToRecipient :: Sender -> Recipient
-senderToRecipient (Sender s) =
-    Recipient s
-
-
 instance Show TcpConn where
     show (TcpConn _ authStatus g) =
         "TcpConn (Queue TcpInstruction) " <> show authStatus <> show g
@@ -144,19 +130,25 @@ fromClientP = do
             SignedAuthCodeF sender <$> signatureP
         , do
             _ <- P.word8 1
-            recipient <- recipientP
-            SendMessage recipient <$> inboxMessageP
+            messageId <- messageIdP
+            SendMessage messageId <$> encryptedP
         , do
             _ <- P.word8 2
-            return GetMessage
+            messageId <- messageIdP
+            return $ GetMessage messageId
         ]
     P.endOfInput
     return msg
 
 
-recipientP :: P.Parser Recipient
-recipientP = do
-    Recipient <$> signingKeyP
+messageIdLength :: Int
+messageIdLength =
+    24
+
+
+messageIdP :: P.Parser MessageId
+messageIdP =
+    MessageId <$> P.take messageIdLength
 
 
 senderP :: P.Parser Sender
@@ -186,15 +178,21 @@ signatureP = do
             fail $ show err
 
 
-inboxMessageP :: P.Parser InboxMessage
-inboxMessageP = do
+encryptedP :: P.Parser Encrypted
+encryptedP =
+    do
     raw <- P.scan 0 msgScanner
-    return $ InboxMessage raw
+    return $ Encrypted raw
+
+
+encryptedLength :: Int
+encryptedLength =
+    16 + 12 + 100
 
 
 msgScanner :: Int -> Word8 -> Maybe Int
 msgScanner counter _ =
-    if counter < 100 then
+    if counter < encryptedLength then
     Just $ counter + 1
     else
     Nothing
@@ -216,10 +214,9 @@ data Output
     | ReadAccessListO
     | StartTcpServerO
     | BatchO [Output]
-    | DeleteInboxMessageDbO Sender Recipient InboxMessage
     | GetRandomGenO
-    | SaveMessageToDbO Sender Recipient InboxMessage
-    | GetMessageFromDbO Recipient
+    | SaveMessageToDbO MessageId Encrypted
+    | GetMessageFromDbO MessageId
     deriving (Show, Eq)
 
 
@@ -237,6 +234,16 @@ instance Ord Sender where
         b' = ByteArray.convert b
         in
         compare a' b'
+
+
+instance DbTf.ToField MessageId where
+    toField (MessageId mId) =
+        DbTf.toField mId
+
+
+instance DbTf.ToField Encrypted where
+    toField (Encrypted e) =
+        DbTf.toField e
 
 
 instance DbTf.ToField Sender where
@@ -329,22 +336,6 @@ instance Ord PublicKey where
         compare a' b'
 
 
-findConn
-    :: Ed.PublicKey
-    -> Map.Map Tcp.SockAddr TcpConn
-    -> Maybe (Tcp.SockAddr, TcpConn)
-findConn initiator conns =
-    let
-    filtered = Map.filter (findConnHelp initiator) conns
-    in
-    case Map.toList filtered of
-    [] ->
-        Nothing
-
-    found:_ ->
-        Just found
-
-
 data FromClient
     = SignedAuthCodeF Sender Ed.Signature
     | SendMessage MessageId Encrypted
@@ -372,6 +363,7 @@ updateOnRawTcpMessage
     -> State
     -> (Output, State)
 updateOnRawTcpMessage address eitherRaw model =
+    trace "updateOnRawTcpMessage" $
     case model of
     InitS _ ->
         (DoNothingO, model)
@@ -382,9 +374,11 @@ updateOnRawTcpMessage address eitherRaw model =
     ReadyS ready ->
         case Map.lookup address (tcpConns ready) of
         Nothing ->
+            trace "ReadyS ready: Nothing" $
             (DoNothingO, model)
 
         Just (TcpConn socket auth getting) ->
+            trace "ReadyS ready: Just (TcpConn _ _ _)" $
             let
             onBad =
                 let
@@ -396,27 +390,37 @@ updateOnRawTcpMessage address eitherRaw model =
             in
             case eitherRaw of
             Left _ ->
+                trace "Left _" $
                 onBad
 
             Right Nothing ->
+                trace "Right Nothing" $
                 onBad
 
             Right (Just raw) ->
+                trace ("raw: " <> show (B.unpack raw)) $
+                trace "Right (Just raw)" $
                 case getting of
                 BodyG ->
+                    trace "BodyG" $
                     case P.parseOnly fromClientP raw of
-                    Left _ ->
+                    Left err ->
+                        trace ("BodyG: Left " <> err) $
                         onBad
 
                     Right untrusted ->
+                        trace "Right untrusted" $
                         updateOnTcpMessage address ready untrusted
 
                 LengthG ->
+                    trace "LengthG" $
                     case P.parseOnly tcpLengthP raw of
                     Left _ ->
+                        trace "Left _" $
                         onBad
 
                     Right len ->
+                        trace "Right len: " $
                         let
                         newConns =
                             Map.insert
@@ -442,50 +446,51 @@ uint8P =
     fromIntegral <$> P.anyWord8
 
 
-senderEqRecipient :: Sender -> Recipient -> Bool
-senderEqRecipient (Sender s) (Recipient r) =
-    s == r
-
-
 updateOnTcpMessage
     :: Tcp.SockAddr
     -> Ready
     -> FromClient
     -> (Output, State)
 updateOnTcpMessage address ready untrusted =
+    trace "updateOnTcpMessage" $
     case Map.lookup address $ tcpConns ready of
     Nothing ->
+        trace "Nothing" $
         (DoNothingO, ReadyS ready)
 
-    Just (TcpConn socket (Authenticated sender) _) ->
+    Just (TcpConn socket (Authenticated _) _) ->
+        trace "Just (TcpConn socket (Authenticated" $
         case untrusted of
         SignedAuthCodeF _ _ ->
+            trace "SignedAuthCodeF" $
             (CloseSocketO socket, ReadyS ready)
 
-        SendMessage recipient inboxMessage ->
-            if senderEqRecipient sender recipient then
-            ( CloseSocketO socket
-            , ReadyS $ ready
-                { tcpConns = Map.delete address $ tcpConns ready }
-            )
-            else
+        SendMessage messageId inboxMessage ->
+            trace "SendMessage" $
             ( BatchO
-                [ SaveMessageToDbO sender recipient inboxMessage
+                [ SaveMessageToDbO messageId inboxMessage
                 , CloseSocketO socket
                 ]
             , ReadyS $ ready
                 { tcpConns = Map.delete address $ tcpConns ready }
             )
 
-        GetMessage ->
-            ( GetMessageFromDbO $ senderToRecipient sender
-            , ReadyS ready
+        GetMessage messageId ->
+            trace "GetMessage" $
+            ( GetMessageFromDbO messageId
+            , ReadyS $
+                ready
+                { awaitingBlob =
+                    Map.insert messageId address $ awaitingBlob ready
+                }
             )
 
     Just (TcpConn socket (Untrusted authCode) _) ->
+        trace "Just (TcpConn socket (Untrusted" $
         let
         closeSocket = (CloseSocketO socket, ReadyS ready)
         in
+        trace ("untrusted: " <> show untrusted) $
         case untrusted of
         SignedAuthCodeF sender signed ->
             let
@@ -493,6 +498,8 @@ updateOnTcpMessage address ready untrusted =
             allowed =
                 Set.member (senderToPub sender) (accessList ready)
             in
+            trace ("validSig: " <> show validSig) $
+            trace ("allowed: " <> show allowed) $
             if validSig && allowed then
             ( TcpRecvO address socket 2
             , ReadyS $
@@ -513,7 +520,7 @@ updateOnTcpMessage address ready untrusted =
         SendMessage _ _ ->
             closeSocket
 
-        GetMessage ->
+        GetMessage _ ->
             closeSocket
 
 
@@ -551,22 +558,24 @@ data ToClient
 
 newtype Encrypted
     = Encrypted B.ByteString
-    deriving Show
+    deriving (Show, Eq)
 
 
 newtype MessageId
     = MessageId B.ByteString
-    deriving Show
+    deriving (Eq, Show, Ord)
 
 
 instance Show Ready where
-    show (Ready conns _ accessList) =
+    show (Ready conns _ accessList awaitingBlob) =
         mconcat
         [ "Ready {\n"
         , "    tcpConns = "
         , show conns
         , "\n    accessList = "
         , show accessList
+        , "\n    awaitingBlob = "
+        , show awaitingBlob
         , "\n}"
         ]
 
@@ -591,8 +600,8 @@ data Msg
     | AccessListM (Either E.IOException B.ByteString)
     | MessagesFromDbM
         MessageId
-        (Either Db.SQLError [(B.ByteString, B.ByteString)])
-    | DbErrM Ed.PublicKey (Either Db.SQLError ())
+        (Either Db.SQLError [Db.Only B.ByteString])
+    | DbErrM MessageId (Either Db.SQLError ())
 
 
 instance Show Msg where
@@ -644,12 +653,13 @@ data Ready
         { tcpConns :: Map.Map Tcp.SockAddr TcpConn
         , randomGen :: CryptoRand.ChaChaDRG
         , accessList :: Set.Set PublicKey
+        , awaitingBlob :: Map.Map MessageId Tcp.SockAddr
         }
 
 
 instance Eq Ready where
-    (==) (Ready t1 _ a1) (Ready t2 _ a2) =
-        t1 == t2 && a1 == a2
+    (==) (Ready t1 _ a1 w1) (Ready t2 _ a2 w2) =
+        t1 == t2 && a1 == a2 && w1 == w2
 
 
 updateOnAccessList
@@ -729,101 +739,106 @@ updateOnTcpSend model address eitherError =
 
 updateOnDbErr
     :: State
-    -> Ed.PublicKey
+    -> MessageId
     -> Either Db.SQLError ()
     -> (Output, State)
-updateOnDbErr model initiator eitherErr =
-    let
-    pass = (DoNothingO, model)
-    in
+updateOnDbErr model messageId eitherErr =
     updateReady model $ \ready ->
+    let
+    noMessageId = Map.delete messageId $ awaitingBlob ready
+    in
     case eitherErr of
     Right () ->
-        pass
+        (DoNothingO, ReadyS $ ready { awaitingBlob = noMessageId })
 
     Left _ ->
-        case findConn initiator $ tcpConns ready of
+        case Map.lookup messageId (awaitingBlob ready) of
         Nothing ->
-            pass
+            (DoNothingO, ReadyS $ ready { awaitingBlob = noMessageId })
 
-        Just (_, TcpConn _ (Untrusted _) _) ->
-            pass
+        Just address ->
+            case Map.lookup address (tcpConns ready) of
+            Nothing ->
+                ( DoNothingO
+                , ReadyS $ ready { awaitingBlob = noMessageId }
+                )
 
-        Just (address, TcpConn socket (Authenticated _) _) ->
-            ( BatchO
-                [ sendToClient address socket NoMessages
-                , CloseSocketO socket
-                ]
-            , ReadyS $
-              ready
-                { tcpConns =
-                    Map.delete address $ tcpConns ready
-                }
-            )
+            Just (TcpConn _ (Untrusted _) _) ->
+                ( DoNothingO
+                , ReadyS $ ready
+                    { awaitingBlob = noMessageId
+                    , tcpConns = Map.delete address $ tcpConns ready
+                    }
+                )
+
+            Just (TcpConn socket (Authenticated _) _) ->
+                ( BatchO
+                    [ sendToClient address socket $
+                        NoSuchMessage messageId
+                    , CloseSocketO socket
+                    ]
+                , ReadyS $
+                  ready
+                    { tcpConns =
+                        Map.delete address $ tcpConns ready
+                    , awaitingBlob = noMessageId
+                    }
+                )
 
 
 updateOnMessagesFromDb
     :: State
     -> MessageId
-    -> Either Db.SQLError [(B.ByteString, B.ByteString)]
+    -> Either Db.SQLError [Db.Only B.ByteString]
     -> (Output, State)
 updateOnMessagesFromDb model messageId eitherRaw =
-
     let
     pass = (DoNothingO, model)
     in
     updateReady model $ \ready ->
-    case findConn initiator $ tcpConns ready of
+    case Map.lookup messageId (awaitingBlob ready) of
     Nothing ->
         pass
 
-    Just (_, TcpConn _ (Untrusted _) _) ->
-        pass
+    Just address ->
+        case Map.lookup address (tcpConns ready) of
+        Nothing ->
+            pass
 
-    Just (address, TcpConn socket (Authenticated _) _) ->
-        let
-        noMessages =
-            ( BatchO
-                [ sendToClient address socket NoMessages
-                , CloseSocketO socket
-                ]
-            , ReadyS $
-              ready
-                { tcpConns =
-                    Map.delete address $ tcpConns ready
-                }
-            )
-        in
-        case eitherRaw of
-        Left _ ->
-            noMessages
+        Just (TcpConn _ (Untrusted _) _) ->
+            pass
 
-        Right [] ->
-            noMessages
-
-        Right ((rawSender, rawMessage):_) ->
-            case Ed.publicKey rawSender of
-            CryptoFailed err ->
-                ( PrintO $
-                  mconcat
-                  [ "could not parse public key from server: "
-                  , Text.Hex.encodeHex rawSender
-                  , ":\n"
-                  , T.pack $ show err
-                  ]
-                , FailedS
+        Just (TcpConn socket (Authenticated _) _) ->
+            let
+            noMessages =
+                ( BatchO
+                    [ sendToClient
+                        address
+                        socket
+                        (NoSuchMessage messageId)
+                    , CloseSocketO socket
+                    ]
+                , ReadyS $
+                  ready
+                    { tcpConns =
+                        Map.delete address $ tcpConns ready
+                    }
                 )
-            CryptoPassed sender ->
+            in
+            case eitherRaw of
+            Left _ ->
+                noMessages
+
+            Right [] ->
+                noMessages
+
+            Right (Db.Only rawMessage:_) ->
                 ( BatchO
                     [ sendToClient address socket $
                       NewMessage
-                      (Sender sender)
-                      (InboxMessage rawMessage)
+                      messageId
+                      (Encrypted rawMessage)
                     , CloseSocketO socket
-                    , DeleteInboxMessageDbO
-                        (Sender sender)
-                        recipient
-                        (InboxMessage rawMessage)
                     ]
                 , ReadyS $ ready
                     { tcpConns =
@@ -845,6 +860,7 @@ updateOnRandomGen model gen =
                 { tcpConns = Map.empty
                 , randomGen = gen
                 , accessList
+                , awaitingBlob = Map.empty
                 }
         )
 
@@ -927,6 +943,7 @@ updateOnNewTcpConn model socket address =
 
 update :: State -> Msg -> (Output, State)
 update model msg =
+    trace ("model: " <> show model <> "\nmessage: " <> show msg <> "\n") $
     case msg of
     DbErrM id_ err ->
         updateOnDbErr model id_ err

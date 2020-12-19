@@ -62,33 +62,22 @@ io mainState output =
         Tcp.serve (Tcp.Host "127.0.0.1") "11453" $ \(sock, addr) ->
         updateIo mainState $ NewTcpConnM sock addr
 
-    DeleteInboxMessageDbO sender@(Sender s) recipient message -> do
-        eitherErr <- E.try $ Db.withConnection dbPath $ \conn ->
-                Db.execute
-                    conn
-                    deleteMessageSql
-                    (sender, recipient, message)
-        updateIo mainState $ DbErrM s eitherErr
-
     GetRandomGenO -> do
         drg <- CryptoRand.drgNew
         updateIo mainState $ RandomGenM drg
 
-    SaveMessageToDbO sender@(Sender s) recipient inboxMessage -> do
+    SaveMessageToDbO messageId inboxMessage -> do
         eitherErr <- E.try $ Db.withConnection dbPath $ \conn ->
                 Db.execute
                     conn
                     saveMessageSql
-                    (sender, recipient, inboxMessage)
-        updateIo mainState $ DbErrM s eitherErr
+                    (messageId, inboxMessage)
+        updateIo mainState $ DbErrM messageId eitherErr
 
-    GetMessageFromDbO recipient -> do
+    GetMessageFromDbO messageId -> do
         result <- E.try $ Db.withConnection dbPath $ \conn ->
-            Db.query
-                conn
-                getMessageSql
-                (Db.Only recipient)
-        updateIo mainState $ MessagesFromDbM recipient result
+            Db.query conn getMessageSql (Db.Only messageId)
+        updateIo mainState $ MessagesFromDbM messageId result
 
     SetupDbO ->
         Db.withConnection dbPath $ \conn ->
@@ -98,27 +87,19 @@ io mainState output =
 makeMessagesTableSql :: Db.Query
 makeMessagesTableSql =
     "CREATE TABLE IF NOT EXISTS messages \
-    \(sender BLOB NOT NULL,\
-    \ recipient BLOB NOT NULL,\
-    \ message BLOB NOT NULL,\
-    \ PRIMARY KEY (sender, recipient, message));"
+    \(messageid BLOB NOT NULL UNIQUE,\
+    \ message BLOB NOT NULL);"
 
 
 saveMessageSql :: Db.Query
 saveMessageSql =
-    "INSERT INTO messages (sender, recipient, message) \
-    \VALUES (?, ?, ?);"
+    "INSERT INTO messages (messageid, message) \
+    \VALUES (?, ?);"
 
 
 getMessageSql :: Db.Query
 getMessageSql =
-    "SELECT sender, message FROM messages WHERE recipient=?;"
-
-
-deleteMessageSql :: Db.Query
-deleteMessageSql =
-    "DELETE FROM messages \
-    \WHERE sender = ? AND recipient = ? and message = ?;"
+    "SELECT message FROM messages WHERE messageid=?;"
 
 
 rootPath :: FilePath

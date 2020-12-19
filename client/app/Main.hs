@@ -19,6 +19,7 @@ import qualified Control.Exception as E
 import qualified Data.ByteString as B
 import qualified Crypto.PubKey.Ed25519 as Ed
 import Crypto.Random (getSystemDRG)
+import Debug.Trace (trace)
 
 
 main :: IO ()
@@ -52,6 +53,11 @@ updateIo mainState msg = do
     io mainState output
 
 
+showb :: B.ByteString -> String
+showb bs =
+    show $ B.unpack bs
+
+
 io :: TVar.TVar State -> Output -> IO ()
 io mainState output =
     case output of
@@ -63,7 +69,8 @@ io mainState output =
         result <- E.try $ Tcp.recv socket len
         updateIo mainState $ FromServerM result
 
-    TcpSendO socket msg -> do
+    TcpSendO socket msg ->
+        trace ("sending: " <> showb msg) $ do
         eitherError <- E.try $ Tcp.send socket msg
         updateIo mainState $ TcpSendResultM eitherError
 
@@ -92,8 +99,8 @@ io mainState output =
     DoNothingO ->
         return ()
 
-    BatchO outputs -> do
-        mapM_ (io mainState) outputs
+    BatchO outputs -> trace ("OUTPUTS: " <> show outputs) $ do
+        mapM_ (\o -> print ("hi" :: String) >> io mainState o) outputs
 
     MakeTcpConnO ->
         do
