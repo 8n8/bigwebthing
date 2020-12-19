@@ -14,7 +14,6 @@ module Update
     , Drg(..)
     ) where
 
-import Debug.Trace (trace)
 import qualified Control.Exception as E
 import qualified Data.ByteString as B
 import qualified Data.Text as T
@@ -197,7 +196,8 @@ updateOnTcpConn model socket =
 
 
 stdInP :: P.Parser T.Text
-stdInP = do
+stdInP =
+    do
     msg <- inboxMessageP
     _ <- P.word8 10 -- newline
     P.endOfInput
@@ -483,7 +483,6 @@ updateOnMyIdArg model =
 
 update :: State -> Msg -> (Output, State)
 update model msg =
-    trace ("model: " <> show model <> "\nmsg: " <> show msg <> "\n") $
     let
     pass = (DoNothingO, model)
     in
@@ -856,7 +855,8 @@ onBodyFromServer ready raw =
 
 
 onlyLengthP :: P.Parser Int
-onlyLengthP = do
+onlyLengthP =
+    do
     l <- uint16P
     P.endOfInput
     return l
@@ -964,7 +964,7 @@ updateOnAuthCode ready (AuthCode authCode) =
             [ TcpSendO socket $
                 encodeToServer $
                 SignedAuthCodeT publicKey signature
-            , TcpSendO socket $ encodeToServer $ trace ("toServer: " <> show toServer) toServer
+            , TcpSendO socket $ encodeToServer toServer
             , case toServer of
                 SignedAuthCodeT _ _ ->
                     DoNothingO
@@ -996,7 +996,8 @@ updateOnAuthCode ready (AuthCode authCode) =
 
 
 fromServerP :: P.Parser FromServer
-fromServerP = do
+fromServerP =
+    do
     msg <- P.choice
         [ do
             _ <- P.word8 0
@@ -1020,13 +1021,15 @@ authCodeLength =
 
 
 authCodeP :: P.Parser AuthCode
-authCodeP = do
+authCodeP =
+    do
     raw <- P.take authCodeLength
     return $ AuthCode raw
 
 
 inboxMessageP :: P.Parser T.Text
-inboxMessageP = do
+inboxMessageP =
+    do
     raw <- P.scan 0 msgScanner
     if B.null raw then
         fail "empty"
@@ -1035,7 +1038,7 @@ inboxMessageP = do
             Left err ->
                 fail $ show err
 
-            Right valid -> do
+            Right valid ->
                 return valid
 
 
@@ -1166,7 +1169,6 @@ newtype AuthCode
 
 batchUpdate :: State -> [Maybe Msg] -> [Output] -> ([Output], State)
 batchUpdate model msgs outputs =
-    trace ("outputs: " <> show outputs) $
     case msgs of
     [] ->
         (reverse outputs, model)
@@ -1182,7 +1184,8 @@ batchUpdate model msgs outputs =
 
 
 secretSigningP :: P.Parser Ed.SecretKey
-secretSigningP = do
+secretSigningP =
+    do
     raw <- P.take Ed.secretKeySize
     key <- case Ed.secretKey raw of
             Ce.CryptoFailed err ->
@@ -1195,7 +1198,8 @@ secretSigningP = do
 
 
 uint16P :: P.Parser Int
-uint16P = do
+uint16P =
+    do
     b0 <- uint8P
     b1 <- uint8P
     return $ b0 + b1 * 256
