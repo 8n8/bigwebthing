@@ -156,6 +156,7 @@ usage =
     "Get usage\n\
     \\n\
     \    $ bwt help\n\
+    \\n\
     \Get my id\n\
     \\n\
     \    $ bwt myid\n\
