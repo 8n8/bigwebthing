@@ -19,7 +19,6 @@ module Update
     ) where
 
 
-import Debug.Trace (trace)
 import qualified Data.Map as Map
 import Data.Bits ((.&.), shiftR)
 import qualified Data.Set as Set
@@ -363,7 +362,6 @@ updateOnRawTcpMessage
     -> State
     -> (Output, State)
 updateOnRawTcpMessage address eitherRaw model =
-    trace "updateOnRawTcpMessage" $
     case model of
     InitS _ ->
         (DoNothingO, model)
@@ -374,11 +372,9 @@ updateOnRawTcpMessage address eitherRaw model =
     ReadyS ready ->
         case Map.lookup address (tcpConns ready) of
         Nothing ->
-            trace "ReadyS ready: Nothing" $
             (DoNothingO, model)
 
         Just (TcpConn socket auth getting) ->
-            trace "ReadyS ready: Just (TcpConn _ _ _)" $
             let
             onBad =
                 let
@@ -390,37 +386,27 @@ updateOnRawTcpMessage address eitherRaw model =
             in
             case eitherRaw of
             Left _ ->
-                trace "Left _" $
                 onBad
 
             Right Nothing ->
-                trace "Right Nothing" $
                 onBad
 
             Right (Just raw) ->
-                trace ("raw: " <> show (B.unpack raw)) $
-                trace "Right (Just raw)" $
                 case getting of
                 BodyG ->
-                    trace "BodyG" $
                     case P.parseOnly fromClientP raw of
-                    Left err ->
-                        trace ("BodyG: Left " <> err) $
+                    Left _ ->
                         onBad
 
                     Right untrusted ->
-                        trace "Right untrusted" $
                         updateOnTcpMessage address ready untrusted
 
                 LengthG ->
-                    trace "LengthG" $
                     case P.parseOnly tcpLengthP raw of
                     Left _ ->
-                        trace "Left _" $
                         onBad
 
                     Right len ->
-                        trace "Right len: " $
                         let
                         newConns =
                             Map.insert
@@ -452,21 +438,16 @@ updateOnTcpMessage
     -> FromClient
     -> (Output, State)
 updateOnTcpMessage address ready untrusted =
-    trace "updateOnTcpMessage" $
     case Map.lookup address $ tcpConns ready of
     Nothing ->
-        trace "Nothing" $
         (DoNothingO, ReadyS ready)
 
     Just (TcpConn socket (Authenticated _) _) ->
-        trace "Just (TcpConn socket (Authenticated" $
         case untrusted of
         SignedAuthCodeF _ _ ->
-            trace "SignedAuthCodeF" $
             (CloseSocketO socket, ReadyS ready)
 
         SendMessage messageId inboxMessage ->
-            trace "SendMessage" $
             ( BatchO
                 [ SaveMessageToDbO messageId inboxMessage
                 , CloseSocketO socket
@@ -476,7 +457,6 @@ updateOnTcpMessage address ready untrusted =
             )
 
         GetMessage messageId ->
-            trace "GetMessage" $
             ( GetMessageFromDbO messageId
             , ReadyS $
                 ready
@@ -486,11 +466,9 @@ updateOnTcpMessage address ready untrusted =
             )
 
     Just (TcpConn socket (Untrusted authCode) _) ->
-        trace "Just (TcpConn socket (Untrusted" $
         let
         closeSocket = (CloseSocketO socket, ReadyS ready)
         in
-        trace ("untrusted: " <> show untrusted) $
         case untrusted of
         SignedAuthCodeF sender signed ->
             let
@@ -498,8 +476,6 @@ updateOnTcpMessage address ready untrusted =
             allowed =
                 Set.member (senderToPub sender) (accessList ready)
             in
-            trace ("validSig: " <> show validSig) $
-            trace ("allowed: " <> show allowed) $
             if validSig && allowed then
             ( TcpRecvO address socket 2
             , ReadyS $
@@ -943,7 +919,6 @@ updateOnNewTcpConn model socket address =
 
 update :: State -> Msg -> (Output, State)
 update model msg =
-    trace ("model: " <> show model <> "\nmessage: " <> show msg <> "\n") $
     case msg of
     DbErrM id_ err ->
         updateOnDbErr model id_ err
