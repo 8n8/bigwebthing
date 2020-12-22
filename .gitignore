@@ -32,3 +32,6 @@ server/server.cabal
 server/.stack-work
 server/bwtdata/
 client/bigwebthingSECRET
+client/c/bigwebthingSECRET
+client/c/a.out
+client/c/hydrogen.o

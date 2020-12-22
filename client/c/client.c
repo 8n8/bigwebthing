@@ -15,13 +15,13 @@ error create_signing_keys(hydro_sign_keypair* signing_keys) {
     hydro_sign_keypair key_pair;
     hydro_sign_keygen(&key_pair);
 
-    secret_key_file_handle = fopen(keys_path, "wb");
+    FILE* f = fopen(keys_path, "wb");
 
-    const site_t pk_count = fwrite(
+    const size_t pk_count = fwrite(
         key_pair.pk,
         1,
         hydro_sign_PUBLICKEYBYTES,
-        secret_key_file_handle);
+        f);
     if (pk_count != hydro_sign_PUBLICKEYBYTES) {
         return WRITING_KEYS_TO_FILE;
     }
@@ -30,12 +30,12 @@ error create_signing_keys(hydro_sign_keypair* signing_keys) {
         key_pair.sk,
         1,
         hydro_sign_SECRETKEYBYTES,
-        secret_key_file_handle);
+        f);
     if (sk_count != hydro_sign_SECRETKEYBYTES) {
         return WRITING_KEYS_TO_FILE;
     }
 
-    if (ferror(secret_key_file_handle)) {
+    if (ferror(f)) {
         return WRITING_KEYS_TO_FILE;
     }
     return 0;
@@ -43,7 +43,7 @@ error create_signing_keys(hydro_sign_keypair* signing_keys) {
 
 
 error get_signing_keys(hydro_sign_keypair* signing_keys) {
-    FILE* f = fopen(keysPath, "rb");
+    FILE* f = fopen(keys_path, "rb");
     if (f == NULL) {
         return create_signing_keys(signing_keys);
     }
@@ -74,8 +74,8 @@ error get_signing_keys(hydro_sign_keypair* signing_keys) {
 
 
 int main() {
-    hydro_kx_keypair crypto_keys;
-    int err = make_crypto_keys(&crypto_keys);
+    hydro_sign_keypair signing_keys;
+    int err = get_signing_keys(&signing_keys);
     if (err != 0) {
         return err;
     }
