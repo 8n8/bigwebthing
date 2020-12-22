@@ -13,9 +13,9 @@ Access to the server is controlled by a list of public signing keys kept on the 
 
 These are the different parts of the program:
 
-1. (Haskell) A command-line app that runs on the client.
+1. (C) A command-line app that runs on the client.
 
-6. (Haskell) The server. This acts as a route between clients. They upload and download messages.
+6. (C) The server. This acts as a route between clients. They upload and download messages.
 
 # User interface
 
