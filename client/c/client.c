@@ -6,12 +6,22 @@ const char* keys_path = "bigwebthingSECRET";
 
 
 typedef enum {
-    WRITING_KEYS_TO_FILE,
+    WRITING_KEYS_TO_FILE = 1,
     READING_KEYS_FROM_FILE,
 } error;
 
 
-error create_signing_keys(hydro_sign_keypair* signing_keys) {
+char* show_error(int err) {
+    switch (err) {
+    case WRITING_KEYS_TO_FILE:
+        return "writing keys to file";
+    case READING_KEYS_FROM_FILE:
+        return "reading keys from file";
+    }
+    return "bad error code";
+}
+
+int create_signing_keys(hydro_sign_keypair* signing_keys) {
     hydro_sign_keypair key_pair;
     hydro_sign_keygen(&key_pair);
 
@@ -42,7 +52,7 @@ error create_signing_keys(hydro_sign_keypair* signing_keys) {
 }
 
 
-error get_signing_keys(hydro_sign_keypair* signing_keys) {
+int get_signing_keys(hydro_sign_keypair* signing_keys) {
     FILE* f = fopen(keys_path, "rb");
     if (f == NULL) {
         return create_signing_keys(signing_keys);
@@ -73,10 +83,19 @@ error get_signing_keys(hydro_sign_keypair* signing_keys) {
 }
 
 
-int main() {
+int main_err() {
     hydro_sign_keypair signing_keys;
     int err = get_signing_keys(&signing_keys);
     if (err != 0) {
         return err;
     }
+    return 0;
+}
+
+int main() {
+    int err = main_err();
+    if (err) {
+        printf("internal error: %s", show_error(err));
+    }
+    return 0;
 }
