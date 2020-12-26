@@ -41,8 +41,6 @@ It's a command-line app. The commands are:
 
 The server runs a TCP server on port 53745.
 
-All messages should be prefixed by a 2-byte length.
-
 Client to server
     97 bytes: Signed auth code:
         1 byte: 0
@@ -51,12 +49,7 @@ Client to server
     Send message
         1 byte: 1
         24 bytes: message ID
-        16 bytes: MAC
-        12 bytes: nonce
-        <= 100 bytes: encrypted message
-            a sequence of these UTF-8 characters:
-            1!2"3£4$5%6^7&8*9(0)-_+=abcdefghijklmnopqrstuvwxyz
-            ABCDEFGHIJKLMNOPQRSTUVWXYZ|\<,>.?/ :;@'#~
+        encrypted message
     Get message
         1 byte: 2
         24 bytes: message ID
@@ -67,17 +60,24 @@ Server to client
         32 bytes: random
     Message
         1 byte: 1
-        24 bytes: message ID
-        16 bytes: MAC
-        12 bytes: nonce
-        <= 100 bytes: encrypted inbox message
+        encrypted message
     No such message
         1 byte: 2
-        24 bytes: message ID
 
 # Encodings
 
 Message IDs and secret keys are encoded as URL-safe Base64.
+
+## Encrypted message
+
+137 bytes:
+    36 bytes: header
+    encrypted:
+        1 byte: length of plain-text
+        100 bytes: buffer containing plain-text
+            a sequence of these UTF-8 characters:
+            1!2"3£4$5%6^7&8*9(0)-_+=abcdefghijklmnopqrstuvwxyz
+            ABCDEFGHIJKLMNOPQRSTUVWXYZ|\<,>.?/ :;@'#~
 
 # Client cache
 
