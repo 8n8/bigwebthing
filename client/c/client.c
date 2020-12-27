@@ -351,18 +351,31 @@ int bwt_send(const hydro_sign_keypair* signing_keys) {
 }
 
 
-int one_simple_arg(
-    char** argv,
-    const hydro_sign_keypair* signing_keys) {
+int bwt_read() {
+    int sock;
+    const int sock_err = make_socket(&sock);
+    if (sock_err) {
+        return sock_err;
+    }
 
+    const int read_err = bwt_read_use_sock(sock);
+    close(sock);
+    if (read_err) {
+        return read_err;
+    }
+    return 0;
+}
+
+
+int one_simple_arg(char** argv) {
     if (strcmp(argv[1], "help") == 0) {
         return bwt_help();
     }
     if (strcmp(argv[1], "myid") == 0) {
-        return bwt_myid(&signing_keys);
+        return bwt_myid();
     }
-    if (strcmp(argv[1], "send") == 0) {
-        return bwt_send(signing_keys);
+    if (strcmp(argv[1], "read") == 0) {
+        return bwt_read();
     }
     return BAD_ARGS;
 }
@@ -466,6 +479,148 @@ int bwt_get_use_sock(
 }
 
 
+
+int create_static_keys_help(*FILE f, hydro_kx_keypair* static_keys) {
+    const size_t pk_count = fwrite(
+        static_keys.pk,
+        1,
+        hydro_kx_PUBLICKEYBYTES,
+        f);
+    if (pk_count != hydro_kx_PUBLICKEYBYTES) {
+        return BAD_WRITE_PK_TO_FILE;
+    }
+
+    const size_t sk_count = fwrite(
+        static_keys.sk,
+        1,
+        hydro_kx_SECRETKEYBYTES,
+        f);
+    if (sk_count != hydro_sign_SECRETKEYBYTES) {
+        return BAD_WRITE_SK_TO_FILE;
+    }
+
+    return 0
+}
+
+
+int create_static_keys(hydro_kx_keypair* static_keys) {
+    hydro_kx_keygen(static_keys);
+
+    FILE* f = fopen(keys_path, "wb");
+    const int err = create_static_keys_help(f, static_keys);
+    close(f);
+    return err;
+}
+
+
+int get_static_keys(hydro_kx_keypair* static_keys) {
+    FILE* f = fopen(keys_path, "rb");
+    if (f == NULL) {
+        return create_static_keys(static_keys);
+    }
+
+    const size_t pk_count = fread(
+        static_keys->pk,
+        1,
+        hydro_kx_PUBLICKEYBYTES,
+        f);
+    if (pk_count != hydro_kx_PUBLICKEYBYTES) {
+        return BAD_READ_PK_FROM_FILE;
+    }
+
+    const size_t sk_count = fread(
+        static_keys->sk,
+        1,
+        hydro_kx_SECRETKEYBYTES,
+        f);
+    if (sk_count != hydro_kx_SECRETKEYBYTES) {
+        return BAD_READ_SK_FROM_FILE;
+    }
+
+}
+
+
+int get_session_keys(int sock, hydro_kx_session_keypair* session_kp) {
+    uint8_t packet1[hydro_kx_XX_PACKET1BYTES];
+    hydro_kx_state kx_state;
+    if (hydro_kx_xx_1(&kx_state, packet1, NULL)) {
+        return BAD_KX_XX1;
+    }
+
+    const int p1l = send(sock, packet1, hydro_kx_XX_PACKET1BYTES, 0);
+    if (p1l != hydro_kx_XX_PACKET1BYTES) {
+        return BAD_XX1_SEND;
+    }
+
+    uint8_t packet2[hydro_kx_XX_PACKET2BYTES];
+    const int received = recv(sock, packet2, hydro_kx_XX_PACKET2BYTES);
+    if (recieved != hydro_kx_XX_PACKET2BYTES) {
+        return BAD_XX2_RECEIVE;
+    }
+
+    hydro_kx_keypair static_keys;
+    const int kp_err = get_static_keys(&static_keys);
+    if (kp_err) {
+        return kp_err;
+    }
+
+    uint8_t packet3[hydro_kx_XX_PACKET3BYTES];
+    uint8_t server_pk[hydro_kx_PUBLICKEYBYTES];
+
+    const int xx3_err = hydro_kx_xx_3(
+        &kx_state,
+        &session_kp,
+        packet3,
+        server_pk,
+        packet2,
+        NULL,
+        &static_keys);
+    if (xx3_err) {
+        return BAD_MAKE_XX3;
+    }
+
+    for (int i = 0; i < hydro_kx_PUBLICKEYBYTES; i++) {
+        if (server_pk[i] != known_server_pk[i]) {
+            return FAKE_SERVER;
+        }
+    }
+
+    const int p3l = send(sock, packet3, hydro_kx_XX_PACKET3BYTES, 0);
+    if (p3l != hydro_kx_XX_PACKET3BYTES) {
+        return BAD_XX3_SEND;
+    }
+    return 0;
+}
+
+
+int bwt_read_use_sock(int sock) {
+    hydro_kx_session_keypair session_kp;
+    const int key_err = get_session_keys(sock, &session_kp);
+    if (key_err) {
+        return key_err;
+    }
+
+    uint8_t plaintext[1];
+    plaintext[0] = 1; // 1 means 'Get chain'
+    uint8_t ciphertext[1 + hydro_secretbox_HEADERBYTES];
+    const int encrypt_err = hydro_secretbox_encrypt(
+        ciphertext, plaintext, 1, 0, ENCRYPT_CONTEXT, session_kp->tx);
+    if (encrypt_err) {
+        return BAD_ENCRYPT;
+    }
+
+    const int sent_get =
+        send(sock, ciphertext, 1 + hydro_secretbox_HEADERBYTES, 0);
+    if (sent_get != 1 + hydro_secretbox_HEADERBYTES) {
+        return BAD_SEND_GET;
+    }
+
+    while (1) {
+        
+    }
+}
+
+
 int bwt_get_help(
     hydro_sign_keypair* signing_keys,
     uint8_t id_and_key[KEY_ID_LENGTH]) {
@@ -516,19 +671,8 @@ int bwt_get(char** argv, hydro_sign_keypair* signing_keys) {
 
 
 int main_err(int argc, char** argv) {
-    if (hydro_init() != 0) {
-        return BAD_HYDRO_INIT;
-    }
-    hydro_sign_keypair signing_keys;
-    const int keys_err = get_signing_keys(&signing_keys);
-    if (keys_err) {
-        return keys_err;
-    }
     if (argc == 2) {
-        return one_simple_arg(argv, &signing_keys);
-    }
-    if (argc == 3) {
-        return bwt_get(argv, &signing_keys);
+        return one_simple_arg(argv);
     }
     return BAD_ARGS;
 }

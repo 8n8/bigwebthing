@@ -3,19 +3,23 @@ BigWebThing version 2
 
 # Overview
 
-BigWebThing is for storing messages in the cloud conveniently, via the command line. Messages are symmetrically encrypted. Users can share the keys with each other instead of sharing the files.
+BigWebThing is for sending messages, via the command line.
 
 There is a message-passing server for sharing data between people.
 
+All the data, for the server and the user, is kept in a single append-only binary blob, hosted on the server.
+
 Access to the server is controlled by a list of public signing keys kept on the server.
+
+The program is written in C.
 
 # Program structure
 
 These are the different parts of the program:
 
-1. (C) A command-line app that runs on the client.
+1. A command-line app that runs on the client.
 
-6. (C) The server. This acts as a route between clients. They upload and download messages.
+6. The server. This acts as a route between clients. They upload and download messages.
 
 # User interface
 
@@ -29,66 +33,77 @@ It's a command-line app. The commands are:
 
         $ bwt myid
 
-    Download a message to STDOUT:
+    Read messages
 
-        $ bwt get <message ID>
+        $ bwt read
 
-    Send a message from STDIN:
+    Write a new message from STDIN
 
-        $ bwt send
+        $ bwt write <recipient ID>
+
+    Add contact
+
+        $ bwt addcontact <contact ID>
 
 # Server API
 
 The server runs a TCP server on port 53745.
 
+All messages between client and server are encrypted with the Noise XX pattern.
+
 Client to server
-    97 bytes: Signed auth code:
+    Upload chain link
         1 byte: 0
-        32 bytes: public signing key
-        64 bytes: signed auth code
-    Send message
+        chain link
+    Get chain
         1 byte: 1
-        24 bytes: message ID
-        encrypted message
-    Get message
-        1 byte: 2
-        24 bytes: message ID
 
 Server to client
-    Auth code to sign
+    Chain link
         1 byte: 0
-        32 bytes: random
-    Message
+        chain link
+    End of chain
         1 byte: 1
-        encrypted message
-    No such message
-        1 byte: 2
 
 # Encodings
 
 Message IDs and secret keys are encoded as URL-safe Base64.
 
-## Encrypted message
+## Chain link
 
-137 bytes:
-    36 bytes: header
-    encrypted:
-        1 byte: length of plain-text
-        100 bytes: buffer containing plain-text
-            a sequence of these UTF-8 characters:
-            1!2"3£4$5%6^7&8*9(0)-_+=abcdefghijklmnopqrstuvwxyz
-            ABCDEFGHIJKLMNOPQRSTUVWXYZ|\<,>.?/ :;@'#~
+one of
+    61 bytes: KK packet 1
+        1 byte: 0
+        12 bytes: session ID
+        48 bytes: packet 1
+    61 bytes: KK packet 2
+        1 byte: 1
+        12 bytes: session ID
+        48 bytes: packet 2
+    149 bytes: transport
+        1 byte: 2
+        12 bytes: session ID
+        36 bytes: nonce and MAC
+        100 bytes: encrypted payload
+
+## Chain
+
+    4 bytes: number of items in the chain (Little-Endian)
+    sequence of chain links
 
 # Client cache
 
-A file called bigwebthingSECRETkey containing the secret signing key.
++ A file containing the client Noise static key pair.
+
++ A database table containing the ephemeral Noise keys. Each row is:
+    - sessionid
+    - public
+    - secret
+
++ A file containing the contact list. Each line is a hex-encoded public static Noise key.
 
 # Server cache
 
-database
-    messages
-        message ID
-        message
-
-accessList.txt
-    Contains one user public signing key per line, encoded in Base64.
++ a file containing the message chain
++ a file containing the access list, with one hex-encoded user public Noise key on each line
++ a file containing the server Noise static key pair
