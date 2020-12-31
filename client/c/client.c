@@ -134,6 +134,7 @@ int get_signing_keys(hydro_sign_keypair* signing_keys) {
 #define MESSAGE_LENGTH 100
 #define ENCRYPT_CONTEXT "k2LCe3A3"
 #define SIGN_CONTEXT "MjQhgLOl"
+#define SERVER_CLIENT_CONTEXT "IYSfodrk"
 
 
 int download_auth_code(int sock, uint8_t auth_code[AUTH_CODE_LENGTH]) {
@@ -351,14 +352,14 @@ int bwt_send(const hydro_sign_keypair* signing_keys) {
 }
 
 
-int bwt_read() {
+int bwt_get() {
     int sock;
     const int sock_err = make_socket(&sock);
     if (sock_err) {
         return sock_err;
     }
 
-    const int read_err = bwt_read_use_sock(sock);
+    const int read_err = bwt_get_use_sock(sock);
     close(sock);
     if (read_err) {
         return read_err;
@@ -374,8 +375,8 @@ int one_simple_arg(char** argv) {
     if (strcmp(argv[1], "myid") == 0) {
         return bwt_myid();
     }
-    if (strcmp(argv[1], "read") == 0) {
-        return bwt_read();
+    if (strcmp(argv[1], "get") == 0) {
+        return bwt_get();
     }
     return BAD_ARGS;
 }
@@ -465,21 +466,6 @@ int request_message(
 }
 
 
-int bwt_get_use_sock(
-    int sock,
-    const uint8_t message_id[MESSAGE_ID_LENGTH],
-    const uint8_t key[hydro_secretbox_KEYBYTES]) {
-
-    const int request_err = request_message(sock, message_id, key);
-    if (request_err) {
-        return request_err;
-    }
-
-    return 0;
-}
-
-
-
 int create_static_keys_help(*FILE f, hydro_kx_keypair* static_keys) {
     const size_t pk_count = fwrite(
         static_keys.pk,
@@ -540,7 +526,11 @@ int get_static_keys(hydro_kx_keypair* static_keys) {
 }
 
 
-int get_session_keys(int sock, hydro_kx_session_keypair* session_kp) {
+int get_session_keys(
+    int sock,
+    hydro_kx_session_keypair* session_kp,
+    hydro_kx_keypair* static_keys) {
+
     uint8_t packet1[hydro_kx_XX_PACKET1BYTES];
     hydro_kx_state kx_state;
     if (hydro_kx_xx_1(&kx_state, packet1, NULL)) {
@@ -558,12 +548,6 @@ int get_session_keys(int sock, hydro_kx_session_keypair* session_kp) {
         return BAD_XX2_RECEIVE;
     }
 
-    hydro_kx_keypair static_keys;
-    const int kp_err = get_static_keys(&static_keys);
-    if (kp_err) {
-        return kp_err;
-    }
-
     uint8_t packet3[hydro_kx_XX_PACKET3BYTES];
     uint8_t server_pk[hydro_kx_PUBLICKEYBYTES];
 
@@ -574,7 +558,7 @@ int get_session_keys(int sock, hydro_kx_session_keypair* session_kp) {
         server_pk,
         packet2,
         NULL,
-        &static_keys);
+        static_keys);
     if (xx3_err) {
         return BAD_MAKE_XX3;
     }
@@ -593,86 +577,225 @@ int get_session_keys(int sock, hydro_kx_session_keypair* session_kp) {
 }
 
 
-int bwt_read_use_sock(int sock) {
-    hydro_kx_session_keypair session_kp;
-    const int key_err = get_session_keys(sock, &session_kp);
+// An encrypted 24-byte blob ID: 24 + hydro_secretbox_HEADERBYTES
+#define from_server_PING_SIZE 60
+
+// An encrypted 'no such thing' message:
+//
+//     one byte + hydro_secretbox_HEADERBYTES
+//
+#define from_server_NO_SUCH_THING_SIZE 37
+
+// An encrypted blob:
+//
+//    maximum blob size 16KB + hydro_secretbox_HEADERBYTES
+//
+#define from_server_MAX_BLOB_SIZE 16036
+
+
+int process_blob_help(
+    uint8_t* ciphertext,
+    uint8_t* plaintext,
+    hydro_kx_keypair* static_keys,
+    uint8_t file_id[FILE_ID_SIZE],
+    struct session_state* session_state) {
+
+    const int decrypt_err =
+        hydro_secretbox_decrypt(
+            plaintext,
+            ciphertext,
+            ciphertext_size,
+            session_state->counter,
+            SERVER_CLIENT_CONTEXT,
+            session_state->keys->rx);
+    if (decrypt_err != 0) {
+        return BAD_DECRYPT_SERVER_BLOB;
+    }
+
+    int initiator_err =
+        process_blob_as_initiator(plaintext, file_id, static_keys);
+    if (initiator_err != 0) {
+        return initiator_err;
+    }
+
+    return process_blob_as_responder(plaintext, file_id, static_keys);
+}
+
+
+typedef struct {
+    int cursor;
+    hydro_kx_state state;
+    hydro_kx_session_keypair session_keys;
+} parser_state;
+            
+
+int process_blob_as_initiator(
+    const uint8_t* plaintext,
+    const int plantext_size,
+    const uint8_t file_id[FILE_ID_SIZE],
+    const hydro_kx_keypair* static_keys) {
+
+    parser_state state;
+    state.cursor = 0;
+
+    const int xx1_err = process_XX_1(
+        plaintext,
+        plaintext_size,
+        &state);
+    if (xx1_err != 0) {
+        return xx1_err;
+    }
+
+    if (state.cursor >= plaintext_size) {
+        return 0;
+    }
+
+    const int xx2_err = process_XX_2(
+        plaintext,
+        plaintext_size,
+        &state);
+    if (xx2_err != 0) {
+        return xx2_err;
+    }
+
+    if (state.cursor >= plaintext_size) {
+        return 0;
+    }
+
+    const int xx3_err = process_XX_3(
+        plaintext,
+        plaintext_size,
+        &state);
+    if (xx3_err != 0) {
+        return xx3_err;
+    }
+
+    if (state.cursor >= plaintext_size) {
+        return 0;
+    }
+
+    while (cursor < plaintext_size) {
+
+        const int transport_err = process_transport(
+            plaintext,
+            plaintext_size,
+            &state);
+        if (transport_err != 0) {
+            return transport_err;
+        }
+
+        if (state.cursor >= plaintext_size) {
+            return 0;
+        }
+    }
+    return INITIATOR_PROCESS_NEVER_HAPPENS;
+}
+
+
+int process_blob(
+    uint8_t* blob,
+    struct session_state* session_state,
+    hydro_kx_keypair* static_keys,
+    uint8_t file_id[FILE_ID_SIZE],
+    int sock) {
+
+    const int message_length =
+        recv(sock, blob, from_server_MAX_BLOB_SIZE, 0);
+    if (message_length <= hydro_secretbox_HEADERBYTES) {
+        return BAD_BLOB_BODY_RECV;
+    }
+
+    uint8_t* plaintext =
+        malloc(message_length - hydro_secrebox_HEADERBYTES);
+    const int helper_err = process_blob_help(
+        blob,
+        plaintext,
+        static_keys,
+        file_id,
+        session_state);
+    free(plaintext);
+    return helper_err;
+}
+
+
+int process_ping(
+    const uint8_t buf[PING_SIZE],
+    struct session_state* session_state,
+    hydro_kx_keypair* static_keys,
+    int sock) {
+
+    uint8_t file_id[FILE_ID_SIZE];
+    const int decrypt_err =
+        hydro_secretbox_decrypt(
+            file_id,
+            buf,
+            PING_SIZE,
+            session_state->counter,
+            SERVER_CLIENT_CONTEXT,
+            session_state->keys->rx);
+    if (decrypt_err != 0) {
+        return BAD_SERVER_DECRYPT;
+    }
+    session_state->counter++;
+
+    uint8_t* blob = malloc(from_server_MAX_BLOB_SIZE);
+    const int process_blob_err = process_blob(
+        blob,
+        session_state,
+        static_keys,
+        file_id,
+        sock);
+    free(blob);
+    if (process_blob_err) {
+        return process_blob_err;
+    }
+}
+
+
+int bwt_get_use_sock(int sock) {
+    hydro_kx_keypair static_keys;
+    int static_key_err = get_static_keys(&static_keys);
+    if (static_key_err) {
+        return static_key_err;
+    }
+
+    hydro_kx_session_keypair session_keys;
+    const int key_err =
+        get_session_keys(sock, &session_keys, &static_keys);
     if (key_err) {
         return key_err;
     }
 
-    uint8_t plaintext[1];
-    plaintext[0] = 1; // 1 means 'Get chain'
-    uint8_t ciphertext[1 + hydro_secretbox_HEADERBYTES];
-    const int encrypt_err = hydro_secretbox_encrypt(
-        ciphertext, plaintext, 1, 0, ENCRYPT_CONTEXT, session_kp->tx);
-    if (encrypt_err) {
-        return BAD_ENCRYPT;
-    }
-
-    const int sent_get =
-        send(sock, ciphertext, 1 + hydro_secretbox_HEADERBYTES, 0);
-    if (sent_get != 1 + hydro_secretbox_HEADERBYTES) {
-        return BAD_SEND_GET;
-    }
-
     while (1) {
-        
-    }
-}
-
-
-int bwt_get_help(
-    hydro_sign_keypair* signing_keys,
-    uint8_t id_and_key[KEY_ID_LENGTH]) {
-
-    uint8_t message_id[MESSAGE_ID_LENGTH];
-    for (int i = 0; i < MESSAGE_ID_LENGTH; i++) {
-        message_id[i] = id_and_key[i];
-    }
-
-    uint8_t key[hydro_secretbox_KEYBYTES];
-    for (int i = 0; i < hydro_secretbox_KEYBYTES; i++) {
-        key[i] = id_and_key[i + MESSAGE_ID_LENGTH];
-    }
-
-    int sock;
-    const int sock_err = make_socket(&sock);
-    if (sock_err) {
-        return sock_err;
-    }
-
-    const int comms_err = bwt_get_use_sock(sock, message_id, key);
-    close(sock);
-    if (comms_err) {
-        return comms_err;
-    }
-    return 0;
-}
-
-
-int bwt_get(char** argv, hydro_sign_keypair* signing_keys) {
-    if (strcmp(argv[1], "get") == 0) {
-        uint8_t id_and_key[KEY_ID_LENGTH];
-        if(hydro_hex2bin(
-            id_and_key,
-            KEY_ID_LENGTH,
-            argv[2],
-            RAW_KEY_AND_ID_LENGTH,
-            NULL,
-            NULL)) {
-
-            return BAD_ARGS;
+        uint8_t buf[PING_SIZE];
+        size_t message_length = recv(sock, buf, PING_SIZE, 0);
+        if (message_length == PING_SIZE) {
+            const int err = process_ping(
+                buf,
+                &session_keys,
+                &static_keys,
+                sock);
+            if (err != 0) {
+                return err;
+            }
+            continue;
         }
 
-        return bwt_get_help(signing_keys, id_and_key);
+        if (message_length != NO_SUCH_THING_SIZE) {
+            return BAD_SERVER_MESSAGE;
+        }
+
+        return process_no_ping(buf, &session_keys);
     }
-    return BAD_ARGS;
 }
 
 
 int main_err(int argc, char** argv) {
     if (argc == 2) {
         return one_simple_arg(argv);
+    }
+    if (argc == 3) {
+        return two_args(argv);
     }
     return BAD_ARGS;
 }
