@@ -9,8 +9,6 @@ There is a message-passing server for sharing data between people.
 
 Access to the server is controlled by a list of public signing keys kept on the server.
 
-The program is written in C.
-
 # Program structure
 
 These are the different parts of the program:
@@ -47,67 +45,63 @@ It's a command-line app. The commands are:
 
 The server runs a TCP server on port 53745.
 
-All messages between client and server are encrypted with the Noise XX pattern.
+All messages between client and server are encrypted with the Noise XK pattern.
 
 Client to server
-    Augmented file
-        1 byte: 0
-        24 bytes: the file ID
-        <= 16KB: the file
-    Ping
+	Message to someone
+		1 byte: 0
+		32 bytes: recipient ID
+		<= 16KB the message
+    Get message
         1 byte: 1
-        32 bytes: recipient ID
-        24 bytes: file ID
-    Get file
-        1 byte: 2
-        8 bytes: file ID
-    Get ping
-        1 byte: 3
 
 Server to client
-    File
-        <= 16KB: the file
-    No such thing
-        1 byte: 0
-    Bad file upload
-        1 byte: 1
-    Ping
-        24 bytes: blob ID
+	Message from someone
+		1 byte: 1
+		32 bytes: sender ID
+		<= 16KB: the message
 
 # Encodings
 
-Message IDs and secret keys are encoded as URL-safe Base64.
+## Messages between clients
 
-The files on server are a sequence of these:
+One of:
 
-33 bytes: XX packet 1
-    32 bytes: packet
-81 bytes: XX packet 2
-    80 bytes: packet
-49 bytes: XX packet 3
-    48 bytes: packet
-138 bytes: transport message
-    36 bytes: crypto overhead
-    101 bytes: encrypted
-        1 byte: message length
-        100 bytes: message
-... more transport messages
+	100 Noise KK1s
+		1 byte: 0
+		7200 bytes: 100 Noise KK1 messages
+			72 bytes
+				32 bytes: public ephemeral key
+				16 + 24 bytes: encrypted session ID
+	100 Noise KK2s
+		1 byte: 1
+		7200 bytes: 100 Noise KK2 messages
+			72 bytes
+				48 bytes: Noise XK2 with empty payload
+				24 bytes: session ID
+	Noise KK transport
+		1 byte: 2
+		116 bytes: encrypted payload
+		24 bytes: session ID
 
 # Client cache
 
 + A file containing the client Noise static key pair.
 
-+ A directory containing the ephemeral Noise keys. Each key pair is kept in a file named after the fileid.
++ A file containing the contact list. Each line is a Base64-encoded public static Noise key.
 
-+ A file containing the contact list. Each line is a hex-encoded public static Noise key.
++ A database table containing the session states
+	- session ID
+	- other party ID
+	- tx or rx
+	- Noise HandshakeState / Cipherstate
 
 # Server cache
 
-+ a directory containing append-only blobs, named by random 24-byte user-chosen IDs. Any user can read and append to these.
-
 + a database table containing inboxes:
-    - blob ID
+    - sender ID
     - recipient ID
+	- message
 
 + a file containing the access list, with one hex-encoded user public Noise key on each line
 
