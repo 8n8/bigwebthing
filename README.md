@@ -45,7 +45,7 @@ It's a command-line app. The commands are:
 
 The server runs a TCP server on port 53745.
 
-All messages between client and server are encrypted with the Noise XK pattern.
+All messages between client and server are encrypted with the Noise XX pattern.
 
 Client to server
 	Message to someone
