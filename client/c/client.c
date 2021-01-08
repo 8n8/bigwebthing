@@ -304,49 +304,6 @@ int bwt_send_use_sock(
     }
 
     print_id(message_id, key);
-    
-    return 0;
-}
-
-
-int bwt_send_help(
-    const hydro_sign_keypair* signing_keys,
-    const uint8_t plaintext[PLAINTEXT_LENGTH]) {
-
-    int sock;
-    const int sock_err = make_socket(&sock);
-    if (sock_err) {
-        return sock_err;
-    }
-
-    const int send_err = bwt_send_use_sock(
-        signing_keys, sock, plaintext);
-    close(sock);
-    if (send_err) {
-        return send_err;
-    }
-    return 0;
-}
-
-
-int bwt_send(const hydro_sign_keypair* signing_keys) {
-    uint8_t message[MESSAGE_LENGTH];
-
-    uint8_t i;
-    for (i = 0; i < MESSAGE_LENGTH; i++) {
-        const char ch = getchar();
-        if (ch == EOF) {
-            message[0] = i;
-            return bwt_send_help(signing_keys, message);
-        }
-
-        const ch_err = check_char(ch);
-        if (ch_err) {
-            return ch_err;
-        }
-
-        message[i+1] = ch;
-    }
 
     return 0;
 }
@@ -501,6 +458,12 @@ int create_static_keys(hydro_kx_keypair* static_keys) {
 
 int get_static_keys(hydro_kx_keypair* static_keys) {
     FILE* f = fopen(keys_path, "rb");
+    const int err = keys_file_help(static_Keys, f);
+    close(f);
+    return err;
+}
+
+int keys_file_help(hydro_kx_keypair* static_keys, FILE* f) {
     if (f == NULL) {
         return create_static_keys(static_keys);
     }
@@ -523,6 +486,7 @@ int get_static_keys(hydro_kx_keypair* static_keys) {
         return BAD_READ_SK_FROM_FILE;
     }
 
+    return 0;
 }
 
 
@@ -590,7 +554,7 @@ int get_session_keys(
 //
 //    maximum blob size 16KB + hydro_secretbox_HEADERBYTES
 //
-#define from_server_MAX_BLOB_SIZE 16036
+#define MAX_MESSAGE_SIZE 16000
 
 
 int process_blob_help(
@@ -752,8 +716,86 @@ int process_ping(
 }
 
 
+int get_message_help(
+    int sock,
+    const hydro_kx_keypair* static_keys,
+    const hydro_kx_session_keypair* session_keys,
+    int* xx_counter,
+    uint8_t* buf) {
+
+    const int n = recv(sock, buf, MAX_MESSAGE_SIZE, *xx_counter);
+    if (n <= hydro_secretbox_HEADERBYTES) {
+        return MESSAGE_FROM_SERVER_TOO_SHORT;
+    }
+
+    const int plain_size = n - hydro_secretbox_HEADERBYTES;
+    uint8_t* plaintext = malloc(plain_size);
+
+    *xx_counter += 1;
+
+    const int decrypt_err =
+        hydro_secretbox_decrypt(
+            plaintext,
+            buf,
+            n,
+            *xx_counter,
+            ENCRYPT_CONTEXT,
+            session_keys->rx);
+    if (decrypt_err != 0) {
+        return BAD_SECRETBOX_DECRYPT;
+    }
+
+    if (n == 1) {
+        if (plaintext[0] != 0) {
+            return BAD_MESSAGE_FROM_SERVER;
+        }
+        printf("no messages");
+        return 0;
+    }
+    if (n < 34) {
+        return BAD_MESSAGE_FROM_SERVER;
+    }
+    if (plaintext[0] != 1) {
+        return BAD_MESSAGE_FROM_SERVER;
+    }
+    uint8_t sender_id[hydro_kx_PUBLICKEYBYTES];
+    for (int i = 0; i < hydro_kx_PUBLICKEYBYTES; i++) {
+        sender_id[i] = plaintext[i + 1];
+    }
+
+    const int message_size = plain_size - 1 - hydro_kx_PUBLICKEYBYTES;
+
+    uint8_t* message = malloc(message_size);
+    for (int i = 0; i < message_size; i++) {
+        message[i] = plaintext[1 + hydro_kx_PUBLICKEYBYTES + i];
+    }
+    const int c2c_err = process_client_to_client(
+        static_keys,
+        sock,
+        xx_counter,
+        session_keys,
+        sender_id,
+        message,
+        message_size);
+    free(message);
+    return c2c_err;
+}
+
+
+int process_client_to_client(
+    const hydro_kx_keypair* static_keys,
+    int sock,
+    int* xx_counter,
+    const hydro_kx_session_keypair* session_keys
+    uint8_t sender_id[hydro_kx_PUBLICKEYBYTES],
+    uint8_t* message,
+    int message_size) {
+}
+
+
+
 int bwt_get_use_sock(int sock) {
-    hydro_kx_keypair static_keys;
+    hydro_kx_keypair* static_keys;
     int static_key_err = get_static_keys(&static_keys);
     if (static_key_err) {
         return static_key_err;
@@ -761,32 +803,24 @@ int bwt_get_use_sock(int sock) {
 
     hydro_kx_session_keypair session_keys;
     const int key_err =
-        get_session_keys(sock, &session_keys, &static_keys);
+        get_session_keys(sock, &session_keys, static_keys);
     if (key_err) {
         return key_err;
     }
 
-    while (1) {
-        uint8_t buf[PING_SIZE];
-        size_t message_length = recv(sock, buf, PING_SIZE, 0);
-        if (message_length == PING_SIZE) {
-            const int err = process_ping(
-                buf,
-                &session_keys,
-                &static_keys,
-                sock);
-            if (err != 0) {
-                return err;
-            }
-            continue;
-        }
-
-        if (message_length != NO_SUCH_THING_SIZE) {
-            return BAD_SERVER_MESSAGE;
-        }
-
-        return process_no_ping(buf, &session_keys);
+    int xx_counter = 0;
+    uint8_t get_messages[1] = {1};
+    const int xx_err =
+        to_server(&session_keys, &xx_counter, get_messages);
+    if xx_err != 0 {
+        return xx_err;
     }
+
+    uint8_t* buf = malloc(MAX_MESSAGE_SIZE);
+    const int get_err =
+        get_message_help(sock, static_keys, &session_keys, &xx_counter, buf);
+    free(buf);
+    return get_err;
 }
 
 
