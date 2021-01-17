@@ -52,12 +52,12 @@ Client to server
 		1 byte: 0
 		32 bytes: recipient ID
 		<= 15967: the message
-    Get message
-        1 byte: 1
+	Get message
+		1 byte: 1
 
 Server to client
-    No messages
-        1 byte: 0
+	No messages
+		1 byte: 0
 	Message from someone
 		1 byte: 1
 		32 bytes: sender ID
@@ -69,34 +69,47 @@ Server to client
 
 One of:
 
-    100 Noise KK1s
-        1 byte: 0
-        7200 bytes: 100 Noise KK1 messages
-            72 bytes
-                48 bytes: Noise KK packet 1
-                24 bytes: session ID
-    100 Noise KK2s
-        1 byte: 1
-        7200 bytes: 100 Noise KK2 messages
-            72 bytes
-                48 bytes: Noise XK2 with empty payload
-                24 bytes: session ID
-    Noise KK transport
-        1 byte: 2
-        116 bytes: encrypted payload
-        24 bytes: session ID
+	7201 bytes: 100 Noise KK1s
+		1 byte: 0
+		7200 bytes: 100 Noise KK1 messages
+			72 bytes
+				48 bytes: Noise KK packet 1
+				24 bytes: session ID
+	7201 bytes: 100 Noise KK2s
+		1 byte: 1
+		7200 bytes: 100 Noise KK2 messages
+		72 bytes
+			48 bytes: Noise XK2 with empty payload
+			24 bytes: session ID
+	162 bytes: Noise KK transport
+		1 byte: 2
+		24 bytes: session ID
+		36 bytes: crypto header
+		101 bytes: encrypted payload
+			1 byte: length of plaintext
+			100 bytes: padded plaintext
 
 # Client cache
 
 + A file containing the client Noise static key pair.
 
-+ A file containing the contact list. Each line is a Base64-encoded public static Noise key.
++ A database table containing the contact list
+	- contact ID
 
-+ A database table containing the session states
++ A database table containing the receiving session keys
 	- session ID
 	- other party ID
-	- tx or rx
-	- Noise HandshakeState / Cipherstate
+	- secret session key
+
++ A database table containing the sending handshake states
+	- session ID
+	- other party ID
+	- encoded handshake state
+
++ A database table containing the sending session keys
+	- session ID
+	- other party ID
+	- secret session key
 
 # Server cache
 
