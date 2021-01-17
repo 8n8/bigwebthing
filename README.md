@@ -48,46 +48,42 @@ The server runs a TCP server on port 53745.
 All messages between client and server are encrypted with the Noise XX pattern.
 
 Client to server
-	Message to someone
+	Blob upload
 		1 byte: 0
-		32 bytes: recipient ID
-		<= 15967: the message
-	Get message
+		24 bytes: blob ID
+		blob
+	Get messages
 		1 byte: 1
+	Message upload
+		1 byte: 2
+		message
+	Get blob
+		1 byte: 3
+		24 bytes: blob ID
 
 Server to client
-	No messages
+	Message
 		1 byte: 0
-	Message from someone
+		message
+	Blob
 		1 byte: 1
-		32 bytes: sender ID
-		<= 15967: the message
+		blob
 
 # Encodings
 
-## Messages between clients
+## Message
 
-One of:
-
-	7201 bytes: 100 Noise KK1s
+One of
+	49 bytes: KK1
 		1 byte: 0
-		7200 bytes: 100 Noise KK1 messages
-			72 bytes
-				48 bytes: Noise KK packet 1
-				24 bytes: session ID
-	7201 bytes: 100 Noise KK2s
+		48 bytes: crypto overhead
+	49 bytes: KK2
 		1 byte: 1
-		7200 bytes: 100 Noise KK2 messages
-		72 bytes
-			48 bytes: Noise XK2 with empty payload
-			24 bytes: session ID
-	162 bytes: Noise KK transport
+		48 bytes: crypto overhead
+	41 bytes: KK3
 		1 byte: 2
-		24 bytes: session ID
-		36 bytes: crypto header
-		101 bytes: encrypted payload
-			1 byte: length of plaintext
-			100 bytes: padded plaintext
+		16 bytes: crypto overhead
+		24 bytes: encrypted blob ID
 
 # Client cache
 
@@ -96,27 +92,14 @@ One of:
 + A database table containing the contact list
 	- contact ID
 
-+ A database table containing the receiving session keys
-	- session ID
++ A database table containing the ephemeral key pairs
 	- other party ID
-	- secret session key
-
-+ A database table containing the sending handshake states
-	- session ID
-	- other party ID
-	- encoded handshake state
-
-+ A database table containing the sending session keys
-	- session ID
-	- other party ID
-	- secret session key
+	- secret key
+	- public key
 
 # Server cache
 
-+ a database table containing inboxes:
-    - sender ID
-    - recipient ID
-	- message
++ a file containing the messages
 
 + a file containing the access list, with one hex-encoded user public Noise key on each line
 
