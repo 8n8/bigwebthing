@@ -65,8 +65,10 @@ Server to client
 	Message
 		1 byte: 0
 		message
-	Blob
+	No more messages
 		1 byte: 1
+	Blob
+		1 byte: 2
 		blob
 
 # Encodings
@@ -87,15 +89,14 @@ One of
 
 # Client cache
 
-+ A file containing the client Noise static key pair.
-
-+ A database table containing the contact list
-	- contact ID
-
-+ A database table containing the ephemeral key pairs
-	- other party ID
-	- secret key
-	- public key
+A file containing:
+	+ client Noise static key pair.
+	+ list of contact IDs
+	+ list of ephemeral key pairs
+		- other party ID
+		- secret key
+		- public key
+		- tx/rx
 
 # Server cache
 
