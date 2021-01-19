@@ -3,23 +3,11 @@ BigWebThing version 2
 
 # Overview
 
-BigWebThing is for sending messages, via the command line.
-
-There is a message-passing server for sharing data between people.
-
-Access to the server is controlled by a list of public signing keys kept on the server.
-
-# Program structure
-
-These are the different parts of the program:
-
-1. A command-line app that runs on the client.
-
-6. The server. This acts as a route between clients. They upload and download messages.
+BigWebThing is for creating encrypted messages to send between people.
 
 # User interface
 
-It's a command-line app. The commands are:
+It's a command-line app. It will optionally read two files in the current directory, called 'secret' and 'public'. The 'public' file should be sent to the recipients. The commands are:
 
     Get usage
 
@@ -41,67 +29,21 @@ It's a command-line app. The commands are:
 
         $ bwt addcontact <contact ID>
 
-# Server API
-
-The server runs a TCP server on port 53745.
-
-All messages between client and server are encrypted with the Noise XX pattern.
-
-Client to server
-	Blob upload
-		1 byte: 0
-		24 bytes: blob ID
-		blob
-	Get messages
-		1 byte: 1
-	Message upload
-		1 byte: 2
-		message
-	Get blob
-		1 byte: 3
-		24 bytes: blob ID
-
-Server to client
-	Message
-		1 byte: 0
-		message
-	No more messages
-		1 byte: 1
-	Blob
-		1 byte: 2
-		blob
-
-# Encodings
-
-## Message
-
-One of
-	49 bytes: KK1
-		1 byte: 0
-		48 bytes: crypto overhead
-	49 bytes: KK2
-		1 byte: 1
-		48 bytes: crypto overhead
-	41 bytes: KK3
-		1 byte: 2
-		16 bytes: crypto overhead
-		24 bytes: encrypted blob ID
-
 # Client cache
 
-A file containing:
+Secrets file containing:
 	+ client Noise static key pair.
-	+ list of contact IDs
-	+ list of ephemeral key pairs
-		- other party ID
-		- secret key
-		- public key
-		- tx/rx
+	+ set of contact IDs
+	+ map of session secrets
+		key: KK1
+		value:
+			- other party ID
+			- tx or rx
+			- secret bytes
 
-# Server cache
-
-+ a file containing the messages
-
-+ a file containing the access list, with one hex-encoded user public Noise key on each line
-
-+ a file containing the server Noise static key pair
+Public file containing:
+	+ KK1 section, where each is a 48-byte KK1 with empty payload
+	+ KK2 section, where each is a 48-byte KK2 with empty payload
+	+ KK transport section, where each is 36 bytes
+		- 20-byte message
+		- 16-byte crypto overhead
