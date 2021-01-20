@@ -19,11 +19,11 @@ It's a command-line app. It will optionally read two files in the current direct
 
     Get messages
 
-        $ bwt get
+        $ bwt read
 
     Send a new message from STDIN
 
-        $ bwt send <recipient ID>
+        $ bwt write <recipient ID>
 
     Add contact
 
@@ -34,16 +34,21 @@ It's a command-line app. It will optionally read two files in the current direct
 Secrets file containing:
 	+ client Noise static key pair.
 	+ set of contact IDs
-	+ map of session secrets
+	+ map of sending session secrets
 		key: KK1
 		value:
 			- other party ID
-			- tx or rx
 			- secret bytes
+	+ map of receiving session secrets
 
-Public file containing:
-	+ KK1 section, where each is a 48-byte KK1 with empty payload
-	+ KK2 section, where each is a 48-byte KK2 with empty payload
-	+ KK transport section, where each is 36 bytes
-		- 20-byte message
-		- 16-byte crypto overhead
+Public file containing sequence of KKs, where a KK is one of:
+	49 bytes: KK1
+		1 byte: 0
+		48 bytes: KK1 with empty payload
+	49 bytes: KK2
+		1 byte: 1
+		48 bytes: KK2 with empty payload
+	41 bytes: KK transport
+		1 byte: 2
+		24 bytes: message
+		16 bytes: crypto overhead
