@@ -366,19 +366,32 @@ int bwt_send_use_sock(
     return 0;
 }
 
-int bwt_get() {
-    int sock;
-    const int sock_err = make_socket(&sock);
-    if (sock_err) {
-        return sock_err;
-    }
+struct Secrets {
+	hydro_kx_keypair static_keys;
+	uint8_t* contacts[hydro_kx_PUBLICKEYBYTES];
+}
 
-    const int read_err = bwt_get_use_sock(sock);
-    close(sock);
-    if (read_err) {
-        return read_err;
-    }
-    return 0;
+int bwt_read_help(FILE* fsecret, FILE* fpublic) {
+	struct Secrets secrets;
+	if (fsecret == NULL) {
+		int err = make_secrets(&secrets);
+		if (err) {
+			return err;
+		}
+	}
+}
+
+int bwt_read() {
+	FILE* fsecret = fopen(secret_path, "rb");
+	FILE* fpublic = fopen(public_path, "rb");
+	int err = bwt_read_help(fsecret, fpublic)
+	if (fsecret != NULL) {
+		fclose(fsecret);
+	}
+	if (fpublic != NULL) {
+		fclose(fpublic);
+	}
+	return err;
 }
 
 const char* usage =
@@ -431,8 +444,8 @@ int one_simple_arg(char** argv) {
     if (strcmp(argv[1], "myid") == 0) {
         return bwt_myid();
     }
-    if (strcmp(argv[1], "get") == 0) {
-        return bwt_get();
+    if (strcmp(argv[1], "read") == 0) {
+        return bwt_read();
     }
     return BAD_ARGS;
 }
@@ -1141,31 +1154,6 @@ struct from_client {
 
 const int MAX_FROM_SERVER_SIZE = 7201;
 
-int bwt_get_use_sock(int sock) {
-	hydro_kx_keypair* static_keys;
-	int err = get_static_keys(&static_keys);
-	if (err) {
-		return err;
-	}
-
-	struct noise_xx_state xx_state;
-	err = init_xx_session(&xx_state);
-	if (err) {
-		return err;
-	}
-
-	uint8_t get_messages[1] = {1};
-	err = to_server(&xx_state, get_messages);
-	if (err) {
-		return err;
-	}
-
-	uint8_t* message = malloc(MAX_FROM_SERVER_SIZE);
-	err = from_server_help(&xx_state, message, static_keys);
-	free(message);
-	return err;
-}
-
 int parse_hex_userid(
 	char* raw,
 	uint8_t userid[hydro_kx_PUBLICKEYBYTES]) {
@@ -1690,11 +1678,6 @@ int setup_db() {
 int main_err(int argc, char** argv) {
 	if (hydro_init() != 0) {
 		return BAD_HYDRO_INIT;
-	}
-
-	int err = setup_db();
-	if (err) {
-		return err;
 	}
 
 	if (argc == 2) {
