@@ -197,13 +197,13 @@ func makeSessionFor(
 
 var cryptoAd []byte = []byte{100, 117, 182, 195, 110, 70, 39, 86, 128, 240}
 
-func makeRandomGen(secret Secret) io.Reader {
+func makeRandomGen(secret []byte) io.Reader {
 	panic("makeRandomGen not implemented yet")
 	return rand.Reader
 }
 
 func initShake(
-	secret Secret,
+	secret []byte,
 	contact UserId,
 	staticKeys noise.DHKey,
 	initiator bool) (*noise.HandshakeState, error) {
@@ -226,7 +226,7 @@ func initShake(
 }
 
 func initShakeRx(
-	secret Secret,
+	secret []byte,
 	contact UserId,
 	staticKeys noise.DHKey) (*noise.HandshakeState, error) {
 
@@ -234,7 +234,7 @@ func initShakeRx(
 }
 
 func initShakeTx(
-	secret Secret,
+	secret []byte,
 	contact UserId,
 	staticKeys noise.DHKey) (*noise.HandshakeState, error) {
 
@@ -322,9 +322,9 @@ func (k Kk1Kk2Tx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-func makeSessionSecret() (Secret, error) {
+func makeSessionSecret() ([]byte, error) {
 	panic("makeSessionSecret not implemented yet")
-	return *new(Secret), nil
+	return []byte{}, nil
 }
 
 func rxSessions(
@@ -607,12 +607,10 @@ func getPublic() (Public, error) {
 const kk1Size = 48
 
 type SessionSecrets interface {
-	insert(Kk1, UserId, Secret)
+	insert(Kk1, UserId, []byte)
 	remove(Kk1)
-	get(Kk1, UserId) (Secret, bool)
+	get(Kk1, UserId) ([]byte, bool)
 }
-
-type Secret []byte
 
 type Secrets struct {
 	staticKeys noise.DHKey
@@ -703,7 +701,7 @@ func getSecrets() (Secrets, error) {
 
 type TransportSession struct {
 	theirid UserId
-	secret Secret
+	secret []byte
 	kk1 Kk1
 	kk2 Kk2
 	transport KkTransport
@@ -711,7 +709,7 @@ type TransportSession struct {
 
 type Kk1Kk2Session struct {
 	theirid UserId
-	secret Secret
+	secret []byte
 	kk1 Kk1
 	kk2 Kk2
 }
@@ -723,7 +721,7 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 
 type Kk1TxSession struct {
 	theirId UserId
-	secret Secret
+	secret []byte
 	kk1 Kk1
 }
 
@@ -743,14 +741,14 @@ func (k TransportTx) insert(sessions Sessions) Sessions {
 
 type TransportTx struct {
 	theirid UserId
-	secret Secret
+	secret []byte
 	kk2 []byte
 	plain []byte
 }
 
 type TransportRx struct {
 	theirid UserId
-	secret Secret
+	secret []byte
 	kk1 []byte
 	transport []byte
 }
@@ -758,7 +756,7 @@ type TransportRx struct {
 type Kk1Kk2Rx struct {
 	kk1 []byte
 	theirid UserId
-	secret Secret
+	secret []byte
 }
 
 func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
@@ -768,7 +766,7 @@ func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
 
 type Kk1Kk2Tx struct {
 	theirid UserId
-	secret Secret
+	secret []byte
 	kk2 []byte
 }
 
@@ -779,7 +777,7 @@ type Kk1Rx struct {
 
 type Kk1Tx struct {
 	theirId UserId
-	secret Secret
+	secret []byte
 }
 
 func addSessions(s1 Sessions, s2 Sessions) Sessions {
