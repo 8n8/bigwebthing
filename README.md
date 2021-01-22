@@ -34,12 +34,11 @@ It's a command-line app. It will optionally read two files in the current direct
 Secrets file containing:
 	+ client Noise static key pair.
 	+ set of contact IDs
-	+ map of sending session secrets
-		key: KK1
-		value:
-			- other party ID
-			- secret bytes
-	+ map of receiving session secrets
+	+ sending session secrets
+		- KK1
+		- other party ID
+		- secret bytes
+	+ receiving session secrets
 
 Public file containing sequence of KKs, where a KK is one of:
 	49 bytes: KK1
