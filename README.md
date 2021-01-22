@@ -9,6 +9,10 @@ BigWebThing is for creating encrypted messages to send between people.
 
 It's a command-line app. It will optionally read two files in the current directory, called 'secret' and 'public'. The 'public' file should be sent to the recipients. The commands are:
 
+    Update crypto
+
+        $ bwt
+
     Get usage
 
         $ bwt help

@@ -1,19 +1,20 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"github.com/flynn/noise"
-	"os"
+	"io"
 	"io/ioutil"
-	"crypto/cipher"
-	"crypto/aes"
-	"crypto/rand"
+	"os"
 )
 
 func main() {
 	err := mainErr()
-	if (err != nil) {
+	if err != nil {
 		fmt.Println(err.Error())
 	}
 }
@@ -93,7 +94,6 @@ Add contact
 
     $ bwt addcontact <contact ID>`
 
-
 const badArgsMessage = "bad arguments: usage:\n" + usage
 
 func (BadArgs) Error() string {
@@ -119,21 +119,123 @@ func (a AddContact) run() error {
 
 type Write_ []byte
 
-func (s Write_) run() error {
-	fmt.Println("send not implemented yet")
+type MessageTooLong struct{}
+
+func (MessageTooLong) Error() string {
+	return "message too long"
+}
+
+type EmptyMessage struct{}
+
+func (EmptyMessage) Error() string {
+	return "empty message"
+}
+
+func getMessage() ([plaintextSize]byte, error) {
+	var msg [plaintextSize]byte
+	n, err := os.Stdin.Read(msg[1:])
+	if n == 0 {
+		return msg, EmptyMessage{}
+	}
+	if err != io.EOF {
+		return msg, MessageTooLong{}
+	}
+	msg[0] = byte(n)
+	return msg, nil
+}
+
+const transportIndicator = 2
+
+type WritingTransportFailed int
+
+func (w WritingTransportFailed) Error() string {
+	return fmt.Sprintf("bad byte count on writing new transport: %d", w)
+}
+
+func writeTransport(transport [kkTransportSize]byte) error {
+	f, err := os.OpenFile(publicPath, os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	indicated := make([]byte, 1+kkTransportSize)
+	indicated[0] = transportIndicator
+	copy(indicated[1:], transport[:])
+	n, err := f.Write(indicated)
+	if n != 1+kkTransportSize {
+		return WritingTransportFailed(n)
+	}
+	return err
+}
+
+func messageOk(msg [plaintextSize]byte) error {
+	for _, m := range msg {
+		if m < 32 || m > 126 {
+			return BadChar(m)
+		}
+	}
 	return nil
+}
+
+type BadChar int
+
+func (b BadChar) Error() string {
+	return fmt.Sprintf("character not allowed: %d", b)
+}
+
+func (s Write_) run() error {
+	msg, err := getMessage()
+	if err != nil {
+		return err
+	}
+
+	err = messageOk(msg)
+	if err != nil {
+		return err
+	}
+
+	secrets, err := getSecrets()
+	if err != nil {
+		return err
+	}
+
+	sessions, err := getSessions(secrets)
+	if err != nil {
+		return err
+	}
+
+	if len(sessions.kk1kk2Tx) == 0 {
+		return NoSessionsCantSend{}
+	}
+
+	transport, err := makeTransport(
+		msg,
+		sessions.kk1kk2Tx[0],
+		secrets.staticKeys)
+	if err != nil {
+		return err
+	}
+
+	return writeTransport(transport)
+}
+
+type NoSessionsCantSend struct{}
+
+func (NoSessionsCantSend) Error() string {
+	return "no sessions, so can't send message"
 }
 
 type Read_ struct{}
 
 type Ephemeral struct {
-	id [dhlen]byte
+	id   [dhlen]byte
 	keys noise.DHKey
 }
 
 type Cache struct {
 	staticKeys noise.DHKey
-	contacts [][dhlen]byte
+	contacts   [][dhlen]byte
 	ephemerals []Ephemeral
 }
 
@@ -196,12 +298,12 @@ func initShake(
 		noise.HashSHA256)
 
 	config := noise.Config{
-		CipherSuite: cipherSuite,
-		Random: RandomGen(secret),
-		Pattern: noise.HandshakeKK,
-		Initiator: initiator,
+		CipherSuite:   cipherSuite,
+		Random:        RandomGen(secret),
+		Pattern:       noise.HandshakeKK,
+		Initiator:     initiator,
 		StaticKeypair: staticKeys,
-		PeerStatic: contact[:],
+		PeerStatic:    contact[:],
 	}
 
 	return noise.NewHandshakeState(config)
@@ -264,7 +366,7 @@ func txSessions(
 		// So there is no responding KK2.
 		return Kk1Tx{
 			theirId: contact,
-			secret: secret,
+			secret:  secret,
 		}, true, nil
 	}
 
@@ -279,9 +381,9 @@ func txSessions(
 			// So I sent out a transport.
 			return TransportTx{
 				theirid: contact,
-				secret: secret,
-				kk2: kk2,
-				plain: plain,
+				secret:  secret,
+				kk2:     kk2,
+				plain:   plain,
 			}, true, nil
 		}
 	}
@@ -289,8 +391,8 @@ func txSessions(
 	// So there is a KK1 and a KK2 but no transport.
 	return Kk1Kk2Tx{
 		theirid: contact,
-		secret: secret,
-		kk2: kk2,
+		secret:  secret,
+		kk2:     kk2,
 	}, true, nil
 }
 
@@ -332,7 +434,7 @@ func rxSessions(
 		if err == nil {
 			return Kk1Rx{
 				theirid: contact,
-				kk1: kk1,
+				kk1:     kk1,
 			}, nil
 		}
 		return NoSession{}, nil
@@ -342,7 +444,6 @@ func rxSessions(
 	if err != nil {
 		return nil, err
 	}
-
 
 	_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
 	if err != nil {
@@ -360,7 +461,7 @@ func rxSessions(
 	if !matchingKk2(newKk2, kk2s) {
 		return Kk1Rx{
 			theirid: contact,
-			kk1: kk1,
+			kk1:     kk1,
 		}, nil
 	}
 
@@ -374,16 +475,16 @@ func rxSessions(
 	}
 	if err != nil {
 		return Kk1Kk2Rx{
-			kk1: kk1,
+			kk1:     kk1,
 			theirid: contact,
-			secret: secret,
+			secret:  secret,
 		}, nil
 	}
 
 	return TransportRx{
-		theirid: contact,
-		secret: secret,
-		kk1: kk1,
+		theirid:   contact,
+		secret:    secret,
+		kk1:       kk1,
 		transport: transport,
 	}, nil
 }
@@ -416,7 +517,7 @@ func (NoSession) insert(sessions Sessions) Sessions {
 }
 
 func parseKk1(p Parser) (Parser, error) {
-	if p.lenraw - p.cursor < kk1Size {
+	if p.lenraw-p.cursor < kk1Size {
 		return p, TooShortForKk1(p)
 	}
 
@@ -424,13 +525,13 @@ func parseKk1(p Parser) (Parser, error) {
 	copy(kk1[:], p.raw[p.cursor:])
 	kk1s := append(p.public.kk1s, kk1)
 	return Parser{
-		raw: p.raw,
-		lenraw: p.lenraw,
-		cursor: p.cursor + kk1Size,
+		raw:     p.raw,
+		lenraw:  p.lenraw,
+		cursor:  p.cursor + kk1Size,
 		counter: p.counter,
 		public: Public{
-			kk1s: kk1s,
-			kk2s: p.public.kk2s,
+			kk1s:       kk1s,
+			kk2s:       p.public.kk2s,
 			transports: p.public.transports,
 		},
 	}, nil
@@ -439,7 +540,7 @@ func parseKk1(p Parser) (Parser, error) {
 const kk2Size = 48
 
 func parseKk2(p Parser) (Parser, error) {
-	if p.lenraw - p.cursor < kk2Size {
+	if p.lenraw-p.cursor < kk2Size {
 		return p, TooShortForKk2(p)
 	}
 
@@ -447,19 +548,21 @@ func parseKk2(p Parser) (Parser, error) {
 	copy(kk2[:], p.raw[p.cursor:])
 	kk2s := append(p.public.kk2s, kk2)
 	return Parser{
-		raw: p.raw,
-		lenraw: p.lenraw,
-		cursor: p.cursor + kk2Size,
+		raw:     p.raw,
+		lenraw:  p.lenraw,
+		cursor:  p.cursor + kk2Size,
 		counter: p.counter,
 		public: Public{
-			kk1s: p.public.kk1s,
-			kk2s: kk2s,
+			kk1s:       p.public.kk1s,
+			kk2s:       kk2s,
 			transports: p.public.transports,
 		},
 	}, nil
 }
 
-const kk_transport_size = 40
+const plaintextSize = 24
+const transportOverhead = 16
+const kkTransportSize = plaintextSize + transportOverhead
 
 type KkTransport []byte
 
@@ -488,31 +591,31 @@ func (t TooShortForKk1) Error() string {
 }
 
 func parseKkTransport(p Parser) (Parser, error) {
-	if p.lenraw - p.cursor < kk_transport_size {
+	if p.lenraw-p.cursor < kkTransportSize {
 		return p, TooShortForTransport(p)
 	}
 	transport := KkTransport(
-		p.raw[p.cursor: p.cursor + kk_transport_size])
+		p.raw[p.cursor : p.cursor+kkTransportSize])
 	transports := append(p.public.transports, transport)
 	return Parser{
-		raw: p.raw,
-		lenraw: p.lenraw,
-		cursor: p.cursor + kk_transport_size,
+		raw:     p.raw,
+		lenraw:  p.lenraw,
+		cursor:  p.cursor + kkTransportSize,
 		counter: p.counter,
 		public: Public{
-			kk1s: p.public.kk1s,
-			kk2s: p.public.kk2s,
+			kk1s:       p.public.kk1s,
+			kk2s:       p.public.kk2s,
 			transports: transports,
 		},
 	}, nil
 }
 
 type Parser struct {
-	raw []byte
-	lenraw int
-	cursor int
+	raw     []byte
+	lenraw  int
+	cursor  int
 	counter int
-	public Public
+	public  Public
 }
 
 func parseKk(p Parser) (Parser, error) {
@@ -547,13 +650,13 @@ func (NoPublicFile) Error() string {
 
 func initParser(raw []byte) Parser {
 	return Parser{
-		raw: raw,
-		lenraw: len(raw),
-		cursor: 0,
+		raw:     raw,
+		lenraw:  len(raw),
+		cursor:  0,
 		counter: 0,
 		public: Public{
-			kk1s: make([][kk1Size]byte, 0),
-			kk2s: make([][kk2Size]byte, 0),
+			kk1s:       make([][kk1Size]byte, 0),
+			kk2s:       make([][kk2Size]byte, 0),
 			transports: make([]KkTransport, 0),
 		},
 	}
@@ -579,23 +682,23 @@ func getPublic() (Public, error) {
 }
 
 type kk1AndId struct {
-	kk1 [kk1Size]byte
+	kk1     [kk1Size]byte
 	theirId [dhlen]byte
 }
 
 type Secrets struct {
 	staticKeys noise.DHKey
-	contacts [][dhlen]byte
-	sending map[kk1AndId][SecretSize]byte
-	receiving map[kk1AndId][SecretSize]byte
+	contacts   [][dhlen]byte
+	sending    map[kk1AndId][SecretSize]byte
+	receiving  map[kk1AndId][SecretSize]byte
 }
 
 const secretPath = "secret"
 
 type ParsedSecret struct {
-	kk1 [kk1Size]byte
+	kk1     [kk1Size]byte
 	theirid [dhlen]byte
-	secret [SecretSize]byte
+	secret  [SecretSize]byte
 }
 
 func parseSessionSecrets(
@@ -630,7 +733,7 @@ func parseSessionSecrets(
 }
 
 func kk1P(raw []byte, pos int) ([kk1Size]byte, int, error) {
-	if len(raw) - pos < kk1Size {
+	if len(raw)-pos < kk1Size {
 		return *new([kk1Size]byte), pos, TooShortForKk1{}
 	}
 
@@ -641,14 +744,14 @@ func kk1P(raw []byte, pos int) ([kk1Size]byte, int, error) {
 	return kk1, pos, nil
 }
 
-type TooShortForSecret struct {}
+type TooShortForSecret struct{}
 
 func (TooShortForSecret) Error() string {
 	return "too short for secret"
 }
 
 func secretP(raw []byte, pos int) ([SecretSize]byte, int, error) {
-	if len(raw) - pos < SecretSize {
+	if len(raw)-pos < SecretSize {
 		return *new([SecretSize]byte), pos, TooShortForSecret{}
 	}
 
@@ -658,14 +761,14 @@ func secretP(raw []byte, pos int) ([SecretSize]byte, int, error) {
 	return secret, pos, nil
 }
 
-type TooShortForTheirId struct {}
+type TooShortForTheirId struct{}
 
 func (TooShortForTheirId) Error() string {
 	return "too short for their ID"
 }
 
 func dhlenP(raw []byte, pos int) ([dhlen]byte, int, error) {
-	if len(raw) - pos < dhlen {
+	if len(raw)-pos < dhlen {
 		return *new([dhlen]byte), pos, TooShortForTheirId{}
 	}
 
@@ -682,11 +785,11 @@ func (TooShortForUint32) Error() string {
 }
 
 func uint32P(raw []byte, pos int) (int, int, error) {
-	if len(raw) - pos < 4 {
+	if len(raw)-pos < 4 {
 		return 0, pos, TooShortForUint32{}
 	}
 
-	bs := raw[pos: pos + 4]
+	bs := raw[pos : pos+4]
 	pos += 4
 
 	n := 0
@@ -720,7 +823,7 @@ func parseStaticKeys(raw []byte, pos int) (noise.DHKey, int, error) {
 	public, pos, err := dhlenP(raw, pos)
 	return noise.DHKey{
 		Private: secret[:],
-		Public: public[:],
+		Public:  public[:],
 	}, pos, err
 }
 
@@ -750,20 +853,20 @@ func parseSecrets(raw []byte) (Secrets, error) {
 
 	if pos != len(raw) {
 		return secret, ExpectSecretEnd{
-			pos: pos,
+			pos:    pos,
 			lenraw: len(raw)}
 	}
 
-	return Secrets {
+	return Secrets{
 		staticKeys: staticKeys,
-		contacts: contacts,
-		sending: sending,
-		receiving: receiving,
+		contacts:   contacts,
+		sending:    sending,
+		receiving:  receiving,
 	}, nil
 }
 
 type ExpectSecretEnd struct {
-	pos int
+	pos    int
 	lenraw int
 }
 
@@ -780,9 +883,9 @@ func makeSecrets() (Secrets, error) {
 	receiving := make(map[kk1AndId][SecretSize]byte)
 	return Secrets{
 		staticKeys: staticKeys,
-		contacts: make([][dhlen]byte, 0),
-		sending: sending,
-		receiving: receiving,
+		contacts:   make([][dhlen]byte, 0),
+		sending:    sending,
+		receiving:  receiving,
 	}, nil
 }
 
@@ -798,18 +901,18 @@ func getSecrets() (Secrets, error) {
 }
 
 type TransportSession struct {
-	theirid [dhlen]byte
-	secret []byte
-	kk1 [kk1Size]byte
-	kk2 [kk2Size]byte
+	theirid   [dhlen]byte
+	secret    []byte
+	kk1       [kk1Size]byte
+	kk2       [kk2Size]byte
 	transport KkTransport
 }
 
 type Kk1Kk2Session struct {
 	theirid [dhlen]byte
-	secret []byte
-	kk1 [kk1Size]byte
-	kk2 [kk2Size]byte
+	secret  []byte
+	kk1     [kk1Size]byte
+	kk2     [kk2Size]byte
 }
 
 func (k Kk1Rx) insert(sessions Sessions) Sessions {
@@ -819,17 +922,17 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 
 type Kk1TxSession struct {
 	theirId [dhlen]byte
-	secret []byte
-	kk1 [kk1Size]byte
+	secret  []byte
+	kk1     [kk1Size]byte
 }
 
 type Sessions struct {
 	transportRx []TransportRx
 	transportTx []TransportTx
-	kk1kk2Rx []Kk1Kk2Rx
-	kk1kk2Tx []Kk1Kk2Tx
-	kk1Rx []Kk1Rx
-	kk1Tx []Kk1Tx
+	kk1kk2Rx    []Kk1Kk2Rx
+	kk1kk2Tx    []Kk1Kk2Tx
+	kk1Rx       []Kk1Rx
+	kk1Tx       []Kk1Tx
 }
 
 func (k TransportTx) insert(sessions Sessions) Sessions {
@@ -839,22 +942,22 @@ func (k TransportTx) insert(sessions Sessions) Sessions {
 
 type TransportTx struct {
 	theirid [dhlen]byte
-	secret [SecretSize]byte
-	kk2 [kk2Size]byte
-	plain []byte
+	secret  [SecretSize]byte
+	kk2     [kk2Size]byte
+	plain   []byte
 }
 
 type TransportRx struct {
-	theirid [dhlen]byte
-	secret [SecretSize]byte
-	kk1 [kk1Size]byte
+	theirid   [dhlen]byte
+	secret    [SecretSize]byte
+	kk1       [kk1Size]byte
 	transport []byte
 }
 
 type Kk1Kk2Rx struct {
-	kk1 [kk1Size]byte
+	kk1     [kk1Size]byte
 	theirid [dhlen]byte
-	secret [SecretSize]byte
+	secret  [SecretSize]byte
 }
 
 func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
@@ -864,27 +967,55 @@ func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
 
 type Kk1Kk2Tx struct {
 	theirid [dhlen]byte
-	secret [SecretSize]byte
-	kk2 [kk2Size]byte
+	secret  [SecretSize]byte
+	kk2     [kk2Size]byte
+}
+
+func makeTransport(
+	msg [plaintextSize]byte,
+	k Kk1Kk2Tx,
+	staticKeys noise.DHKey) ([kkTransportSize]byte, error) {
+
+	var transport [kkTransportSize]byte
+	shake, err := initShakeTx(k.secret, k.theirid, staticKeys)
+	if err != nil {
+		return transport, err
+	}
+
+	// make the KK1
+	_, _, _, err = shake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return transport, err
+	}
+
+	// read in the KK2 from the other party
+	_, cipher, _, err := shake.ReadMessage([]byte{}, k.kk2[:])
+	if err != nil {
+		return transport, err
+	}
+
+	encrypted := cipher.Encrypt([]byte{}, cryptoAd, msg[:])
+	copy(transport[:], encrypted)
+	return transport, nil
 }
 
 type Kk1Rx struct {
 	theirid [dhlen]byte
-	kk1 [kk1Size]byte
+	kk1     [kk1Size]byte
 }
 
 type Kk1Tx struct {
 	theirId [dhlen]byte
-	secret [SecretSize]byte
+	secret  [SecretSize]byte
 }
 
 func addSessions(s1 Sessions, s2 Sessions) Sessions {
 	return Sessions{
 		transportRx: append(s1.transportRx, s2.transportRx...),
-		kk1kk2Rx: append(s1.kk1kk2Rx, s2.kk1kk2Rx...),
-		kk1kk2Tx: append(s1.kk1kk2Tx, s2.kk1kk2Tx...),
-		kk1Rx: append(s1.kk1Rx, s2.kk1Rx...),
-		kk1Tx: append(s1.kk1Tx, s2.kk1Tx...),
+		kk1kk2Rx:    append(s1.kk1kk2Rx, s2.kk1kk2Rx...),
+		kk1kk2Tx:    append(s1.kk1kk2Tx, s2.kk1kk2Tx...),
+		kk1Rx:       append(s1.kk1Rx, s2.kk1Rx...),
+		kk1Tx:       append(s1.kk1Tx, s2.kk1Tx...),
 	}
 }
 
@@ -892,16 +1023,16 @@ func initSessions() Sessions {
 	return Sessions{
 		transportRx: make([]TransportRx, 0),
 		transportTx: make([]TransportTx, 0),
-		kk1kk2Rx: make([]Kk1Kk2Rx, 0),
-		kk1kk2Tx: make([]Kk1Kk2Tx, 0),
-		kk1Rx: make([]Kk1Rx, 0),
-		kk1Tx: make([]Kk1Tx, 0),
+		kk1kk2Rx:    make([]Kk1Kk2Rx, 0),
+		kk1kk2Tx:    make([]Kk1Kk2Tx, 0),
+		kk1Rx:       make([]Kk1Rx, 0),
+		kk1Tx:       make([]Kk1Tx, 0),
 	}
 }
 
 type Public struct {
-	kk1s [][kk1Size]byte
-	kk2s [][kk2Size]byte
+	kk1s       [][kk1Size]byte
+	kk2s       [][kk2Size]byte
 	transports []KkTransport
 }
 
