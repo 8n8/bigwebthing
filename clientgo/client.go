@@ -6,8 +6,9 @@ import (
 	"github.com/flynn/noise"
 	"os"
 	"io/ioutil"
+	"crypto/cipher"
+	"crypto/aes"
 	"crypto/rand"
-	"io"
 )
 
 func main() {
@@ -125,36 +126,18 @@ func (s Write_) run() error {
 
 type Read_ struct{}
 
-type UserId []byte
-
 type Ephemeral struct {
-	id UserId
+	id [dhlen]byte
 	keys noise.DHKey
 }
 
 type Cache struct {
 	staticKeys noise.DHKey
-	contacts []UserId
+	contacts [][dhlen]byte
 	ephemerals []Ephemeral
 }
 
-func readCache() (Cache, error) {
-	fmt.Println("readCache not implemented yet")
-	var cache Cache
-	return cache, nil
-}
-
-func requestMessage(cache Cache) error {
-	fmt.Println("requestMessage not implemented yet")
-	return nil
-}
-
-func downloadMessage(cache Cache) ([]byte, error) {
-	fmt.Println("downloadMessage not implemented yet")
-	return []byte{}, nil
-}
-
-const kk1_size = 48
+const kk1Size = 48
 
 type Session interface {
 	insert(Sessions) Sessions
@@ -165,20 +148,10 @@ func (k TransportRx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-// The session can be one of these types:
-// 
-// 0. not to me or from this contact
-// sending
-// 	1. KK1
-// 	2. KK1 KK2
-// receiving
-// 	3. KK1
-// 	4. KK1 KK2
-// 	5. KK1 KK2 Transport
 func makeSessionFor(
-	kk1 Kk1,
-	contact UserId,
-	kk2s []Kk2,
+	kk1 [kk1Size]byte,
+	contact [dhlen]byte,
+	kk2s [][kk2Size]byte,
 	transports []KkTransport,
 	secrets Secrets) (Session, error) {
 
@@ -197,58 +170,67 @@ func makeSessionFor(
 
 var cryptoAd []byte = []byte{100, 117, 182, 195, 110, 70, 39, 86, 128, 240}
 
-func makeRandomGen(secret []byte) io.Reader {
-	panic("makeRandomGen not implemented yet")
-	return rand.Reader
+func (r RandomGen) Read(p []byte) (int, error) {
+	block, err := aes.NewCipher(r[aes.BlockSize:])
+	if err != nil {
+		return 0, err
+	}
+
+	cipher.NewCTR(block, r[aes.BlockSize:]).XORKeyStream(p, p)
+	return len(p), nil
 }
 
+const SecretSize = 2 * aes.BlockSize
+
+type RandomGen [SecretSize]byte
+
 func initShake(
-	secret []byte,
-	contact UserId,
+	secret [SecretSize]byte,
+	contact [dhlen]byte,
 	staticKeys noise.DHKey,
 	initiator bool) (*noise.HandshakeState, error) {
 
 	cipherSuite := noise.NewCipherSuite(
 		noise.DH25519,
-		noise.CipherChaChaPoly,
-		noise.HashBLAKE2s)
+		noise.CipherAESGCM,
+		noise.HashSHA256)
 
 	config := noise.Config{
 		CipherSuite: cipherSuite,
-		Random: makeRandomGen(secret),
+		Random: RandomGen(secret),
 		Pattern: noise.HandshakeKK,
 		Initiator: initiator,
 		StaticKeypair: staticKeys,
-		PeerStatic: contact,
+		PeerStatic: contact[:],
 	}
 
 	return noise.NewHandshakeState(config)
 }
 
 func initShakeRx(
-	secret []byte,
-	contact UserId,
+	secret [SecretSize]byte,
+	contact [dhlen]byte,
 	staticKeys noise.DHKey) (*noise.HandshakeState, error) {
 
 	return initShake(secret, contact, staticKeys, false)
 }
 
 func initShakeTx(
-	secret []byte,
-	contact UserId,
+	secret [SecretSize]byte,
+	contact [dhlen]byte,
 	staticKeys noise.DHKey) (*noise.HandshakeState, error) {
 
 	return initShake(secret, contact, staticKeys, true)
 }
 
 func txSessions(
-	kk1 Kk1,
-	contact UserId,
-	kk2s []Kk2,
+	kk1 [kk1Size]byte,
+	contact [dhlen]byte,
+	kk2s [][kk2Size]byte,
 	transports []KkTransport,
 	secrets Secrets) (Session, bool, error) {
 
-	secret, ok := secrets.sending.get(kk1, contact)
+	secret, ok := secrets.sending[kk1AndId{kk1, contact}]
 	if !ok {
 		return nil, false, nil
 	}
@@ -265,15 +247,15 @@ func txSessions(
 	if err != nil {
 		return nil, true, err
 	}
-	if !bytesEqual(replica, kk1) {
+	if !bytesEqual(replica, kk1[:]) {
 		return nil, true, CouldntReplicateKk1{}
 	}
 
 	// See if there is a KK2 that someone sent in response.
 	var cipher *noise.CipherState
-	var kk2 Kk2
+	var kk2 [kk2Size]byte
 	for _, kk2 = range kk2s {
-		_, cipher, _, err = shake.ReadMessage([]byte{}, kk2)
+		_, cipher, _, err = shake.ReadMessage([]byte{}, kk2[:])
 		if err == nil {
 			break
 		}
@@ -322,19 +304,20 @@ func (k Kk1Kk2Tx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-func makeSessionSecret() ([]byte, error) {
-	panic("makeSessionSecret not implemented yet")
-	return []byte{}, nil
+func makeSessionSecret() ([SecretSize]byte, error) {
+	var secret [SecretSize]byte
+	_, err := rand.Read(secret[:])
+	return secret, err
 }
 
 func rxSessions(
-	kk1 Kk1,
-	contact UserId,
-	kk2s []Kk2,
+	kk1 [kk1Size]byte,
+	contact [dhlen]byte,
+	kk2s [][kk2Size]byte,
 	transports []KkTransport,
 	secrets Secrets) (Session, error) {
 
-	secret, ok := secrets.receiving.get(kk1, contact)
+	secret, ok := secrets.receiving[kk1AndId{kk1, contact}]
 	if !ok {
 		tmpSecret, err := makeSessionSecret()
 		if err != nil {
@@ -345,7 +328,7 @@ func rxSessions(
 		if err != nil {
 			return nil, err
 		}
-		_, _, _, err = shake.ReadMessage([]byte{}, kk1)
+		_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
 		if err == nil {
 			return Kk1Rx{
 				theirid: contact,
@@ -361,16 +344,18 @@ func rxSessions(
 	}
 
 
-	_, _, _, err = shake.ReadMessage([]byte{}, kk1)
+	_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
 	if err != nil {
 		return NoSession{}, nil
 	}
 
-	newKk2, _, cipher, err := shake.WriteMessage(
+	newKk2Slice, _, cipher, err := shake.WriteMessage(
 		[]byte{}, []byte{})
 	if err != nil {
 		return nil, err
 	}
+	var newKk2 [kk2Size]byte
+	copy(newKk2[:], newKk2Slice)
 
 	if !matchingKk2(newKk2, kk2s) {
 		return Kk1Rx{
@@ -415,9 +400,9 @@ func bytesEqual(as []byte, bs []byte) bool {
 	return true
 }
 
-func matchingKk2(newKk2 Kk2, oldKk2s []Kk2) bool {
+func matchingKk2(newKk2 [kk2Size]byte, oldKk2s [][kk2Size]byte) bool {
 	for _, oldKk2 := range oldKk2s {
-		if bytesEqual(newKk2, oldKk2) {
+		if bytesEqual(newKk2[:], oldKk2[:]) {
 			return true
 		}
 	}
@@ -431,16 +416,17 @@ func (NoSession) insert(sessions Sessions) Sessions {
 }
 
 func parseKk1(p Parser) (Parser, error) {
-	if p.lenraw - p.cursor < kk1_size {
+	if p.lenraw - p.cursor < kk1Size {
 		return p, TooShortForKk1(p)
 	}
 
-	kk1 := Kk1(p.raw[p.cursor: p.cursor + kk1_size])
+	var kk1 [kk1Size]byte
+	copy(kk1[:], p.raw[p.cursor:])
 	kk1s := append(p.public.kk1s, kk1)
 	return Parser{
 		raw: p.raw,
 		lenraw: p.lenraw,
-		cursor: p.cursor + kk1_size,
+		cursor: p.cursor + kk1Size,
 		counter: p.counter,
 		public: Public{
 			kk1s: kk1s,
@@ -450,19 +436,20 @@ func parseKk1(p Parser) (Parser, error) {
 	}, nil
 }
 
-const kk2_size = 48
+const kk2Size = 48
 
 func parseKk2(p Parser) (Parser, error) {
-	if p.lenraw - p.cursor < kk2_size {
+	if p.lenraw - p.cursor < kk2Size {
 		return p, TooShortForKk2(p)
 	}
 
-	kk2 := Kk2(p.raw[p.cursor: p.cursor + kk2_size])
+	var kk2 [kk2Size]byte
+	copy(kk2[:], p.raw[p.cursor:])
 	kk2s := append(p.public.kk2s, kk2)
 	return Parser{
 		raw: p.raw,
 		lenraw: p.lenraw,
-		cursor: p.cursor + kk2_size,
+		cursor: p.cursor + kk2Size,
 		counter: p.counter,
 		public: Public{
 			kk1s: p.public.kk1s,
@@ -476,24 +463,11 @@ const kk_transport_size = 40
 
 type KkTransport []byte
 
-type Kk1 []byte
-
-func makeConfig(
-	secret []byte,
-	userId UserId,
-	staticKeys noise.DHKey) noise.Config {
-
-	panic("makeConfig not implemented yet")
-	return *new(noise.Config)
-}
-
 type CouldntReplicateKk1 struct{}
 
 func (CouldntReplicateKk1) Error() string {
 	return "couldn't replicate KK1"
 }
-
-type Kk2 []byte
 
 type TooShortForKk1 Parser
 
@@ -506,7 +480,7 @@ func (t TooShortForKk2) Error() string {
 type TooShortForTransport Parser
 
 func (t TooShortForTransport) Error() string {
-	return fmt.Sprintf("bad 'public' file: failed parsing KK transport: parser position &d, but length is &d", t.cursor, t.lenraw)
+	return fmt.Sprintf("bad 'public' file: failed parsing KK transport: parser position %d, but length is %d", t.cursor, t.lenraw)
 }
 
 func (t TooShortForKk1) Error() string {
@@ -578,8 +552,8 @@ func initParser(raw []byte) Parser {
 		cursor: 0,
 		counter: 0,
 		public: Public{
-			kk1s: make([]Kk1, 0),
-			kk2s: make([]Kk2, 0),
+			kk1s: make([][kk1Size]byte, 0),
+			kk2s: make([][kk2Size]byte, 0),
 			transports: make([]KkTransport, 0),
 		},
 	}
@@ -604,36 +578,150 @@ func getPublic() (Public, error) {
 	return parser.public, nil
 }
 
-const kk1Size = 48
-
-type SessionSecrets interface {
-	insert(Kk1, UserId, []byte)
-	remove(Kk1)
-	get(Kk1, UserId) ([]byte, bool)
+type kk1AndId struct {
+	kk1 [kk1Size]byte
+	theirId [dhlen]byte
 }
 
 type Secrets struct {
 	staticKeys noise.DHKey
-	contacts []UserId
-	sending SessionSecrets
-	receiving SessionSecrets
+	contacts [][dhlen]byte
+	sending map[kk1AndId][SecretSize]byte
+	receiving map[kk1AndId][SecretSize]byte
 }
 
 const secretPath = "secret"
 
-func parseSessionSecrets(raw []byte, pos int) (SessionSecrets, int, error) {
-	panic("parseSessions not implemented yet")
-	return nil, 0, nil
+type ParsedSecret struct {
+	kk1 [kk1Size]byte
+	theirid [dhlen]byte
+	secret [SecretSize]byte
 }
 
-func parseContacts(raw []byte, pos int) ([]UserId, int, error) {
-	panic("parseContacts not implemented yet")
-	return *new([]UserId), 0, nil
+func parseSessionSecrets(
+	raw []byte,
+	pos int) (map[kk1AndId][SecretSize]byte, int, error) {
+
+	n, pos, err := uint32P(raw, pos)
+	if err != nil {
+		return nil, pos, err
+	}
+
+	secrets := make(map[kk1AndId][SecretSize]byte)
+	for i := 0; i < n; i++ {
+		kk1, pos, err := kk1P(raw, pos)
+		if err != nil {
+			return nil, pos, err
+		}
+
+		theirid, pos, err := dhlenP(raw, pos)
+		if err != nil {
+			return nil, pos, err
+		}
+
+		secret, pos, err := secretP(raw, pos)
+		if err != nil {
+			return nil, pos, err
+		}
+
+		secrets[kk1AndId{kk1, theirid}] = secret
+	}
+	return secrets, pos, nil
+}
+
+func kk1P(raw []byte, pos int) ([kk1Size]byte, int, error) {
+	if len(raw) - pos < kk1Size {
+		return *new([kk1Size]byte), pos, TooShortForKk1{}
+	}
+
+	var kk1 [kk1Size]byte
+	copy(kk1[:], raw[pos:])
+	pos += kk1Size
+
+	return kk1, pos, nil
+}
+
+type TooShortForSecret struct {}
+
+func (TooShortForSecret) Error() string {
+	return "too short for secret"
+}
+
+func secretP(raw []byte, pos int) ([SecretSize]byte, int, error) {
+	if len(raw) - pos < SecretSize {
+		return *new([SecretSize]byte), pos, TooShortForSecret{}
+	}
+
+	var secret [SecretSize]byte
+	copy(secret[:], raw[pos:])
+	pos += SecretSize
+	return secret, pos, nil
+}
+
+type TooShortForTheirId struct {}
+
+func (TooShortForTheirId) Error() string {
+	return "too short for their ID"
+}
+
+func dhlenP(raw []byte, pos int) ([dhlen]byte, int, error) {
+	if len(raw) - pos < dhlen {
+		return *new([dhlen]byte), pos, TooShortForTheirId{}
+	}
+
+	var theirId [dhlen]byte
+	copy(theirId[:], raw[pos:])
+	pos += dhlen
+	return theirId, pos, nil
+}
+
+type TooShortForUint32 struct{}
+
+func (TooShortForUint32) Error() string {
+	return "not enough bytes for uint32"
+}
+
+func uint32P(raw []byte, pos int) (int, int, error) {
+	if len(raw) - pos < 4 {
+		return 0, pos, TooShortForUint32{}
+	}
+
+	bs := raw[pos: pos + 4]
+	pos += 4
+
+	n := 0
+	for i := 0; i < 4; i++ {
+		n += int(bs[i] << (i * 8))
+	}
+	return n, pos, nil
+}
+
+func parseContacts(raw []byte, pos int) ([][dhlen]byte, int, error) {
+	n, pos, err := uint32P(raw, pos)
+	if err != nil {
+		return *new([][dhlen]byte), pos, err
+	}
+
+	contacts := make([][dhlen]byte, n)
+	for i := 0; i < n; i++ {
+		contacts[i], pos, err = dhlenP(raw, pos)
+		if err != nil {
+			return contacts, pos, err
+		}
+	}
+	return contacts, pos, nil
 }
 
 func parseStaticKeys(raw []byte, pos int) (noise.DHKey, int, error) {
-	panic("parseStaticKeys not implemented yet")
-	return *new(noise.DHKey), 0, nil
+	secret, pos, err := dhlenP(raw, pos)
+	if err != nil {
+		return *new(noise.DHKey), pos, err
+	}
+	public, pos, err := dhlenP(raw, pos)
+	return noise.DHKey{
+		Private: secret[:],
+		Public: public[:],
+	}, pos, err
 }
 
 func parseSecrets(raw []byte) (Secrets, error) {
@@ -684,8 +772,18 @@ func (e ExpectSecretEnd) Error() string {
 }
 
 func makeSecrets() (Secrets, error) {
-	panic("makeSecret not done yet")
-	return *new(Secrets), nil
+	staticKeys, err := noise.DH25519.GenerateKeypair(rand.Reader)
+	if err != nil {
+		return *new(Secrets), err
+	}
+	sending := make(map[kk1AndId][SecretSize]byte)
+	receiving := make(map[kk1AndId][SecretSize]byte)
+	return Secrets{
+		staticKeys: staticKeys,
+		contacts: make([][dhlen]byte, 0),
+		sending: sending,
+		receiving: receiving,
+	}, nil
 }
 
 func getSecrets() (Secrets, error) {
@@ -700,18 +798,18 @@ func getSecrets() (Secrets, error) {
 }
 
 type TransportSession struct {
-	theirid UserId
+	theirid [dhlen]byte
 	secret []byte
-	kk1 Kk1
-	kk2 Kk2
+	kk1 [kk1Size]byte
+	kk2 [kk2Size]byte
 	transport KkTransport
 }
 
 type Kk1Kk2Session struct {
-	theirid UserId
+	theirid [dhlen]byte
 	secret []byte
-	kk1 Kk1
-	kk2 Kk2
+	kk1 [kk1Size]byte
+	kk2 [kk2Size]byte
 }
 
 func (k Kk1Rx) insert(sessions Sessions) Sessions {
@@ -720,9 +818,9 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 }
 
 type Kk1TxSession struct {
-	theirId UserId
+	theirId [dhlen]byte
 	secret []byte
-	kk1 Kk1
+	kk1 [kk1Size]byte
 }
 
 type Sessions struct {
@@ -740,23 +838,23 @@ func (k TransportTx) insert(sessions Sessions) Sessions {
 }
 
 type TransportTx struct {
-	theirid UserId
-	secret []byte
-	kk2 []byte
+	theirid [dhlen]byte
+	secret [SecretSize]byte
+	kk2 [kk2Size]byte
 	plain []byte
 }
 
 type TransportRx struct {
-	theirid UserId
-	secret []byte
-	kk1 []byte
+	theirid [dhlen]byte
+	secret [SecretSize]byte
+	kk1 [kk1Size]byte
 	transport []byte
 }
 
 type Kk1Kk2Rx struct {
-	kk1 []byte
-	theirid UserId
-	secret []byte
+	kk1 [kk1Size]byte
+	theirid [dhlen]byte
+	secret [SecretSize]byte
 }
 
 func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
@@ -765,19 +863,19 @@ func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
 }
 
 type Kk1Kk2Tx struct {
-	theirid UserId
-	secret []byte
-	kk2 []byte
+	theirid [dhlen]byte
+	secret [SecretSize]byte
+	kk2 [kk2Size]byte
 }
 
 type Kk1Rx struct {
-	theirid UserId
-	kk1 []byte
+	theirid [dhlen]byte
+	kk1 [kk1Size]byte
 }
 
 type Kk1Tx struct {
-	theirId UserId
-	secret []byte
+	theirId [dhlen]byte
+	secret [SecretSize]byte
 }
 
 func addSessions(s1 Sessions, s2 Sessions) Sessions {
@@ -802,13 +900,13 @@ func initSessions() Sessions {
 }
 
 type Public struct {
-	kk1s []Kk1
-	kk2s []Kk2
+	kk1s [][kk1Size]byte
+	kk2s [][kk2Size]byte
 	transports []KkTransport
 }
 
 func makeSessionsFor(
-	contact UserId,
+	contact [dhlen]byte,
 	public Public,
 	secrets Secrets) (Sessions, error) {
 
@@ -849,13 +947,16 @@ func getSessions(secrets Secrets) (Sessions, error) {
 	return makeSessions(public, secrets)
 }
 
-func showTransportRx(t TransportRx, staticKeys noise.DHKey) (string, error) {
+func showTransportRx(
+	t TransportRx,
+	staticKeys noise.DHKey) (string, error) {
+
 	shake, err := initShakeRx(t.secret, t.theirid, staticKeys)
 	if err != nil {
 		return "", err
 	}
 
-	_, _, _, err = shake.ReadMessage([]byte{}, t.kk1)
+	_, _, _, err = shake.ReadMessage([]byte{}, t.kk1[:])
 	if err != nil {
 		return "", err
 	}
