@@ -313,8 +313,7 @@ func parseOneArg(arg string) (Args, error) {
 
 type BadArgs struct{}
 
-const usage = `
-Update crypto
+const usage = `Update crypto
 
     $ bwt
 
