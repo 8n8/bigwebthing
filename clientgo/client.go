@@ -46,6 +46,9 @@ func parseUserId(raw string) ([]byte, error) {
 
 func parseArgs(args []string) (Args, error) {
 	argsLength := len(args)
+	if argsLength == 0 {
+		return Bwt{}, nil
+	}
 	if argsLength == 1 {
 		return parseOneArg(args[0])
 	}
@@ -57,6 +60,185 @@ func parseArgs(args []string) (Args, error) {
 		return parseTwoArgs(args[0], userId)
 	}
 	return nil, BadArgs{}
+}
+
+type Bwt struct{}
+
+func (Bwt) run() error {
+	secrets, err := getSecrets()
+	if err != nil {
+		return err
+	}
+
+	sessions, err := getSessions(secrets)
+	if err != nil {
+		return err
+	}
+
+	topUps := makeTopUps(sessions)
+
+	total := 0
+	for _, count := range topUps {
+		total += count
+	}
+
+	kk1s := make([]byte, 0, total*(kk1Size+1))
+	for id, count := range topUps {
+		for i := 0; i < count; i++ {
+			secret, err := makeSessionSecret()
+			if err != nil {
+				return err
+			}
+
+			kk1, err := makeKk1(
+				id,
+				secrets.staticKeys,
+				secret)
+			if err != nil {
+				return err
+			}
+			kk1s = append(kk1s, kk1Indicator)
+			kk1s = append(kk1s, kk1[:]...)
+			secrets.sending[kk1AndId{kk1, id}] = secret
+		}
+	}
+	err = saveKk1s(kk1s)
+	if err != nil {
+		return err
+	}
+	return saveSecrets(secrets)
+}
+
+func encodeUint32(n int) []byte {
+	result := make([]byte, 4)
+	for i := 0; i < 4; i++ {
+		result[i] = byte((n >> i * 8) & 0xFF)
+	}
+	return result
+}
+
+func encodeSessionSecrets(
+	s map[kk1AndId][SecretSize]byte,
+	buf []byte) []byte {
+
+	buf = append(buf, encodeUint32(len(s))...)
+
+	for k, secret := range s {
+		buf = append(buf, k.kk1[:]...)
+		buf = append(buf, k.theirId[:]...)
+		buf = append(buf, secret[:]...)
+	}
+	return buf
+}
+
+func secretsSize(secrets Secrets) int {
+	staticKeys := 2 * dhlen
+	contacts := 4 + len(secrets.contacts)*dhlen
+	const sessionSize = kk1Size + dhlen + SecretSize
+	sending := 4 + len(secrets.sending)*sessionSize
+	receiving := 4 + len(secrets.receiving)*sessionSize
+	return staticKeys + contacts + sending + receiving
+}
+
+func encodeStaticKeys(staticKeys noise.DHKey, buf []byte) []byte {
+	buf = append(buf, staticKeys.Private...)
+	buf = append(buf, staticKeys.Public...)
+	return buf
+}
+
+func encodeContacts(contacts [][dhlen]byte, buf []byte) []byte {
+	buf = append(buf, encodeUint32(len(contacts))...)
+	for _, contact := range contacts {
+		buf = append(buf, contact[:]...)
+	}
+	return buf
+}
+
+func encodeSecrets(secrets Secrets) []byte {
+	buf := make([]byte, 0, secretsSize(secrets))
+
+	buf = encodeStaticKeys(secrets.staticKeys, buf)
+	buf = encodeContacts(secrets.contacts, buf)
+	buf = encodeSessionSecrets(secrets.sending, buf)
+	buf = encodeSessionSecrets(secrets.receiving, buf)
+	return buf
+}
+
+func saveSecrets(secrets Secrets) error {
+	return ioutil.WriteFile(
+		secretPath, encodeSecrets(secrets), 0644)
+}
+
+func saveKk1s(kk1s []byte) error {
+	f, err := os.OpenFile(publicPath, os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	n, err := f.Write(kk1s)
+	if err != nil {
+		return err
+	}
+	if n != len(kk1s) {
+		return WritingNewKk1sFailed{}
+	}
+	return nil
+}
+
+type WritingNewKk1sFailed struct{}
+
+func (WritingNewKk1sFailed) Error() string {
+	return "could not write new KK1 messages to 'public' file"
+}
+
+func makeKk1(
+	theirid [dhlen]byte,
+	staticKeys noise.DHKey,
+	secret [SecretSize]byte) ([kk1Size]byte, error) {
+
+	var kk1 [kk1Size]byte
+	shake, err := initShakeTx(secret, theirid, staticKeys)
+	if err != nil {
+		return kk1, err
+	}
+
+	kk1Slice, _, _, err := shake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return kk1, err
+	}
+
+	copy(kk1[:], kk1Slice)
+	return kk1, err
+}
+
+func makeTopUps(sessions Sessions) map[[dhlen]byte]int {
+	ids := make(map[[dhlen]byte]int)
+	for _, k := range sessions.kk1kk2Tx {
+		_, ok := ids[k.theirid]
+		if ok {
+			ids[k.theirid] += 1
+			continue
+		}
+		ids[k.theirid] = 1
+	}
+
+	for _, k := range sessions.kk1Tx {
+		_, ok := ids[k.theirId]
+		if ok {
+			ids[k.theirId] += 1
+			continue
+		}
+		ids[k.theirId] = 1
+	}
+
+	topups := make(map[[dhlen]byte]int)
+	for id, count := range ids {
+		if count < sessionsLevel {
+			topups[id] = sessionsLevel - count
+		}
+	}
+	return topups
 }
 
 func parseOneArg(arg string) (Args, error) {
@@ -144,6 +326,7 @@ func getMessage() ([plaintextSize]byte, error) {
 	return msg, nil
 }
 
+const kk1Indicator = 0
 const transportIndicator = 2
 
 type WritingTransportFailed int
@@ -695,12 +878,6 @@ type Secrets struct {
 
 const secretPath = "secret"
 
-type ParsedSecret struct {
-	kk1     [kk1Size]byte
-	theirid [dhlen]byte
-	secret  [SecretSize]byte
-}
-
 func parseSessionSecrets(
 	raw []byte,
 	pos int) (map[kk1AndId][SecretSize]byte, int, error) {
@@ -925,6 +1102,8 @@ type Kk1TxSession struct {
 	secret  []byte
 	kk1     [kk1Size]byte
 }
+
+const sessionsLevel = 100
 
 type Sessions struct {
 	transportRx []TransportRx
