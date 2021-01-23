@@ -900,10 +900,18 @@ func initParser(raw []byte) Parser {
 	}
 }
 
+func initPublic() Public {
+	return Public {
+		kk1s: make([][kk1Size]byte, 0),
+		kk2s: make([][kk2Size]byte, 0),
+		transports: make([]KkTransport, 0),
+	}
+}
+
 func getPublic() (Public, error) {
 	raw, err := ioutil.ReadFile(publicPath)
 	if os.IsNotExist(err) {
-		return *new(Public), NoPublicFile{}
+		return initPublic(), nil
 	}
 	if err != nil {
 		return *new(Public), err
