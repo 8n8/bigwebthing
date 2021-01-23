@@ -75,6 +75,22 @@ func (Bwt) run() error {
 		return err
 	}
 
+	kk1s, secrets, err := makeCryptoTopUps(secrets, sessions)
+	if err != nil {
+		return err
+	}
+
+	err = saveKk1s(kk1s)
+	if err != nil {
+		return err
+	}
+	return saveSecrets(secrets)
+}
+
+func makeCryptoTopUps(
+	secrets Secrets,
+	sessions Sessions) ([]byte, Secrets, error) {
+
 	topUps := makeTopUps(sessions)
 
 	total := 0
@@ -87,7 +103,7 @@ func (Bwt) run() error {
 		for i := 0; i < count; i++ {
 			secret, err := makeSessionSecret()
 			if err != nil {
-				return err
+				return kk1s, secrets, err
 			}
 
 			kk1, err := makeKk1(
@@ -95,18 +111,14 @@ func (Bwt) run() error {
 				secrets.staticKeys,
 				secret)
 			if err != nil {
-				return err
+				return kk1s, secrets, err
 			}
 			kk1s = append(kk1s, kk1Indicator)
 			kk1s = append(kk1s, kk1[:]...)
 			secrets.sending[kk1AndId{kk1, id}] = secret
 		}
 	}
-	err = saveKk1s(kk1s)
-	if err != nil {
-		return err
-	}
-	return saveSecrets(secrets)
+	return kk1s, secrets, nil
 }
 
 func encodeUint32(n int) []byte {
