@@ -64,6 +64,41 @@ func parseArgs(args []string) (Args, error) {
 
 type Bwt struct{}
 
+func makeKk2Responses(
+	secrets Secrets,
+	kk1Rxs []Kk1Rx) ([]byte, Secrets, error) {
+
+	kk2s := make([]byte, 0, (1 + kk2Size) * len(kk1Rxs))
+	for _, k := range kk1Rxs {
+		secret, err := makeSessionSecret()
+		if err != nil {
+			return kk2s, secrets, err
+		}
+
+		shake, err := initShakeRx(
+			secret,
+			k.theirid,
+			secrets.staticKeys)
+		if err != nil {
+			return kk2s, secrets, err
+		}
+
+		_, _, _, err = shake.ReadMessage([]byte{}, k.kk1[:])
+		if err != nil {
+			return kk2s, secrets, err
+		}
+
+		kk2s = append(kk2s, kk2Indicator)
+		kk2s, _, _, err := shake.WriteMessage(kk2s, []byte{})
+		if err != nil {
+			return kk2s, secrets, err
+		}
+
+		secrets.receiving[kk1AndId{k.kk1, k.theirid}] = secret
+	}
+	return kk2s, secrets, nil
+}
+
 func (Bwt) run() error {
 	secrets, err := getSecrets()
 	if err != nil {
@@ -80,7 +115,14 @@ func (Bwt) run() error {
 		return err
 	}
 
-	err = saveKk1s(kk1s)
+	kk2s, secrets, err := makeKk2Responses(
+		secrets,
+		sessions.kk1Rx)
+	if err != nil {
+		return err
+	}
+
+	err = saveKk1s(append(kk1s, kk2s...))
 	if err != nil {
 		return err
 	}
@@ -91,7 +133,7 @@ func makeCryptoTopUps(
 	secrets Secrets,
 	sessions Sessions) ([]byte, Secrets, error) {
 
-	topUps := makeTopUps(sessions)
+	topUps := makeTopUpCounts(sessions)
 
 	total := 0
 	for _, count := range topUps {
@@ -224,7 +266,7 @@ func makeKk1(
 	return kk1, err
 }
 
-func makeTopUps(sessions Sessions) map[[dhlen]byte]int {
+func makeTopUpCounts(sessions Sessions) map[[dhlen]byte]int {
 	ids := make(map[[dhlen]byte]int)
 	for _, k := range sessions.kk1kk2Tx {
 		_, ok := ids[k.theirid]
@@ -339,6 +381,7 @@ func getMessage() ([plaintextSize]byte, error) {
 }
 
 const kk1Indicator = 0
+const kk2Indicator = 1
 const transportIndicator = 2
 
 type WritingTransportFailed int
