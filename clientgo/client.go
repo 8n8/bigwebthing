@@ -533,7 +533,7 @@ func makeSessionFor(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s [][kk2Size]byte,
-	transports []KkTransport,
+	transports [][kkTransportSize]byte,
 	secrets Secrets) (Session, error) {
 
 	session, done, err := txSessions(
@@ -620,7 +620,7 @@ func txSessions(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s [][kk2Size]byte,
-	transports []KkTransport,
+	transports [][kkTransportSize]byte,
 	secrets Secrets) (Session, bool, error) {
 
 	secret, ok := secrets.sending[kk1AndId{kk1, contact}]
@@ -667,7 +667,7 @@ func txSessions(
 		plain, err = cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
-			transport)
+			transport[:])
 		if err == nil {
 			// So I sent out a transport.
 			return TransportTx{
@@ -707,7 +707,7 @@ func rxSessions(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s [][kk2Size]byte,
-	transports []KkTransport,
+	transports [][kkTransportSize]byte,
 	secrets Secrets) (Session, error) {
 
 	secret, ok := secrets.receiving[kk1AndId{kk1, contact}]
@@ -756,10 +756,10 @@ func rxSessions(
 		}, nil
 	}
 
-	var transport []byte
+	var transport [kkTransportSize]byte
 	for _, transport = range transports {
 		_, err = cipher.Decrypt(
-			[]byte{}, cryptoAd, transport)
+			[]byte{}, cryptoAd, transport[:])
 		if err == nil {
 			break
 		}
@@ -855,8 +855,6 @@ const plaintextSize = 24
 const transportOverhead = 16
 const kkTransportSize = plaintextSize + transportOverhead
 
-type KkTransport []byte
-
 type CouldntReplicateKk1 struct{}
 
 func (CouldntReplicateKk1) Error() string {
@@ -885,8 +883,8 @@ func parseKkTransport(p Parser) (Parser, error) {
 	if p.lenraw-p.cursor < kkTransportSize {
 		return p, TooShortForTransport(p)
 	}
-	transport := KkTransport(
-		p.raw[p.cursor : p.cursor+kkTransportSize])
+	var transport [kkTransportSize]byte
+	copy(transport[:], p.raw[p.cursor:])
 	transports := append(p.public.transports, transport)
 	return Parser{
 		raw:     p.raw,
@@ -948,7 +946,7 @@ func initParser(raw []byte) Parser {
 		public: Public{
 			kk1s:       make([][kk1Size]byte, 0),
 			kk2s:       make([][kk2Size]byte, 0),
-			transports: make([]KkTransport, 0),
+			transports: make([][kkTransportSize]byte, 0),
 		},
 	}
 }
@@ -957,7 +955,7 @@ func initPublic() Public {
 	return Public{
 		kk1s:       make([][kk1Size]byte, 0),
 		kk2s:       make([][kk2Size]byte, 0),
-		transports: make([]KkTransport, 0),
+		transports: make([][kkTransportSize]byte, 0),
 	}
 }
 
@@ -1201,7 +1199,7 @@ type TransportSession struct {
 	secret    []byte
 	kk1       [kk1Size]byte
 	kk2       [kk2Size]byte
-	transport KkTransport
+	transport [kkTransportSize]byte
 }
 
 type Kk1Kk2Session struct {
@@ -1249,7 +1247,7 @@ type TransportRx struct {
 	theirid   [dhlen]byte
 	secret    [SecretSize]byte
 	kk1       [kk1Size]byte
-	transport []byte
+	transport [kkTransportSize]byte
 }
 
 type Kk1Kk2Rx struct {
@@ -1331,7 +1329,7 @@ func initSessions() Sessions {
 type Public struct {
 	kk1s       [][kk1Size]byte
 	kk2s       [][kk2Size]byte
-	transports []KkTransport
+	transports [][kkTransportSize]byte
 }
 
 func makeSessionsFor(
@@ -1395,7 +1393,7 @@ func showTransportRx(
 		return "", err
 	}
 
-	plain, err := cipher.Decrypt([]byte{}, cryptoAd, t.transport)
+	plain, err := cipher.Decrypt([]byte{}, cryptoAd, t.transport[:])
 	if err != nil {
 		return "", err
 	}
