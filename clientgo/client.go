@@ -314,6 +314,10 @@ func parseOneArg(arg string) (Args, error) {
 type BadArgs struct{}
 
 const usage = `
+Update crypto
+
+    $ bwt
+
 Get usage
 
     $ bwt help
@@ -322,11 +326,11 @@ Get my ID
 
     $ bwt myid
 
-Read messages
+Get messages
 
     $ bwt read
 
-Write a new message from STDIN
+Send a new message from STDIN
 
     $ bwt write <recipient ID>
 
@@ -1396,7 +1400,7 @@ func (MyId) run() error {
 type Help struct{}
 
 func (Help) run() error {
-	fmt.Println("help not implmented yet")
+	fmt.Println(usage)
 	return nil
 }
 
