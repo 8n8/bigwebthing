@@ -1175,12 +1175,14 @@ func makeSecrets() (Secrets, error) {
 	}
 	sending := make(map[kk1AndId][SecretSize]byte)
 	receiving := make(map[kk1AndId][SecretSize]byte)
-	return Secrets{
+	secrets := Secrets{
 		staticKeys: staticKeys,
 		contacts:   make([][dhlen]byte, 0),
 		sending:    sending,
 		receiving:  receiving,
-	}, nil
+	}
+	err = saveSecrets(secrets)
+	return secrets, err
 }
 
 func getSecrets() (Secrets, error) {
@@ -1426,7 +1428,13 @@ func (Read_) run() error {
 type MyId struct{}
 
 func (MyId) run() error {
-	fmt.Println("myid not implemented yet")
+	secrets, err := getSecrets()
+	if err != nil {
+		return err
+	}
+	str := base64.RawURLEncoding.EncodeToString(
+		secrets.staticKeys.Public)
+	fmt.Println(str)
 	return nil
 }
 
