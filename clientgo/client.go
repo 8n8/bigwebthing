@@ -34,15 +34,17 @@ type Args interface {
 
 const dhlen = 32
 
-func parseUserId(raw string) ([]byte, error) {
+func parseUserId(raw string) ([dhlen]byte, error) {
+	var userid [dhlen]byte
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return []byte{}, err
+		return userid, err
 	}
 	if len(decoded) != dhlen {
-		return []byte{}, BadUserIdLength(len(decoded))
+		return userid, BadUserIdLength(len(decoded))
 	}
-	return decoded, nil
+	copy(userid[:], decoded)
+	return userid, nil
 }
 
 func parseArgs(args []string) (Args, error) {
@@ -343,7 +345,7 @@ func (BadArgs) Error() string {
 	return badArgsMessage
 }
 
-func parseTwoArgs(arg1 string, userId []byte) (Args, error) {
+func parseTwoArgs(arg1 string, userId [dhlen]byte) (Args, error) {
 	switch arg1 {
 	case "send":
 		return Write_(userId), nil
@@ -353,14 +355,45 @@ func parseTwoArgs(arg1 string, userId []byte) (Args, error) {
 	return nil, BadArgs{}
 }
 
-type AddContact []byte
+type AddContact [dhlen]byte
 
-func (a AddContact) run() error {
-	fmt.Println("addcontact not implemented yet")
-	return nil
+func isUniqueContact(
+	contact [dhlen]byte,
+	contacts [][dhlen]byte) bool {
+
+	for _, existing := range contacts {
+		if contact == existing {
+			return false
+		}
+	}
+	return true
 }
 
-type Write_ []byte
+func (a AddContact) run() error {
+	secrets, err := getSecrets()
+	if err != nil {
+		return err
+	}
+
+	if !isUniqueContact(a, secrets.contacts) {
+		fmt.Println("already a contact")
+		return nil
+	}
+
+	secrets.contacts = append(secrets.contacts, a)
+	return saveSecrets(secrets)
+}
+
+func getSession(ks []Kk1Kk2Tx, theirid [dhlen]byte) (Kk1Kk2Tx, bool) {
+	for _, k := range ks {
+		if k.theirid == theirid {
+			return k, true
+		}
+	}
+	return *new(Kk1Kk2Tx), false
+}
+
+type Write_ [dhlen]byte
 
 type MessageTooLong struct{}
 
@@ -450,13 +483,14 @@ func (s Write_) run() error {
 		return err
 	}
 
-	if len(sessions.kk1kk2Tx) == 0 {
+	session, ok := getSession(sessions.kk1kk2Tx, s)
+	if !ok {
 		return NoSessionsCantSend{}
 	}
 
 	transport, err := makeTransport(
 		msg,
-		sessions.kk1kk2Tx[0],
+		session,
 		secrets.staticKeys)
 	if err != nil {
 		return err
