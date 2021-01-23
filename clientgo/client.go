@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"github.com/flynn/noise"
 	"io"
@@ -224,6 +225,9 @@ func saveSecrets(secrets Secrets) error {
 }
 
 func saveKk1s(kk1s []byte) error {
+	if len(kk1s) == 0 {
+		return nil
+	}
 	f, err := os.OpenFile(publicPath, os.O_APPEND, 0644)
 	if err != nil {
 		return err
@@ -922,7 +926,8 @@ func initPublic() Public {
 
 func getPublic() (Public, error) {
 	raw, err := ioutil.ReadFile(publicPath)
-	if os.IsNotExist(err) {
+	var pathError *os.PathError
+	if errors.As(err, &pathError) {
 		return initPublic(), nil
 	}
 	if err != nil {
