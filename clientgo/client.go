@@ -68,7 +68,7 @@ func makeKk2Responses(
 	secrets Secrets,
 	kk1Rxs []Kk1Rx) ([]byte, Secrets, error) {
 
-	kk2s := make([]byte, 0, (1 + kk2Size) * len(kk1Rxs))
+	kk2s := make([]byte, 0, (1+kk2Size)*len(kk1Rxs))
 	for _, k := range kk1Rxs {
 		secret, err := makeSessionSecret()
 		if err != nil {
@@ -511,18 +511,25 @@ func makeSessionFor(
 var cryptoAd []byte = []byte{100, 117, 182, 195, 110, 70, 39, 86, 128, 240}
 
 func (r RandomGen) Read(p []byte) (int, error) {
-	block, err := aes.NewCipher(r[aes.BlockSize:])
-	if err != nil {
-		return 0, err
-	}
-
-	cipher.NewCTR(block, r[aes.BlockSize:]).XORKeyStream(p, p)
+	r.stream.XORKeyStream(p, p)
 	return len(p), nil
 }
 
 const SecretSize = 2 * aes.BlockSize
 
-type RandomGen [SecretSize]byte
+type RandomGen struct {
+	stream cipher.Stream
+}
+
+func initRandomGen(secret [SecretSize]byte) (RandomGen, error) {
+	block, err := aes.NewCipher(secret[:aes.BlockSize])
+	if err != nil {
+		return *new(RandomGen), err
+	}
+
+	stream := cipher.NewCTR(block, secret[aes.BlockSize:])
+	return RandomGen{stream}, nil
+}
 
 func initShake(
 	secret [SecretSize]byte,
@@ -535,9 +542,14 @@ func initShake(
 		noise.CipherAESGCM,
 		noise.HashSHA256)
 
+	random, err := initRandomGen(secret)
+	if err != nil {
+		return new(noise.HandshakeState), err
+	}
+
 	config := noise.Config{
 		CipherSuite:   cipherSuite,
-		Random:        RandomGen(secret),
+		Random:        random,
 		Pattern:       noise.HandshakeKK,
 		Initiator:     initiator,
 		StaticKeypair: staticKeys,
@@ -901,9 +913,9 @@ func initParser(raw []byte) Parser {
 }
 
 func initPublic() Public {
-	return Public {
-		kk1s: make([][kk1Size]byte, 0),
-		kk2s: make([][kk2Size]byte, 0),
+	return Public{
+		kk1s:       make([][kk1Size]byte, 0),
+		kk2s:       make([][kk2Size]byte, 0),
 		transports: make([]KkTransport, 0),
 	}
 }
@@ -1386,5 +1398,6 @@ func (Help) run() error {
 type BadUserIdLength int
 
 func (b BadUserIdLength) Error() string {
-	return fmt.Sprintf("wrong length: expected 43, got %d", int(b))
+	return fmt.Sprintf(
+		"wrong length: expected 43, got %d", int(b))
 }
