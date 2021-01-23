@@ -169,7 +169,7 @@ func makeCryptoTopUps(
 func encodeUint32(n int) []byte {
 	result := make([]byte, 4)
 	for i := 0; i < 4; i++ {
-		result[i] = byte((n >> i * 8) & 0xFF)
+		result[i] = byte((n >> (i * 8)) & 0xFF)
 	}
 	return result
 }
@@ -339,7 +339,7 @@ Add contact
 
     $ bwt addcontact <contact ID>`
 
-const badArgsMessage = "bad arguments: usage:\n" + usage
+const badArgsMessage = "bad arguments"
 
 func (BadArgs) Error() string {
 	return badArgsMessage
