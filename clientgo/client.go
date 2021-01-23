@@ -507,17 +507,6 @@ func (NoSessionsCantSend) Error() string {
 
 type Read_ struct{}
 
-type Ephemeral struct {
-	id   [dhlen]byte
-	keys noise.DHKey
-}
-
-type Cache struct {
-	staticKeys noise.DHKey
-	contacts   [][dhlen]byte
-	ephemerals []Ephemeral
-}
-
 const kk1Size = 48
 
 type Session interface {
@@ -1194,30 +1183,9 @@ func getSecrets() (Secrets, error) {
 	return parseSecrets(raw)
 }
 
-type TransportSession struct {
-	theirid   [dhlen]byte
-	secret    []byte
-	kk1       [kk1Size]byte
-	kk2       [kk2Size]byte
-	transport [kkTransportSize]byte
-}
-
-type Kk1Kk2Session struct {
-	theirid [dhlen]byte
-	secret  []byte
-	kk1     [kk1Size]byte
-	kk2     [kk2Size]byte
-}
-
 func (k Kk1Rx) insert(sessions Sessions) Sessions {
 	sessions.kk1Rx = append(sessions.kk1Rx, k)
 	return sessions
-}
-
-type Kk1TxSession struct {
-	theirId [dhlen]byte
-	secret  []byte
-	kk1     [kk1Size]byte
 }
 
 const sessionsLevel = 100
