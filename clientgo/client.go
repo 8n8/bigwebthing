@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/flynn/noise"
-	"io"
 	"io/ioutil"
 	"os"
 )
@@ -413,10 +412,12 @@ func getMessage() ([plaintextSize]byte, error) {
 	if n == 0 {
 		return msg, EmptyMessage{}
 	}
-	if err != io.EOF {
-		return msg, MessageTooLong{}
+	if err != nil {
+		return msg, err
 	}
-	msg[0] = byte(n)
+	// The - 1 is to remove trailing newline that is automatically
+	// inserted when reading from stdin.
+	msg[0] = byte(n-1)
 	return msg, nil
 }
 
@@ -448,9 +449,9 @@ func writeTransport(transport [kkTransportSize]byte) error {
 }
 
 func messageOk(msg [plaintextSize]byte) error {
-	for _, m := range msg {
-		if m < 32 || m > 126 {
-			return BadChar(m)
+	for i := 0; i < int(msg[0]); i++ {
+		if msg[i+1] < 32 || msg[i+1] > 126 {
+			return BadChar(msg[i+1])
 		}
 	}
 	return nil
