@@ -135,7 +135,7 @@ func makeCryptoTopUps(
 	secrets Secrets,
 	sessions Sessions) ([]byte, Secrets, error) {
 
-	topUps := makeTopUpCounts(sessions)
+	topUps := makeTopUpCounts(sessions, secrets.contacts)
 
 	total := 0
 	for _, count := range topUps {
@@ -271,8 +271,15 @@ func makeKk1(
 	return kk1, err
 }
 
-func makeTopUpCounts(sessions Sessions) map[[dhlen]byte]int {
+func makeTopUpCounts(
+	sessions Sessions,
+	contacts [][dhlen]byte) map[[dhlen]byte]int {
+
 	ids := make(map[[dhlen]byte]int)
+	for _, contact := range contacts {
+		ids[contact] = 0
+	}
+
 	for _, k := range sessions.kk1kk2Tx {
 		_, ok := ids[k.theirid]
 		if ok {
@@ -1175,7 +1182,8 @@ func makeSecrets() (Secrets, error) {
 
 func getSecrets() (Secrets, error) {
 	raw, err := ioutil.ReadFile(secretPath)
-	if os.IsNotExist(err) {
+	var pathError *os.PathError
+	if errors.As(err, &pathError) {
 		return makeSecrets()
 	}
 	if err != nil {
