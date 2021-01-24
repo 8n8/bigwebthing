@@ -307,7 +307,7 @@ func parseOneArg(arg string) (Args, error) {
 		return Help{}, nil
 	case "myid":
 		return MyId{}, nil
-	case "get":
+	case "read":
 		return Read_{}, nil
 	}
 	return nil, BadArgs{}
@@ -347,7 +347,7 @@ func (BadArgs) Error() string {
 
 func parseTwoArgs(arg1 string, userId [dhlen]byte) (Args, error) {
 	switch arg1 {
-	case "send":
+	case "write":
 		return Write_(userId), nil
 	case "addcontact":
 		return AddContact(userId), nil
