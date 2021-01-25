@@ -748,7 +748,7 @@ func rxSessions(
 
 	// So it's a valid KK1 from this contact.
 
-	newKk2Slice, _, cipher, err := shake.WriteMessage(
+	newKk2Slice, cipher, _, err := shake.WriteMessage(
 		[]byte{}, []byte{})
 	if err != nil {
 		return nil, err
@@ -1219,7 +1219,7 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-const sessionsLevel = 1
+const sessionsLevel = 100
 
 type Sessions struct {
 	transportRx []TransportRx
@@ -1387,7 +1387,7 @@ func showTransportRx(
 		return "", err
 	}
 
-	_, _, cipher, err := shake.WriteMessage([]byte{}, []byte{})
+	_, cipher, _, err := shake.WriteMessage([]byte{}, []byte{})
 	if err != nil {
 		return "", err
 	}
@@ -1411,7 +1411,6 @@ func (Read_) run() error {
 	}
 
 	for _, transport := range sessions.transportRx {
-		fmt.Println(transport)
 		pretty, err := showTransportRx(
 			transport, secrets.staticKeys)
 		if err != nil {
