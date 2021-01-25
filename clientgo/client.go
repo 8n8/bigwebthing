@@ -229,7 +229,10 @@ func saveKk1s(kk1s []byte) error {
 	if len(kk1s) == 0 {
 		return nil
 	}
-	f, err := os.OpenFile(publicPath, os.O_APPEND, 0644)
+	f, err := os.OpenFile(
+		publicPath,
+		os.O_APPEND | os.O_WRONLY | os.O_CREATE,
+		0644)
 	if err != nil {
 		return err
 	}
@@ -439,7 +442,10 @@ func (w WritingTransportFailed) Error() string {
 }
 
 func writeTransport(transport [kkTransportSize]byte) error {
-	f, err := os.OpenFile(publicPath, os.O_APPEND, 0644)
+	f, err := os.OpenFile(
+		publicPath,
+		os.O_APPEND | os.O_WRONLY | os.O_CREATE,
+		0644)
 	if err != nil {
 		return err
 	}
@@ -1000,18 +1006,21 @@ func parseSessionSecrets(
 	}
 
 	secrets := make(map[kk1AndId][SecretSize]byte)
+	var kk1 [kk1Size]byte
+	var theirid [dhlen]byte
+	var secret [SecretSize]byte
 	for i := 0; i < n; i++ {
-		kk1, pos, err := kk1P(raw, pos)
+		kk1, pos, err = kk1P(raw, pos)
 		if err != nil {
 			return nil, pos, err
 		}
 
-		theirid, pos, err := dhlenP(raw, pos)
+		theirid, pos, err = dhlenP(raw, pos)
 		if err != nil {
 			return nil, pos, err
 		}
 
-		secret, pos, err := secretP(raw, pos)
+		secret, pos, err = secretP(raw, pos)
 		if err != nil {
 			return nil, pos, err
 		}
