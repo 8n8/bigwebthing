@@ -294,18 +294,14 @@ func makeTopUpCounts(
 		_, ok := ids[k.theirid]
 		if ok {
 			ids[k.theirid] += 1
-			continue
 		}
-		ids[k.theirid] = 1
 	}
 
 	for _, k := range sessions.kk1Tx {
 		_, ok := ids[k.theirId]
 		if ok {
 			ids[k.theirId] += 1
-			continue
 		}
-		ids[k.theirId] = 1
 	}
 
 	topups := make(map[[dhlen]byte]int)
@@ -1223,7 +1219,7 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-const sessionsLevel = 100
+const sessionsLevel = 1
 
 type Sessions struct {
 	transportRx []TransportRx
@@ -1415,6 +1411,7 @@ func (Read_) run() error {
 	}
 
 	for _, transport := range sessions.transportRx {
+		fmt.Println(transport)
 		pretty, err := showTransportRx(
 			transport, secrets.staticKeys)
 		if err != nil {
