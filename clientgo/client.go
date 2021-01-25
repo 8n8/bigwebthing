@@ -98,7 +98,7 @@ func makeKk2Responses(
 		}
 
 		kk2s = append(kk2s, kk2Indicator)
-		kk2s, _, _, err := shake.WriteMessage(kk2s, []byte{})
+		kk2s, _, _, err = shake.WriteMessage(kk2s, []byte{})
 		if err != nil {
 			return kk2s, secrets, err
 		}
