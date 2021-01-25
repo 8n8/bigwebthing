@@ -54,12 +54,19 @@ func parseArgs(args []string) (Args, error) {
 	if argsLength == 1 {
 		return parseOneArg(args[0])
 	}
-	if argsLength == 2 {
-		userId, err := parseUserId(args[1])
+	userId, err := parseUserId(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if argsLength == 2 && args[0] == "addcontact" {
+		return AddContact(userId), nil
+	}
+	if argsLength == 3 && args[0] == "write" {
+		msg, err := parseMessage(args[2])
 		if err != nil {
 			return nil, err
 		}
-		return parseTwoArgs(args[0], userId)
+		return Write_{to: userId, msg: msg}, nil
 	}
 	return nil, BadArgs{}
 }
@@ -336,13 +343,13 @@ Get my ID
 
     $ bwt myid
 
-Get messages
+Read messages
 
     $ bwt read
 
-Send a new message from STDIN
+Write a new message
 
-    $ bwt write <recipient ID>
+    $ bwt write <recipient ID> "hi"
 
 Add contact
 
@@ -352,16 +359,6 @@ const badArgsMessage = "bad arguments"
 
 func (BadArgs) Error() string {
 	return badArgsMessage
-}
-
-func parseTwoArgs(arg1 string, userId [dhlen]byte) (Args, error) {
-	switch arg1 {
-	case "write":
-		return Write_(userId), nil
-	case "addcontact":
-		return AddContact(userId), nil
-	}
-	return nil, BadArgs{}
 }
 
 type AddContact [dhlen]byte
@@ -402,7 +399,10 @@ func getSession(ks []Kk1Kk2Tx, theirid [dhlen]byte) (Kk1Kk2Tx, bool) {
 	return *new(Kk1Kk2Tx), false
 }
 
-type Write_ [dhlen]byte
+type Write_ struct {
+	to [dhlen]byte
+	msg [plaintextSize]byte
+}
 
 type MessageTooLong struct{}
 
@@ -416,19 +416,17 @@ func (EmptyMessage) Error() string {
 	return "empty message"
 }
 
-func getMessage() ([plaintextSize]byte, error) {
-	var msg [plaintextSize]byte
-	n, err := os.Stdin.Read(msg[1:])
-	if n == 0 {
-		return msg, EmptyMessage{}
+func parseMessage(raw string) ([plaintextSize]byte, error) {
+	asBytes := []byte(raw)
+	var plain [plaintextSize]byte
+	// The -1 is because the first byte is used for storing the
+	// length.
+	if len(asBytes) > plaintextSize - 1 {
+		return plain, MessageTooLong{}
 	}
-	if err != nil {
-		return msg, err
-	}
-	// The - 1 is to remove trailing newline that is automatically
-	// inserted when reading from stdin.
-	msg[0] = byte(n-1)
-	return msg, nil
+	copy(plain[1:], asBytes)
+	plain[0] = byte(len(asBytes))
+	return plain, messageOk(plain)
 }
 
 const kk1Indicator = 0
@@ -477,16 +475,6 @@ func (b BadChar) Error() string {
 }
 
 func (s Write_) run() error {
-	msg, err := getMessage()
-	if err != nil {
-		return err
-	}
-
-	err = messageOk(msg)
-	if err != nil {
-		return err
-	}
-
 	secrets, err := getSecrets()
 	if err != nil {
 		return err
@@ -497,13 +485,13 @@ func (s Write_) run() error {
 		return err
 	}
 
-	session, ok := getSession(sessions.kk1kk2Tx, s)
+	session, ok := getSession(sessions.kk1kk2Tx, s.to)
 	if !ok {
 		return NoSessionsCantSend{}
 	}
 
 	transport, err := makeTransport(
-		msg,
+		s.msg,
 		session,
 		secrets.staticKeys)
 	if err != nil {
@@ -648,6 +636,15 @@ func txSessions(
 	}
 
 	// See if there is a KK2 that someone sent in response.
+	if len(kk2s) == 0 {
+		// There aren't any KK2s at all.
+		return Kk1Tx{
+			theirId: contact,
+			secret: secret,
+		}, true, nil
+	}
+
+	// There are some KK2s, but are there any from this person?
 	var cipher *noise.CipherState
 	var kk2 [kk2Size]byte
 	for _, kk2 = range kk2s {
@@ -657,7 +654,6 @@ func txSessions(
 		}
 	}
 	if err != nil {
-		// So there is no responding KK2.
 		return Kk1Tx{
 			theirId: contact,
 			secret:  secret,
@@ -666,6 +662,13 @@ func txSessions(
 
 	// So there is a responding KK2.
 	var plain []byte
+	if len(transports) == 0 {
+		return Kk1Kk2Tx{
+			theirid: contact,
+			secret: secret,
+			kk2: kk2,
+		}, true, nil
+	}
 	for _, transport := range transports {
 		plain, err = cipher.Decrypt(
 			[]byte{},
@@ -715,6 +718,7 @@ func rxSessions(
 
 	secret, ok := secrets.receiving[kk1AndId{kk1, contact}]
 	if !ok {
+		// It's not a KK1 I have interacted with before.
 		tmpSecret, err := makeSessionSecret()
 		if err != nil {
 			return nil, err
@@ -734,6 +738,8 @@ func rxSessions(
 		return NoSession{}, nil
 	}
 
+	// It's a KK1 that I have responded to in the past.
+
 	shake, err := initShakeRx(secret, contact, secrets.staticKeys)
 	if err != nil {
 		return nil, err
@@ -743,6 +749,8 @@ func rxSessions(
 	if err != nil {
 		return NoSession{}, nil
 	}
+
+	// So it's a valid KK1 from this contact.
 
 	newKk2Slice, _, cipher, err := shake.WriteMessage(
 		[]byte{}, []byte{})
@@ -759,6 +767,15 @@ func rxSessions(
 		}, nil
 	}
 
+	// I have already responded to the KK1 with a KK2.
+
+	if len(transports) == 0 {
+		return Kk1Kk2Rx{
+			kk1: kk1,
+			theirid: contact,
+			secret: secret,
+		}, nil
+	}
 	var transport [kkTransportSize]byte
 	for _, transport = range transports {
 		_, err = cipher.Decrypt(
