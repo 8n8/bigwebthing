@@ -776,6 +776,7 @@ func rxSessions(
 	for _, transport = range transports {
 		_, err = cipher.Decrypt(
 			[]byte{}, cryptoAd, transport[:])
+		fmt.Println(err)
 		if err == nil {
 			break
 		}
