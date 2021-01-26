@@ -650,7 +650,6 @@ func txSessions(
 	}
 
 	// So there is a responding KK2.
-	var plain []byte
 	if len(transports) == 0 {
 		return Kk1Kk2Tx{
 			theirid: contact,
@@ -659,11 +658,13 @@ func txSessions(
 		}, true, nil
 	}
 	for _, transport := range transports {
-		plain, err = cipher.Decrypt(
+		plainArr, err := cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
 			transport[:])
 		if err == nil {
+			var plain [plaintextSize]byte
+			copy(plain[:], plainArr)
 			// So I sent out a transport.
 			return TransportTx{
 				theirid: contact,
@@ -1220,7 +1221,7 @@ const sessionsLevel = 1
 
 type Sessions struct {
 	transportRx map[TransportRx]struct{}
-	transportTx []TransportTx
+	transportTx map[TransportTx]struct{}
 	kk1kk2Rx    []Kk1Kk2Rx
 	kk1kk2Tx    []Kk1Kk2Tx
 	kk1Rx       []Kk1Rx
@@ -1228,7 +1229,7 @@ type Sessions struct {
 }
 
 func (k TransportTx) insert(sessions Sessions) Sessions {
-	sessions.transportTx = append(sessions.transportTx, k)
+	sessions.transportTx[k] = struct{}{}
 	return sessions
 }
 
@@ -1236,7 +1237,7 @@ type TransportTx struct {
 	theirid [dhlen]byte
 	secret  [SecretSize]byte
 	kk2     [kk2Size]byte
-	plain   []byte
+	plain   [plaintextSize]byte
 }
 
 type TransportRx struct {
@@ -1317,7 +1318,7 @@ func addSessions(s1 Sessions, s2 Sessions) Sessions {
 func initSessions() Sessions {
 	return Sessions{
 		transportRx: make(map[TransportRx]struct{}),
-		transportTx: make([]TransportTx, 0),
+		transportTx: make(map[TransportTx]struct{}),
 		kk1kk2Rx:    make([]Kk1Kk2Rx, 0),
 		kk1kk2Tx:    make([]Kk1Kk2Tx, 0),
 		kk1Rx:       make([]Kk1Rx, 0),
