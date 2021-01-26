@@ -1222,7 +1222,7 @@ const sessionsLevel = 1
 type Sessions struct {
 	transportRx map[TransportRx]struct{}
 	transportTx map[TransportTx]struct{}
-	kk1kk2Rx    []Kk1Kk2Rx
+	kk1kk2Rx    map[Kk1Kk2Rx]struct{}
 	kk1kk2Tx    []Kk1Kk2Tx
 	kk1Rx       []Kk1Rx
 	kk1Tx       []Kk1Tx
@@ -1254,7 +1254,7 @@ type Kk1Kk2Rx struct {
 }
 
 func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
-	sessions.kk1kk2Rx = append(sessions.kk1kk2Rx, k)
+	sessions.kk1kk2Rx[k] = struct{}{}
 	return sessions
 }
 
@@ -1306,9 +1306,12 @@ func addSessions(s1 Sessions, s2 Sessions) Sessions {
 	for t := range s2.transportRx {
 		s1.transportRx[t] = struct{}{}
 	}
+	for k := range s2.kk1kk2Rx {
+		s1.kk1kk2Rx[k] = struct{}{}
+	}
 	return Sessions{
 		transportRx: s1.transportRx,
-		kk1kk2Rx:    append(s1.kk1kk2Rx, s2.kk1kk2Rx...),
+		kk1kk2Rx:    s1.kk1kk2Rx,
 		kk1kk2Tx:    append(s1.kk1kk2Tx, s2.kk1kk2Tx...),
 		kk1Rx:       append(s1.kk1Rx, s2.kk1Rx...),
 		kk1Tx:       append(s1.kk1Tx, s2.kk1Tx...),
@@ -1319,7 +1322,7 @@ func initSessions() Sessions {
 	return Sessions{
 		transportRx: make(map[TransportRx]struct{}),
 		transportTx: make(map[TransportTx]struct{}),
-		kk1kk2Rx:    make([]Kk1Kk2Rx, 0),
+		kk1kk2Rx:    make(map[Kk1Kk2Rx]struct{}),
 		kk1kk2Tx:    make([]Kk1Kk2Tx, 0),
 		kk1Rx:       make([]Kk1Rx, 0),
 		kk1Tx:       make([]Kk1Tx, 0),
