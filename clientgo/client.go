@@ -131,7 +131,7 @@ func (Bwt) run() error {
 		return err
 	}
 
-	err = saveKk1s(append(kk1s, kk2s...))
+	err = saveKks(append(kk1s, kk2s...))
 	if err != nil {
 		return err
 	}
@@ -232,8 +232,8 @@ func saveSecrets(secrets Secrets) error {
 		secretPath, encodeSecrets(secrets), 0644)
 }
 
-func saveKk1s(kk1s []byte) error {
-	if len(kk1s) == 0 {
+func saveKks(kks []byte) error {
+	if len(kks) == 0 {
 		return nil
 	}
 	f, err := os.OpenFile(
@@ -245,19 +245,19 @@ func saveKk1s(kk1s []byte) error {
 	}
 	defer f.Close()
 
-	n, err := f.Write(kk1s)
+	n, err := f.Write(kks)
 	if err != nil {
 		return err
 	}
-	if n != len(kk1s) {
-		return WritingNewKk1sFailed{}
+	if n != len(kks) {
+		return WritingNewKksFailed{}
 	}
 	return nil
 }
 
-type WritingNewKk1sFailed struct{}
+type WritingNewKksFailed struct{}
 
-func (WritingNewKk1sFailed) Error() string {
+func (WritingNewKksFailed) Error() string {
 	return "could not write new KK1 messages to 'public' file"
 }
 
