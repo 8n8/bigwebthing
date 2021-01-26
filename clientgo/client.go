@@ -210,9 +210,12 @@ func encodeStaticKeys(staticKeys noise.DHKey, buf []byte) []byte {
 	return buf
 }
 
-func encodeContacts(contacts [][dhlen]byte, buf []byte) []byte {
+func encodeContacts(
+	contacts map[[dhlen]byte]struct{},
+	buf []byte) []byte {
+
 	buf = append(buf, encodeUint32(len(contacts))...)
-	for _, contact := range contacts {
+	for contact := range contacts {
 		buf = append(buf, contact[:]...)
 	}
 	return buf
@@ -284,10 +287,10 @@ func makeKk1(
 
 func makeTopUpCounts(
 	sessions Sessions,
-	contacts [][dhlen]byte) map[[dhlen]byte]int {
+	contacts map[[dhlen]byte]struct{}) map[[dhlen]byte]int {
 
 	ids := make(map[[dhlen]byte]int)
-	for _, contact := range contacts {
+	for contact := range contacts {
 		ids[contact] = 0
 	}
 
@@ -360,30 +363,19 @@ func (BadArgs) Error() string {
 
 type AddContact [dhlen]byte
 
-func isUniqueContact(
-	contact [dhlen]byte,
-	contacts [][dhlen]byte) bool {
-
-	for _, existing := range contacts {
-		if contact == existing {
-			return false
-		}
-	}
-	return true
-}
-
 func (a AddContact) run() error {
 	secrets, err := getSecrets()
 	if err != nil {
 		return err
 	}
 
-	if !isUniqueContact(a, secrets.contacts) {
+	_, alreadyAcontact := secrets.contacts[a]
+	if alreadyAcontact {
 		fmt.Println("already a contact")
 		return nil
 	}
 
-	secrets.contacts = append(secrets.contacts, a)
+	secrets.contacts[a] = struct{}{}
 	return saveSecrets(secrets)
 }
 
@@ -1003,7 +995,7 @@ type kk1AndId struct {
 
 type Secrets struct {
 	staticKeys noise.DHKey
-	contacts   [][dhlen]byte
+	contacts   map[[dhlen]byte]struct{}
 	sending    map[kk1AndId][SecretSize]byte
 	receiving  map[kk1AndId][SecretSize]byte
 }
@@ -1111,18 +1103,22 @@ func uint32P(raw []byte, pos int) (int, int, error) {
 	return n, pos, nil
 }
 
-func parseContacts(raw []byte, pos int) ([][dhlen]byte, int, error) {
+func parseContacts(
+	raw []byte,
+	pos int) (map[[dhlen]byte]struct{}, int, error) {
+
 	n, pos, err := uint32P(raw, pos)
 	if err != nil {
-		return *new([][dhlen]byte), pos, err
+		return *new(map[[dhlen]byte]struct{}), pos, err
 	}
 
-	contacts := make([][dhlen]byte, n)
+	contacts := make(map[[dhlen]byte]struct{}, n)
 	for i := 0; i < n; i++ {
-		contacts[i], pos, err = dhlenP(raw, pos)
+		contact, pos, err := dhlenP(raw, pos)
 		if err != nil {
 			return contacts, pos, err
 		}
+		contacts[contact] = struct{}{}
 	}
 	return contacts, pos, nil
 }
@@ -1195,7 +1191,7 @@ func makeSecrets() (Secrets, error) {
 	receiving := make(map[kk1AndId][SecretSize]byte)
 	secrets := Secrets{
 		staticKeys: staticKeys,
-		contacts:   make([][dhlen]byte, 0),
+		contacts:   make(map[[dhlen]byte]struct{}),
 		sending:    sending,
 		receiving:  receiving,
 	}
@@ -1355,7 +1351,7 @@ func makeSessionsFor(
 
 func makeSessions(public Public, secrets Secrets) (Sessions, error) {
 	sessions := initSessions()
-	for _, contact := range secrets.contacts {
+	for contact := range secrets.contacts {
 		newSessions, err := makeSessionsFor(
 			contact, public, secrets)
 		if err != nil {
