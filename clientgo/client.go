@@ -1219,7 +1219,7 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-const sessionsLevel = 100
+const sessionsLevel = 1
 
 type Sessions struct {
 	transportRx []TransportRx
