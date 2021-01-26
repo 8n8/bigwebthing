@@ -135,6 +135,7 @@ func (Bwt) run() error {
 	if err != nil {
 		return err
 	}
+
 	return saveSecrets(secrets)
 }
 
