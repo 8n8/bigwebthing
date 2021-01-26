@@ -119,7 +119,7 @@ func (Bwt) run() error {
 		return err
 	}
 
-	kk1s, secrets, err := makeCryptoTopUps(secrets, sessions)
+	kk1s, secrets, err := makeKk1TopUps(secrets, sessions)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (Bwt) run() error {
 	return saveSecrets(secrets)
 }
 
-func makeCryptoTopUps(
+func makeKk1TopUps(
 	secrets Secrets,
 	sessions Sessions) ([]byte, Secrets, error) {
 
