@@ -505,7 +505,7 @@ type Session interface {
 }
 
 func (k TransportRx) insert(sessions Sessions) Sessions {
-	sessions.transportRx = append(sessions.transportRx, k)
+	sessions.transportRx[k] = struct{}{}
 	return sessions
 }
 
@@ -1219,7 +1219,7 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 const sessionsLevel = 1
 
 type Sessions struct {
-	transportRx []TransportRx
+	transportRx map[TransportRx]struct{}
 	transportTx []TransportTx
 	kk1kk2Rx    []Kk1Kk2Rx
 	kk1kk2Tx    []Kk1Kk2Tx
@@ -1302,8 +1302,11 @@ type Kk1Tx struct {
 }
 
 func addSessions(s1 Sessions, s2 Sessions) Sessions {
+	for t := range s2.transportRx {
+		s1.transportRx[t] = struct{}{}
+	}
 	return Sessions{
-		transportRx: append(s1.transportRx, s2.transportRx...),
+		transportRx: s1.transportRx,
 		kk1kk2Rx:    append(s1.kk1kk2Rx, s2.kk1kk2Rx...),
 		kk1kk2Tx:    append(s1.kk1kk2Tx, s2.kk1kk2Tx...),
 		kk1Rx:       append(s1.kk1Rx, s2.kk1Rx...),
@@ -1313,7 +1316,7 @@ func addSessions(s1 Sessions, s2 Sessions) Sessions {
 
 func initSessions() Sessions {
 	return Sessions{
-		transportRx: make([]TransportRx, 0),
+		transportRx: make(map[TransportRx]struct{}),
 		transportTx: make([]TransportTx, 0),
 		kk1kk2Rx:    make([]Kk1Kk2Rx, 0),
 		kk1kk2Tx:    make([]Kk1Kk2Tx, 0),
@@ -1407,7 +1410,7 @@ func (Read_) run() error {
 		return err
 	}
 
-	for _, transport := range sessions.transportRx {
+	for transport := range sessions.transportRx {
 		pretty, err := showTransportRx(
 			transport, secrets.staticKeys)
 		if err != nil {
