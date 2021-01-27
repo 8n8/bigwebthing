@@ -17,6 +17,8 @@ cd ../A
 ~/go/bin/client
 cp public ../B
 
+exit 0
+
 # 4
 cd ../B
 ~/go/bin/client

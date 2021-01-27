@@ -992,11 +992,17 @@ func parseSecretKk1(raw []byte, pos int) ([kk1Size]byte, int, error) {
 	var kk1 [kk1Size]byte
 	n := copy(kk1[:], raw[pos:])
 	if n < kk1Size {
-		return kk1, pos, TooShortForKk1{}
+		return kk1, pos, TooShortForSecretKk1{}
 	}
 	pos += kk1Size
 
 	return kk1, pos, nil
+}
+
+type TooShortForSecretKk1 struct{}
+
+func (TooShortForSecretKk1) Error() string {
+	return "too short for secret KK1"
 }
 
 type TooShortForSecret struct{}
