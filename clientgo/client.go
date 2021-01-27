@@ -997,12 +997,11 @@ func parseSessionSecrets(
 }
 
 func kk1P(raw []byte, pos int) ([kk1Size]byte, int, error) {
-	if len(raw)-pos < kk1Size {
-		return *new([kk1Size]byte), pos, TooShortForKk1{}
-	}
-
 	var kk1 [kk1Size]byte
-	copy(kk1[:], raw[pos:])
+	n := copy(kk1[:], raw[pos:])
+	if n < kk1Size {
+		return kk1, pos, TooShortForKk1{}
+	}
 	pos += kk1Size
 
 	return kk1, pos, nil
@@ -1015,12 +1014,11 @@ func (TooShortForSecret) Error() string {
 }
 
 func secretP(raw []byte, pos int) ([SecretSize]byte, int, error) {
-	if len(raw)-pos < SecretSize {
-		return *new([SecretSize]byte), pos, TooShortForSecret{}
-	}
-
 	var secret [SecretSize]byte
-	copy(secret[:], raw[pos:])
+	n := copy(secret[:], raw[pos:])
+	if n < SecretSize {
+		return secret, pos, TooShortForSecret{}
+	}
 	pos += SecretSize
 	return secret, pos, nil
 }
@@ -1032,12 +1030,11 @@ func (TooShortForTheirId) Error() string {
 }
 
 func dhlenP(raw []byte, pos int) ([dhlen]byte, int, error) {
-	if len(raw)-pos < dhlen {
-		return *new([dhlen]byte), pos, TooShortForTheirId{}
-	}
-
 	var theirId [dhlen]byte
-	copy(theirId[:], raw[pos:])
+	n := copy(theirId[:], raw[pos:])
+	if n < dhlen {
+		return theirId, pos, TooShortForTheirId{}
+	}
 	pos += dhlen
 	return theirId, pos, nil
 }
@@ -1049,16 +1046,17 @@ func (TooShortForUint32) Error() string {
 }
 
 func uint32P(raw []byte, pos int) (int, int, error) {
-	if len(raw)-pos < 4 {
+	var bytes [4]byte
+	n := copy(bytes[:], raw[pos:])
+	if n < 4 {
 		return 0, pos, TooShortForUint32{}
 	}
 
-	bs := raw[pos : pos+4]
 	pos += 4
 
-	n := 0
+	n = 0
 	for i := 0; i < 4; i++ {
-		n += int(bs[i] << (i * 8))
+		n += int(bytes[i] << (i * 8))
 	}
 	return n, pos, nil
 }
