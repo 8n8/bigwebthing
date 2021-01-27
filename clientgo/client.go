@@ -945,10 +945,10 @@ func getPublic() (Public, error) {
 	for parser.cursor < parser.lenraw {
 		parser, err = parseKk(parser)
 		if err != nil {
-			return parser.public, err
+			break
 		}
 	}
-	return parser.public, nil
+	return parser.public, err
 }
 
 type kk1AndId struct {
