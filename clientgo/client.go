@@ -881,7 +881,6 @@ type Parser struct {
 	raw     []byte
 	lenraw  int
 	cursor  int
-	counter int
 	public  Public
 }
 
@@ -920,7 +919,6 @@ func initParser(raw []byte) Parser {
 		raw:     raw,
 		lenraw:  len(raw),
 		cursor:  0,
-		counter: 0,
 		public: initPublic(),
 	}
 }
@@ -944,7 +942,7 @@ func getPublic() (Public, error) {
 	}
 
 	parser := initParser(raw)
-	for ; parser.cursor < parser.lenraw; parser.counter++ {
+	for parser.cursor < parser.lenraw {
 		parser, err = parseKk(parser)
 		if err != nil {
 			return parser.public, err
