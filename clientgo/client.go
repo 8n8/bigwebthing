@@ -242,7 +242,7 @@ func saveKks(kks []byte) error {
 	}
 	f, err := os.OpenFile(
 		publicPath,
-		os.O_APPEND | os.O_WRONLY | os.O_CREATE,
+		os.O_APPEND|os.O_WRONLY|os.O_CREATE,
 		0644)
 	if err != nil {
 		return err
@@ -392,7 +392,7 @@ func getSession(
 }
 
 type Write_ struct {
-	to [dhlen]byte
+	to  [dhlen]byte
 	msg [plaintextSize]byte
 }
 
@@ -413,7 +413,7 @@ func parseMessage(raw string) ([plaintextSize]byte, error) {
 	var plain [plaintextSize]byte
 	// The -1 is because the first byte is used for storing the
 	// length.
-	if len(asBytes) > plaintextSize - 1 {
+	if len(asBytes) > plaintextSize-1 {
 		return plain, MessageTooLong{}
 	}
 	copy(plain[1:], asBytes)
@@ -434,7 +434,7 @@ func (w WritingTransportFailed) Error() string {
 func writeTransport(transport [transportSize]byte) error {
 	f, err := os.OpenFile(
 		publicPath,
-		os.O_APPEND | os.O_WRONLY | os.O_CREATE,
+		os.O_APPEND|os.O_WRONLY|os.O_CREATE,
 		0644)
 	if err != nil {
 		return err
@@ -530,7 +530,7 @@ func makeSessionFor(
 			secrets.staticKeys)
 	}
 
-	return rxSession(kk1, contact, kk2s, transports, secrets)
+	return rxSession(kk1, contact, transports, secrets)
 }
 
 var cryptoAd []byte = []byte{100, 117, 182, 195, 110, 70, 39, 86, 128, 240}
@@ -622,7 +622,7 @@ func txSession(
 	if !foundKk2 {
 		return Kk1Tx{
 			theirId: contact,
-			secret: secret,
+			secret:  secret,
 		}, nil
 	}
 
@@ -630,16 +630,16 @@ func txSession(
 	if !foundTransport {
 		return Kk2Tx{
 			theirid: contact,
-			secret: secret,
-			kk2: kk2,
+			secret:  secret,
+			kk2:     kk2,
 		}, nil
 	}
 
 	return TransportTx{
 		theirid: contact,
-		secret: secret,
-		kk2: kk2,
-		plain: plain,
+		secret:  secret,
+		kk2:     kk2,
+		plain:   plain,
 	}, nil
 }
 
@@ -698,38 +698,79 @@ func makeSessionSecret() ([SecretSize]byte, error) {
 	return secret, err
 }
 
+func readNewKk1Rx(
+	kk1 [kk1Size]byte,
+	contact [dhlen]byte,
+	staticKeys noise.DHKey) (Session, error) {
+
+	tmpSecret, err := makeSessionSecret()
+	if err != nil {
+		return nil, err
+	}
+
+	shake, err := initShakeRx(
+		tmpSecret,
+		contact,
+		staticKeys)
+	if err != nil {
+		return nil, err
+	}
+
+	_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
+	if err == nil {
+		return Kk1Rx{
+			theirid: contact,
+			kk1:     kk1,
+		}, nil
+	}
+
+	return NoSession{}, nil
+}
+
 func rxSession(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
-	kk2s map[[kk2Size]byte]struct{},
 	transports map[[transportSize]byte]struct{},
 	secrets Secrets) (Session, error) {
 
 	secret, ok := secrets.receiving[kk1AndId{kk1, contact}]
 	if !ok {
-		// It's not a KK1 I have interacted with before.
-		tmpSecret, err := makeSessionSecret()
-		if err != nil {
-			return nil, err
-		}
-		shake, err := initShakeRx(
-			tmpSecret, contact, secrets.staticKeys)
-		if err != nil {
-			return nil, err
-		}
-		_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
-		if err == nil {
-			return Kk1Rx{
-				theirid: contact,
-				kk1:     kk1,
-			}, nil
-		}
-		return NoSession{}, nil
+		return readNewKk1Rx(kk1, contact, secrets.staticKeys)
 	}
 
-	// It's a KK1 that I have responded to in the past.
+	return readOldKk1Rx(
+		kk1,
+		contact,
+		secret,
+		transports,
+		secrets.staticKeys)
+}
 
-	shake, err := initShakeRx(secret, contact, secrets.staticKeys)
+func findTransportRx(
+	cipher *noise.CipherState,
+	transports map[[transportSize]byte]struct{}) (
+	[transportSize]byte, bool) {
+
+	for transport := range transports {
+		_, err := cipher.Decrypt(
+			[]byte{},
+			cryptoAd,
+			transport[:])
+		if err == nil {
+			return transport, true
+		}
+	}
+	return *new([transportSize]byte), false
+}
+
+func readOldKk1Rx(
+	kk1 [kk1Size]byte,
+	contact [dhlen]byte,
+	secret [SecretSize]byte,
+	transports map[[transportSize]byte]struct{},
+	staticKeys noise.DHKey) (Session, error) {
+
+	shake, err := initShakeRx(secret, contact, staticKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -739,42 +780,15 @@ func rxSession(
 		return NoSession{}, nil
 	}
 
-	// So it's a valid KK1 from this contact.
-
-	newKk2Slice, cipher, _, err := shake.WriteMessage(
-		[]byte{}, []byte{})
+	_, cipher, _, err := shake.WriteMessage([]byte{}, []byte{})
 	if err != nil {
 		return nil, err
 	}
-	var newKk2 [kk2Size]byte
-	copy(newKk2[:], newKk2Slice)
 
-	_, kk2Exists := kk2s[newKk2]
-	if !kk2Exists {
-		return Kk1Rx{
-			theirid: contact,
-			kk1:     kk1,
-		}, nil
-	}
-
-	// I have already responded to the KK1 with a KK2.
-
-	if len(transports) == 0 {
-		return Kk2Rx{
-			kk1: kk1,
-			theirid: contact,
-			secret: secret,
-		}, nil
-	}
-	var transport [transportSize]byte
-	for transport = range transports {
-		_, err = cipher.Decrypt(
-			[]byte{}, cryptoAd, transport[:])
-		if err == nil {
-			break
-		}
-	}
-	if err != nil {
+	transport, foundTransport := findTransportRx(
+		cipher,
+		transports)
+	if !foundTransport {
 		return Kk2Rx{
 			kk1:     kk1,
 			theirid: contact,
@@ -854,10 +868,10 @@ func parseTransport(p Parser) (Parser, error) {
 }
 
 type Parser struct {
-	raw     []byte
-	lenraw  int
-	cursor  int
-	public  Public
+	raw    []byte
+	lenraw int
+	cursor int
+	public Public
 }
 
 func parseKk(p Parser) (Parser, error) {
@@ -891,9 +905,9 @@ func (NoPublicFile) Error() string {
 
 func initParser(raw []byte) Parser {
 	return Parser{
-		raw:     raw,
-		lenraw:  len(raw),
-		cursor:  0,
+		raw:    raw,
+		lenraw: len(raw),
+		cursor: 0,
 		public: initPublic(),
 	}
 }
@@ -1157,8 +1171,8 @@ const sessionsLevel = 1
 type Sessions struct {
 	transportRx map[TransportRx]struct{}
 	transportTx map[TransportTx]struct{}
-	kk2Rx    map[Kk2Rx]struct{}
-	kk2Tx    map[Kk2Tx]struct{}
+	kk2Rx       map[Kk2Rx]struct{}
+	kk2Tx       map[Kk2Tx]struct{}
 	kk1Rx       map[Kk1Rx]struct{}
 	kk1Tx       map[Kk1Tx]struct{}
 }
@@ -1263,8 +1277,8 @@ func initSessions() Sessions {
 	return Sessions{
 		transportRx: make(map[TransportRx]struct{}),
 		transportTx: make(map[TransportTx]struct{}),
-		kk2Rx:    make(map[Kk2Rx]struct{}),
-		kk2Tx:    make(map[Kk2Tx]struct{}),
+		kk2Rx:       make(map[Kk2Rx]struct{}),
+		kk2Tx:       make(map[Kk2Tx]struct{}),
 		kk1Rx:       make(map[Kk1Rx]struct{}),
 		kk1Tx:       make(map[Kk1Tx]struct{}),
 	}
