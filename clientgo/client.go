@@ -613,25 +613,11 @@ func txSession(
 		return nil, err
 	}
 
-	// Replicate the KK1.
-	replica, _, _, err := shake.WriteMessage([]byte{}, []byte{})
+	_, _, _, err = shake.WriteMessage([]byte{}, []byte{})
 	if err != nil {
 		return nil, err
 	}
-	if !bytesEqual(replica, kk1[:]) {
-		return nil, CouldntReplicateKk1{}
-	}
 
-	// See if there is a KK2 that someone sent in response.
-	if len(kk2s) == 0 {
-		// There aren't any KK2s at all.
-		return Kk1Tx{
-			theirId: contact,
-			secret: secret,
-		}, nil
-	}
-
-	// There are some KK2s, but are there any from this person?
 	var cipher *noise.CipherState
 	var kk2 [kk2Size]byte
 	for kk2 = range kk2s {
@@ -640,30 +626,21 @@ func txSession(
 			break
 		}
 	}
-	if err != nil {
+	if err != nil || len(kk2s) == 0 {
 		return Kk1Tx{
 			theirId: contact,
 			secret:  secret,
 		}, nil
 	}
 
-	// So there is a responding KK2.
-	if len(transports) == 0 {
-		return Kk2Tx{
-			theirid: contact,
-			secret: secret,
-			kk2: kk2,
-		}, nil
-	}
 	for transport := range transports {
-		plainArr, err := cipher.Decrypt(
+		plainSlice, err := cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
 			transport[:])
 		if err == nil {
 			var plain [plaintextSize]byte
-			copy(plain[:], plainArr)
-			// So I sent out a transport.
+			copy(plain[:], plainSlice)
 			return TransportTx{
 				theirid: contact,
 				secret:  secret,
@@ -673,7 +650,6 @@ func txSession(
 		}
 	}
 
-	// So there is a KK1 and a KK2 but no transport.
 	return Kk2Tx{
 		theirid: contact,
 		secret:  secret,
@@ -834,12 +810,6 @@ func parseKk2(p Parser) (Parser, error) {
 const plaintextSize = 24
 const transportOverhead = 16
 const transportSize = plaintextSize + transportOverhead
-
-type CouldntReplicateKk1 struct{}
-
-func (CouldntReplicateKk1) Error() string {
-	return "couldn't replicate KK1"
-}
 
 type TooShortForKk1 Parser
 
