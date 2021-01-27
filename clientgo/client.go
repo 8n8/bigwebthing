@@ -813,12 +813,11 @@ func (NoSession) insert(sessions Sessions) Sessions {
 }
 
 func parseKk1(p Parser) (Parser, error) {
-	if p.lenraw-p.cursor < kk1Size {
+	var kk1 [kk1Size]byte
+	n := copy(kk1[:], p.raw[p.cursor:])
+	if n < kk1Size {
 		return p, TooShortForKk1(p)
 	}
-
-	var kk1 [kk1Size]byte
-	copy(kk1[:], p.raw[p.cursor:])
 	p.public.kk1s[kk1] = struct{}{}
 	p.cursor += kk1Size
 	return p, nil
@@ -827,12 +826,11 @@ func parseKk1(p Parser) (Parser, error) {
 const kk2Size = 48
 
 func parseKk2(p Parser) (Parser, error) {
-	if p.lenraw-p.cursor < kk2Size {
+	var kk2 [kk2Size]byte
+	n := copy(kk2[:], p.raw[p.cursor:])
+	if n < kk2Size {
 		return p, TooShortForKk2(p)
 	}
-
-	var kk2 [kk2Size]byte
-	copy(kk2[:], p.raw[p.cursor:])
 	p.public.kk2s[kk2] = struct{}{}
 	p.cursor += kk2Size
 	return p, nil
@@ -867,11 +865,11 @@ func (t TooShortForKk1) Error() string {
 }
 
 func parseTransport(p Parser) (Parser, error) {
-	if p.lenraw-p.cursor < transportSize {
+	var transport [transportSize]byte
+	n := copy(transport[:], p.raw[p.cursor:])
+	if n < transportSize {
 		return p, TooShortForTransport(p)
 	}
-	var transport [transportSize]byte
-	copy(transport[:], p.raw[p.cursor:])
 	p.public.transports[transport] = struct{}{}
 	p.cursor += transportSize
 	return p, nil
