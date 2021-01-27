@@ -843,17 +843,17 @@ type TooShortForKk1 Parser
 type TooShortForKk2 Parser
 
 func (t TooShortForKk2) Error() string {
-	return fmt.Sprintf("bad 'public' file: failed parsing KK2: parser position %d, but length is %d", t.cursor, t.lenraw)
+	return fmt.Sprintf("bad public file: failed parsing KK2: parser position %d, but length is %d", t.cursor, t.lenraw)
 }
 
 type TooShortForTransport Parser
 
 func (t TooShortForTransport) Error() string {
-	return fmt.Sprintf("bad 'public' file: failed parsing KK transport: parser position %d, but length is %d", t.cursor, t.lenraw)
+	return fmt.Sprintf("bad public file: failed parsing KK transport: parser position %d, but length is %d", t.cursor, t.lenraw)
 }
 
 func (t TooShortForKk1) Error() string {
-	return fmt.Sprintf("bad 'public' file: failed parsing KK1: parser position %d, but length is %d", t.cursor, t.lenraw)
+	return fmt.Sprintf("bad public file: failed parsing KK1: parser position %d, but length is %d", t.cursor, t.lenraw)
 }
 
 func parseTransport(p Parser) (Parser, error) {
