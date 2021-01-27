@@ -958,7 +958,7 @@ func parseSessionSecrets(
 	raw []byte,
 	pos int) (map[kk1AndId][SecretSize]byte, int, error) {
 
-	n, pos, err := uint32P(raw, pos)
+	n, pos, err := parseUint32(raw, pos)
 	if err != nil {
 		return nil, pos, err
 	}
@@ -968,17 +968,17 @@ func parseSessionSecrets(
 	var theirid [dhlen]byte
 	var secret [SecretSize]byte
 	for i := 0; i < n; i++ {
-		kk1, pos, err = kk1P(raw, pos)
+		kk1, pos, err = parseSecretKk1(raw, pos)
 		if err != nil {
 			return nil, pos, err
 		}
 
-		theirid, pos, err = dhlenP(raw, pos)
+		theirid, pos, err = parseDhlen(raw, pos)
 		if err != nil {
 			return nil, pos, err
 		}
 
-		secret, pos, err = secretP(raw, pos)
+		secret, pos, err = parseSecret(raw, pos)
 		if err != nil {
 			return nil, pos, err
 		}
@@ -988,7 +988,7 @@ func parseSessionSecrets(
 	return secrets, pos, nil
 }
 
-func kk1P(raw []byte, pos int) ([kk1Size]byte, int, error) {
+func parseSecretKk1(raw []byte, pos int) ([kk1Size]byte, int, error) {
 	var kk1 [kk1Size]byte
 	n := copy(kk1[:], raw[pos:])
 	if n < kk1Size {
@@ -1005,7 +1005,7 @@ func (TooShortForSecret) Error() string {
 	return "too short for secret"
 }
 
-func secretP(raw []byte, pos int) ([SecretSize]byte, int, error) {
+func parseSecret(raw []byte, pos int) ([SecretSize]byte, int, error) {
 	var secret [SecretSize]byte
 	n := copy(secret[:], raw[pos:])
 	if n < SecretSize {
@@ -1021,7 +1021,7 @@ func (TooShortForTheirId) Error() string {
 	return "too short for their ID"
 }
 
-func dhlenP(raw []byte, pos int) ([dhlen]byte, int, error) {
+func parseDhlen(raw []byte, pos int) ([dhlen]byte, int, error) {
 	var theirId [dhlen]byte
 	n := copy(theirId[:], raw[pos:])
 	if n < dhlen {
@@ -1037,7 +1037,7 @@ func (TooShortForUint32) Error() string {
 	return "not enough bytes for uint32"
 }
 
-func uint32P(raw []byte, pos int) (int, int, error) {
+func parseUint32(raw []byte, pos int) (int, int, error) {
 	var bytes [4]byte
 	n := copy(bytes[:], raw[pos:])
 	if n < 4 {
@@ -1057,14 +1057,14 @@ func parseContacts(
 	raw []byte,
 	pos int) (map[[dhlen]byte]struct{}, int, error) {
 
-	n, pos, err := uint32P(raw, pos)
+	n, pos, err := parseUint32(raw, pos)
 	if err != nil {
 		return *new(map[[dhlen]byte]struct{}), pos, err
 	}
 
 	contacts := make(map[[dhlen]byte]struct{}, n)
 	for i := 0; i < n; i++ {
-		contact, pos, err := dhlenP(raw, pos)
+		contact, pos, err := parseDhlen(raw, pos)
 		if err != nil {
 			return contacts, pos, err
 		}
@@ -1074,11 +1074,11 @@ func parseContacts(
 }
 
 func parseStaticKeys(raw []byte, pos int) (noise.DHKey, int, error) {
-	secret, pos, err := dhlenP(raw, pos)
+	secret, pos, err := parseDhlen(raw, pos)
 	if err != nil {
 		return *new(noise.DHKey), pos, err
 	}
-	public, pos, err := dhlenP(raw, pos)
+	public, pos, err := parseDhlen(raw, pos)
 	return noise.DHKey{
 		Private: secret[:],
 		Public:  public[:],
