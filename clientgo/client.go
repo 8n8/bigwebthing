@@ -1069,8 +1069,9 @@ func parseContacts(
 	}
 
 	contacts := make(map[[dhlen]byte]struct{}, n)
+	var contact [dhlen]byte
 	for i := 0; i < n; i++ {
-		contact, pos, err := parseDhlen(raw, pos)
+		contact, pos, err = parseDhlen(raw, pos)
 		if err != nil {
 			return contacts, pos, err
 		}
