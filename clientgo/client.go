@@ -294,7 +294,7 @@ func makeTopUpCounts(
 		ids[contact] = 0
 	}
 
-	for k := range sessions.kk1kk2Tx {
+	for k := range sessions.kk2Tx {
 		_, ok := ids[k.theirid]
 		if ok {
 			ids[k.theirid] += 1
@@ -380,15 +380,15 @@ func (a AddContact) run() error {
 }
 
 func getSession(
-	ks map[Kk1Kk2Tx]struct{},
-	theirid [dhlen]byte) (Kk1Kk2Tx, bool) {
+	ks map[Kk2Tx]struct{},
+	theirid [dhlen]byte) (Kk2Tx, bool) {
 
 	for k := range ks {
 		if k.theirid == theirid {
 			return k, true
 		}
 	}
-	return *new(Kk1Kk2Tx), false
+	return *new(Kk2Tx), false
 }
 
 type Write_ struct {
@@ -477,7 +477,7 @@ func (s Write_) run() error {
 		return err
 	}
 
-	session, ok := getSession(sessions.kk1kk2Tx, s.to)
+	session, ok := getSession(sessions.kk2Tx, s.to)
 	if !ok {
 		return NoSessionsCantSend{}
 	}
@@ -654,7 +654,7 @@ func txSessions(
 
 	// So there is a responding KK2.
 	if len(transports) == 0 {
-		return Kk1Kk2Tx{
+		return Kk2Tx{
 			theirid: contact,
 			secret: secret,
 			kk2: kk2,
@@ -679,7 +679,7 @@ func txSessions(
 	}
 
 	// So there is a KK1 and a KK2 but no transport.
-	return Kk1Kk2Tx{
+	return Kk2Tx{
 		theirid: contact,
 		secret:  secret,
 		kk2:     kk2,
@@ -691,8 +691,8 @@ func (k Kk1Tx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-func (k Kk1Kk2Tx) insert(sessions Sessions) Sessions {
-	sessions.kk1kk2Tx[k] = struct{}{}
+func (k Kk2Tx) insert(sessions Sessions) Sessions {
+	sessions.kk2Tx[k] = struct{}{}
 	return sessions
 }
 
@@ -764,7 +764,7 @@ func rxSessions(
 	// I have already responded to the KK1 with a KK2.
 
 	if len(transports) == 0 {
-		return Kk1Kk2Rx{
+		return Kk2Rx{
 			kk1: kk1,
 			theirid: contact,
 			secret: secret,
@@ -779,7 +779,7 @@ func rxSessions(
 		}
 	}
 	if err != nil {
-		return Kk1Kk2Rx{
+		return Kk2Rx{
 			kk1:     kk1,
 			theirid: contact,
 			secret:  secret,
@@ -1179,8 +1179,8 @@ const sessionsLevel = 1
 type Sessions struct {
 	transportRx map[TransportRx]struct{}
 	transportTx map[TransportTx]struct{}
-	kk1kk2Rx    map[Kk1Kk2Rx]struct{}
-	kk1kk2Tx    map[Kk1Kk2Tx]struct{}
+	kk2Rx    map[Kk2Rx]struct{}
+	kk2Tx    map[Kk2Tx]struct{}
 	kk1Rx       map[Kk1Rx]struct{}
 	kk1Tx       map[Kk1Tx]struct{}
 }
@@ -1204,18 +1204,18 @@ type TransportRx struct {
 	transport [transportSize]byte
 }
 
-type Kk1Kk2Rx struct {
+type Kk2Rx struct {
 	kk1     [kk1Size]byte
 	theirid [dhlen]byte
 	secret  [SecretSize]byte
 }
 
-func (k Kk1Kk2Rx) insert(sessions Sessions) Sessions {
-	sessions.kk1kk2Rx[k] = struct{}{}
+func (k Kk2Rx) insert(sessions Sessions) Sessions {
+	sessions.kk2Rx[k] = struct{}{}
 	return sessions
 }
 
-type Kk1Kk2Tx struct {
+type Kk2Tx struct {
 	theirid [dhlen]byte
 	secret  [SecretSize]byte
 	kk2     [kk2Size]byte
@@ -1223,7 +1223,7 @@ type Kk1Kk2Tx struct {
 
 func makeTransport(
 	msg [plaintextSize]byte,
-	k Kk1Kk2Tx,
+	k Kk2Tx,
 	staticKeys noise.DHKey) ([transportSize]byte, error) {
 
 	var transport [transportSize]byte
@@ -1266,11 +1266,11 @@ func addSessions(s1 Sessions, s2 Sessions) Sessions {
 	for t := range s2.transportTx {
 		s1.transportTx[t] = struct{}{}
 	}
-	for k := range s2.kk1kk2Rx {
-		s1.kk1kk2Rx[k] = struct{}{}
+	for k := range s2.kk2Rx {
+		s1.kk2Rx[k] = struct{}{}
 	}
-	for k := range s2.kk1kk2Tx {
-		s1.kk1kk2Tx[k] = struct{}{}
+	for k := range s2.kk2Tx {
+		s1.kk2Tx[k] = struct{}{}
 	}
 	for k := range s2.kk1Rx {
 		s1.kk1Rx[k] = struct{}{}
@@ -1285,8 +1285,8 @@ func initSessions() Sessions {
 	return Sessions{
 		transportRx: make(map[TransportRx]struct{}),
 		transportTx: make(map[TransportTx]struct{}),
-		kk1kk2Rx:    make(map[Kk1Kk2Rx]struct{}),
-		kk1kk2Tx:    make(map[Kk1Kk2Tx]struct{}),
+		kk2Rx:    make(map[Kk2Rx]struct{}),
+		kk2Tx:    make(map[Kk2Tx]struct{}),
 		kk1Rx:       make(map[Kk1Rx]struct{}),
 		kk1Tx:       make(map[Kk1Tx]struct{}),
 	}
@@ -1323,7 +1323,9 @@ func makeSessions(public Public, secrets Secrets) (Sessions, error) {
 	sessions := initSessions()
 	for contact := range secrets.contacts {
 		newSessions, err := makeSessionsFor(
-			contact, public, secrets)
+			contact,
+			public,
+			secrets)
 		if err != nil {
 			return sessions, err
 		}
