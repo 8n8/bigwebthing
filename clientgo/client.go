@@ -519,17 +519,18 @@ func makeSessionFor(
 	transports map[[transportSize]byte]struct{},
 	secrets Secrets) (Session, error) {
 
-	session, done, err := txSessions(
-		kk1,
-		contact,
-		kk2s,
-		transports,
-		secrets)
-	if done {
-		return session, err
+	txSecret, ok := secrets.sending[kk1AndId{kk1, contact}]
+	if ok {
+		return txSession(
+			kk1,
+			contact,
+			kk2s,
+			transports,
+			txSecret,
+			secrets.staticKeys)
 	}
 
-	return rxSessions(kk1, contact, kk2s, transports, secrets)
+	return rxSession(kk1, contact, kk2s, transports, secrets)
 }
 
 var cryptoAd []byte = []byte{100, 117, 182, 195, 110, 70, 39, 86, 128, 240}
@@ -599,32 +600,26 @@ func initShakeTx(
 	return initShake(secret, contact, staticKeys, true)
 }
 
-func txSessions(
+func txSession(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s map[[kk2Size]byte]struct{},
 	transports map[[transportSize]byte]struct{},
-	secrets Secrets) (Session, bool, error) {
+	secret [SecretSize]byte,
+	staticKeys noise.DHKey) (Session, error) {
 
-	secret, ok := secrets.sending[kk1AndId{kk1, contact}]
-	if !ok {
-		return nil, false, nil
-	}
-
-	// So it's a KK1 that I sent out at some stage.
-
-	shake, err := initShakeTx(secret, contact, secrets.staticKeys)
+	shake, err := initShakeTx(secret, contact, staticKeys)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	// Replicate the KK1.
 	replica, _, _, err := shake.WriteMessage([]byte{}, []byte{})
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	if !bytesEqual(replica, kk1[:]) {
-		return nil, true, CouldntReplicateKk1{}
+		return nil, CouldntReplicateKk1{}
 	}
 
 	// See if there is a KK2 that someone sent in response.
@@ -633,7 +628,7 @@ func txSessions(
 		return Kk1Tx{
 			theirId: contact,
 			secret: secret,
-		}, true, nil
+		}, nil
 	}
 
 	// There are some KK2s, but are there any from this person?
@@ -649,7 +644,7 @@ func txSessions(
 		return Kk1Tx{
 			theirId: contact,
 			secret:  secret,
-		}, true, nil
+		}, nil
 	}
 
 	// So there is a responding KK2.
@@ -658,7 +653,7 @@ func txSessions(
 			theirid: contact,
 			secret: secret,
 			kk2: kk2,
-		}, true, nil
+		}, nil
 	}
 	for transport := range transports {
 		plainArr, err := cipher.Decrypt(
@@ -674,7 +669,7 @@ func txSessions(
 				secret:  secret,
 				kk2:     kk2,
 				plain:   plain,
-			}, true, nil
+			}, nil
 		}
 	}
 
@@ -683,7 +678,7 @@ func txSessions(
 		theirid: contact,
 		secret:  secret,
 		kk2:     kk2,
-	}, true, nil
+	}, nil
 }
 
 func (k Kk1Tx) insert(sessions Sessions) Sessions {
@@ -702,7 +697,7 @@ func makeSessionSecret() ([SecretSize]byte, error) {
 	return secret, err
 }
 
-func rxSessions(
+func rxSession(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s map[[kk2Size]byte]struct{},
