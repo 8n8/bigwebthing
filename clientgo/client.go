@@ -301,7 +301,7 @@ func makeTopUpCounts(
 		}
 	}
 
-	for _, k := range sessions.kk1Tx {
+	for k := range sessions.kk1Tx {
 		_, ok := ids[k.theirId]
 		if ok {
 			ids[k.theirId] += 1
@@ -687,7 +687,7 @@ func txSessions(
 }
 
 func (k Kk1Tx) insert(sessions Sessions) Sessions {
-	sessions.kk1Tx = append(sessions.kk1Tx, k)
+	sessions.kk1Tx[k] = struct{}{}
 	return sessions
 }
 
@@ -1228,7 +1228,7 @@ type Sessions struct {
 	kk1kk2Rx    map[Kk1Kk2Rx]struct{}
 	kk1kk2Tx    map[Kk1Kk2Tx]struct{}
 	kk1Rx       map[Kk1Rx]struct{}
-	kk1Tx       []Kk1Tx
+	kk1Tx       map[Kk1Tx]struct{}
 }
 
 func (k TransportTx) insert(sessions Sessions) Sessions {
@@ -1321,14 +1321,10 @@ func addSessions(s1 Sessions, s2 Sessions) Sessions {
 	for k := range s2.kk1Rx {
 		s1.kk1Rx[k] = struct{}{}
 	}
-	return Sessions{
-		transportRx: s1.transportRx,
-		transportTx: s1.transportTx,
-		kk1kk2Rx:    s1.kk1kk2Rx,
-		kk1kk2Tx:    s1.kk1kk2Tx,
-		kk1Rx: s1.kk1Rx,
-		kk1Tx:       append(s1.kk1Tx, s2.kk1Tx...),
+	for k := range s2.kk1Tx {
+		s1.kk1Tx[k] = struct{}{}
 	}
+	return s1
 }
 
 func initSessions() Sessions {
@@ -1338,7 +1334,7 @@ func initSessions() Sessions {
 		kk1kk2Rx:    make(map[Kk1Kk2Rx]struct{}),
 		kk1kk2Tx:    make(map[Kk1Kk2Tx]struct{}),
 		kk1Rx:       make(map[Kk1Rx]struct{}),
-		kk1Tx:       make([]Kk1Tx, 0),
+		kk1Tx:       make(map[Kk1Tx]struct{}),
 	}
 }
 
