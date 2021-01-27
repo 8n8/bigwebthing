@@ -431,7 +431,7 @@ func (w WritingTransportFailed) Error() string {
 	return fmt.Sprintf("bad byte count on writing new transport: %d", w)
 }
 
-func writeTransport(transport [kkTransportSize]byte) error {
+func writeTransport(transport [transportSize]byte) error {
 	f, err := os.OpenFile(
 		publicPath,
 		os.O_APPEND | os.O_WRONLY | os.O_CREATE,
@@ -441,11 +441,11 @@ func writeTransport(transport [kkTransportSize]byte) error {
 	}
 	defer f.Close()
 
-	indicated := make([]byte, 1+kkTransportSize)
+	indicated := make([]byte, 1+transportSize)
 	indicated[0] = transportIndicator
 	copy(indicated[1:], transport[:])
 	n, err := f.Write(indicated)
-	if n != 1+kkTransportSize {
+	if n != 1+transportSize {
 		return WritingTransportFailed(n)
 	}
 	return err
@@ -516,7 +516,7 @@ func makeSessionFor(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s map[[kk2Size]byte]struct{},
-	transports map[[kkTransportSize]byte]struct{},
+	transports map[[transportSize]byte]struct{},
 	secrets Secrets) (Session, error) {
 
 	session, done, err := txSessions(
@@ -603,7 +603,7 @@ func txSessions(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s map[[kk2Size]byte]struct{},
-	transports map[[kkTransportSize]byte]struct{},
+	transports map[[transportSize]byte]struct{},
 	secrets Secrets) (Session, bool, error) {
 
 	secret, ok := secrets.sending[kk1AndId{kk1, contact}]
@@ -706,7 +706,7 @@ func rxSessions(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s map[[kk2Size]byte]struct{},
-	transports map[[kkTransportSize]byte]struct{},
+	transports map[[transportSize]byte]struct{},
 	secrets Secrets) (Session, error) {
 
 	secret, ok := secrets.receiving[kk1AndId{kk1, contact}]
@@ -770,7 +770,7 @@ func rxSessions(
 			secret: secret,
 		}, nil
 	}
-	var transport [kkTransportSize]byte
+	var transport [transportSize]byte
 	for transport = range transports {
 		_, err = cipher.Decrypt(
 			[]byte{}, cryptoAd, transport[:])
@@ -840,7 +840,7 @@ func parseKk2(p Parser) (Parser, error) {
 
 const plaintextSize = 24
 const transportOverhead = 16
-const kkTransportSize = plaintextSize + transportOverhead
+const transportSize = plaintextSize + transportOverhead
 
 type CouldntReplicateKk1 struct{}
 
@@ -866,14 +866,14 @@ func (t TooShortForKk1) Error() string {
 	return fmt.Sprintf("bad 'public' file: failed parsing KK1: parser position %d, but length is %d", t.cursor, t.lenraw)
 }
 
-func parseKkTransport(p Parser) (Parser, error) {
-	if p.lenraw-p.cursor < kkTransportSize {
+func parseTransport(p Parser) (Parser, error) {
+	if p.lenraw-p.cursor < transportSize {
 		return p, TooShortForTransport(p)
 	}
-	var transport [kkTransportSize]byte
+	var transport [transportSize]byte
 	copy(transport[:], p.raw[p.cursor:])
 	p.public.transports[transport] = struct{}{}
-	p.cursor += kkTransportSize
+	p.cursor += transportSize
 	return p, nil
 }
 
@@ -885,7 +885,6 @@ type Parser struct {
 }
 
 func parseKk(p Parser) (Parser, error) {
-
 	indicator := p.raw[p.cursor]
 	p.cursor++
 
@@ -895,7 +894,7 @@ func parseKk(p Parser) (Parser, error) {
 	case 1:
 		return parseKk2(p)
 	case 2:
-		return parseKkTransport(p)
+		return parseTransport(p)
 	}
 	return p, BadKkIndicator(indicator)
 }
@@ -927,7 +926,7 @@ func initPublic() Public {
 	return Public{
 		kk1s:       make(map[[kk1Size]byte]struct{}),
 		kk2s:       make(map[[kk2Size]byte]struct{}),
-		transports: make(map[[kkTransportSize]byte]struct{}),
+		transports: make(map[[transportSize]byte]struct{}),
 	}
 }
 
@@ -1206,7 +1205,7 @@ type TransportRx struct {
 	theirid   [dhlen]byte
 	secret    [SecretSize]byte
 	kk1       [kk1Size]byte
-	transport [kkTransportSize]byte
+	transport [transportSize]byte
 }
 
 type Kk1Kk2Rx struct {
@@ -1229,9 +1228,9 @@ type Kk1Kk2Tx struct {
 func makeTransport(
 	msg [plaintextSize]byte,
 	k Kk1Kk2Tx,
-	staticKeys noise.DHKey) ([kkTransportSize]byte, error) {
+	staticKeys noise.DHKey) ([transportSize]byte, error) {
 
-	var transport [kkTransportSize]byte
+	var transport [transportSize]byte
 	shake, err := initShakeTx(k.secret, k.theirid, staticKeys)
 	if err != nil {
 		return transport, err
@@ -1300,7 +1299,7 @@ func initSessions() Sessions {
 type Public struct {
 	kk1s       map[[kk1Size]byte]struct{}
 	kk2s       map[[kk2Size]byte]struct{}
-	transports map[[kkTransportSize]byte]struct{}
+	transports map[[transportSize]byte]struct{}
 }
 
 func makeSessionsFor(
