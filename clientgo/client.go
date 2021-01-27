@@ -75,10 +75,10 @@ type Bwt struct{}
 
 func makeKk2Responses(
 	secrets Secrets,
-	kk1Rxs []Kk1Rx) ([]byte, Secrets, error) {
+	kk1Rxs map[Kk1Rx]struct{}) ([]byte, Secrets, error) {
 
 	kk2s := make([]byte, 0, (1+kk2Size)*len(kk1Rxs))
-	for _, k := range kk1Rxs {
+	for k := range kk1Rxs {
 		secret, err := makeSessionSecret()
 		if err != nil {
 			return kk2s, secrets, err
@@ -1216,7 +1216,7 @@ func getSecrets() (Secrets, error) {
 }
 
 func (k Kk1Rx) insert(sessions Sessions) Sessions {
-	sessions.kk1Rx = append(sessions.kk1Rx, k)
+	sessions.kk1Rx[k] = struct{}{}
 	return sessions
 }
 
@@ -1227,7 +1227,7 @@ type Sessions struct {
 	transportTx map[TransportTx]struct{}
 	kk1kk2Rx    map[Kk1Kk2Rx]struct{}
 	kk1kk2Tx    map[Kk1Kk2Tx]struct{}
-	kk1Rx       []Kk1Rx
+	kk1Rx       map[Kk1Rx]struct{}
 	kk1Tx       []Kk1Tx
 }
 
@@ -1309,17 +1309,24 @@ func addSessions(s1 Sessions, s2 Sessions) Sessions {
 	for t := range s2.transportRx {
 		s1.transportRx[t] = struct{}{}
 	}
+	for t := range s2.transportTx {
+		s1.transportTx[t] = struct{}{}
+	}
 	for k := range s2.kk1kk2Rx {
 		s1.kk1kk2Rx[k] = struct{}{}
 	}
 	for k := range s2.kk1kk2Tx {
 		s1.kk1kk2Tx[k] = struct{}{}
 	}
+	for k := range s2.kk1Rx {
+		s1.kk1Rx[k] = struct{}{}
+	}
 	return Sessions{
 		transportRx: s1.transportRx,
+		transportTx: s1.transportTx,
 		kk1kk2Rx:    s1.kk1kk2Rx,
 		kk1kk2Tx:    s1.kk1kk2Tx,
-		kk1Rx:       append(s1.kk1Rx, s2.kk1Rx...),
+		kk1Rx: s1.kk1Rx,
 		kk1Tx:       append(s1.kk1Tx, s2.kk1Tx...),
 	}
 }
@@ -1330,7 +1337,7 @@ func initSessions() Sessions {
 		transportTx: make(map[TransportTx]struct{}),
 		kk1kk2Rx:    make(map[Kk1Kk2Rx]struct{}),
 		kk1kk2Tx:    make(map[Kk1Kk2Tx]struct{}),
-		kk1Rx:       make([]Kk1Rx, 0),
+		kk1Rx:       make(map[Kk1Rx]struct{}),
 		kk1Tx:       make([]Kk1Tx, 0),
 	}
 }
