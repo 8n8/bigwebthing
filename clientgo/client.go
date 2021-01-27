@@ -618,43 +618,68 @@ func txSession(
 		return nil, err
 	}
 
-	var cipher *noise.CipherState
-	var kk2 [kk2Size]byte
-	for kk2 = range kk2s {
-		_, cipher, _, err = shake.ReadMessage([]byte{}, kk2[:])
-		if err == nil {
-			break
-		}
-	}
-	if err != nil || len(kk2s) == 0 {
+	kk2, cipher, foundKk2 := findKk2Tx(shake, kk2s)
+	if !foundKk2 {
 		return Kk1Tx{
 			theirId: contact,
-			secret:  secret,
+			secret: secret,
 		}, nil
 	}
 
+	plain, foundTransport := findTransportTx(cipher, transports)
+	if !foundTransport {
+		return Kk2Tx{
+			theirid: contact,
+			secret: secret,
+			kk2: kk2,
+		}, nil
+	}
+
+	return TransportTx{
+		theirid: contact,
+		secret: secret,
+		kk2: kk2,
+		plain: plain,
+	}, nil
+}
+
+func findKk2Tx(
+	shake *noise.HandshakeState,
+	kk2s map[[kk2Size]byte]struct{}) (
+	[kk2Size]byte,
+	*noise.CipherState,
+	bool) {
+
+	for kk2 := range kk2s {
+		_, cipher, _, err := shake.ReadMessage(
+			[]byte{},
+			kk2[:])
+		if err == nil {
+			return kk2, cipher, true
+		}
+	}
+	return *new([kk2Size]byte), new(noise.CipherState), false
+}
+
+func findTransportTx(
+	cipher *noise.CipherState,
+	transports map[[transportSize]byte]struct{}) (
+	[plaintextSize]byte,
+	bool) {
+
+	var plain [plaintextSize]byte
 	for transport := range transports {
 		plainSlice, err := cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
 			transport[:])
 		if err == nil {
-			var plain [plaintextSize]byte
 			copy(plain[:], plainSlice)
-			return TransportTx{
-				theirid: contact,
-				secret:  secret,
-				kk2:     kk2,
-				plain:   plain,
-			}, nil
+			return plain, true
 		}
 	}
 
-	return Kk2Tx{
-		theirid: contact,
-		secret:  secret,
-		kk2:     kk2,
-	}, nil
+	return plain, false
 }
 
 func (k Kk1Tx) insert(sessions Sessions) Sessions {
