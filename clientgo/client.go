@@ -515,8 +515,8 @@ func (k TransportRx) insert(sessions Sessions) Sessions {
 func makeSessionFor(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
-	kk2s [][kk2Size]byte,
-	transports [][kkTransportSize]byte,
+	kk2s map[[kk2Size]byte]struct{},
+	transports map[[kkTransportSize]byte]struct{},
 	secrets Secrets) (Session, error) {
 
 	session, done, err := txSessions(
@@ -602,8 +602,8 @@ func initShakeTx(
 func txSessions(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
-	kk2s [][kk2Size]byte,
-	transports [][kkTransportSize]byte,
+	kk2s map[[kk2Size]byte]struct{},
+	transports map[[kkTransportSize]byte]struct{},
 	secrets Secrets) (Session, bool, error) {
 
 	secret, ok := secrets.sending[kk1AndId{kk1, contact}]
@@ -639,7 +639,7 @@ func txSessions(
 	// There are some KK2s, but are there any from this person?
 	var cipher *noise.CipherState
 	var kk2 [kk2Size]byte
-	for _, kk2 = range kk2s {
+	for kk2 = range kk2s {
 		_, cipher, _, err = shake.ReadMessage([]byte{}, kk2[:])
 		if err == nil {
 			break
@@ -660,7 +660,7 @@ func txSessions(
 			kk2: kk2,
 		}, true, nil
 	}
-	for _, transport := range transports {
+	for transport := range transports {
 		plainArr, err := cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
@@ -705,8 +705,8 @@ func makeSessionSecret() ([SecretSize]byte, error) {
 func rxSessions(
 	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
-	kk2s [][kk2Size]byte,
-	transports [][kkTransportSize]byte,
+	kk2s map[[kk2Size]byte]struct{},
+	transports map[[kkTransportSize]byte]struct{},
 	secrets Secrets) (Session, error) {
 
 	secret, ok := secrets.receiving[kk1AndId{kk1, contact}]
@@ -753,7 +753,8 @@ func rxSessions(
 	var newKk2 [kk2Size]byte
 	copy(newKk2[:], newKk2Slice)
 
-	if !matchingKk2(newKk2, kk2s) {
+	_, kk2Exists := kk2s[newKk2]
+	if !kk2Exists {
 		return Kk1Rx{
 			theirid: contact,
 			kk1:     kk1,
@@ -770,7 +771,7 @@ func rxSessions(
 		}, nil
 	}
 	var transport [kkTransportSize]byte
-	for _, transport = range transports {
+	for transport = range transports {
 		_, err = cipher.Decrypt(
 			[]byte{}, cryptoAd, transport[:])
 		if err == nil {
@@ -805,15 +806,6 @@ func bytesEqual(as []byte, bs []byte) bool {
 	return true
 }
 
-func matchingKk2(newKk2 [kk2Size]byte, oldKk2s [][kk2Size]byte) bool {
-	for _, oldKk2 := range oldKk2s {
-		if bytesEqual(newKk2[:], oldKk2[:]) {
-			return true
-		}
-	}
-	return false
-}
-
 type NoSession struct{}
 
 func (NoSession) insert(sessions Sessions) Sessions {
@@ -827,18 +819,9 @@ func parseKk1(p Parser) (Parser, error) {
 
 	var kk1 [kk1Size]byte
 	copy(kk1[:], p.raw[p.cursor:])
-	kk1s := append(p.public.kk1s, kk1)
-	return Parser{
-		raw:     p.raw,
-		lenraw:  p.lenraw,
-		cursor:  p.cursor + kk1Size,
-		counter: p.counter,
-		public: Public{
-			kk1s:       kk1s,
-			kk2s:       p.public.kk2s,
-			transports: p.public.transports,
-		},
-	}, nil
+	p.public.kk1s[kk1] = struct{}{}
+	p.cursor += kk1Size
+	return p, nil
 }
 
 const kk2Size = 48
@@ -850,18 +833,9 @@ func parseKk2(p Parser) (Parser, error) {
 
 	var kk2 [kk2Size]byte
 	copy(kk2[:], p.raw[p.cursor:])
-	kk2s := append(p.public.kk2s, kk2)
-	return Parser{
-		raw:     p.raw,
-		lenraw:  p.lenraw,
-		cursor:  p.cursor + kk2Size,
-		counter: p.counter,
-		public: Public{
-			kk1s:       p.public.kk1s,
-			kk2s:       kk2s,
-			transports: p.public.transports,
-		},
-	}, nil
+	p.public.kk2s[kk2] = struct{}{}
+	p.cursor += kk2Size
+	return p, nil
 }
 
 const plaintextSize = 24
@@ -898,18 +872,9 @@ func parseKkTransport(p Parser) (Parser, error) {
 	}
 	var transport [kkTransportSize]byte
 	copy(transport[:], p.raw[p.cursor:])
-	transports := append(p.public.transports, transport)
-	return Parser{
-		raw:     p.raw,
-		lenraw:  p.lenraw,
-		cursor:  p.cursor + kkTransportSize,
-		counter: p.counter,
-		public: Public{
-			kk1s:       p.public.kk1s,
-			kk2s:       p.public.kk2s,
-			transports: transports,
-		},
-	}, nil
+	p.public.transports[transport] = struct{}{}
+	p.cursor += kkTransportSize
+	return p, nil
 }
 
 type Parser struct {
@@ -956,19 +921,15 @@ func initParser(raw []byte) Parser {
 		lenraw:  len(raw),
 		cursor:  0,
 		counter: 0,
-		public: Public{
-			kk1s:       make([][kk1Size]byte, 0),
-			kk2s:       make([][kk2Size]byte, 0),
-			transports: make([][kkTransportSize]byte, 0),
-		},
+		public: initPublic(),
 	}
 }
 
 func initPublic() Public {
 	return Public{
-		kk1s:       make([][kk1Size]byte, 0),
-		kk2s:       make([][kk2Size]byte, 0),
-		transports: make([][kkTransportSize]byte, 0),
+		kk1s:       make(map[[kk1Size]byte]struct{}),
+		kk2s:       make(map[[kk2Size]byte]struct{}),
+		transports: make(map[[kkTransportSize]byte]struct{}),
 	}
 }
 
@@ -1339,9 +1300,9 @@ func initSessions() Sessions {
 }
 
 type Public struct {
-	kk1s       [][kk1Size]byte
-	kk2s       [][kk2Size]byte
-	transports [][kkTransportSize]byte
+	kk1s       map[[kk1Size]byte]struct{}
+	kk2s       map[[kk2Size]byte]struct{}
+	transports map[[kkTransportSize]byte]struct{}
 }
 
 func makeSessionsFor(
@@ -1350,7 +1311,7 @@ func makeSessionsFor(
 	secrets Secrets) (Sessions, error) {
 
 	sessions := initSessions()
-	for _, kk1 := range public.kk1s {
+	for kk1 := range public.kk1s {
 		session, err := makeSessionFor(
 			kk1,
 			contact,
