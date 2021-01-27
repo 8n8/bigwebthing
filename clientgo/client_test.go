@@ -103,3 +103,34 @@ func TestRandomSame(t *testing.T) {
 		t.Errorf("buffers should be equal, but got %v and %v", buf1, buf2)
 	}
 }
+
+func TestParseUserIdEmpty(t *testing.T) {
+	_, err := parseUserId("")
+	if err == nil {
+		t.Errorf("succeeded on empty string, expected fail")
+	}
+}
+
+func TestParseUserIdJunk(t *testing.T) {
+	_, err := parseUserId("asdflaksdjf;lkh ereriuerpqwer ")
+	if err == nil {
+		t.Errorf("succeeded on junk input, expected fail")
+	}
+}
+
+func TestParseValid(t *testing.T) {
+	got, err := parseUserId("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Errorf("failed on good input")
+	}
+
+	if len(got) != 32 {
+		t.Errorf("expected 32 byte output, got %d", len(got))
+	}
+
+	for _, g := range got {
+		if g != 0 {
+			t.Errorf("expected a zero, but got %d", g)
+		}
+	}
+}
