@@ -765,18 +765,6 @@ func rxSession(
 	}, nil
 }
 
-func bytesEqual(as []byte, bs []byte) bool {
-	if len(as) != len(bs) {
-		return false
-	}
-	for i, a := range as {
-		if a != bs[i] {
-			return false
-		}
-	}
-	return true
-}
-
 type NoSession struct{}
 
 func (NoSession) insert(sessions Sessions) Sessions {
