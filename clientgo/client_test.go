@@ -118,7 +118,7 @@ func TestParseUserIdJunk(t *testing.T) {
 	}
 }
 
-func TestParseValid(t *testing.T) {
+func TestParseValidId(t *testing.T) {
 	got, err := parseUserId("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	if err != nil {
 		t.Errorf("failed on good input")
@@ -132,5 +132,71 @@ func TestParseValid(t *testing.T) {
 		if g != 0 {
 			t.Errorf("expected a zero, but got %d", g)
 		}
+	}
+}
+
+func TestParseArgsBwt(t *testing.T) {
+	got, err := parseArgs([]string{})
+	if err != nil {
+		t.Errorf("error on valid args: %v", err)
+	}
+	_, ok := got.(Bwt)
+	if !ok {
+		t.Errorf("expected Bwt, but got %v", got)
+	}
+}
+
+func TestParseArgsHelp(t *testing.T) {
+	got, err := parseArgs([]string{"help"})
+	if err != nil {
+		t.Errorf("error on valid args: %v", err)
+	}
+	_, ok := got.(Help)
+	if !ok {
+		t.Errorf("expected Help, but got %v", got)
+	}
+}
+
+func TestParseArgsMyId(t *testing.T) {
+	got, err := parseArgs([]string{"myid"})
+	if err != nil {
+		t.Errorf("error on valid args: %v", err)
+	}
+	_, ok := got.(MyId)
+	if !ok {
+		t.Errorf("expected MyId, but got %v", got)
+	}
+}
+
+func TestParseArgsRead(t *testing.T) {
+	got, err := parseArgs([]string{"read"})
+	if err != nil {
+		t.Errorf("error on valid args: %v", err)
+	}
+	_, ok := got.(Read_)
+	if !ok {
+		t.Errorf("expected Read, but got %v", got)
+	}
+}
+
+func TestParseArgsWrite(t *testing.T) {
+	got, err := parseArgs([]string{"write", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "hi"})
+	if err != nil {
+		t.Errorf("error on valid args: %v", err)
+	}
+	_, ok := got.(Write_)
+	if !ok {
+		t.Errorf("expected Write_, but got %v", got)
+	}
+}
+
+func TestParseArgsAddContact(t *testing.T) {
+	got, err := parseArgs([]string{"addcontact", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})
+	if err != nil {
+		t.Errorf("error on valid args: %v", err)
+	}
+	_, ok := got.(AddContact)
+	if !ok {
+		t.Errorf("expected AddContact, but got %v", got)
 	}
 }
