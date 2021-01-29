@@ -14,23 +14,25 @@ cd ../A
 ~/go/bin/client addcontact "$BID"
 
 # 3
+# OK
 ~/go/bin/client
 cp public ../B
 
-exit 0
-
 # 4
+# OK
 cd ../B
 ~/go/bin/client
 cp public ../A
 
 # 5
+# OK
 cd ../A
 ~/go/bin/client write "$BID" "hi B"
 ~/go/bin/client
 cp public ../B
 
 # 6
+# OK
 cd ../B
 ~/go/bin/client write "$AID" "hi A"
 cp public ../A

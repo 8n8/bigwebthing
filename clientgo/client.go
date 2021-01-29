@@ -522,7 +522,6 @@ func makeSessionFor(
 	txSecret, ok := secrets.sending[kk1AndId{kk1, contact}]
 	if ok {
 		return txSession(
-			kk1,
 			contact,
 			kk2s,
 			transports,
@@ -601,7 +600,6 @@ func initShakeTx(
 }
 
 func txSession(
-	kk1 [kk1Size]byte,
 	contact [dhlen]byte,
 	kk2s map[[kk2Size]byte]struct{},
 	transports map[[transportSize]byte]struct{},
@@ -747,12 +745,32 @@ func rxSession(
 }
 
 func findTransportRx(
-	cipher *noise.CipherState,
+	secret [SecretSize]byte,
+	staticKeys noise.DHKey,
+	kk1 [kk1Size]byte,
+	contact [dhlen]byte,
 	transports map[[transportSize]byte]struct{}) (
 	[transportSize]byte, bool) {
 
 	for transport := range transports {
-		_, err := cipher.Decrypt(
+		shake, err := initShakeRx(secret, contact, staticKeys)
+		if err != nil {
+			return transport, false
+		}
+
+		_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
+		if err != nil {
+			return transport, false
+		}
+
+		_, cipher, _, err := shake.WriteMessage(
+			[]byte{},
+			[]byte{})
+		if err != nil {
+			return transport, false
+		}
+
+		_, err = cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
 			transport[:])
@@ -770,23 +788,11 @@ func readOldKk1Rx(
 	transports map[[transportSize]byte]struct{},
 	staticKeys noise.DHKey) (Session, error) {
 
-	shake, err := initShakeRx(secret, contact, staticKeys)
-	if err != nil {
-		return nil, err
-	}
-
-	_, _, _, err = shake.ReadMessage([]byte{}, kk1[:])
-	if err != nil {
-		return NoSession{}, nil
-	}
-
-	_, cipher, _, err := shake.WriteMessage([]byte{}, []byte{})
-	if err != nil {
-		return nil, err
-	}
-
 	transport, foundTransport := findTransportRx(
-		cipher,
+		secret,
+		staticKeys,
+		kk1,
+		contact,
 		transports)
 	if !foundTransport {
 		return Kk2Rx{
@@ -1173,7 +1179,7 @@ func (k Kk1Rx) insert(sessions Sessions) Sessions {
 	return sessions
 }
 
-const sessionsLevel = 1
+const sessionsLevel = 100
 
 type Sessions struct {
 	transportRx map[TransportRx]struct{}
