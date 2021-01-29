@@ -10,11 +10,9 @@ import (
 	"github.com/flynn/noise"
 	"io/ioutil"
 	"os"
-	"github.com/pkg/profile"
 )
 
 func main() {
-	defer profile.Start().Stop()
 	err := mainErr()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -608,7 +606,17 @@ func txSession(
 	secret [SecretSize]byte,
 	staticKeys noise.DHKey) (Session, error) {
 
-	kk2, foundKk2 := findKk2Tx(secret, staticKeys, contact, kk2s)
+	shake, err := initShakeTx(secret, contact, staticKeys)
+	if err != nil {
+		return nil, err
+	}
+
+	_, _, _, err = shake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return nil, err
+	}
+
+	kk2, cipher, foundKk2 := findKk2Tx(shake, kk2s)
 	if !foundKk2 {
 		return Kk1Tx{
 			theirId: contact,
@@ -616,7 +624,7 @@ func txSession(
 		}, nil
 	}
 
-	plain, foundTransport := findTransportTx(secret, contact, staticKeys, kk2, transports)
+	plain, foundTransport := findTransportTx(cipher, transports)
 	if !foundTransport {
 		return Kk2Tx{
 			theirid: contact,
@@ -634,60 +642,31 @@ func txSession(
 }
 
 func findKk2Tx(
-	secret [SecretSize]byte,
-	staticKeys noise.DHKey,
-	contact [dhlen]byte,
+	shake *noise.HandshakeState,
 	kk2s map[[kk2Size]byte]struct{}) (
 	[kk2Size]byte,
+	*noise.CipherState,
 	bool) {
 
 	for kk2 := range kk2s {
-		shake, err := initShakeTx(secret, contact, staticKeys)
-		if err != nil {
-			return kk2, false
-		}
-
-		_, _, _, err = shake.WriteMessage([]byte{}, []byte{})
-		if err != nil {
-			return kk2, false
-		}
-
-		_, _, _, err = shake.ReadMessage([]byte{}, kk2[:])
+		_, cipher, _, err := shake.ReadMessage(
+			[]byte{},
+			kk2[:])
 		if err == nil {
-			return kk2, true
+			return kk2, cipher, true
 		}
 	}
-	return *new([kk2Size]byte), false
+	return *new([kk2Size]byte), new(noise.CipherState), false
 }
 
 func findTransportTx(
-	secret [SecretSize]byte,
-	contact [dhlen]byte,
-	staticKeys noise.DHKey,
-	kk2 [kk2Size]byte,
+	cipher *noise.CipherState,
 	transports map[[transportSize]byte]struct{}) (
 	[plaintextSize]byte,
 	bool) {
 
 	var plain [plaintextSize]byte
 	for transport := range transports {
-		shake, err := initShakeTx(secret, contact, staticKeys)
-		if err != nil {
-			return plain, false
-		}
-
-		_, _, _, err = shake.WriteMessage([]byte{}, []byte{})
-		if err != nil {
-			return plain, false
-		}
-
-		_, cipher, _, err := shake.ReadMessage(
-			[]byte{},
-			kk2[:])
-		if err != nil {
-			return plain, false
-		}
-
 		plainSlice, err := cipher.Decrypt(
 			[]byte{},
 			cryptoAd,
