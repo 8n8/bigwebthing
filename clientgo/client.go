@@ -1389,7 +1389,8 @@ func showTransportRx(
 	if err != nil {
 		return "", err
 	}
-	return string(plain), nil
+	size := int(plain[0])
+	return string(plain[1 : size+1]), nil
 }
 
 func (Read_) run() error {
