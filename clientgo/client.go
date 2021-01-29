@@ -10,11 +10,9 @@ import (
 	"github.com/flynn/noise"
 	"io/ioutil"
 	"os"
-	"github.com/pkg/profile"
 )
 
 func main() {
-	defer profile.Start().Stop()
 	err := mainErr()
 	if err != nil {
 		fmt.Println(err.Error())
