@@ -1,3 +1,0 @@
-'Done' means that it works, that the code is concise, neat and readable, and is documented well enough for a technical peer to understand how it works.
-
-+ update FromServer and ToServer in client for new API
