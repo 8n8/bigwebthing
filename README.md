@@ -1,4 +1,4 @@
-BigWebThing version 2
+BigWebThing version 3
 =====================
 
 # Overview
@@ -21,13 +21,13 @@ It's a command-line app. It will optionally read two files in the current direct
 
         $ bwt myid
 
-    Get messages
+    Read messages
 
         $ bwt read
 
-    Send a new message from STDIN
+    Write a message
 
-        $ bwt write <recipient ID>
+        $ bwt write <recipient ID> "hi ..."
 
     Add contact
 
