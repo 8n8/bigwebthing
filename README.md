@@ -3,7 +3,7 @@ BigWebThing version 3
 
 # Overview
 
-BigWebThing is for creating encrypted messages to send between people.
+BigWebThing is for creating encrypted messages and sending them between people.
 
 # User interface
 
@@ -33,6 +33,45 @@ It's a command-line app. It will optionally read two files in the current direct
 
         $ bwt addcontact <contact ID>
 
+    Syncronise with the server
+
+        $ bwt sync
+
+# Server API
+
+Client to server
+	Upload message
+		1 byte: 0
+		1 byte: number of messages
+		sequence of 49-byte messages
+	Download message set
+		1 byte: 1
+	Download accounts
+		1 byte: 2
+Server to client
+	Message set
+		1 byte: 0
+		1 byte: number of messages
+		sequence of 49-byte messages
+	Accounts
+		1 byte: 1
+		4 bytes: payment amount
+		4 bytes: number of spends
+		sequence of spends
+	Not enough money
+		1 byte: 2
+
+# Server cache
+
+database
+	+ Messages
+		- upload time
+		- payment ID
+		- message (unique)
+	+ Payments
+		- payment ID (unique)
+		- amount
+
 # Client cache
 
 Secrets file containing:
@@ -51,9 +90,9 @@ Public file containing sequence of KKs, where a KK is one of:
 	49 bytes: KK2
 		1 byte: 1
 		48 bytes: KK2 with empty payload
-	41 bytes: KK transport
+	49 bytes: KK transport
 		1 byte: 2
-		24 bytes: message
+		32 bytes: message
 		16 bytes: crypto overhead
 
 # Client process
