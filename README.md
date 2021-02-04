@@ -5,13 +5,39 @@ BigWebThing version 4
 
 BigWebThing is a system for constructing and publishing documents.
 
-The main principle is that the server logs everything it can and publishes everything. Any privacy there is comes from measures such as encryption implemented on the client.
+The main principle is that the server logs everything it can and publishes everything. Any privacy there is comes from the client, such as end-to-end encryption.
 
 # User interface
 
-+ A view of all the data on the server
+It's a command-line app. The commands are:
 
-+ Facilities for creating content and publishing it.
+    Update crypto
+
+        $ bwt
+
+    Get usage
+
+        $ bwt help
+
+    Get my ID
+
+        $ bwt myid
+
+    Read messages
+
+        $ bwt read
+
+    Write a message
+
+        $ bwt write <recipient ID> "hi ..."
+
+    Add contact
+
+        $ bwt addcontact <contact ID>
+
+    Make a dummy £1 payment to the server - TESTING ONLY
+
+        $ bwt pay
 
 # Client cache
 
