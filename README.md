@@ -9,35 +9,20 @@ The main principle is that the server logs everything it can and publishes every
 
 # User interface
 
-It's a command-line app. The commands are:
++ A view of all the data on the server
 
-    Update crypto
-
-        $ bwt update
-
-    Get usage
-
-        $ bwt help
-
-    Get my ID
-
-        $ bwt myid
-
-    Read messages
-
-        $ bwt read
-
-    Write a message
-
-        $ bwt write <recipient ID> "hi ..."
-
-    Add contact
-
-        $ bwt addcontact <contact ID>
++ Facilities for creating content and publishing it.
 
 # Client cache
 
-File containing client's static Noise key pair, and all the session secrets. A session secret is a random secret byte array, with a session ID. A session ID is the first few bytes of the Noise message that started the session.
+SQLITE database
+	static Noise key pairs for each account
+		public
+		secret
+	session secrets
+		session ID
+		secret
+		public Noise key of account
 
 # Server cache
 
