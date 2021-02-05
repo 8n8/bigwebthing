@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"github.com/flynn/noise"
 	"io/ioutil"
+	"io"
 	"os"
+	"net"
 )
 
 func main() {
@@ -58,9 +60,6 @@ func parseArgs(args []string) (Args, error) {
 	if err != nil {
 		return nil, err
 	}
-	if argsLength == 2 && args[0] == "addcontact" {
-		return AddContact(userId), nil
-	}
 	if argsLength == 3 && args[0] == "write" {
 		msg, err := parseMessage(args[2])
 		if err != nil {
@@ -108,35 +107,264 @@ func makeKk2Responses(
 	return kk2s, secrets, nil
 }
 
+func makeStaticKeys() (noise.DHKey, error) {
+	staticKeys, err := noise.DH25519.GenerateKeypair(rand.Reader)
+	if err != nil {
+		return staticKeys, err
+	}
+
+	f, err := os.OpenFile(
+		staticKeysPath,
+		os.O_WRONLY | os.O_CREATE,
+		0600)
+	if err != nil {
+		return staticKeys, fmt.Errorf("couldn't save static keys: %s", err)
+	}
+
+	err = encodeStaticKeys(f, staticKeys)
+	if err != nil {
+		return staticKeys, fmt.Errorf("couldn't encode static keys: %s", err)
+	}
+
+	return staticKeys, nil
+}
+
+func getStaticKeys() (noise.DHKey, error) {
+	f, err := os.Open(staticKeysPath)
+	if err != nil {
+		return makeStaticKeys()
+	}
+
+	return parseStaticKeys(f)
+}
+
+const staticKeysPath = "staticKeys"
+
 func (Bwt) run() error {
-	secrets, err := getSecrets()
+	staticKeys, err := getStaticKeys()
 	if err != nil {
-		return err
+		return fmt.Errorf("couldn't get static keys: %s", err)
 	}
 
-	sessions, err := getSessions(secrets)
+	conn, err := net.Dial("tcp", serverUrl)
 	if err != nil {
-		return err
+		return fmt.Errorf("couldn't connect to server: %s", err)
+	}
+	defer conn.Close()
+
+	shake, err := handshake(staticKeys, conn)
+	if err != nil {
+		return fmt.Errorf("couldn't do handshake with server: %s", err)
 	}
 
-	kk1s, secrets, err := makeKk1TopUps(secrets, sessions)
+	req, rx, tx, err := shake.WriteMessage([]byte{}, []byte{RequestKk1sToMe})
 	if err != nil {
-		return err
+		return fmt.Errorf("couldn't encrypt request for KK1s: %s", err)
 	}
 
-	kk2s, secrets, err := makeKk2Responses(
-		secrets,
-		sessions.kk1Rx)
+	_, err = conn.Write(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("couldn't send request for KK1s: %s", err)
 	}
 
-	err = saveKks(append(kk1s, kk2s...))
-	if err != nil {
-		return err
+	for {
+		size, err := uint16P(conn)
+		if err != nil {
+			return fmt.Errorf("couldn't read message size from server: %s", err)
+		}
+
+		encrypted := make([]byte, size)
+		n, err := conn.Read(encrypted)
+		if n != size {
+			return fmt.Errorf("wrong number of bytes from server: expected %d, got %d", size, n)
+		}
+		if err != io.EOF && err != nil {
+			return fmt.Errorf("error on reading KK1 from server: %s", err)
+		}
+
+		plain, err := rx.Decrypt([]byte{}, cryptoAd, encrypted)
+		if err != nil {
+			return fmt.Errorf("couldn't decrypt KK1 message from server")
+		}
+
+		if len(plain) == 0 {
+			return errors.New("empty message from server")
+		}
+
+		switch plain[0] {
+		case 1:
+			break
+		case 2:
+			var kk1 [Kk1Size]
+			n := copy(kk1[:], plain)
+			if n != Kk1Size {
+				return fmt.Errorf("couldn't read KK1 from message: expected %d bytes, got %d", Kk1Size, n)
+			}
+
+			var theirId [dhlen]
+			n = copy(theirId[:], plain)
+			if n != dhlen {
+				return fmt.Errorf("couldn't read their ID from message: expected %d bytes, got %d", dhlen, n)
+			}
+
+
+		}
 	}
 
-	return saveSecrets(secrets)
+	return nil
+}
+
+const CryptoOverhead = 16
+const Kk1FromServerSize = 1 + dhlen + Kk1Size + 1 + CryptoOverhead
+const Kk1Size = 48
+const SessionIdSize = 24
+const Kk2Size = 48
+const TransportSize = 72
+const Kk2ToServeSize = 1 + dhlen + SessionIdSize
+
+type Conn struct {
+
+}
+
+type Kk2Row struct {
+	kk2 [Kk2Size]byte
+	sender [dhlen]byte
+}
+
+type TransportRow struct {
+	transport [TransportSize]byte
+	sender [dhlen]byte
+}
+
+type MessagesToMe struct {
+	kk1s map[[Kk1Size]byte][dhlen]byte
+	kk2s map[[SessionIdSize]byte]Kk2Row
+	transports map[[SessionIdSize]byte]TransportRow
+}
+
+func initMessagesToMe() MessagesToMe {
+	return MessagesToMe{
+		kk1s: make(map[[Kk1Size]byte][dhlen]byte),
+		kk2s: make(map[[SessionIdSize]byte]Kk2Row),
+		transports: make(map[[SessionIdSize]byte]TransportRow),
+	}
+}
+
+type MessageToMe interface {
+	NoMoreMessages() bool
+	Insert(MessagesToMe)
+}
+
+var serverStaticKey = [dhlen]byte{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+
+func serverCipherSuite() noise.CipherSuite {
+	return noise.NewCipherSuite(
+		noise.DH25519,
+		noise.CipherAESGCM,
+		noise.HashSHA256)
+}
+
+func noiseServerConfig(staticKeys noise.DHKey) noise.Config {
+	return noise.Config{
+		CipherSuite: serverCipherSuite(),
+		Random: rand.Reader,
+		Pattern: noise.HandshakeXK,
+		Initiator: true,
+		StaticKeypair: staticKeys,
+		PeerStatic: serverStaticKey[:],
+	}
+}
+
+func handshake(
+	staticKeys noise.DHKey,
+	conn net.Conn) (*noise.HandshakeState, error) {
+
+	config := noiseServerConfig(staticKeys)
+	shake, err := noise.NewHandshakeState(config)
+	if err != nil {
+		return shake, fmt.Errorf("couldn't make handshake state for server: %s", err)
+	}
+
+	msg1, _, _, err := shake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return shake, fmt.Errorf("couldn't make first server handshake message: %s", err)
+	}
+
+	_, err = conn.Write(msg1)
+	if err != nil {
+		return shake, fmt.Errorf("couldn't send first handshake message to server: %s", err)
+	}
+
+	const response1Size = 32 + 16 + 16
+	response1 := make([]byte, response1Size)
+	n, err := conn.Read(response1)
+	if n != response1Size {
+		return shake, fmt.Errorf("couldn't read enough bytes from server in first response: got %d, expected %d", n, response1Size)
+	}
+	if err != io.EOF && err != nil {
+		return shake, fmt.Errorf("couldn't read first response from server: %s", err)
+	}
+
+	_, _, _, err = shake.ReadMessage([]byte{}, response1)
+	return shake, err
+}
+
+const RequestKk1sToMe = 1
+
+const serverUrl = "localhost:3001"
+
+func downloadKk1sToMe(
+	staticKeys noise.DHKey,
+	shake *noise.HandshakeState,
+	conn net.Conn) (
+	map[[Kk1Size]byte][dhlen]byte,
+	*noise.CipherState,
+	*noise.CipherState,
+	error) {
+
+	messages := make(map[[Kk1Size]byte][dhlen]byte)
+
+	req, rx, tx, err := shake.WriteMessage(
+		[]byte{},
+		[]byte{RequestKk1sToMe})
+	var cErr *noise.CipherState
+	if err != nil {
+		return messages, cErr, cErr, fmt.Errorf("couldn't encrypt request for messages to me: %s", err)
+	}
+
+	_, err = conn.Write(req)
+	if err != nil {
+		return messages, cErr, cErr, fmt.Errorf("couldn't send request for messages to me: %s", err)
+	}
+
+	for {
+		var buf [Kk1FromServerSize]byte
+		n, err := conn.Read(buf[:])
+		if n != Kk1FromServerSize {
+			return messages, cErr, cErr, fmt.Errorf("bad KK1 from server: expecting %d bytes, but got %d", Kk1FromServerSize, n)
+		}
+		if err != io.EOF && err != nil {
+			return messages, cErr, cErr, fmt.Errorf("couldn't read KK1 from server: %s", err)
+		}
+
+		plain, err := rx.Decrypt([]byte{}, cryptoAd, buf[:])
+		if err != nil {
+			return messages, cErr, cErr, fmt.Errorf("couldn't decrypt KK1 message: %s", err)
+		}
+
+		var kk1 [Kk1Size]byte
+		copy(kk1[:], buf[1:])
+
+		var sender [dhlen]byte
+		copy(sender[:], buf[1+Kk1Size:])
+
+		messages[kk1] = sender
+
+		if buf[Kk1FromServerSize-1] == 0 {
+			break
+		}
+	}
+	return messages, rx, tx, nil
 }
 
 func makeKk1TopUps(
@@ -204,10 +432,17 @@ func secretsSize(secrets Secrets) int {
 	return staticKeys + contacts + sending + receiving
 }
 
-func encodeStaticKeys(staticKeys noise.DHKey, buf []byte) []byte {
-	buf = append(buf, staticKeys.Private...)
-	buf = append(buf, staticKeys.Public...)
-	return buf
+func encodeStaticKeys(f io.Writer, staticKeys noise.DHKey) error {
+	_, err := f.Write(staticKeys.Private)
+	if err != nil {
+		return fmt.Errorf("couldn't encode secret DH key: %s", err)
+	}
+
+	_, err = f.Write(staticKeys.Public)
+	if err != nil {
+		return fmt.Errorf("couldn't encode public DH key: %s", err)
+	}
+	return nil
 }
 
 func encodeContacts(
@@ -219,21 +454,6 @@ func encodeContacts(
 		buf = append(buf, contact[:]...)
 	}
 	return buf
-}
-
-func encodeSecrets(secrets Secrets) []byte {
-	buf := make([]byte, 0, secretsSize(secrets))
-
-	buf = encodeStaticKeys(secrets.staticKeys, buf)
-	buf = encodeContacts(secrets.contacts, buf)
-	buf = encodeSessionSecrets(secrets.sending, buf)
-	buf = encodeSessionSecrets(secrets.receiving, buf)
-	return buf
-}
-
-func saveSecrets(secrets Secrets) error {
-	return ioutil.WriteFile(
-		secretPath, encodeSecrets(secrets), 0644)
 }
 
 func saveKks(kks []byte) error {
@@ -349,34 +569,12 @@ Read messages
 
 Write a new message
 
-    $ bwt write <recipient ID> "hi"
-
-Add contact
-
-    $ bwt addcontact <contact ID>`
+    $ bwt write <recipient ID> "hi"`
 
 const badArgsMessage = "bad arguments"
 
 func (BadArgs) Error() string {
 	return badArgsMessage
-}
-
-type AddContact [dhlen]byte
-
-func (a AddContact) run() error {
-	secrets, err := getSecrets()
-	if err != nil {
-		return err
-	}
-
-	_, alreadyAcontact := secrets.contacts[a]
-	if alreadyAcontact {
-		fmt.Println("already a contact")
-		return nil
-	}
-
-	secrets.contacts[a] = struct{}{}
-	return saveSecrets(secrets)
 }
 
 func getSession(
@@ -394,6 +592,10 @@ func getSession(
 type Write_ struct {
 	to  [dhlen]byte
 	msg [plaintextSize]byte
+}
+
+func (Write_) run() error {
+	return errors.New("Write_.run is not implemented yet")
 }
 
 type MessageTooLong struct{}
@@ -466,33 +668,6 @@ func (b BadChar) Error() string {
 	return fmt.Sprintf("character not allowed: %d", b)
 }
 
-func (s Write_) run() error {
-	secrets, err := getSecrets()
-	if err != nil {
-		return err
-	}
-
-	sessions, err := getSessions(secrets)
-	if err != nil {
-		return err
-	}
-
-	session, ok := getSession(sessions.kk2Tx, s.to)
-	if !ok {
-		return NoSessionsCantSend{}
-	}
-
-	transport, err := makeTransport(
-		s.msg,
-		session,
-		secrets.staticKeys)
-	if err != nil {
-		return err
-	}
-
-	return writeTransport(transport)
-}
-
 type NoSessionsCantSend struct{}
 
 func (NoSessionsCantSend) Error() string {
@@ -500,6 +675,10 @@ func (NoSessionsCantSend) Error() string {
 }
 
 type Read_ struct{}
+
+func (Read_) run() error {
+	return errors.New("Read_.run is not implemented yet")
+}
 
 const kk1Size = 48
 
@@ -979,40 +1158,6 @@ type Secrets struct {
 
 const secretPath = "secret"
 
-func parseSessionSecrets(
-	raw []byte,
-	pos int) (map[kk1AndId][SecretSize]byte, int, error) {
-
-	n, pos, err := parseUint32(raw, pos)
-	if err != nil {
-		return nil, pos, err
-	}
-
-	secrets := make(map[kk1AndId][SecretSize]byte)
-	var kk1 [kk1Size]byte
-	var theirid [dhlen]byte
-	var secret [SecretSize]byte
-	for i := 0; i < n; i++ {
-		kk1, pos, err = parseSecretKk1(raw, pos)
-		if err != nil {
-			return nil, pos, err
-		}
-
-		theirid, pos, err = parseDhlen(raw, pos)
-		if err != nil {
-			return nil, pos, err
-		}
-
-		secret, pos, err = parseSecret(raw, pos)
-		if err != nil {
-			return nil, pos, err
-		}
-
-		secrets[kk1AndId{kk1, theirid}] = secret
-	}
-	return secrets, pos, nil
-}
-
 func parseSecretKk1(raw []byte, pos int) ([kk1Size]byte, int, error) {
 	var kk1 [kk1Size]byte
 	n := copy(kk1[:], raw[pos:])
@@ -1052,14 +1197,16 @@ func (TooShortForTheirId) Error() string {
 	return "too short for their ID"
 }
 
-func parseDhlen(raw []byte, pos int) ([dhlen]byte, int, error) {
-	var theirId [dhlen]byte
-	n := copy(theirId[:], raw[pos:])
-	if n < dhlen {
-		return theirId, pos, TooShortForTheirId{}
+func parseDhlen(f io.Reader) ([dhlen]byte, error) {
+	var id [dhlen]byte
+	n, err := f.Read(id[:])
+	if err != io.EOF && err != nil {
+		return id, fmt.Errorf("couldn't parse DH key: %s", err)
 	}
-	pos += dhlen
-	return theirId, pos, nil
+	if n < dhlen {
+		return id, TooShortForTheirId{}
+	}
+	return id, nil
 }
 
 type TooShortForUint32 struct{}
@@ -1084,75 +1231,16 @@ func parseUint32(raw []byte, pos int) (int, int, error) {
 	return n, pos, nil
 }
 
-func parseContacts(
-	raw []byte,
-	pos int) (map[[dhlen]byte]struct{}, int, error) {
-
-	n, pos, err := parseUint32(raw, pos)
+func parseStaticKeys(f io.Reader) (noise.DHKey, error) {
+	secret, err := parseDhlen(f)
 	if err != nil {
-		return *new(map[[dhlen]byte]struct{}), pos, err
+		return *new(noise.DHKey), err
 	}
-
-	contacts := make(map[[dhlen]byte]struct{}, n)
-	var contact [dhlen]byte
-	for i := 0; i < n; i++ {
-		contact, pos, err = parseDhlen(raw, pos)
-		if err != nil {
-			return contacts, pos, err
-		}
-		contacts[contact] = struct{}{}
-	}
-	return contacts, pos, nil
-}
-
-func parseStaticKeys(raw []byte, pos int) (noise.DHKey, int, error) {
-	secret, pos, err := parseDhlen(raw, pos)
-	if err != nil {
-		return *new(noise.DHKey), pos, err
-	}
-	public, pos, err := parseDhlen(raw, pos)
+	public, err := parseDhlen(f)
 	return noise.DHKey{
 		Private: secret[:],
 		Public:  public[:],
-	}, pos, err
-}
-
-func parseSecrets(raw []byte) (Secrets, error) {
-	pos := 0
-	var secret Secrets
-
-	staticKeys, pos, err := parseStaticKeys(raw, pos)
-	if err != nil {
-		return secret, err
-	}
-
-	contacts, pos, err := parseContacts(raw, pos)
-	if err != nil {
-		return secret, err
-	}
-
-	sending, pos, err := parseSessionSecrets(raw, pos)
-	if err != nil {
-		return secret, err
-	}
-
-	receiving, pos, err := parseSessionSecrets(raw, pos)
-	if err != nil {
-		return secret, err
-	}
-
-	if pos != len(raw) {
-		return secret, ExpectSecretEnd{
-			pos:    pos,
-			lenraw: len(raw)}
-	}
-
-	return Secrets{
-		staticKeys: staticKeys,
-		contacts:   contacts,
-		sending:    sending,
-		receiving:  receiving,
-	}, nil
+	}, err
 }
 
 type ExpectSecretEnd struct {
@@ -1162,35 +1250,6 @@ type ExpectSecretEnd struct {
 
 func (e ExpectSecretEnd) Error() string {
 	return fmt.Sprintf("bad secret file: expecting file end at position %d, but length is %d", e.pos, e.lenraw)
-}
-
-func makeSecrets() (Secrets, error) {
-	staticKeys, err := noise.DH25519.GenerateKeypair(rand.Reader)
-	if err != nil {
-		return *new(Secrets), err
-	}
-	sending := make(map[kk1AndId][SecretSize]byte)
-	receiving := make(map[kk1AndId][SecretSize]byte)
-	secrets := Secrets{
-		staticKeys: staticKeys,
-		contacts:   make(map[[dhlen]byte]struct{}),
-		sending:    sending,
-		receiving:  receiving,
-	}
-	err = saveSecrets(secrets)
-	return secrets, err
-}
-
-func getSecrets() (Secrets, error) {
-	raw, err := ioutil.ReadFile(secretPath)
-	var pathError *os.PathError
-	if errors.As(err, &pathError) {
-		return makeSecrets()
-	}
-	if err != nil {
-		return *new(Secrets), err
-	}
-	return parseSecrets(raw)
 }
 
 func (k Kk1Rx) insert(sessions Sessions) Sessions {
@@ -1393,40 +1452,10 @@ func showTransportRx(
 	return string(plain[1 : size+1]), nil
 }
 
-func (Read_) run() error {
-	secrets, err := getSecrets()
-	if err != nil {
-		return err
-	}
-
-	sessions, err := getSessions(secrets)
-	if err != nil {
-		return err
-	}
-
-	for transport := range sessions.transportRx {
-		pretty, err := showTransportRx(
-			transport, secrets.staticKeys)
-		if err != nil {
-			return err
-		}
-		fmt.Println(pretty)
-	}
-
-	return nil
-}
-
 type MyId struct{}
 
 func (MyId) run() error {
-	secrets, err := getSecrets()
-	if err != nil {
-		return err
-	}
-	str := base64.RawURLEncoding.EncodeToString(
-		secrets.staticKeys.Public)
-	fmt.Println(str)
-	return nil
+	return errors.New("MyId.run is not implemented yet")
 }
 
 type Help struct{}
