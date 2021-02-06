@@ -342,7 +342,6 @@ const SessionIdSize = 24
 const Kk2Size = 48
 const TransportSize = 72
 const Kk2ToServerSize = 1 + dhlen + SessionIdSize + Kk2Size
-
 const UploadKk2Indicator = 0
 
 var serverStaticKey = [dhlen]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
@@ -440,12 +439,6 @@ func encodeStaticKeys(f io.Writer, staticKeys noise.DHKey) error {
 	return nil
 }
 
-type WritingNewKksFailed struct{}
-
-func (WritingNewKksFailed) Error() string {
-	return "could not write new KK1 messages to 'public' file"
-}
-
 func parseOneArg(arg string) (Args, error) {
 	switch arg {
 	case "help":
@@ -510,12 +503,6 @@ func (MessageTooLong) Error() string {
 	return "message too long"
 }
 
-type EmptyMessage struct{}
-
-func (EmptyMessage) Error() string {
-	return "empty message"
-}
-
 func parseMessage(raw string) ([plaintextSize]byte, error) {
 	asBytes := []byte(raw)
 	var plain [plaintextSize]byte
@@ -527,12 +514,6 @@ func parseMessage(raw string) ([plaintextSize]byte, error) {
 	copy(plain[1:], asBytes)
 	plain[0] = byte(len(asBytes))
 	return plain, messageOk(plain)
-}
-
-type WritingTransportFailed int
-
-func (w WritingTransportFailed) Error() string {
-	return fmt.Sprintf("bad byte count on writing new transport: %d", w)
 }
 
 func messageOk(msg [plaintextSize]byte) error {
@@ -548,12 +529,6 @@ type BadChar int
 
 func (b BadChar) Error() string {
 	return fmt.Sprintf("character not allowed: %d", b)
-}
-
-type NoSessionsCantSend struct{}
-
-func (NoSessionsCantSend) Error() string {
-	return "no sessions, so can't send message"
 }
 
 type Read_ struct{}
@@ -592,30 +567,6 @@ func makeSessionSecret() ([SecretSize]byte, error) {
 }
 
 const plaintextSize = 24
-
-type BadKkIndicator int
-
-func (b BadKkIndicator) Error() string {
-	return "bad KK indicator"
-}
-
-type NoPublicFile struct{}
-
-func (NoPublicFile) Error() string {
-	return "need file named 'public'"
-}
-
-type TooShortForSecretKk1 struct{}
-
-func (TooShortForSecretKk1) Error() string {
-	return "too short for secret KK1"
-}
-
-type TooShortForSecret struct{}
-
-func (TooShortForSecret) Error() string {
-	return "too short for secret"
-}
 
 type TooShortForTheirId struct{}
 
