@@ -11,33 +11,33 @@ The main principle is that the server logs everything it can and publishes every
 
 It's a command-line app. The commands are:
 
-    Update crypto
+	Update crypto
 
-        $ bwt
+		$ bwt
 
-    Get usage
+	Get usage
 
-        $ bwt help
+		$ bwt help
 
-    Get my ID
+	Get my ID
 
-        $ bwt myid
+		$ bwt myid
 
-    Read messages
+	Read messages
 
-        $ bwt read
+		$ bwt read
 
-    Write a message
+	Write a message
 
-        $ bwt write <recipient ID> "hi ..."
+		$ bwt write <recipient ID> "hi ..."
 
-    Add contact
+	Add contact
 
-        $ bwt addcontact <contact ID>
+		$ bwt addcontact <contact ID>
 
-    Make a dummy £1 payment to the server - TESTING ONLY
+	Make a dummy £1 payment to the server - TESTING ONLY
 
-        $ bwt pay
+		$ bwt pay
 
 # Client cache
 
