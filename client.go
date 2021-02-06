@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -106,124 +107,232 @@ func getStaticKeys() (noise.DHKey, error) {
 
 const staticKeysPath = "staticKeys"
 
+type Conn struct {
+	shake   *noise.HandshakeState
+	counter int
+	tx      *noise.CipherState
+	rx      *noise.CipherState
+	conn    net.Conn
+}
+
+func initConn(staticKeys noise.DHKey) (Conn, error) {
+	var conn Conn
+	var err error
+
+	conn.conn, err = net.Dial("tcp", serverUrl)
+	if err != nil {
+		return conn, err
+	}
+
+	config := noiseServerConfig(staticKeys)
+	conn.shake, err = noise.NewHandshakeState(config)
+	conn.counter = 0
+	return conn, err
+}
+
+type Kk1FromServer struct {
+	kk1    [Kk1Size]byte
+	sender [dhlen]byte
+}
+
+const Kk1FromServerIndicator = 2
+
+const Shake3Overhead = dhlen + (CryptoOverhead * 2)
+
+func (conn Conn) Write(raw []byte) error {
+	var msg []byte
+	var err error
+	if conn.counter > 2 {
+		size := len(raw) + CryptoOverhead
+		msg = make([]byte, 2, 2+size)
+		msg[0] = byte(size & 0xFF)
+		msg[1] = byte((size >> 1) & 0xFF)
+		msg = conn.tx.Encrypt(msg, cryptoAd, raw)
+	} else {
+		size := len(raw) + Shake3Overhead
+		msg = make([]byte, 2, 2+size)
+		msg[0] = byte(size & 0xFF)
+		msg[1] = byte((size >> 1) & 0xFF)
+		msg, _, _, err = conn.shake.WriteMessage(msg, raw)
+		if err != nil {
+			return err
+		}
+		conn.counter++
+	}
+	_, err = conn.conn.Write(msg)
+	return err
+}
+
+func parseKk1FromServer(raw io.Reader) (Kk1FromServer, error) {
+	var kk1 Kk1FromServer
+
+	var indicator [1]byte
+	n, err := raw.Read(indicator[:])
+	if n != 1 {
+		return kk1, errors.New("not enough bytes for indicator")
+	}
+	if err != nil {
+		return kk1, fmt.Errorf("couldn't read indicator: %s", err)
+	}
+
+	if indicator[0] != Kk1FromServerIndicator {
+		return kk1, fmt.Errorf("bad indicator: %d", indicator[0])
+	}
+
+	n, err = raw.Read(kk1.kk1[:])
+	if n != Kk1Size {
+		return kk1, fmt.Errorf("not enough bytes for KK1: expecting %d, got %d", Kk1Size, n)
+	}
+	if err != nil {
+		return kk1, fmt.Errorf("couldn't read KK1: %s", err)
+	}
+
+	kk1.sender, err = parseDhlen(raw)
+	return kk1, err
+}
+
+func requestKk1s(staticKeys noise.DHKey) (Conn, error) {
+	conn, err := initConn(staticKeys)
+	if err != nil {
+		return conn, fmt.Errorf("couldn't connect to server: %s", err)
+	}
+	defer conn.conn.Close()
+
+	err = conn.Write([]byte{})
+	if err != nil {
+		return conn, fmt.Errorf("couldn't send initial handshake message to serve: %s", err)
+	}
+
+	_, err = conn.Read()
+	if err != nil {
+		return conn, fmt.Errorf("couldn't read second handshake message from server: %s", err)
+	}
+
+	err = conn.Write([]byte{RequestKk1sToMe})
+	return conn, err
+}
+
 func (Bwt) run() error {
 	staticKeys, err := getStaticKeys()
 	if err != nil {
 		return fmt.Errorf("couldn't get static keys: %s", err)
 	}
 
-	conn, err := net.Dial("tcp", serverUrl)
+	conn, err := requestKk1s(staticKeys)
 	if err != nil {
-		return fmt.Errorf("couldn't connect to server: %s", err)
+		return fmt.Errorf("couldn't request KK1s: %s", err)
 	}
-	defer conn.Close()
 
-	shake, err := handshake(staticKeys, conn)
+	var carryOn bool
+	for carryOn {
+		carryOn, err = fetchAndRespondToKk1(&conn, staticKeys)
+	}
+	return err
+}
+
+func (conn Conn) Read() ([]byte, error) {
+	size, err := uint16P(conn.conn)
 	if err != nil {
-		return fmt.Errorf("couldn't do handshake with server: %s", err)
+		return []byte{}, fmt.Errorf("couldn't read message size from server: %s", err)
 	}
 
-	req, rx, tx, err := shake.WriteMessage([]byte{}, []byte{RequestKk1sToMe})
+	encrypted := make([]byte, size)
+	n, err := conn.conn.Read(encrypted)
+	if n != size {
+		return []byte{}, fmt.Errorf("couldn't read encrypted message from server: expecting %d bytes, but got %d", size, n)
+	}
+	if err != io.EOF && err != nil {
+		return []byte{}, fmt.Errorf("error on reading message from server: %s", err)
+	}
+
+	if conn.counter == 1 {
+		plain, _, _, err := conn.shake.ReadMessage([]byte{}, encrypted)
+		conn.counter++
+		return plain, err
+	}
+
+	return conn.rx.Decrypt([]byte{}, cryptoAd, encrypted)
+}
+
+const NothingFromServerIndicator = 1
+
+func fetchAndRespondToKk1(
+	conn *Conn,
+	staticKeys noise.DHKey) (bool, error) {
+
+	raw, err := conn.Read()
 	if err != nil {
-		return fmt.Errorf("couldn't encrypt request for KK1s: %s", err)
+		return false, fmt.Errorf("couldn't read message from server: %s", err)
 	}
 
-	_, err = conn.Write(req)
+	if len(raw) == 1 && raw[0] == NothingFromServerIndicator {
+		return false, nil
+	}
+
+	kk1FromServer, err := parseKk1FromServer(
+		bytes.NewBuffer(raw))
 	if err != nil {
-		return fmt.Errorf("couldn't send request for KK1s: %s", err)
+		return false, fmt.Errorf("couldn't parse KK1 from server: %s", err)
 	}
 
-	for {
-		size, err := uint16P(conn)
-		if err != nil {
-			return fmt.Errorf("couldn't read message size from server: %s", err)
-		}
-
-		encrypted := make([]byte, size)
-		n, err := conn.Read(encrypted)
-		if n != size {
-			return fmt.Errorf("wrong number of bytes from server: expected %d, got %d", size, n)
-		}
-		if err != io.EOF && err != nil {
-			return fmt.Errorf("error on reading KK1 from server: %s", err)
-		}
-
-		plain, err := rx.Decrypt([]byte{}, cryptoAd, encrypted)
-		if err != nil {
-			return fmt.Errorf("couldn't decrypt KK1 message from server")
-		}
-
-		if len(plain) == 0 {
-			return errors.New("empty message from server")
-		}
-
-		if plain[0] == 1 {
-			break
-		}
-		if plain[0] == 2 {
-			var kk1 [Kk1Size]byte
-			n := copy(kk1[:], plain)
-			if n != Kk1Size {
-				return fmt.Errorf("couldn't read KK1 from message: expected %d bytes, got %d", Kk1Size, n)
-			}
-
-			var theirId [dhlen]byte
-			n = copy(theirId[:], plain)
-			if n != dhlen {
-				return fmt.Errorf("couldn't read their ID from message: expected %d bytes, got %d", dhlen, n)
-			}
-
-			upSize := encodeUint16(Kk2ToServerSize)
-			up := make([]byte, 0, 2+CryptoOverhead+Kk2ToServerSize)
-			up = append(up, upSize...)
-
-			kk2Plain := make([]byte, 0, Kk2ToServerSize)
-			kk2Plain = append(kk2Plain, UploadKk2Indicator)
-			kk2Plain = append(kk2Plain, theirId[:]...)
-			kk2Plain = append(kk2Plain, kk1[:SessionIdSize]...)
-			secret, err := makeSessionSecret()
-			if err != nil {
-				return fmt.Errorf("couldn't make session secret: %s", err)
-			}
-
-			var sessionId [SessionIdSize]byte
-			copy(sessionId[:], kk1[:])
-			err = cacheSecret(sessionId, secret)
-			if err != nil {
-				return err
-			}
-
-			random, err := initRandomGen(secret)
-			if err != nil {
-				return fmt.Errorf("couldn't initiate random generator: %s", err)
-			}
-
-			kkConfig := makeKkConfig(staticKeys, theirId, random)
-			kkShake, err := noise.NewHandshakeState(kkConfig)
-			if err != nil {
-				return fmt.Errorf("couldn't make new KK handshake: %s", err)
-			}
-
-			_, _, _, err = kkShake.ReadMessage([]byte{}, kk1[:])
-			if err != nil {
-				return fmt.Errorf("couldn't read in KK1: %s", err)
-			}
-			kk2Plain, _, _, err = kkShake.WriteMessage(kk2Plain, []byte{})
-			if err != nil {
-				return fmt.Errorf("couldn't create KK2: %s", err)
-			}
-
-			encrypted := tx.Encrypt(up, cryptoAd, kk2Plain[:])
-			_, err = conn.Write(encrypted)
-			if err != nil {
-				return fmt.Errorf("couldn't send KK2 to server: %s", err)
-			}
-			continue
-		}
-		return fmt.Errorf("unexpected message indicator: %d", plain[0])
+	kk2Response, err := makeKk2Response(kk1FromServer, staticKeys)
+	if err != nil {
+		return false, fmt.Errorf("couldn't make KK2 response: %s", err)
 	}
 
-	return nil
+	err = conn.Write(kk2Response[:])
+	if err != nil {
+		return false, fmt.Errorf("couldn't send response to KK1: %s", err)
+	}
+
+	return true, nil
+}
+
+func makeKk2Response(
+	kk1 Kk1FromServer,
+	staticKeys noise.DHKey) ([Kk2ToServerSize]byte, error) {
+
+	var kk2To [Kk2ToServerSize]byte
+	kk2To[0] = 0
+	copy(kk2To[1:], kk1.sender[:])
+
+	secret, err := makeSessionSecret()
+	if err != nil {
+		return kk2To, fmt.Errorf("couldn't make session secret: %s", err)
+	}
+
+	var sessionId [SessionIdSize]byte
+	copy(sessionId[:], kk1.kk1[:])
+	copy(kk2To[1+dhlen:], sessionId[:])
+
+	err = cacheSecret(sessionId, secret)
+	if err != nil {
+		return kk2To, fmt.Errorf("couldn't cache the secret with sessionId %v", sessionId)
+	}
+
+	random, err := initRandomGen(secret)
+	if err != nil {
+		return kk2To, fmt.Errorf("couldn't make random generator: %s", err)
+	}
+
+	kkConfig := makeKkConfig(staticKeys, kk1.sender, random)
+	kkShake, err := noise.NewHandshakeState(kkConfig)
+	if err != nil {
+		return kk2To, fmt.Errorf("couldn't make new handshake state: %s", err)
+	}
+
+	_, _, _, err = kkShake.ReadMessage([]byte{}, kk1.kk1[:])
+	if err != nil {
+		return kk2To, fmt.Errorf("couldn't read in KK1: %s", err)
+	}
+
+	kk2, _, _, err := kkShake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return kk2To, fmt.Errorf("couldn't make KK2: %s", err)
+	}
+
+	copy(kk2To[1+dhlen+SessionIdSize:], kk2)
+	return kk2To, nil
 }
 
 const CryptoOverhead = 16
@@ -233,9 +342,6 @@ const SessionIdSize = 24
 const Kk2Size = 48
 const TransportSize = 72
 const Kk2ToServerSize = 1 + dhlen + SessionIdSize + Kk2Size
-
-type Conn struct {
-}
 
 const UploadKk2Indicator = 0
 
@@ -313,50 +419,9 @@ func uint16P(f io.Reader) (int, error) {
 	return num, nil
 }
 
-func handshake(
-	staticKeys noise.DHKey,
-	conn net.Conn) (*noise.HandshakeState, error) {
-
-	config := noiseServerConfig(staticKeys)
-	shake, err := noise.NewHandshakeState(config)
-	if err != nil {
-		return shake, fmt.Errorf("couldn't make handshake state for server: %s", err)
-	}
-
-	msg1, _, _, err := shake.WriteMessage([]byte{}, []byte{})
-	if err != nil {
-		return shake, fmt.Errorf("couldn't make first server handshake message: %s", err)
-	}
-
-	_, err = conn.Write(msg1)
-	if err != nil {
-		return shake, fmt.Errorf("couldn't send first handshake message to server: %s", err)
-	}
-
-	const response1Size = 32 + 16 + 16
-	response1 := make([]byte, response1Size)
-	n, err := conn.Read(response1)
-	if n != response1Size {
-		return shake, fmt.Errorf("couldn't read enough bytes from server in first response: got %d, expected %d", n, response1Size)
-	}
-	if err != io.EOF && err != nil {
-		return shake, fmt.Errorf("couldn't read first response from server: %s", err)
-	}
-
-	_, _, _, err = shake.ReadMessage([]byte{}, response1)
-	return shake, err
-}
-
 const RequestKk1sToMe = 1
 
 const serverUrl = "localhost:3001"
-
-func encodeUint16(n int) []byte {
-	result := make([]byte, 2)
-	result[0] = byte(n & 0xFF)
-	result[1] = byte((n >> 1) & 0xFF)
-	return result
-}
 
 func encodeStaticKeys(f io.Writer, staticKeys noise.DHKey) error {
 	_, err := f.Write(staticKeys.Private)
