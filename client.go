@@ -4,14 +4,16 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/flynn/noise"
-	"io/ioutil"
+	_ "github.com/mattn/go-sqlite3"
 	"io"
-	"os"
+	"io/ioutil"
 	"net"
+	"os"
 )
 
 func main() {
@@ -115,7 +117,7 @@ func makeStaticKeys() (noise.DHKey, error) {
 
 	f, err := os.OpenFile(
 		staticKeysPath,
-		os.O_WRONLY | os.O_CREATE,
+		os.O_WRONLY|os.O_CREATE,
 		0600)
 	if err != nil {
 		return staticKeys, fmt.Errorf("couldn't save static keys: %s", err)
@@ -195,20 +197,66 @@ func (Bwt) run() error {
 		case 1:
 			break
 		case 2:
-			var kk1 [Kk1Size]
+			var kk1 [Kk1Size]byte
 			n := copy(kk1[:], plain)
 			if n != Kk1Size {
 				return fmt.Errorf("couldn't read KK1 from message: expected %d bytes, got %d", Kk1Size, n)
 			}
 
-			var theirId [dhlen]
+			var theirId [dhlen]byte
 			n = copy(theirId[:], plain)
 			if n != dhlen {
 				return fmt.Errorf("couldn't read their ID from message: expected %d bytes, got %d", dhlen, n)
 			}
 
+			upSize := encodeUint16(Kk2ToServerSize)
+			up := make([]byte, 0, 2+CryptoOverhead+Kk2ToServerSize)
+			up = append(up, upSize...)
 
+			kk2Plain := make([]byte, 0, Kk2ToServerSize)
+			kk2Plain = append(kk2Plain, UploadKk2Indicator)
+			kk2Plain = append(kk2Plain, theirId[:]...)
+			kk2Plain = append(kk2Plain, kk1[:SessionIdSize]...)
+			secret, err := makeSessionSecret()
+			if err != nil {
+				return fmt.Errorf("couldn't make session secret: %s", err)
+			}
+
+			var sessionId [SessionIdSize]byte
+			copy(sessionId[:], kk1[:])
+			err = cacheSecret(sessionId, secret)
+			if err != nil {
+				return err
+			}
+
+			random, err := initRandomGen(secret)
+			if err != nil {
+				return fmt.Errorf("couldn't initiate random generator: %s", err)
+			}
+
+			kkConfig := makeKkConfig(staticKeys, theirId, random)
+			kkShake, err := noise.NewHandshakeState(kkConfig)
+			if err != nil {
+				return fmt.Errorf("couldn't make new KK handshake: %s", err)
+			}
+
+			_, _, _, err = kkShake.ReadMessage([]byte{}, kk1[:])
+			if err != nil {
+				return fmt.Errorf("couldn't read in KK1: %s", err)
+			}
+			kk2Plain, _, _, err = kkShake.WriteMessage(kk2Plain, []byte{})
+			if err != nil {
+				return fmt.Errorf("couldn't create KK2: %s", err)
+			}
+
+			encrypted := tx.Encrypt(up, cryptoAd, kk2Plain[:])
+			_, err = conn.Write(encrypted)
+			if err != nil {
+				return fmt.Errorf("couldn't send KK2 to server: %s", err)
+			}
+			continue
 		}
+		return fmt.Errorf("unexpected message indicator: %d", plain[0])
 	}
 
 	return nil
@@ -220,42 +268,43 @@ const Kk1Size = 48
 const SessionIdSize = 24
 const Kk2Size = 48
 const TransportSize = 72
-const Kk2ToServeSize = 1 + dhlen + SessionIdSize
+const Kk2ToServerSize = 1 + dhlen + SessionIdSize + Kk2Size
 
 type Conn struct {
-
 }
 
 type Kk2Row struct {
-	kk2 [Kk2Size]byte
+	kk2    [Kk2Size]byte
 	sender [dhlen]byte
 }
 
 type TransportRow struct {
 	transport [TransportSize]byte
-	sender [dhlen]byte
+	sender    [dhlen]byte
 }
 
 type MessagesToMe struct {
-	kk1s map[[Kk1Size]byte][dhlen]byte
-	kk2s map[[SessionIdSize]byte]Kk2Row
+	kk1s       map[[Kk1Size]byte][dhlen]byte
+	kk2s       map[[SessionIdSize]byte]Kk2Row
 	transports map[[SessionIdSize]byte]TransportRow
 }
 
 func initMessagesToMe() MessagesToMe {
 	return MessagesToMe{
-		kk1s: make(map[[Kk1Size]byte][dhlen]byte),
-		kk2s: make(map[[SessionIdSize]byte]Kk2Row),
+		kk1s:       make(map[[Kk1Size]byte][dhlen]byte),
+		kk2s:       make(map[[SessionIdSize]byte]Kk2Row),
 		transports: make(map[[SessionIdSize]byte]TransportRow),
 	}
 }
+
+const UploadKk2Indicator = 0
 
 type MessageToMe interface {
 	NoMoreMessages() bool
 	Insert(MessagesToMe)
 }
 
-var serverStaticKey = [dhlen]byte{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+var serverStaticKey = [dhlen]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 func serverCipherSuite() noise.CipherSuite {
 	return noise.NewCipherSuite(
@@ -264,15 +313,69 @@ func serverCipherSuite() noise.CipherSuite {
 		noise.HashSHA256)
 }
 
+func makeKkConfig(staticKeys noise.DHKey, theirId [dhlen]byte, randomGen RandomGen) noise.Config {
+	return noise.Config{
+		CipherSuite: noise.NewCipherSuite(
+			noise.DH25519,
+			noise.CipherAESGCM,
+			noise.HashSHA256),
+		Random:        randomGen,
+		Pattern:       noise.HandshakeKK,
+		Initiator:     false,
+		StaticKeypair: staticKeys,
+		PeerStatic:    theirId[:],
+	}
+}
+
+const dbPath = "sessionSecrets.sqlite"
+
+const cacheSecretSql = `INSERT INTO sessionsecrets (sessionid, secret) values (?, ?);`
+
+func cacheSecret(
+	sessionId [SessionIdSize]byte,
+	secret [SecretSize]byte) error {
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't open SQLITE database: %s",
+			err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(cacheSecretSql, sessionId[:], secret[:])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't insert secret to SQL: %s", err)
+	}
+	return nil
+}
+
 func noiseServerConfig(staticKeys noise.DHKey) noise.Config {
 	return noise.Config{
-		CipherSuite: serverCipherSuite(),
-		Random: rand.Reader,
-		Pattern: noise.HandshakeXK,
-		Initiator: true,
+		CipherSuite:   serverCipherSuite(),
+		Random:        rand.Reader,
+		Pattern:       noise.HandshakeXK,
+		Initiator:     true,
 		StaticKeypair: staticKeys,
-		PeerStatic: serverStaticKey[:],
+		PeerStatic:    serverStaticKey[:],
 	}
+}
+
+func uint16P(f io.Reader) (int, error) {
+	bs := make([]byte, 2)
+	n, err := f.Read(bs)
+	if n != 2 {
+		return 0, fmt.Errorf("couldn't read message length: expected 2, got %d", n)
+	}
+	if err != io.EOF && err != nil {
+		return 0, fmt.Errorf("error reading message length: %s", err)
+	}
+
+	num := 0
+	num += int(bs[0])
+	num += int(bs[1]) * 256
+	return num, nil
 }
 
 func handshake(
@@ -313,60 +416,6 @@ const RequestKk1sToMe = 1
 
 const serverUrl = "localhost:3001"
 
-func downloadKk1sToMe(
-	staticKeys noise.DHKey,
-	shake *noise.HandshakeState,
-	conn net.Conn) (
-	map[[Kk1Size]byte][dhlen]byte,
-	*noise.CipherState,
-	*noise.CipherState,
-	error) {
-
-	messages := make(map[[Kk1Size]byte][dhlen]byte)
-
-	req, rx, tx, err := shake.WriteMessage(
-		[]byte{},
-		[]byte{RequestKk1sToMe})
-	var cErr *noise.CipherState
-	if err != nil {
-		return messages, cErr, cErr, fmt.Errorf("couldn't encrypt request for messages to me: %s", err)
-	}
-
-	_, err = conn.Write(req)
-	if err != nil {
-		return messages, cErr, cErr, fmt.Errorf("couldn't send request for messages to me: %s", err)
-	}
-
-	for {
-		var buf [Kk1FromServerSize]byte
-		n, err := conn.Read(buf[:])
-		if n != Kk1FromServerSize {
-			return messages, cErr, cErr, fmt.Errorf("bad KK1 from server: expecting %d bytes, but got %d", Kk1FromServerSize, n)
-		}
-		if err != io.EOF && err != nil {
-			return messages, cErr, cErr, fmt.Errorf("couldn't read KK1 from server: %s", err)
-		}
-
-		plain, err := rx.Decrypt([]byte{}, cryptoAd, buf[:])
-		if err != nil {
-			return messages, cErr, cErr, fmt.Errorf("couldn't decrypt KK1 message: %s", err)
-		}
-
-		var kk1 [Kk1Size]byte
-		copy(kk1[:], buf[1:])
-
-		var sender [dhlen]byte
-		copy(sender[:], buf[1+Kk1Size:])
-
-		messages[kk1] = sender
-
-		if buf[Kk1FromServerSize-1] == 0 {
-			break
-		}
-	}
-	return messages, rx, tx, nil
-}
-
 func makeKk1TopUps(
 	secrets Secrets,
 	sessions Sessions) ([]byte, Secrets, error) {
@@ -399,6 +448,13 @@ func makeKk1TopUps(
 		}
 	}
 	return kk1s, secrets, nil
+}
+
+func encodeUint16(n int) []byte {
+	result := make([]byte, 2)
+	result[0] = byte(n & 0xFF)
+	result[1] = byte((n >> 1) & 0xFF)
+	return result
 }
 
 func encodeUint32(n int) []byte {

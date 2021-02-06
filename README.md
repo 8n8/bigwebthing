@@ -46,7 +46,6 @@ SQLITE database
 	session secrets
 		session ID
 		secret
-		public Noise key of account
 
 # Server cache
 
@@ -81,7 +80,6 @@ to server
 			1 byte: 0
 			32 bytes: recipient ID
 			72 bytes: message
-			1 byte: 0 for final message, 1 for more
 		download KK1 new messages to me
 			1 byte: 1
 		download KK2 messages to me
