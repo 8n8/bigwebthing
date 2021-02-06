@@ -354,7 +354,11 @@ func serverCipherSuite() noise.CipherSuite {
 		noise.HashSHA256)
 }
 
-func makeKkConfig(staticKeys noise.DHKey, theirId [dhlen]byte, randomGen RandomGen) noise.Config {
+func makeKkConfig(
+	staticKeys noise.DHKey,
+	theirId [dhlen]byte,
+	randomGen RandomGen) noise.Config {
+
 	return noise.Config{
 		CipherSuite: noise.NewCipherSuite(
 			noise.DH25519,
@@ -370,7 +374,7 @@ func makeKkConfig(staticKeys noise.DHKey, theirId [dhlen]byte, randomGen RandomG
 
 const dbPath = "sessionSecrets.sqlite"
 
-const cacheSecretSql = `INSERT INTO sessionsecrets (sessionid, secret) values (?, ?);`
+const cacheSecretSql = "INSERT INTO sessionsecrets (sessionid, secret) values (?, ?);"
 
 func cacheSecret(
 	sessionId [SessionIdSize]byte,
@@ -474,7 +478,16 @@ Read messages
 
 Write a new message
 
-    $ bwt write <recipient ID> "hi"`
+    $ bwt write <recipient ID> "hi"
+
+Add contact
+
+    $ bwt addcontact <contact ID>
+
+Make a dummy £1 payment to the server - TESTING ONLY
+
+    $ bwt pay
+`
 
 const badArgsMessage = "bad arguments"
 
@@ -622,12 +635,6 @@ func parseDhlen(f io.Reader) ([dhlen]byte, error) {
 	return id, nil
 }
 
-type TooShortForUint32 struct{}
-
-func (TooShortForUint32) Error() string {
-	return "not enough bytes for uint32"
-}
-
 func parseStaticKeys(f io.Reader) (noise.DHKey, error) {
 	secret, err := parseDhlen(f)
 	if err != nil {
@@ -638,15 +645,6 @@ func parseStaticKeys(f io.Reader) (noise.DHKey, error) {
 		Private: secret[:],
 		Public:  public[:],
 	}, err
-}
-
-type ExpectSecretEnd struct {
-	pos    int
-	lenraw int
-}
-
-func (e ExpectSecretEnd) Error() string {
-	return fmt.Sprintf("bad secret file: expecting file end at position %d, but length is %d", e.pos, e.lenraw)
 }
 
 type MyId struct{}
