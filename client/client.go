@@ -4,6 +4,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"io"
+	"github.com/flynn/noise"
+	"net"
+	"crypto/rand"
 )
 
 func main() {
@@ -30,6 +34,21 @@ type Start struct{}
 
 type RawArgs []string
 
+type StaticKeysFile struct {
+	f io.Reader
+	err error
+}
+
+type StaticKeys struct {
+	keys noise.DHKey
+	err error
+}
+
+type ServerConn struct {
+	conn net.Conn
+	err error
+}
+
 //
 //
 //
@@ -41,6 +60,12 @@ type RawArgs []string
 type Empty struct{}
 
 type ReadingArgs struct{}
+
+type GettingStaticKeysForBwt struct{}
+
+type StaticKeysBwt noise.DHKey
+
+type MakingStaticKeysBwt struct{}
 
 //
 //
@@ -58,6 +83,12 @@ type Print string
 
 type OutList []Out
 
+type GetStaticKeysFile struct{}
+
+type GetServerConn struct{}
+
+type MakeStaticKeys struct{}
+
 //
 //
 //
@@ -70,6 +101,10 @@ type In interface {
 	update(State) (State, Out)
 }
 
+func (k StaticKeys) update(state State) (State, Out) {
+	return GettingServerConnBwt(k), GetServerConn{}
+}
+
 func (Start) update(state State) (State, Out) {
 	return ReadingArgs{}, ReadArgs{}
 }
@@ -78,16 +113,56 @@ func (args RawArgs) update(state State) (State, Out) {
 	return state.onArgs(args)
 }
 
+func (s StaticKeysFile) update(state State) (State, Out) {
+	state.(GettingStaticKeysForBwt)
+
+	if s.err != nil {
+		return MakingStaticKeys{}, MakeStaticKeys{}
+	}
+
+	keys, err := parseStaticKeys(s.f)
+	if err != nil {
+		return Empty{}, OutList([]Out{Print(fmt.Sprintf("couldn't parse static keys file: %s", err)), End{}})
+	}
+
+	return StaticKeysBwt(keys), GetServerConn{}
+}
+
+func (c ServerConn) update(state State) (State, Out) {
+	state.(MakingStaticKeysBwt)
+	return state.onServerConn(c)
+}
+
 //
 //
 //
-// state actions implementations
+// state implementations
 //
 //
 //
 
 type State interface {
-	onArgs(RawArgs) (State, Out)
+}
+
+func (GettingStaticKeysForBwt) onStaticKeysFile(s StaticKeysFile) (State, Out) {
+	if s.err != nil {
+		return MakingStaticKeysBwt{}, MakeStaticKeys{}
+	}
+
+	keys, err := parseStaticKeys(s.f)
+	if err != nil {
+		return Empty{}, OutList([]Out{Print(fmt.Sprintf("couldn't parse static keys file: %s", err)), End{}})
+	}
+
+	return StaticKeysBwt(keys), GetServerConn{}
+}
+
+func (GettingStaticKeysForBwt) onArgs(RawArgs) (State, Out) {
+	panic("GettingStaticKeysForBwt.onArgs can't happen")
+}
+
+func (Empty) onStaticKeysFile(StaticKeysFile) (State, Out) {
+	panic("Empty.onStaticKeysFile can't happen")
 }
 
 func (ReadingArgs) onArgs(rawArgs RawArgs) (State, Out) {
@@ -99,7 +174,7 @@ func (ReadingArgs) onArgs(rawArgs RawArgs) (State, Out) {
 	return args.update()
 }
 
-func (Empty) onArgs(_ RawArgs) (State, Out) {
+func (Empty) onArgs(RawArgs) (State, Out) {
 	panic("Empty.onArgs can't happen")
 }
 
@@ -115,13 +190,28 @@ type Out interface {
 	run(chan In)
 }
 
+func (MakeStaticKeys) run(in chan In) {
+	staticKeys, err := noise.DH25519.GenerateKeypair(rand.Reader)
+	in <- StaticKeys{staticKeys, err}
+}
+
+func (GetServerConn) run(in chan In) {
+	conn, err := net.Dial("tcp", serverUrl)
+	in <- ServerConn{conn, err}
+}
+
+func (GetStaticKeysFile) run(in chan In) {
+	f, err := os.Open(staticKeysPath)
+	in <- StaticKeysFile{f, err}
+}
+
 func (ReadArgs) run(in chan In) {
 	in <- RawArgs(os.Args)
 }
 
-func (End) run(_ chan In) {}
+func (End) run(chan In) {}
 
-func (p Print) run(_ chan In) {
+func (p Print) run(chan In) {
 	fmt.Print(p)
 }
 
@@ -138,6 +228,40 @@ func (outputs OutList) run(in chan In) {
 //
 //
 //
+
+const serverUrl = "localhost:3001"
+
+type TooShortForTheirId struct{}
+
+func (TooShortForTheirId) Error() string {
+	return "too short for their ID"
+}
+
+func parseDhlen(f io.Reader) ([dhlen]byte, error) {
+	var id [dhlen]byte
+	n, err := f.Read(id[:])
+	if err != io.EOF && err != nil {
+		return id, fmt.Errorf("couldn't parse DH key: %s", err)
+	}
+	if n < dhlen {
+		return id, TooShortForTheirId{}
+	}
+	return id, nil
+}
+
+func parseStaticKeys(f io.Reader) (noise.DHKey, error) {
+	secret, err := parseDhlen(f)
+	if err != nil {
+		return *new(noise.DHKey), err
+	}
+	public, err := parseDhlen(f)
+	return noise.DHKey{
+		Private: secret[:],
+		Public:  public[:],
+	}, err
+}
+
+const staticKeysPath = "staticKeys"
 
 type BadArgs struct{}
 
@@ -214,7 +338,7 @@ func (Read_) update() (State, Out) {
 }
 
 func (Bwt) update() (State, Out) {
-	panic("Bwt.update not implemented yet")
+	return GettingStaticKeysForBwt{}, GetStaticKeysFile{}
 }
 
 func parseArgs(args []string) (Args, error) {
