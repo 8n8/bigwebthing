@@ -10,16 +10,202 @@ import (
 	"crypto/rand"
 )
 
+// modes
+const UpdateCrypto = 1
+
+// status
+const ListeningForXk2 = 1
+const ListeningForNewKk1s = 2
+const MakingSessionSecret = 3
+
+type State struct {
+	mode int
+	staticKeys noise.DHKey
+	status int
+	kk1 [Kk1Size]byte
+}
+
 func main() {
-	var state State = Empty{}
-	var input In = Start{}
-	var output Out
-	inputChan := make(chan In)
-	for _, end := output.(End); !end; {
-		state, output = input.update(state)
-		go output.run(inputChan)
-		input = <-inputChan
+	if mainErr() != nil {
+		fmt.Println(err)
 	}
+}
+
+func mainErr() error {
+	if len(os.Args) == 2 && os.Args[1] == "update" {
+		return updateCrypto()
+	}
+
+	return errors.New("bad arguments")
+}
+
+var badServer error = errors.New("bad server")
+
+func updateCrypto() error {
+	staticKeys := getStaticKeys()
+
+	conn, err := net.Dial("tcp", serverUrl)
+	if err != nil {
+		return badServer
+	}
+
+	handshake := makeServerShake(staticKeys)
+
+	_, err = conn.Write(makeXk1(&handshake))
+	if err != nil {
+		return badServer
+	}
+
+	err = readXk2(conn, &handshake)
+	if err != nil {
+		return err
+	}
+
+	rx, err := requestNewKk1s(conn, handshake)
+	if err != nil {
+		return err
+	}
+
+	for ok := true; ok; {
+		err, ok = respondToKk1(conn, rx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func respondToKk1(conn net.Conn, tx *noise.CipherState, rx *noise.CipherState) (error, bool) {
+	encrypted, err := connRead(conn)
+	if err != nil {
+		return err, false
+	}
+
+	msg, err := rx.Decrypt([]byte{}, cryptoAd, encrypted)
+	if err != nil {
+		return badServer, false
+	}
+
+	if len(msg) == 1 && msg[0] == NoMoreMessages {
+		return nil, false
+	}
+
+	if len(msg) == 1 + Kk1Size + dhlen && msg[0] = Kk1Message {
+		kk1 := make([]byte, Kk1Size)
+		copy(kk1, msg[1:])
+		_, err = rx.Decrypt([]byte{}, cryptoAd, kk1)
+		if err != nil {
+			return badServer, false
+		}
+	}
+}
+
+func requestNewKk1s(conn net.Conn, handshake noise.HandshakeState) (*noise.CipherState, error) {
+	request, _, rx, err := handshake.WriteMessage([]byte{}, []byte{RequestNewKk1s})
+	if err != nil {
+		panic(err)
+	}
+
+	return rx, connWrite(conn, request)
+}
+
+func connWrite(conn net.Conn, msg []byte) error {
+	encoded := make([]byte, len(msg) + 2)
+	encoded[0] = byte(len(msg) & 0xFF)
+	encoded[1] = byte((len(msg) >> 8) & 0xFF)
+	copy(encoded[2:], msg)
+	_, err := conn.Write(encoded)
+	if err != nil {
+		return badServer
+	}
+	return nil
+}
+
+func connRead(conn net.Conn) ([]byte, error) {
+	size, err := uint16P(conn)
+	if err != nil {
+		return []byte{}, badServer
+	}
+
+	buf := make([]byte, size)
+	n, err := conn.Read(buf)
+	if n != size {
+		return []byte{}, badServer
+	}
+	if err != nil {
+		return []byte{}, badServer
+	}
+
+	return nil, buf
+}
+
+func readXk2(conn net.Conn, handshake *noise.HandshakeState) error {
+	xk2, err := connRead(xk2)
+	if n != Xk2Size {
+		return badServer
+	}
+	if err != io.EOF && err != nil {
+		return badServer
+	}
+
+	_, _, _, err = handshake.ReadMessage([]byte{}, xk2)
+	if err != nil {
+		return badServer
+	}
+
+	return nil
+}
+
+
+func makeXk1(handshake *noise.HandshakeState) []byte {
+	xk1, _, _, err := handshake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		panic(err)
+	}
+	return xk1
+}
+
+
+func getStaticKeys() noise.DHKey {
+	var staticKeys noise.DHKey
+	f, err := os.Open(staticKeysPath)
+	if err != nil {
+		return makeStaticKeys()
+	}
+	defer f.Close()
+
+	staticKeys, err = parseStaticKeys(f)
+	if err != nil {
+		panic(err)
+	}
+
+	return staticKeys
+}
+
+func makeStaticKeys() noise.DHKey {
+	staticKeys, err = noise.DH25519.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+
+	f, err = os.OpenFile(staticKeysPath, os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	_, err = f.Write(staticKeys.Private)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = f.Write(staticKeys.Public)
+	if err != nil {
+		panic(err)
+	}
+
+	return staticKeys
 }
 
 //

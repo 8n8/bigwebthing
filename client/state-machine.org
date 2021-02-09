@@ -1,34 +1,36 @@
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| INPUT                 | OLD STATE HAS                  | NEW STATE HAS                   | OUTPUT                 |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Start                 | Don't care                     | Don't care                      | Get args               |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Fatal client errors   | Don't care                     | Don't care                      | Panic                  |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Fatal server errors   | Don't care                     | Don't care                      | End with error message |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Update crypto args    | Don't care                     | mode: update crypto             | Get static keys file   |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| No static keys file   | Don't care                     | Don't care                      | Make static keys       |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| New static keys       | Don't care                     | static keys: ...                | Write static keys      |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Static keys file      | mode: update crypto            | static keys: ...                | Connect to server      |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Got server connection | mode: update crypto            | server state: listening for XK2 | + Send XK1 to server   |
-|                       |                                |                                 | + Listen for XK2       |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Message from server   | mode: update crypto            | status: listening for new KK1s  | + Request for new KK1s |
-|                       | status: listening for XK2      |                                 | + Listen for new KK1   |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| Message from server   | mode: update crypto            | status: making session secret   | if KK1 {               |
-|                       | status: listening for new KK1s | kk1: ...                        | Make session secret    |
-|                       |                                |                                 | }                      |
-|                       |                                |                                 | if no more messages {  |
-|                       |                                |                                 | End                    |
-|                       |                                |                                 | }                      |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
-| New session secret    | mode: update crypto            | status: listening for new KK1s  | + Cache secret         |
-|                       | status: making session secret  |                                 | + Send KK2             |
-|                       |                                |                                 | + Listen for new KK1   |
-|-----------------------+--------------------------------+---------------------------------+------------------------|
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| INPUT                 | OLD STATE HAS                  | NEW STATE HAS                  | OUTPUT                 |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Start                 | Don't care                     | Don't care                     | Get args               |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Fatal client errors   | Don't care                     | Don't care                     | Panic                  |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Fatal server errors   | Don't care                     | Don't care                     | End with error message |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Update crypto args    | Don't care                     | mode: update crypto            | Get static keys file   |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| No static keys file   | Don't care                     | Don't care                     | Make static keys       |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| New static keys       | Don't care                     | static keys: ...               | + Write static keys    |
+|                       |                                |                                | + Connect to server    |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Static keys file      | mode: update crypto            | static keys: ...               | Connect to server      |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Got server connection | mode: update crypto            | status: listening for XK2      | + Send XK1 to server   |
+|                       |                                | conn: ...                      | + Listen for XK2       |
+|                       |                                | handshake: ...                 |                        |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Message from server   | mode: update crypto            | status: listening for new KK1s | + Request for new KK1s |
+|                       | status: listening for XK2      |                                | + Listen for new KK1   |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| Message from server   | mode: update crypto            | status: making session secret  | if KK1 {               |
+|                       | status: listening for new KK1s | kk1: ...                       | Make session secret    |
+|                       |                                |                                | }                      |
+|                       |                                |                                | if no more messages {  |
+|                       |                                |                                | End                    |
+|                       |                                |                                | }                      |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
+| New session secret    | mode: update crypto            | status: listening for new KK1s | + Cache secret         |
+|                       | status: making session secret  |                                | + Send KK2             |
+|                       |                                |                                | + Listen for new KK1   |
+|-----------------------+--------------------------------+--------------------------------+------------------------|
