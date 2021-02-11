@@ -74,7 +74,7 @@ All requests to the server should be made with the Noise IK pattern, using the h
 This API is a minimal version that just allows sending and reading messages. It will eventually allow the user to query anything on the server database.
 
 to server
-	2 bytes: size
+	1 byte: size
 	encrypted
 		upload KK2 message
 			1 byte: 0
@@ -93,7 +93,7 @@ to server
 		download transport messages from me
 			1 byte: 6
 from server
-	2 bytes: size
+	1 byte: size
 	encrypted
 		1 byte: not enough money
 			1 byte: 0
