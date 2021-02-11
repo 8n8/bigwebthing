@@ -51,7 +51,7 @@ const UpdateCrypto = 1
 // Statuses
 const ListeningForNewKk1 = 1
 const ListeningForXk2 = 2
-const MakingClientSessionSecret = 3
+const MakingClientSecret = 3
 const MakingServerSecret = 4
 
 // API indicators to server
@@ -246,7 +246,7 @@ func (r ReadResult) update(s *State) Out {
 	}
 
 	if s.mode == UpdateCrypto &&
-		s.status == MakingClientSessionSecret {
+		s.status == MakingClientSecret {
 
 		return sendKk2(r, s)
 	}
@@ -472,7 +472,7 @@ func processKk1(r ReadResult, s *State) Out {
 	}
 
 	s.kk1 = kk1From
-	s.status = MakingClientSessionSecret
+	s.status = MakingClientSecret
 
 	return Read{rand.Reader, SecretSize}
 }
