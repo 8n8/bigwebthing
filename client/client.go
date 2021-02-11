@@ -60,13 +60,6 @@ const UploadKk2 = 0
 // Sizes
 const SessionIdSize = 24
 
-// Outputs
-type Out interface {
-	run(chan In)
-}
-
-type GetArgs struct{}
-
 // Inputs
 type In interface {
 	update(*State) Out
@@ -114,6 +107,48 @@ type WrittenFile struct {
 	err error
 }
 
+// Outputs
+
+type Out interface {
+	run(chan In)
+}
+
+type GetArgs struct{}
+
+type ReadStaticKeysFile struct{}
+
+type WriteStaticKeys []byte
+
+type ConnectToServer struct{}
+
+type MakeStaticKeys struct{}
+
+type Read struct {
+	reader io.Reader
+	size   int
+}
+
+type ToServer struct {
+	message []byte
+	conn    net.Conn
+}
+
+type End struct{}
+
+type GetDbHandle struct{}
+
+type CacheSecret struct {
+	id     [SessionIdSize]byte
+	secret [SecretSize]byte
+	db     *sql.DB
+}
+
+type Panic struct {
+	err error
+}
+
+type Print string
+
 // State transitions
 
 func (Start) update(*State) Out {
@@ -123,8 +158,6 @@ func (Start) update(*State) Out {
 func (GetArgs) run(in chan In) {
 	in <- Arguments(os.Args)
 }
-
-type ReadStaticKeysFile struct{}
 
 func (ReadStaticKeysFile) run(in chan In) {
 	contents, err := ioutil.ReadFile(staticKeysPath)
@@ -138,8 +171,6 @@ func (args Arguments) update(s *State) Out {
 
 	return Sequence([]Out{Print("bad arguments"), End{}})
 }
-
-type WriteStaticKeys []byte
 
 func (w WriteStaticKeys) run(in chan In) {
 	in <- WrittenFile{ioutil.WriteFile(staticKeysPath, []byte(w), 0400)}
@@ -179,24 +210,16 @@ func (k NewStaticKeys) update(s *State) Out {
 
 const serverUrl = "localhost:3001"
 
-type ConnectToServer struct{}
-
 func (ConnectToServer) run(in chan In) {
 	conn, err := net.Dial("tcp", serverUrl)
 	in <- ServerConnection{conn, err}
-}
-
-type Panic struct {
-	err error
 }
 
 func (p Panic) run(chan In) {
 	panic(p)
 }
 
-type MakeNewStaticKeys struct{}
-
-func (MakeNewStaticKeys) run(in chan In) {
+func (MakeStaticKeys) run(in chan In) {
 	keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
 	in <- NewStaticKeys{keys, err}
 }
@@ -218,7 +241,7 @@ func parseStaticKeys(raw []byte) (noise.DHKey, error) {
 
 func (kf StaticKeysFile) update(s *State) Out {
 	if kf.err != nil {
-		return MakeNewStaticKeys{}
+		return MakeStaticKeys{}
 	}
 
 	if s.mode == UpdateCrypto {
@@ -246,11 +269,6 @@ func (c ServerConnection) update(s *State) Out {
 
 const SecretSize = 2 * aes.BlockSize
 
-type Read struct {
-	reader io.Reader
-	size   int
-}
-
 func (r Read) run(in chan In) {
 	raw := make([]byte, r.size)
 	n, err := r.reader.Read(raw)
@@ -259,12 +277,8 @@ func (r Read) run(in chan In) {
 
 var badServer Out = Sequence([]Out{Print("bad server"), End{}})
 
-type End struct{}
-
 func (End) run(chan In) {
 }
-
-type Print string
 
 func (p Print) run(chan In) {
 	fmt.Print(p)
@@ -317,11 +331,6 @@ func requestKk1s(r ReadResult, s *State) Out {
 const SizedXk3NewKk1Size = 1 + dhlen + CryptoOverhead + 1 + CryptoOverhead
 
 const Kk1Size = 48
-
-type ToServer struct {
-	message []byte
-	conn    net.Conn
-}
 
 func (t ToServer) run(in chan In) {
 	_, err := t.conn.Write(t.message)
@@ -479,8 +488,6 @@ type ClientSecret struct {
 	secret [SecretSize]byte
 }
 
-type GetDbHandle struct{}
-
 func (GetDbHandle) run(in chan In) {
 	db, err := sql.Open("sqlite3", dbPath)
 	in <- DbHandle{db, err}
@@ -501,12 +508,6 @@ func (d DbHandle) update(s *State) Out {
 }
 
 const cacheSecretSql = "INSERT INTO sessionsecrets (sessionid, secret) values (?, ?);"
-
-type CacheSecret struct {
-	id     [SessionIdSize]byte
-	secret [SecretSize]byte
-	db     *sql.DB
-}
 
 func (c CacheSecret) run(in chan In) {
 	_, err := c.db.Exec(cacheSecretSql, c.id[:], c.secret[:])
