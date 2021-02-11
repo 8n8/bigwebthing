@@ -14,10 +14,26 @@ import (
 	"os"
 )
 
+func main() {
+	var state State
+	var in In = Start{}
+	inCh := make(chan In)
+
+	for {
+		out := in.update(&state)
+		if _, end := out.(End); end {
+			break
+		}
+
+		go out.run(inCh)
+		in = <-inCh
+	}
+}
+
 type State struct {
-	mode          interface{}
-	staticKeys    noise.DHKey
+	mode          int
 	status        int
+	staticKeys    noise.DHKey
 	kk1           Kk1From
 	conn          net.Conn
 	handshake     *noise.HandshakeState
@@ -38,49 +54,75 @@ const ListeningForNewKk1 = 1
 const MakingClientSessionSecret = 2
 const ListeningForXk2 = 3
 
-type In interface {
-	update(*State) Out
-}
-
+// API indicators
 const UploadKk2 = 0
 
+// Sizes
 const SessionIdSize = 24
 
+// Outputs
 type Out interface {
 	run(chan In)
 }
 
-func main() {
-	var state State
-	var in In = Start{}
-	inCh := make(chan In)
-
-	for {
-		out := in.update(&state)
-		if _, end := out.(End); end {
-			break
-		}
-
-		go out.run(inCh)
-		in = <-inCh
-	}
-}
+type GetArgs struct{}
 
 // Inputs
+type In interface {
+	update(*State) Out
+}
 
 type Start struct{}
+
+type Arguments []string
+
+type NewStaticKeys struct {
+	keys noise.DHKey
+	err  error
+}
+
+type StaticKeysFile struct {
+	raw []byte
+	err error
+}
+
+type ServerConnection struct {
+	conn net.Conn
+	err  error
+}
+
+type ReadResult struct {
+	raw []byte
+	n   int
+	err error
+}
+
+type DbHandle struct {
+	db  *sql.DB
+	err error
+}
+
+type CacheSecretResult struct {
+	err error
+}
+
+type WrittenToServer struct {
+	err error
+}
+
+type WrittenFile struct {
+	err error
+}
+
+// State transitions
 
 func (Start) update(*State) Out {
 	return GetArgs{}
 }
 
-type GetArgs struct{}
-
 func (GetArgs) run(in chan In) {
-	in <- Args(os.Args)
+	in <- Arguments(os.Args)
 }
-
-type Args []string
 
 type ReadStaticKeysFile struct{}
 
@@ -89,17 +131,12 @@ func (ReadStaticKeysFile) run(in chan In) {
 	in <- StaticKeysFile{contents, err}
 }
 
-func (args Args) update(s *State) Out {
+func (args Arguments) update(s *State) Out {
 	if len(args) == 2 && args[1] == "update" {
 		return ReadStaticKeysFile{}
 	}
 
 	return Sequence([]Out{Print("bad arguments"), End{}})
-}
-
-type NewStaticKeys struct {
-	keys noise.DHKey
-	err  error
 }
 
 type WriteStaticKeys []byte
@@ -146,12 +183,7 @@ type ConnectToServer struct{}
 
 func (ConnectToServer) run(in chan In) {
 	conn, err := net.Dial("tcp", serverUrl)
-	in <- ServerConn{conn, err}
-}
-
-type StaticKeysFile struct {
-	raw []byte
-	err error
+	in <- ServerConnection{conn, err}
 }
 
 type Panic struct {
@@ -202,12 +234,7 @@ func (kf StaticKeysFile) update(s *State) Out {
 	return Panic{errors.New("bad mode in StaticKeysFile.update")}
 }
 
-type ServerConn struct {
-	conn net.Conn
-	err  error
-}
-
-func (c ServerConn) update(s *State) Out {
+func (c ServerConnection) update(s *State) Out {
 	if c.err != nil {
 		return badServer
 	}
@@ -228,12 +255,6 @@ func (r Read) run(in chan In) {
 	raw := make([]byte, r.size)
 	n, err := r.reader.Read(raw)
 	in <- ReadResult{raw, n, err}
-}
-
-type ReadResult struct {
-	raw []byte
-	n   int
-	err error
 }
 
 var badServer Out = Sequence([]Out{Print("bad server"), End{}})
@@ -304,7 +325,7 @@ type ToServer struct {
 
 func (t ToServer) run(in chan In) {
 	_, err := t.conn.Write(t.message)
-	in <- WrittenServer{err}
+	in <- WrittenToServer{err}
 }
 
 const NoMoreMessages = 1
@@ -467,11 +488,6 @@ func (GetDbHandle) run(in chan In) {
 
 const dbPath = "sessionSecrets.sqlite"
 
-type DbHandle struct {
-	db  *sql.DB
-	err error
-}
-
 func (d DbHandle) update(s *State) Out {
 	if d.err != nil {
 		return Panic{d.err}
@@ -495,10 +511,6 @@ type CacheSecret struct {
 func (c CacheSecret) run(in chan In) {
 	_, err := c.db.Exec(cacheSecretSql, c.id[:], c.secret[:])
 	in <- CacheSecretResult{err}
-}
-
-type CacheSecretResult struct {
-	err error
 }
 
 func (c CacheSecretResult) update(*State) Out {
@@ -603,11 +615,7 @@ func startServerHandshake(r ReadResult, s *State) Out {
 		Read{s.conn, 1}:       struct{}{}})
 }
 
-type WrittenServer struct {
-	err error
-}
-
-func (w WrittenServer) update(s *State) Out {
+func (w WrittenToServer) update(s *State) Out {
 	if w.err != nil {
 		return badServer
 	}
@@ -617,10 +625,6 @@ func (w WrittenServer) update(s *State) Out {
 type DoNothing struct{}
 
 func (DoNothing) run(chan In) {
-}
-
-type WrittenFile struct {
-	err error
 }
 
 func (w WrittenFile) update(s *State) Out {

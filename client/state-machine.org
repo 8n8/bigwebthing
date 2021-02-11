@@ -1,55 +1,54 @@
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| INPUT                      | OLD STATE HAS                        | NEW STATE HAS                         | OUTPUT                         |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Start                      | Don't care                           | Don't care                            | Get args                       |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Command-line arguments     | Don't care                           | mode: update crypto                   | Read static keys file          |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| New static keys            | Don't care                           | static keys: ...                      | + Write static keys            |
-|                            |                                      |                                       | + Connect to server            |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Static keys file contents  | if fileOk {                          | if fileOk {                           | if fileOk {                    |
-|                            | mode: update crypto                  | static keys: ...                      | Connect to server              |
-|                            | } else {                             | }                                     | } else {                       |
-|                            | Don't care                           |                                       | Make static keys               |
-|                            | }                                    |                                       | }                              |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Got server connection      | Don't care                           | status: making server sessions secret | Make session secret            |
-|                            |                                      | conn: ...                             |                                |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Read result                | mode: update crypto                  | status: listening for new KK1         | + Request for new KK1s         |
-|                            | status: listening for XK2            | reading size: true                    | + Listen for size              |
-|                            |                                      | rx: ...                               |                                |
-|                            |                                      | tx: ...                               |                                |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Read result                | mode: update crypto                  | if KK1 {                              | if KK1 {                       |
-|                            | status: listening for new KK1        | status: making client session secret  | Make session secret            |
-|                            | reading size: false                  | kk1: ...                              | }                              |
-|                            |                                      | }                                     | if no more messages {          |
-|                            |                                      |                                       | End                            |
-|                            |                                      |                                       | }                              |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Read result                | mode: update crypto                  | status: listening for new KK1s        | + Get DB handle                |
-|                            | status: making client session secret | reading size: true                    | + Send KK2                     |
-|                            |                                      | secret: ...                           | + Listen for size              |
-|                            |                                      | caching secret: true                  |                                |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| DB handle                  | caching secret: true                 | unchanged                             | Cache secret                   |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Cache secret result        | Don't care                           | Don't care                            | Panic if bad, close DB if good |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Read result                | reading size: true                   | reading size: false                   | Listen for message             |
-|                            |                                      | size: ...                             |                                |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Read result                | mode: update crypto                  | status: listening for XK2             | + Send XK1 to server           |
-|                            | status: making server session secret | handshake: ...                        | + Listen for size              |
-|                            |                                      | reading size: true                    |                                |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Finished writing to server | Don't care                           | unchanged                             | if error {                     |
-|                            |                                      |                                       | print message and end          |
-|                            |                                      |                                       | }                              |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
-| Finished writing to file   | Don't care                           | unchanged                             | if error {                     |
-|                            |                                      |                                       | panic                          |
-|                            |                                      |                                       | }                              |
-|----------------------------+--------------------------------------+---------------------------------------+--------------------------------|
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| INPUT               | OLD STATE HAS                        | NEW STATE HAS                         | OUTPUT                         |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Start               | Don't care                           | Don't care                            | Get args                       |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Arguments           | Don't care                           | mode: update crypto                   | Read static keys file          |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| New static keys     | Don't care                           | static keys: ...                      | + Write static keys            |
+|                     |                                      |                                       | + Connect to server            |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Static keys file    | if fileOk {                          | if fileOk {                           | if fileOk {                    |
+|                     | mode: update crypto                  | static keys: ...                      | Connect to server              |
+|                     | } else {                             | }                                     | } else {                       |
+|                     | Don't care                           |                                       | Make static keys               |
+|                     | }                                    |                                       | }                              |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Server connection   | Don't care                           | status: making server sessions secret | Make session secret            |
+|                     |                                      | conn: ...                             |                                |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Read result         | mode: update crypto                  | status: listening for new KK1         | + Request for new KK1s         |
+|                     | status: listening for XK2            | reading size: true                    | + Listen for size              |
+|                     |                                      | rx: ...                               |                                |
+|                     |                                      | tx: ...                               |                                |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Read result         | mode: update crypto                  | if KK1 {                              | if KK1 {                       |
+|                     | status: listening for new KK1        | status: making client session secret  | Make session secret            |
+|                     | reading size: false                  | kk1: ...                              | }                              |
+|                     |                                      | }                                     | if no more messages {          |
+|                     |                                      |                                       | End                            |
+|                     |                                      |                                       | }                              |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Read result         | mode: update crypto                  | status: listening for new KK1s        | + Get DB handle                |
+|                     | status: making client session secret | reading size: true                    | + Send KK2                     |
+|                     |                                      | secret: ...                           | + Listen for size              |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Read result         | reading size: true                   | reading size: false                   | Listen for message             |
+|                     |                                      | size: ...                             |                                |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Read result         | mode: update crypto                  | status: listening for XK2             | + Send XK1 to server           |
+|                     | status: making server session secret | handshake: ...                        | + Listen for size              |
+|                     |                                      | reading size: true                    |                                |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| DB handle           | caching secret: true                 | unchanged                             | Cache secret                   |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Cache secret result | Don't care                           | Don't care                            | Panic if bad, close DB if good |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Written to server   | Don't care                           | unchanged                             | if error {                     |
+|                     |                                      |                                       | print message and end          |
+|                     |                                      |                                       | }                              |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
+| Written file        | Don't care                           | unchanged                             | if error {                     |
+|                     |                                      |                                       | panic                          |
+|                     |                                      |                                       | }                              |
+|---------------------+--------------------------------------+---------------------------------------+--------------------------------|
