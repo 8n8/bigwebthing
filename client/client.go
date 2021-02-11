@@ -14,20 +14,22 @@ import (
 	"os"
 )
 
+var killCh chan struct{} = make(chan struct{})
+var inCh chan In = make(chan In)
+
 func main() {
 	var state State
 	var in In = Start{}
-	inCh := make(chan In)
 
-	for {
-		out := in.update(&state)
-		if _, end := out.(End); end {
-			break
+	go func() {
+		for {
+			out := in.update(&state)
+			go out.run()
+			in = <-inCh
 		}
+	}()
 
-		go out.run(inCh)
-		in = <-inCh
-	}
+	<-killCh
 }
 
 type State struct {
@@ -130,7 +132,7 @@ type WrittenFile struct {
 // Outputs
 
 type Out interface {
-	run(chan In)
+	run()
 }
 
 type GetArgs struct{}
@@ -169,8 +171,6 @@ type Panic struct {
 
 type Print string
 
-type Set map[Out]struct{}
-
 type Sequence []Out
 
 type DoNothing struct{}
@@ -186,20 +186,18 @@ func (args Arguments) update(s *State) Out {
 		return ReadStaticKeysFile{}
 	}
 
-	return Sequence([]Out{Print("bad arguments"), End{}})
+	return Sequence([]Out{Print("bad arguments\n"), End{}})
 }
 
 func (k NewStaticKeys) update(s *State) Out {
 	if k.err != nil {
-		return Panic{k.err}
+		return Panic{fmt.Errorf("bad static keys: %s", k.err)}
 	}
 
 	encoded := encodeStaticKeys(k.keys)
 	written := WriteStaticKeys(encoded)
 
-	return Set(map[Out]struct{}{
-		written:           struct{}{},
-		ConnectToServer{}: struct{}{}})
+	return Sequence([]Out{written, ConnectToServer{}})
 }
 
 func (kf StaticKeysFile) update(s *State) Out {
@@ -210,7 +208,7 @@ func (kf StaticKeysFile) update(s *State) Out {
 	if s.mode == UpdateCrypto {
 		staticKeys, err := parseStaticKeys(kf.raw)
 		if err != nil {
-			return Panic{err}
+			return Panic{fmt.Errorf("couldn't parse static keys: %s", err)}
 		}
 
 		s.staticKeys = staticKeys
@@ -270,7 +268,7 @@ func (r ReadResult) update(s *State) Out {
 
 func (d DbHandle) update(s *State) Out {
 	if d.err != nil {
-		return Panic{d.err}
+		return Panic{fmt.Errorf("no database handle: %s", d.err)}
 	}
 
 	if s.cachingSecret {
@@ -282,7 +280,7 @@ func (d DbHandle) update(s *State) Out {
 
 func (c CacheSecretResult) update(*State) Out {
 	if c.err != nil {
-		return Panic(c)
+		return Panic{fmt.Errorf("couldn't cache secrets: %s", c.err)}
 	}
 	return DoNothing{}
 }
@@ -296,81 +294,76 @@ func (w WrittenToServer) update(s *State) Out {
 
 func (w WrittenFile) update(s *State) Out {
 	if w.err != nil {
-		return Panic(w)
+		return Panic{fmt.Errorf("could't write file: ", w.err)}
 	}
 	return DoNothing{}
 }
 
 // Output runners
 
-func (GetArgs) run(in chan In) {
-	in <- Arguments(os.Args)
+func (GetArgs) run() {
+	inCh <- Arguments(os.Args)
 }
 
-func (ReadStaticKeysFile) run(in chan In) {
+func (ReadStaticKeysFile) run() {
 	contents, err := ioutil.ReadFile(staticKeysPath)
-	in <- StaticKeysFile{contents, err}
+	inCh <- StaticKeysFile{contents, err}
 }
 
-func (w WriteStaticKeys) run(in chan In) {
-	in <- WrittenFile{ioutil.WriteFile(staticKeysPath, []byte(w), 0400)}
+func (w WriteStaticKeys) run() {
+	inCh <- WrittenFile{ioutil.WriteFile(staticKeysPath, []byte(w), 0400)}
 }
 
-func (ConnectToServer) run(in chan In) {
+func (ConnectToServer) run() {
 	conn, err := net.Dial("tcp", serverUrl)
-	in <- ServerConnection{conn, err}
+	inCh <- ServerConnection{conn, err}
 }
 
-func (MakeStaticKeys) run(in chan In) {
+func (MakeStaticKeys) run() {
 	keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
-	in <- NewStaticKeys{keys, err}
+	inCh <- NewStaticKeys{keys, err}
 }
 
-func (r Read) run(in chan In) {
+func (r Read) run() {
 	raw := make([]byte, r.size)
 	n, err := r.reader.Read(raw)
-	in <- ReadResult{raw, n, err}
+	inCh <- ReadResult{raw, n, err}
 }
 
-func (t ToServer) run(in chan In) {
+func (t ToServer) run() {
 	_, err := t.conn.Write(t.message)
-	in <- WrittenToServer{err}
+	inCh <- WrittenToServer{err}
 }
 
-func (End) run(chan In) {
+func (End) run() {
+	killCh <- struct{}{}
 }
 
-func (GetDbHandle) run(in chan In) {
+func (GetDbHandle) run() {
 	db, err := sql.Open("sqlite3", dbPath)
-	in <- DbHandle{db, err}
+	inCh <- DbHandle{db, err}
 }
 
-func (c CacheSecret) run(in chan In) {
+func (c CacheSecret) run() {
 	_, err := c.db.Exec(cacheSecretSql, c.id[:], c.secret[:])
-	in <- CacheSecretResult{err}
+	inCh <- CacheSecretResult{err}
 }
 
-func (p Panic) run(chan In) {
+func (p Panic) run() {
 	panic(p)
 }
 
-func (p Print) run(chan In) {
+func (p Print) run() {
 	fmt.Print(p)
 }
 
-func (set Set) run(in chan In) {
-	for out := range set {
-		go out.run(in)
-	}
-}
-
-func (s Sequence) run(in chan In) {
+func (s Sequence) run() {
 	for _, out := range s {
-		out.run(in)
+		out.run()
 	}
 }
 
-func (DoNothing) run(chan In) {
+func (DoNothing) run() {
 }
 
 // Helper functions
@@ -397,7 +390,7 @@ func parseStaticKeys(raw []byte) (noise.DHKey, error) {
 	return keys, nil
 }
 
-var badServer Out = Sequence([]Out{Print("bad server"), End{}})
+var badServer Out = Sequence([]Out{Print("bad server\n"), End{}})
 
 func requestKk1s(r ReadResult, s *State) Out {
 	if r.n != Xk2FromServerSize {
@@ -415,7 +408,7 @@ func requestKk1s(r ReadResult, s *State) Out {
 		xk3,
 		[]byte{GiveMeNewKk1s})
 	if err != nil {
-		return Panic{err}
+		return Panic{fmt.Errorf("couldn't do WriteMessage in requestKk2s: %s", err)}
 	}
 
 	s.status = ListeningForNewKk1
@@ -424,9 +417,7 @@ func requestKk1s(r ReadResult, s *State) Out {
 	s.tx = tx
 
 	request := ToServer{xk3, s.conn}
-	return Set(map[Out]struct{}{
-		request:         struct{}{},
-		Read{s.conn, 1}: struct{}{}})
+	return Sequence([]Out{request, Read{s.conn, 1}})
 }
 
 func parseKk1From(raw []byte) (Kk1From, error) {
@@ -523,13 +514,13 @@ func sendKk2(r ReadResult, s *State) Out {
 	copy(secret[:], r.raw)
 	random, err := initRandomGen(secret)
 	if err != nil {
-		return Panic{err}
+		return Panic{fmt.Errorf("couldn't initialise random generator: %s", err)}
 	}
 
 	config := makeKkConfig(s.staticKeys, s.kk1.sender, random)
 	shake, err := noise.NewHandshakeState(config)
 	if err != nil {
-		return Panic{err}
+		return Panic{fmt.Errorf("couldn't make new handshake state in sendKk2: %s", err)}
 	}
 
 	_, _, _, err = shake.ReadMessage([]byte{}, s.kk1.kk1[:])
@@ -539,7 +530,7 @@ func sendKk2(r ReadResult, s *State) Out {
 
 	kk2, _, _, err := shake.WriteMessage([]byte{}, []byte{})
 	if err != nil {
-		return Panic{err}
+		return Panic{fmt.Errorf("couldn't make kk2 in sendKk2: %s", err)}
 	}
 
 	s.readingSize = true
@@ -553,9 +544,6 @@ func sendKk2(r ReadResult, s *State) Out {
 	toServer := make([]byte, 1, Kk2ToServerSize)
 	toServer[0] = Kk2ToServerSize
 	toServer = s.tx.Encrypt(toServer, cryptoAd, plain)
-	if err != nil {
-		return Panic{err}
-	}
 
 	var sessionId [SessionIdSize]byte
 	copy(sessionId[:], s.kk1.kk1[:])
@@ -563,10 +551,10 @@ func sendKk2(r ReadResult, s *State) Out {
 	s.secret = ClientSecret{sessionId, secret}
 	s.cachingSecret = true
 
-	return Set(map[Out]struct{}{
-		GetDbHandle{}:              struct{}{},
-		ToServer{toServer, s.conn}: struct{}{},
-		Read{s.conn, 1}:            struct{}{}})
+	return Sequence([]Out{
+		GetDbHandle{},
+		ToServer{toServer, s.conn},
+		Read{s.conn, 1}})
 }
 
 type ClientSecret struct {
@@ -614,19 +602,17 @@ func startServerHandshake(r ReadResult, s *State) Out {
 
 	shake, err := initServerShake(s.staticKeys, secret)
 	if err != nil {
-		return Panic{err}
+		return Panic{fmt.Errorf("couldn't initialize server handshake in startServerHandshake: %s", err)}
 	}
 
 	xk1, _, _, err := shake.WriteMessage([]byte{}, []byte{})
 	if err != nil {
-		return Panic{err}
+		return Panic{fmt.Errorf("couldn't make xk1 in initServerShake: %s", err)}
 	}
 
 	s.handshake = shake
 	s.status = ListeningForXk2
 	s.readingSize = true
 
-	return Set(map[Out]struct{}{
-		ToServer{xk1, s.conn}: struct{}{},
-		Read{s.conn, 1}:       struct{}{}})
+	return Sequence([]Out{ToServer{xk1, s.conn}, Read{s.conn, 1}})
 }
