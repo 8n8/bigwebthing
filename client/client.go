@@ -47,18 +47,38 @@ type State struct {
 
 // Modes
 const UpdateCrypto = 1
-const MakingServerSecret = 2
 
 // Statuses
 const ListeningForNewKk1 = 1
-const MakingClientSessionSecret = 2
-const ListeningForXk2 = 3
+const ListeningForXk2 = 2
+const MakingClientSessionSecret = 3
+const MakingServerSecret = 4
 
-// API indicators
+// API indicators to server
 const UploadKk2 = 0
+const GiveMeNewKk1s = 1
+
+// API indicators from server
+const NoMoreMessages = 1
 
 // Sizes
 const SessionIdSize = 24
+const dhlen = 32
+const SecretSize = 2 * aes.BlockSize
+const CryptoOverhead = 16
+const Xk2FromServerSize = dhlen + 2*CryptoOverhead
+const SizedXk3NewKk1Size = 1 + dhlen + CryptoOverhead + 1 + CryptoOverhead
+const Kk1Size = 48
+const Kk2Size = dhlen + 2*CryptoOverhead
+const Kk2ToServerSize = 1 + CryptoOverhead + 1 + dhlen + Kk2Size
+
+// Paths and URLs
+const staticKeysPath = "staticKeys"
+const dbPath = "sessionSecrets.sqlite"
+const serverUrl = "localhost:3001"
+
+// SQL
+const cacheSecretSql = "INSERT INTO sessionsecrets (sessionid, secret) values (?, ?);"
 
 // Inputs
 type In interface {
@@ -149,19 +169,16 @@ type Panic struct {
 
 type Print string
 
+type Set map[Out]struct{}
+
+type Sequence []Out
+
+type DoNothing struct{}
+
 // State transitions
 
 func (Start) update(*State) Out {
 	return GetArgs{}
-}
-
-func (GetArgs) run(in chan In) {
-	in <- Arguments(os.Args)
-}
-
-func (ReadStaticKeysFile) run(in chan In) {
-	contents, err := ioutil.ReadFile(staticKeysPath)
-	in <- StaticKeysFile{contents, err}
 }
 
 func (args Arguments) update(s *State) Out {
@@ -170,29 +187,6 @@ func (args Arguments) update(s *State) Out {
 	}
 
 	return Sequence([]Out{Print("bad arguments"), End{}})
-}
-
-func (w WriteStaticKeys) run(in chan In) {
-	in <- WrittenFile{ioutil.WriteFile(staticKeysPath, []byte(w), 0400)}
-}
-
-const staticKeysPath = "staticKeys"
-
-func encodeStaticKeys(keys noise.DHKey) []byte {
-	encoded := make([]byte, 0, 2*dhlen)
-	encoded = append(encoded, keys.Private...)
-	encoded = append(encoded, keys.Public...)
-	return encoded
-}
-
-const dhlen = 32
-
-type Set map[Out]struct{}
-
-func (set Set) run(in chan In) {
-	for out := range set {
-		go out.run(in)
-	}
 }
 
 func (k NewStaticKeys) update(s *State) Out {
@@ -206,37 +200,6 @@ func (k NewStaticKeys) update(s *State) Out {
 	return Set(map[Out]struct{}{
 		written:           struct{}{},
 		ConnectToServer{}: struct{}{}})
-}
-
-const serverUrl = "localhost:3001"
-
-func (ConnectToServer) run(in chan In) {
-	conn, err := net.Dial("tcp", serverUrl)
-	in <- ServerConnection{conn, err}
-}
-
-func (p Panic) run(chan In) {
-	panic(p)
-}
-
-func (MakeStaticKeys) run(in chan In) {
-	keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
-	in <- NewStaticKeys{keys, err}
-}
-
-func parseStaticKeys(raw []byte) (noise.DHKey, error) {
-	var keys noise.DHKey
-	n := copy(keys.Private, raw)
-	if n != dhlen {
-		return keys, fmt.Errorf("expecting %d bytes but got %d", dhlen, n)
-	}
-
-	n = copy(keys.Public, raw[dhlen:])
-	if n != dhlen {
-		return keys, fmt.Errorf("expecting %d bytes but got %d", dhlen, n)
-	}
-
-	return keys, nil
 }
 
 func (kf StaticKeysFile) update(s *State) Out {
@@ -267,7 +230,101 @@ func (c ServerConnection) update(s *State) Out {
 	return Read{rand.Reader, SecretSize}
 }
 
-const SecretSize = 2 * aes.BlockSize
+func (r ReadResult) update(s *State) Out {
+	if s.mode == UpdateCrypto &&
+		s.status == ListeningForXk2 &&
+		!s.readingSize {
+
+		return requestKk1s(r, s)
+	}
+
+	if s.mode == UpdateCrypto &&
+		s.status == ListeningForNewKk1 &&
+		!s.readingSize {
+
+		return processKk1(r, s)
+	}
+
+	if s.mode == UpdateCrypto &&
+		s.status == MakingClientSessionSecret {
+
+		return sendKk2(r, s)
+	}
+
+	if s.readingSize {
+		if r.n != 1 {
+			return badServer
+		}
+
+		s.size = int(r.raw[0])
+		s.readingSize = false
+		return Read{s.conn, int(s.size)}
+	}
+
+	if s.mode == UpdateCrypto && s.status == MakingServerSecret {
+		return startServerHandshake(r, s)
+	}
+
+	return Panic{errors.New("unexpected ReadResult")}
+}
+
+func (d DbHandle) update(s *State) Out {
+	if d.err != nil {
+		return Panic{d.err}
+	}
+
+	if s.cachingSecret {
+		return CacheSecret{s.secret.id, s.secret.secret, d.db}
+	}
+
+	return Panic{errors.New("unexpected database handle")}
+}
+
+func (c CacheSecretResult) update(*State) Out {
+	if c.err != nil {
+		return Panic(c)
+	}
+	return DoNothing{}
+}
+
+func (w WrittenToServer) update(s *State) Out {
+	if w.err != nil {
+		return badServer
+	}
+	return DoNothing{}
+}
+
+func (w WrittenFile) update(s *State) Out {
+	if w.err != nil {
+		return Panic(w)
+	}
+	return DoNothing{}
+}
+
+// Output runners
+
+func (GetArgs) run(in chan In) {
+	in <- Arguments(os.Args)
+}
+
+func (ReadStaticKeysFile) run(in chan In) {
+	contents, err := ioutil.ReadFile(staticKeysPath)
+	in <- StaticKeysFile{contents, err}
+}
+
+func (w WriteStaticKeys) run(in chan In) {
+	in <- WrittenFile{ioutil.WriteFile(staticKeysPath, []byte(w), 0400)}
+}
+
+func (ConnectToServer) run(in chan In) {
+	conn, err := net.Dial("tcp", serverUrl)
+	in <- ServerConnection{conn, err}
+}
+
+func (MakeStaticKeys) run(in chan In) {
+	keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
+	in <- NewStaticKeys{keys, err}
+}
 
 func (r Read) run(in chan In) {
 	raw := make([]byte, r.size)
@@ -275,16 +332,37 @@ func (r Read) run(in chan In) {
 	in <- ReadResult{raw, n, err}
 }
 
-var badServer Out = Sequence([]Out{Print("bad server"), End{}})
+func (t ToServer) run(in chan In) {
+	_, err := t.conn.Write(t.message)
+	in <- WrittenToServer{err}
+}
 
 func (End) run(chan In) {
+}
+
+func (GetDbHandle) run(in chan In) {
+	db, err := sql.Open("sqlite3", dbPath)
+	in <- DbHandle{db, err}
+}
+
+func (c CacheSecret) run(in chan In) {
+	_, err := c.db.Exec(cacheSecretSql, c.id[:], c.secret[:])
+	in <- CacheSecretResult{err}
+}
+
+func (p Panic) run(chan In) {
+	panic(p)
 }
 
 func (p Print) run(chan In) {
 	fmt.Print(p)
 }
 
-type Sequence []Out
+func (set Set) run(in chan In) {
+	for out := range set {
+		go out.run(in)
+	}
+}
 
 func (s Sequence) run(in chan In) {
 	for _, out := range s {
@@ -292,11 +370,34 @@ func (s Sequence) run(in chan In) {
 	}
 }
 
-const CryptoOverhead = 16
+func (DoNothing) run(chan In) {
+}
 
-const Xk2FromServerSize = dhlen + 2*CryptoOverhead
+// Helper functions
 
-const GiveMeNewKk1s = 1
+func encodeStaticKeys(keys noise.DHKey) []byte {
+	encoded := make([]byte, 0, 2*dhlen)
+	encoded = append(encoded, keys.Private...)
+	encoded = append(encoded, keys.Public...)
+	return encoded
+}
+
+func parseStaticKeys(raw []byte) (noise.DHKey, error) {
+	var keys noise.DHKey
+	n := copy(keys.Private, raw)
+	if n != dhlen {
+		return keys, fmt.Errorf("expecting %d bytes but got %d", dhlen, n)
+	}
+
+	n = copy(keys.Public, raw[dhlen:])
+	if n != dhlen {
+		return keys, fmt.Errorf("expecting %d bytes but got %d", dhlen, n)
+	}
+
+	return keys, nil
+}
+
+var badServer Out = Sequence([]Out{Print("bad server"), End{}})
 
 func requestKk1s(r ReadResult, s *State) Out {
 	if r.n != Xk2FromServerSize {
@@ -327,17 +428,6 @@ func requestKk1s(r ReadResult, s *State) Out {
 		request:         struct{}{},
 		Read{s.conn, 1}: struct{}{}})
 }
-
-const SizedXk3NewKk1Size = 1 + dhlen + CryptoOverhead + 1 + CryptoOverhead
-
-const Kk1Size = 48
-
-func (t ToServer) run(in chan In) {
-	_, err := t.conn.Write(t.message)
-	in <- WrittenToServer{err}
-}
-
-const NoMoreMessages = 1
 
 func parseKk1From(raw []byte) (Kk1From, error) {
 	const expected = 1 + Kk1Size + dhlen
@@ -424,8 +514,6 @@ func makeKkConfig(
 	}
 }
 
-const Kk2Size = dhlen + 2*CryptoOverhead
-
 func sendKk2(r ReadResult, s *State) Out {
 	if r.n != SecretSize {
 		return Panic{errors.New("bad new secret size")}
@@ -481,82 +569,9 @@ func sendKk2(r ReadResult, s *State) Out {
 		Read{s.conn, 1}:            struct{}{}})
 }
 
-const Kk2ToServerSize = 1 + CryptoOverhead + 1 + dhlen + Kk2Size
-
 type ClientSecret struct {
 	id     [SessionIdSize]byte
 	secret [SecretSize]byte
-}
-
-func (GetDbHandle) run(in chan In) {
-	db, err := sql.Open("sqlite3", dbPath)
-	in <- DbHandle{db, err}
-}
-
-const dbPath = "sessionSecrets.sqlite"
-
-func (d DbHandle) update(s *State) Out {
-	if d.err != nil {
-		return Panic{d.err}
-	}
-
-	if s.cachingSecret {
-		return CacheSecret{s.secret.id, s.secret.secret, d.db}
-	}
-
-	return Panic{errors.New("unexpected database handle")}
-}
-
-const cacheSecretSql = "INSERT INTO sessionsecrets (sessionid, secret) values (?, ?);"
-
-func (c CacheSecret) run(in chan In) {
-	_, err := c.db.Exec(cacheSecretSql, c.id[:], c.secret[:])
-	in <- CacheSecretResult{err}
-}
-
-func (c CacheSecretResult) update(*State) Out {
-	if c.err != nil {
-		return Panic(c)
-	}
-	return DoNothing{}
-}
-
-func (r ReadResult) update(s *State) Out {
-	if s.mode == UpdateCrypto &&
-		s.status == ListeningForXk2 &&
-		!s.readingSize {
-
-		return requestKk1s(r, s)
-	}
-
-	if s.mode == UpdateCrypto &&
-		s.status == ListeningForNewKk1 &&
-		!s.readingSize {
-
-		return processKk1(r, s)
-	}
-
-	if s.mode == UpdateCrypto &&
-		s.status == MakingClientSessionSecret {
-
-		return sendKk2(r, s)
-	}
-
-	if s.readingSize {
-		if r.n != 1 {
-			return badServer
-		}
-
-		s.size = int(r.raw[0])
-		s.readingSize = false
-		return Read{s.conn, int(s.size)}
-	}
-
-	if s.mode == UpdateCrypto && s.status == MakingServerSecret {
-		return startServerHandshake(r, s)
-	}
-
-	return Panic{errors.New("unexpected ReadResult")}
 }
 
 func serverCipherSuite() noise.CipherSuite {
@@ -614,23 +629,4 @@ func startServerHandshake(r ReadResult, s *State) Out {
 	return Set(map[Out]struct{}{
 		ToServer{xk1, s.conn}: struct{}{},
 		Read{s.conn, 1}:       struct{}{}})
-}
-
-func (w WrittenToServer) update(s *State) Out {
-	if w.err != nil {
-		return badServer
-	}
-	return DoNothing{}
-}
-
-type DoNothing struct{}
-
-func (DoNothing) run(chan In) {
-}
-
-func (w WrittenFile) update(s *State) Out {
-	if w.err != nil {
-		return Panic(w)
-	}
-	return DoNothing{}
 }
