@@ -113,3 +113,36 @@ func TestStaticKeysFileOk(t *testing.T) {
 		t.Errorf("failed to copy static keys from file into state")
 	}
 }
+
+func TestServerConnectionErr(t *testing.T) {
+	var in ServerConnection
+	in.err = errors.New("not nil")
+
+	var state State
+	got := in.update(&state).(Sequence)
+
+	expected := badServer.(Sequence)
+
+	if got[0] != expected[0] {
+		t.Errorf("expected %v, but got %v", expected[0], got[0])
+	}
+
+	if got[1] != expected[1] {
+		t.Errorf("expected %v, but got %v", expected[1], got[1])
+	}
+}
+
+func TestServerConnectionOk(t *testing.T) {
+	var in ServerConnection
+	var state State
+	got := in.update(&state)
+
+	read, ok := got.(Read)
+	if !ok {
+		t.Errorf("expected Read, but got %v", got)
+	}
+
+	if read.size != SecretSize {
+		t.Errorf("expected %d, but got %d", SecretSize, read.size)
+	}
+}
