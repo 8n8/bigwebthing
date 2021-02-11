@@ -183,6 +183,7 @@ func (Start) update(*State) Out {
 
 func (args Arguments) update(s *State) Out {
 	if len(args) == 2 && args[1] == "update" {
+		s.mode = UpdateCrypto
 		return ReadStaticKeysFile{}
 	}
 
@@ -350,7 +351,7 @@ func (c CacheSecret) run() {
 }
 
 func (p Panic) run() {
-	panic(p)
+	panic(p.err.Error())
 }
 
 func (p Print) run() {
@@ -376,18 +377,19 @@ func encodeStaticKeys(keys noise.DHKey) []byte {
 }
 
 func parseStaticKeys(raw []byte) (noise.DHKey, error) {
-	var keys noise.DHKey
-	n := copy(keys.Private, raw)
+	private := make([]byte, dhlen)
+	n := copy(private, raw)
 	if n != dhlen {
-		return keys, fmt.Errorf("expecting %d bytes but got %d", dhlen, n)
+		return *new(noise.DHKey), fmt.Errorf("expecting %d bytes for Private key but got %d", dhlen, n)
 	}
 
-	n = copy(keys.Public, raw[dhlen:])
+	public := make([]byte, dhlen)
+	n = copy(public, raw[dhlen:])
 	if n != dhlen {
-		return keys, fmt.Errorf("expecting %d bytes but got %d", dhlen, n)
+		return *new(noise.DHKey), fmt.Errorf("expecting %d bytes for Public Key but got %d", dhlen, n)
 	}
 
-	return keys, nil
+	return noise.DHKey{Private: private, Public: public}, nil
 }
 
 var badServer Out = Sequence([]Out{Print("bad server\n"), End{}})
