@@ -295,7 +295,7 @@ func (w WrittenToServer) update(s *State) Out {
 
 func (w WrittenFile) update(s *State) Out {
 	if w.err != nil {
-		return Panic{fmt.Errorf("could't write file: ", w.err)}
+		return Panic{fmt.Errorf("could't write file: %s", w.err)}
 	}
 	return DoNothing{}
 }
