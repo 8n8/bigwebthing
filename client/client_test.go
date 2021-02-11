@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"github.com/flynn/noise"
 	"testing"
 )
 
@@ -37,5 +39,77 @@ func TestArgumentsEmpty(t *testing.T) {
 	_, ended := seq[1].(End)
 	if !(printed && ended) {
 		t.Errorf("expected printed and ended, but got %v", got)
+	}
+}
+
+func TestNewStaticKeysErr(t *testing.T) {
+	var in NewStaticKeys
+	in.err = errors.New("error")
+
+	var state State
+	got := in.update(&state)
+
+	_, ok := got.(Panic)
+	if !ok {
+		t.Errorf("expecting panic but got %v", got)
+	}
+}
+
+func TestNewStaticKeysOk(t *testing.T) {
+	in := NewStaticKeys{
+		err: nil,
+		keys: noise.DHKey{
+			Private: make([]byte, dhlen),
+			Public:  make([]byte, dhlen),
+		},
+	}
+	in.keys.Private[0] = 55
+
+	var state State
+	got := in.update(&state)
+
+	if state.staticKeys.Private[0] != 55 {
+		t.Errorf("failed to copy new static keys")
+	}
+
+	seq := got.(Sequence)
+	_, write := seq[0].(WriteStaticKeys)
+	_, connect := seq[1].(ConnectToServer)
+	if !(write && connect) {
+		t.Errorf("expected write and connect, but got %v", got)
+	}
+}
+
+func TestStaticKeysFileErr(t *testing.T) {
+	in := StaticKeysFile{
+		raw: make([]byte, dhlen*2),
+		err: errors.New("not nil"),
+	}
+
+	got := in.update(new(State))
+	_, ok := got.(MakeStaticKeys)
+	if !ok {
+		t.Errorf("expected make static keys, but got %v", got)
+	}
+}
+
+func TestStaticKeysFileOk(t *testing.T) {
+	in := StaticKeysFile{
+		raw: make([]byte, dhlen*2),
+		err: nil,
+	}
+	in.raw[32] = 45
+
+	var state State
+	state.mode = UpdateCrypto
+	got := in.update(&state)
+
+	_, ok := got.(ConnectToServer)
+	if !ok {
+		t.Errorf("expected ConnectToServer, but got %v", got)
+	}
+
+	if state.staticKeys.Public[0] != 45 {
+		t.Errorf("failed to copy static keys from file into state")
 	}
 }

@@ -195,6 +195,8 @@ func (k NewStaticKeys) update(s *State) Out {
 		return Panic{fmt.Errorf("bad static keys: %s", k.err)}
 	}
 
+	s.staticKeys = k.keys
+
 	encoded := encodeStaticKeys(k.keys)
 	written := WriteStaticKeys(encoded)
 
