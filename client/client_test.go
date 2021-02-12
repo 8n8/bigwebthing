@@ -145,4 +145,12 @@ func TestServerConnectionOk(t *testing.T) {
 	if read.size != SecretSize {
 		t.Errorf("expected %d, but got %d", SecretSize, read.size)
 	}
+
+	if state.status != MakingServerSecret {
+		t.Errorf("expected %d, but got %d", MakingServerSecret, state.status)
+	}
+}
+
+func TestReadResultXk2(t *testing.T) {
+	in := ReadResult
 }
