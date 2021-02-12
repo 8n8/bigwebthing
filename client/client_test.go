@@ -150,7 +150,3 @@ func TestServerConnectionOk(t *testing.T) {
 		t.Errorf("expected %d, but got %d", MakingServerSecret, state.status)
 	}
 }
-
-func TestReadResultXk2(t *testing.T) {
-	in := ReadResult
-}
