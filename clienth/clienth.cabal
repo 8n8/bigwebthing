@@ -1,0 +1,77 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 444c3e14b996be394ae09c2170cb6daeb3f772e1a09bffdda4a49e3a668fcec7
+
+name:           clienth
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/clienth#readme>
+homepage:       https://github.com/githubuser/clienth#readme
+bug-reports:    https://github.com/githubuser/clienth/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2021 Author name here
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/clienth
+
+library
+  exposed-modules:
+      Lib
+  other-modules:
+      Paths_clienth
+  hs-source-dirs:
+      src
+  ghc-options: -Weverything -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-implicit-prelude -Wno-unsafe -Wno-safe
+  build-depends:
+      base >=4.7 && <5
+    , bytestring
+    , cacophony
+    , memory
+    , stm
+    , text
+  default-language: Haskell2010
+
+executable clienth-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_clienth
+  hs-source-dirs:
+      app
+  ghc-options: -Weverything -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-implicit-prelude -Wno-unsafe -Wno-safe -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , bytestring
+    , cacophony
+    , memory
+    , stm
+    , text
+  default-language: Haskell2010
+
+test-suite clienth-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_clienth
+  hs-source-dirs:
+      test
+  ghc-options: -Weverything -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-implicit-prelude -Wno-unsafe -Wno-safe -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , bytestring
+    , cacophony
+    , clienth
+    , memory
+    , stm
+    , text
+  default-language: Haskell2010

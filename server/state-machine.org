@@ -1,53 +1,48 @@
-| INPUT              | OLD STATE                       | NEW STATE                       | OUTPUT                    |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| Start              | Don't care                      | unchanged                       | Read static keys file     |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| Static keys file   | Don't care                      | if file OK {                    | if file OK {              |
-|                    |                                 | static keys: ...                | start tcp listener        |
-|                    |                                 | }                               | } else {                  |
-|                    |                                 |                                 | generate static keys      |
-|                    |                                 |                                 | }                         |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| New static keys    | Don't care                      | static keys: ...                | + start TCP listener      |
-|                    |                                 |                                 | + save static keys        |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| New TCP listener   | Don't care                      | tcp: ...                        | + Listen for connections  |
-|                    |                                 | counter: 0                      |                           |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| New TCP connection | Don't care                      | conns: {                        | + Listen for message size |
-|                    |                                 | conn ID: {                      |                           |
-|                    |                                 | status: Listening for XK1       |                           |
-|                    |                                 | listening for size: true        |                           |
-|                    |                                 | }                               |                           |
-|                    |                                 | }                               |                           |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| Conn read result   | conns: {                        | conns: {                        | + Listen for message body |
-|                    | conn ID: {                      | conn ID: {                      |                           |
-|                    | Listening for size = true       | size: ...                       |                           |
-|                    | }                               | Listening for size = false      |                           |
-|                    | }                               | }                               |                           |
-|                    |                                 | }                               |                           |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| Conn read result   | conns: {                        | conns: {                        | + Send XK2                |
-|                    | conn ID: {                      | conn ID: {                      | + Listen for XK3          |
-|                    | status: Listening for XK1       | status: Listening for XK3       |                           |
-|                    | listening for size: false       | listening for size: true        |                           |
-|                    | }                               | handshake: ...                  |                           |
-|                    | }                               | }                               |                           |
-|                    |                                 | }                               |                           |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| Conn read result   | conns: {                        | conns: {                        | + Send response           |
-|                    | conn ID: {                      | conn ID: {                      |                           |
-|                    | status: Listening for XK3       | status: Listening for transport |                           |
-|                    | listening for size: false       | listening for size: true        |                           |
-|                    | }                               | rx: rx                          |                           |
-|                    | }                               | tx: tx                          |                           |
-|                    |                                 | }                               |                           |
-|                    |                                 | }                               |                           |
-|--------------------+---------------------------------+---------------------------------+---------------------------|
-| Conn read result   | conns: {                        | conns: {                        | + Send response           |
-|                    | conn ID: {                      | conn ID: {                      |                           |
-|                    | status: listening for transport | tx: ...                         |                           |
-|                    | listening for size: false       | }                               |                           |
-|                    | }                               | }                               |                           |
-|                    | }                               |                                 |                           |
+| INPUT              | OLD STATE                  | NEW STATE                       | OUTPUT                    |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| Start              | Don't care                 | unchanged                       | Read static keys file     |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| Static keys file   | Don't care                 | if file OK {                    | if file OK {              |
+|                    |                            | static keys: ...                | start tcp listener        |
+|                    |                            | }                               | } else {                  |
+|                    |                            |                                 | generate static keys      |
+|                    |                            |                                 | }                         |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| New static keys    | Don't care                 | static keys: ...                | + start TCP listener      |
+|                    |                            |                                 | + save static keys        |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| New TCP listener   | Don't care                 | tcp: ...                        | + Listen for connections  |
+|                    |                            | counter: 0                      |                           |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| New TCP connection | Don't care                 | conns: {                        | + Listen for message size |
+|                    |                            | IP address: {                   |                           |
+|                    |                            | status: Listening for XK1       |                           |
+|                    |                            | listening for size: true        |                           |
+|                    |                            | }                               |                           |
+|                    |                            | }                               |                           |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| Conn read result   | conns: {                   | conns: {                        | + Listen for message body |
+|                    | IP address: {              | IP address: {                   |                           |
+|                    | Listening for size = true  | size: ...                       |                           |
+|                    | }                          | Listening for size = false      |                           |
+|                    | }                          | }                               |                           |
+|                    |                            | }                               |                           |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| Conn read result   | conns: {                   | conns: {                        | + Send XK2                |
+|                    | IP address: {              | IP address: {                   | + Listen for XK3          |
+|                    | status: Listening for XK1  | status: Listening for XK3       |                           |
+|                    | listening for size: false  | listening for size: true        |                           |
+|                    | }                          | handshake: ...                  |                           |
+|                    | }                          | }                               |                           |
+|                    |                            | }                               |                           |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| Conn read result   | conns: {                   | conns: {                        | + Send response           |
+| wanting DB data    | IP address: {              | IP address: {                   |                           |
+|                    | status: Listening for XK3  | status: Listening for transport |                           |
+|                    | or listening for transport | }                               |                           |
+|                    | listening for size: false  | }                               |                           |
+|                    | }                          |                                 |                           |
+|                    | }                          |                                 |                           |
+|--------------------+----------------------------+---------------------------------+---------------------------|
+| Request for        |                            |                                 |                           |
+|                    |                            |                                 |                           |
