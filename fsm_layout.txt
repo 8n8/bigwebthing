@@ -1,0 +1,49 @@
+# A table schema for laying out a finite state machine
+
+The entry point is a function that maps a state and an input to a new state and an output.
+
+## Literal types table
+
+- literal ID
+- type
+
+## String literals table
+
+- literal ID
+- string (Unicode text)
+
+## Int literals table
+
+- literal ID
+- int (int)
+
+## Map key-value pairs literals table
+
+- literal ID
+- key literal ID
+- value literal ID
+
+## Map lookup literal
+
+- literal ID
+- key literal ID
+
+## Function call literals table
+
+- literal ID
+- ID of function
+
+## Function call parameter literals
+
+- ID of function call literal
+- ID of parameter literal
+
+## Function literals table
+
+- literal ID
+- ID of value literal
+
+## Function parameters table
+
+- function literal ID
+- parameter literal ID 

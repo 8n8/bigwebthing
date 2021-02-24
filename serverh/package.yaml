@@ -25,12 +25,20 @@ dependencies:
 - bytestring
 - cacophony
 - memory
-
-library:
-  source-dirs: src
+- network-simple
+- containers
+- text
+- attoparsec
+- sqlite-simple
 
 ghc-options:
 - -Weverything
+- -Wno-prepositive-qualified-module
+- -Wno-unsafe
+- -Wno-missing-safe-haskell-mode
+- -Wno-implicit-prelude
+- -Wno-safe
+- -Wno-missing-deriving-strategies
 
 executables:
   serverh-exe:
@@ -40,16 +48,3 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    dependencies:
-    - serverh
-
-tests:
-  serverh-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - serverh

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: cff3576a0b2beac65944bca2419c594ea88b0421f04cf121350d46b0e7b39e19
+-- hash: 61db0ff849c1351c47788da09694c3e7db1979b204c232230ca7663405818060
 
 name:           serverh
 version:        0.1.0.0
@@ -25,51 +25,22 @@ source-repository head
   type: git
   location: https://github.com/githubuser/serverh
 
-library
-  exposed-modules:
-      Lib
-  other-modules:
-      Paths_serverh
-  hs-source-dirs:
-      src
-  ghc-options: -Weverything
-  build-depends:
-      base >=4.7 && <5
-    , bytestring
-    , cacophony
-    , memory
-    , stm
-  default-language: Haskell2010
-
 executable serverh-exe
   main-is: Main.hs
   other-modules:
       Paths_serverh
   hs-source-dirs:
       app
-  ghc-options: -Weverything -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -Weverything -Wno-prepositive-qualified-module -Wno-unsafe -Wno-missing-safe-haskell-mode -Wno-implicit-prelude -Wno-safe -Wno-missing-deriving-strategies -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      attoparsec
+    , base >=4.7 && <5
     , bytestring
     , cacophony
+    , containers
     , memory
-    , serverh
+    , network-simple
+    , sqlite-simple
     , stm
-  default-language: Haskell2010
-
-test-suite serverh-test
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  other-modules:
-      Paths_serverh
-  hs-source-dirs:
-      test
-  ghc-options: -Weverything -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-      base >=4.7 && <5
-    , bytestring
-    , cacophony
-    , memory
-    , serverh
-    , stm
+    , text
   default-language: Haskell2010

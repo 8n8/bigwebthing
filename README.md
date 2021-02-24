@@ -49,23 +49,22 @@ SQLITE database
 
 # Server cache
 
-File containing server's static Noise key pair.
-SQLITE database
-	KK1 messages
-		48-byte message
-		sender public Noise key
-		recipient public Noise key
-	KK2 messages
-		72-byte message
-		sender public Noise key
-		recipient public Noise key
-	Transport messages
-		96-byte message
-		sender public Noise key
-		recipient public Noise key
++ File containing server's static Noise key pair.
+
++ SQLITE database
 	payments
 		payer public key
 		amount
+	KK1 messages
+        24 bytes message remainder
+        24 bytes session ID
+		sender public Noise key
+		recipient public Noise key
+	KK2 messages
+		72 bytes message
+        24 bytes session ID
+		sender public Noise key
+		recipient public Noise key
 
 # Server API
 
@@ -76,41 +75,20 @@ This API is a minimal version that just allows sending and reading messages. It 
 to server
 	1 byte: size
 	encrypted
-		upload KK2 message
-			1 byte: 0
-			32 bytes: recipient ID
-			72 bytes: message
-		download KK1 new messages to me
-			1 byte: 1
-		download KK2 messages to me
-			1 byte: 2
-		download transport messages to me
-			1 byte: 3
-		download KK1 messages from me
-			1 byte: 4
-		download KK2 messages from me
-			1 byte: 5
-		download transport messages from me
-			1 byte: 6
+        upload KK2 for
+            1 byte: 0
+            32 bytes: recipient ID
+            24 bytes: session ID
+            48 bytes: KK2
+        download new KK1s to me
+            1 byte: 1
 from server
-	1 byte: size
+	2 bytes: size
 	encrypted
-		1 byte: not enough money
-			1 byte: 0
-		1 byte: no more messages
-			1 byte: 1
-		91 bytes: KK1 message
-			1 byte: 2
-			48 bytes: message
-			32 bytes: their ID
-		106 bytes: KK2 message
-			1 byte: 3
-			72 bytes: message
-			32 bytes: their ID
-		132 bytes: transport message
-			1 byte: 4
-			96 bytes: message
-			32 bytes: their ID
+        91 bytes: KK1 message
+            1 byte: 0
+            48 bytes: message
+            32 bytes: their ID
 
 # KK message encoding
 
@@ -125,3 +103,14 @@ from server
 	1 byte: 2
 	24 bytes: start of corresponding KK1, used as a session ID
 	72 bytes: encrypted 56-byte message with 16 byte overhead
+
+# Chunking
+
+Each chunk must be no longer than 256^2 - 16 - 32 - 1 = 65487:
+
+    either
+        1 byte: 0 if not the last
+        65486 bytes: chunk
+    or
+        1 byte: 1 if the last
+        >= 65486 bytes: chunk
