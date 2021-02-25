@@ -4,7 +4,6 @@ module Main (main) where
 
 import qualified Control.Concurrent.STM as Stm
 import qualified Control.Concurrent.STM.TVar as TVar
-import Control.Concurrent (forkIO)
 import qualified Data.ByteString as B
 import qualified Control.Exception as E
 import qualified Crypto.Noise.DH as Dh
@@ -19,7 +18,6 @@ import Crypto.Noise.HandshakePatterns (noiseXK)
 import qualified Data.Text as T
 import qualified Data.Attoparsec.ByteString as P
 import qualified Database.SQLite.Simple as Db
-import Debug.Trace (trace)
 
 
 main :: IO ()
@@ -47,36 +45,19 @@ mainHelp :: TVar.TVar State -> In -> IO ()
 mainHelp state in_ =
     do
     out <- Stm.atomically $ updateStm state in_
-    _ <- forkIO $ run state out
-    return ()
+    run state out
 
 
 sequenceHelp :: TVar.TVar State -> [Out] -> IO ()
 sequenceHelp state outs =
-    trace "sequenceHelp" $
-    trace (show outs) $
     case outs of
     [] ->
-        trace "no outs" $
         return ()
 
     o:uts ->
-        trace "o:uts" $
         do
         run state o
         sequenceHelp state uts
-
-
-parallelsHelp :: TVar.TVar State -> [Out] -> IO ()
-parallelsHelp state outs =
-    case outs of
-    [] ->
-        return ()
-
-    o:uts ->
-        do
-        _ <- forkIO $ run state o
-        parallelsHelp state uts
 
 
 saveKk2Sql :: Db.Query
@@ -92,14 +73,13 @@ getNewKk1sSql =
 createTablesSql :: [Db.Query]
 createTablesSql =
     [ "CREATE TABLE IF NOT EXISTS payments (payer INTEGER NOT NULL, amount INTEGER NOT NULL, PRIMARY KEY (payer, amount));"
-    , "CREATE TABLE IF NOT EXISTS kk1s (kk1 UNIQUE BLOB NOT NULL, sessionid UNIQUE BLOB NOT NULL, sender BLOB NOT NULL, recipient BLOB NOT NULL);"
-    , "CREATE TABLE IF NOT EXISTS kk2s (kk2 UNIQUE BLOB NOT NULL, sessionid UNIQUE BLOB NOT NULL, sender BLOB NOT NULL, recipient BLOB NOT NULL);"
+    , "CREATE TABLE IF NOT EXISTS kk1s (kk1 BLOB UNIQUE NOT NULL, sessionid BLOB UNIQUE NOT NULL, sender BLOB NOT NULL, recipient BLOB NOT NULL);"
+    , "CREATE TABLE IF NOT EXISTS kk2s (kk2 BLOB UNIQUE NOT NULL, sessionid BLOB UNIQUE NOT NULL, sender BLOB NOT NULL, recipient BLOB NOT NULL);"
     ]
 
 
 run :: TVar.TVar State -> Out -> IO ()
 run state out =
-    trace ("run: " <> show out) $
     case out of
 
     SaveKk2InDb address row ->
@@ -114,18 +94,13 @@ run state out =
         mainHelp state $ NewKk1For address row
 
     SetupDb ->
-        trace "run SetupDb" $
         Db.withConnection dbPath $ \conn ->
         mapM_ (Db.execute_ conn) createTablesSql
-
-    Parallel outs ->
-        parallelsHelp state outs
 
     Sequence outs ->
         sequenceHelp state outs
 
     ReadKeys ->
-        trace "run ReadKeys" $
         do
         eitherRaw <- E.try $ B.readFile staticKeysPath
         mainHelp state $ KeysFile eitherRaw
@@ -211,17 +186,20 @@ update state input =
                 )
 
     Start ->
-        trace "Start" $
         (state, Sequence [SetupDb, ReadKeys])
 
     KeysFile (Left _) ->
-        trace "KeysFile Left" $
         (state, MakeKeys)
 
     KeysFile (Right raw) ->
         case Dh.dhBytesToPair $ Ba.convert raw of
         Nothing ->
-            (state, Panic "couldn't make static keys")
+            ( state
+            , Panic $ mconcat
+                [ "couldn't parse static keys: "
+                , T.pack $ show $ B.unpack raw
+                ]
+            )
 
         Just keys ->
             (state { staticKeysS = GotKeys keys }, StartServer)
@@ -356,8 +334,11 @@ onMessageToConn address conn state message =
                 newConns = Map.insert address newConn $ connsS state
                 in
                 ( state { connsS = newConns }
-                , Parallel
-                    [ SocketSend address (socketC conn) (Ba.convert xk2)
+                , Sequence
+                    [ SocketSend
+                        address
+                        (socketC conn)
+                        (Ba.convert xk2)
                     , SocketReceive address 2 (socketC conn)
                     ]
                 )
@@ -430,7 +411,7 @@ onGoodMessage fromClient address state =
 
         Just senderId ->
             ( expectingSize address state
-            , Parallel
+            , Sequence
                 [ SaveKk2InDb
                     address
                     ( (\(Kk2 k) -> k) kk2
@@ -456,7 +437,7 @@ onGoodMessage fromClient address state =
 
         Just senderId ->
             ( expectingSize address state
-            , Parallel
+            , Sequence
                 [ FetchNewKk1sFor address $ pubToBytes senderId
                 , getSize address state
                 ]
@@ -513,10 +494,7 @@ fromClientP =
 
 fromClientHelpP :: P.Parser FromClient
 fromClientHelpP =
-    P.choice
-    [ uploadKk2P
-    , downloadNewKk1sToMeP
-    ]
+    P.choice [uploadKk2P, downloadNewKk1sToMeP]
 
 
 downloadNewKk1sToMeP :: P.Parser FromClient
@@ -606,7 +584,9 @@ onNewKeys state keys =
         Just (address, conn) ->
             let
             newConn =
-                conn { noise = NoiseState $ initNoise keys staticKeys }
+                conn
+                    { noise = NoiseState $ initNoise keys staticKeys
+                    }
             in
             ( state
                 { connsS = Map.insert address newConn (connsS state) }
@@ -614,16 +594,17 @@ onNewKeys state keys =
             )
 
     NoKeys ->
-        trace "NoKeys" $
         ( state { staticKeysS = GotKeys keys }
-        , Parallel
+        , Sequence
             [ WriteKeys $ encodeKeys keys
             , StartServer
             ]
         )
 
 
-getNeedsKeys :: Map.Map Tcp.SockAddr Conn -> Maybe (Tcp.SockAddr, Conn)
+getNeedsKeys
+    :: Map.Map Tcp.SockAddr Conn
+    -> Maybe (Tcp.SockAddr, Conn)
 getNeedsKeys conns =
     case Map.toList $ Map.filterWithKey needsKeys conns of
     [] ->
@@ -654,7 +635,10 @@ initConn socket =
     }
 
 
-initNoise :: NoiseKeys -> NoiseKeys -> Noise.NoiseState AESGCM Curve25519 SHA256
+initNoise
+    :: NoiseKeys
+    -> NoiseKeys
+    -> Noise.NoiseState AESGCM Curve25519 SHA256
 initNoise ephemerals static =
     let
     options =
@@ -665,8 +649,8 @@ initNoise ephemerals static =
     Noise.noiseState options noiseXK
 
 
-data Conn =
-    Conn
+data Conn
+    = Conn
     { socketC :: Tcp.Socket
     , readingSizeC :: Bool
     , expectingC :: ConnExpecting
@@ -714,7 +698,6 @@ data Out
     | SaveKk2InDb
         Tcp.SockAddr
         (B.ByteString, B.ByteString, B.ByteString, B.ByteString)
-    | Parallel [Out]
     | Sequence [Out]
     | FetchNewKk1sFor Tcp.SockAddr B.ByteString
     | SetupDb
@@ -747,11 +730,12 @@ data KeysState
     | GotKeys NoiseKeys
 
 
-type NoiseKeys = Dh.KeyPair Curve25519
+type NoiseKeys
+    = Dh.KeyPair Curve25519
 
 
-data State =
-    State
+data State
+    = State
     { staticKeysS :: KeysState
     , connsS :: Map.Map Tcp.SockAddr Conn
     }
