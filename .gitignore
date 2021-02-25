@@ -3,4 +3,4 @@ staticKeys
 *~
 *#*
 .#*
-serverh/db.sqlite
+server/db.sqlite
