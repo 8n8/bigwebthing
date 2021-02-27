@@ -423,25 +423,26 @@ onGoodMessage fromClient address state =
                 ]
             )
 
-    DownloadNewKk1sToMeF ->
-        case getSenderId address (connsS state) of
-        Nothing ->
-            ( state
-            , Panic $
-                mconcat
-                [ "could not find static key for "
-                , T.pack $ show address
-                , " for request for new KK1s"
-                ]
-            )
 
-        Just senderId ->
-            ( expectingSize address state
-            , Sequence
-                [ FetchNewKk1sFor address $ pubToBytes senderId
-                , getSize address state
-                ]
-            )
+sendNewKk1sTo address state =
+    case getSenderId address (connsS state) of
+    Nothing ->
+        ( state
+        , Panic $
+            mconcat
+            [ "could not find static key for "
+            , T.pack $ show address
+            , " for request for new KK1s"
+            ]
+        )
+
+    Just senderId ->
+        ( expectingSize address state
+        , Sequence
+            [ FetchNewKk1sFor address $ pubToBytes senderId
+            , getSize address state
+            ]
+        )
 
 
 getSize :: Tcp.SockAddr -> State -> Out
@@ -494,14 +495,7 @@ fromClientP =
 
 fromClientHelpP :: P.Parser FromClient
 fromClientHelpP =
-    P.choice [uploadKk2P, downloadNewKk1sToMeP]
-
-
-downloadNewKk1sToMeP :: P.Parser FromClient
-downloadNewKk1sToMeP =
-    do
-    _ <- P.word8 1
-    return DownloadNewKk1sToMeF
+    P.choice [uploadKk2P]
 
 
 uploadKk2P :: P.Parser FromClient
@@ -553,7 +547,6 @@ kk2Size =
 
 data FromClient
     = UploadKk2F PublicKey SessionId Kk2
-    | DownloadNewKk1sToMeF
 
 
 type PublicKey
@@ -587,11 +580,13 @@ onNewKeys state keys =
                 conn
                     { noise = NoiseState $ initNoise keys staticKeys
                     }
+            newState =
+                state
+                    { connsS =
+                        Map.insert address newConn (connsS state)
+                    }
             in
-            ( state
-                { connsS = Map.insert address newConn (connsS state) }
-            , SocketReceive address 2 (socketC conn)
-            )
+            sendNewKk1sTo address newState
 
     NoKeys ->
         ( state { staticKeysS = GotKeys keys }

@@ -80,12 +80,10 @@ to server
             32 bytes: recipient ID
             24 bytes: session ID
             48 bytes: KK2
-        download new KK1s to me
-            1 byte: 1
 from server
 	2 bytes: size
 	encrypted
-        91 bytes: KK1 message
+        91 bytes: new KK1 message
             1 byte: 0
             48 bytes: message
             32 bytes: their ID
