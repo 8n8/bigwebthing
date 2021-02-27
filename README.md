@@ -73,7 +73,7 @@ All requests to the server should be made with the Noise IK pattern, using the h
 This API is a minimal version that just allows sending and reading messages. It will eventually allow the user to query anything on the server database.
 
 to server
-	1 byte: size
+	2 bytes: size
 	encrypted
         upload KK2 for
             1 byte: 0

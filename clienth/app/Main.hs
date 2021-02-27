@@ -15,157 +15,131 @@ import Crypto.Noise.DH.Curve25519 (Curve25519)
 import qualified Crypto.Noise.DH as Dh
 import qualified Data.ByteString as B
 import qualified Data.ByteArray as Ba
-
-
-data Mode
-        = Update
-        | DontKnow
-
-
-data State = State
-        { mode :: Mode
-        , staticKeys :: Maybe (Dh.KeyPair Curve25519)
-        }
-
-
-initState :: State
-initState =
-        State
-        { mode = DontKnow
-        }
-
-
-data Input
-        = Args [String]
-        | RawStaticKeys (Either IOError B.ByteString)
-        | StaticKeys (Dh.KeyPair Curve25519)
-        | Default
-
-
-data Output
-        = GetArgs
-        | ReadStaticKeysFile
-        | Print T.Text
-        | MakeStaticKeys
-        | SaveStaticKeys B.ByteString
-        | Sequence [Output]
-        | CloseHandle Sio.Handle
-        | End
-        | GetServerConn
-
-
-update :: State -> Input -> (State, Output)
-update state input =
-        case input of
-        Args ["bwt", "update"] ->
-                (state, ReadStaticKeysFile)
-
-        Args _ ->
-                (state, Print "bad arguments")
-
-        RawStaticKeys (Left _) ->
-                (state, MakeStaticKeys)
-
-        RawStaticKeys (Right raw) ->
-                case parseStaticKeys raw of
-                Nothing ->
-                        ( state
-                        , Sequence [Print "internal error", End]
-                        )
-
-                Just keys ->
-                        (state { staticKeys = Just keys }
-                        , case mode state of
-                                DontKnow ->
-                                        panic
-
-                                Update ->
-                                        GetServerConn
-                        )
-
-        StaticKeys keys ->
-                (state, SaveStaticKeys $ encodeKeys keys)
-
-
-panic :: Output
-panic =
-        Sequence [Print "internal error", End]
-
-
-parseStaticKeys :: B.ByteString -> Maybe (Dh.KeyPair Curve25519)
-parseStaticKeys =
-        Dh.dhBytesToPair . Ba.convert
-
-
-encodeKeys :: Dh.KeyPair Curve25519 -> B.ByteString
-encodeKeys (secret, _) =
-        Ba.convert $ Dh.dhSecToBytes secret
-
-
-staticKeysFile :: String
-staticKeysFile =
-        "staticKeys"
-
-
-run :: Q.TQueue Input -> Output -> IO ()
-run inQ out =
-        case out of
-        End ->
-                return ()
-
-        GetArgs ->
-                do
-                args <- getArgs
-                writeQ inQ $ Args args
-
-        ReadStaticKeysFile ->
-                do
-                contents <- try $ B.readFile staticKeysFile
-                writeQ inQ $ RawStaticKeys contents
-
-        Print message ->
-                Tio.putStr message
-
-        MakeStaticKeys ->
-                do
-                keys <- Dh.dhGenKey
-                writeQ inQ $ StaticKeys keys
-
-        Sequence outputs ->
-                mapM_ (run inQ) outputs
-
-        CloseHandle handle ->
-                Sio.hClose handle
-
-        SaveStaticKeys keys ->
-                B.writeFile staticKeysFile keys
-
-        GetServerConn ->
-                
-
-
-writeQ :: Q.TQueue a -> a -> IO ()
-writeQ q x =
-        Stm.atomically $ Q.writeTQueue q x
+import qualified Network.Simple.TCP as Tcp
 
 
 main :: IO ()
 main =
+    do
+    state <- Stm.atomically $ TVar.newTVar initState
+    mainHelp state Start
+
+
+initState :: State
+initState =
+    State
+    { expectingSizeS = False
+    , socketS = Nothing
+    }
+
+
+updateStm :: TVar.TVar State -> In -> Stm.STM Out
+updateStm stateVar input =
+    do
+    oldState <- TVar.readTVar stateVar
+    let (newState, output) = update oldState input
+    TVar.writeTVar stateVar newState
+    return output
+
+
+mainHelp :: TVar.TVar State -> In -> IO ()
+mainHelp state in_ =
+    do
+    out <- Stm.atomically $ updateStm state in_
+    run state out
+
+
+data In
+    = Start
+    | ServerConn Tcp.Socket
+    | MessageFromServer (Maybe B.ByteString)
+
+
+type NoiseKeys
+    = Dh.KeyPair Curve25519
+
+
+data State
+    = State
+    { socketS :: Maybe Tcp.Socket
+    , expectingSizeS :: Bool
+    , handshake :: Maybe Noise.HandshakeState
+    }
+
+
+data Out
+    = ConnectToServer
+    | ReadKeysFile
+    | ReadConn Tcp.Socket Int
+    | Print T.Text
+
+
+run :: Stm.TVar State -> Out -> IO ()
+run state out =
+    case out of
+
+    ConnectToServer ->
+        Tcp.connect "127.0.0.1" "3000" $ \(conn, _) ->
+        mainHelp state $ ServerConn conn
+
+    ReadConn socket size ->
         do
-        inQ <- Stm.atomically $ Q.newTQueue
-        Stm.atomically $ Q.writeTQueue inQ Default
-        mainHelp initState inQ
+        message <- Tcp.recv socket size
+        mainHelp state $ MessageFromServer message
 
 
-mainHelp :: State -> Q.TQueue Input -> IO ()
-mainHelp state inQ =
-        do
-        newInput <- Stm.atomically $ Q.readTQueue inQ
-        case update state newInput of
-                (_, End) ->
-                        return ()
+badServer :: State -> (State, Out)
+badServer state =
+    (state { socketS = Nothing }, Print "bad internet")
 
-                (newState, output) ->
-                        do
-                        run inQ output
-                        mainHelp newState inQ
+
+onMessageFromServer :: State -> B.ByteString -> (State, Out)
+onMessageFromServer state raw =
+    if expectingSizeS state then
+
+        if B.length raw == 2 then
+        let
+        size = B.index raw 0 + (B.index raw 1 << 8)
+        in
+        case serverConnS state of
+        Nothing ->
+            badServer state
+
+        Just socket ->
+            ( state { expectingSizeS = False }
+            , ReadConn socket size
+            )
+
+        else
+        badServer state
+
+    else
+        onBodyFromServer raw state
+
+
+onBodyFromServer :: B.ByteString -> State -> (State, Out)
+onBodyFromServer encrypted state =
+    case 
+    Noise.readMessage encrypted (
+
+
+update :: State -> In -> (State, Out)
+update state in_ =
+    case in_ of
+
+    MessageFromServer Nothing ->
+        badServer state
+
+    MessageFromServer (Just raw) ->
+        onMessageFromServer state raw
+
+    Start ->
+        (state, ReadKeysFile)
+
+    ServerConn conn ->
+        ( state
+            { expectingSizeS = True
+            , socketS = Just conn
+            }
+        , ReadConn conn 2
+        )
