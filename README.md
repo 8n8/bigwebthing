@@ -74,6 +74,23 @@ SQLITE database of KX states
                 32 bytes: hash of whole file
                 <= 15866 bytes: the chunk
 
+## Client / frontend API
+
+### To frontend
+
+transport
+    1 byte: 0
+    32 bytes: sender 
+    24 bytes: blob ID
+    32 bytes: encryption key of blob
+
+### From frontend
+
+open transport
+    1 byte: 0
+    24 bytes: blob ID
+    32 bytes: encryption key of blob
+
 ## Server API
 
 ### To server
