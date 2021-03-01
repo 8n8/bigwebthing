@@ -33,6 +33,8 @@ BigWebThing is for creating and publishing documents. Everything on the server i
 
 + A file containing the server static keys. 
 
++ A file containing the public key of the user authorised to upload payments.
+
 ## Client cache
 
 SQLITE database of KX states
