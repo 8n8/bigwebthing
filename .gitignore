@@ -1,6 +1,0 @@
-*.sw*
-staticKeys
-*~
-*#*
-.#*
-server/db.sqlite
