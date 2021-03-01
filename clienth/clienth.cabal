@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 2cef917b6395c033dbc1d6d409ec0af75dd982a8d4088ba1ec37fc61e7462e7d
+-- hash: c2ef88b0bf92f9a4438842186360cce3715709d99f62881f9749a35dcbee6d0e
 
 name:           clienth
 version:        0.1.0.0
@@ -34,7 +34,8 @@ library
       src
   ghc-options: -Weverything -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-implicit-prelude -Wno-unsafe -Wno-safe
   build-depends:
-      base >=4.7 && <5
+      attoparsec
+    , base >=4.7 && <5
     , bytestring
     , cacophony
     , memory
@@ -51,7 +52,8 @@ executable clienth-exe
       app
   ghc-options: -Weverything -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-implicit-prelude -Wno-unsafe -Wno-safe -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      attoparsec
+    , base >=4.7 && <5
     , bytestring
     , cacophony
     , memory
@@ -69,7 +71,8 @@ test-suite clienth-test
       test
   ghc-options: -Weverything -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-implicit-prelude -Wno-unsafe -Wno-safe -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      attoparsec
+    , base >=4.7 && <5
     , bytestring
     , cacophony
     , clienth

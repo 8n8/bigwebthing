@@ -27,6 +27,7 @@ dependencies:
 - bytestring
 - memory
 - network-simple
+- attoparsec
 
 ghc-options:
 - -Weverything

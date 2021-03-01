@@ -16,6 +16,12 @@ import qualified Crypto.Noise.DH as Dh
 import qualified Data.ByteString as B
 import qualified Data.ByteArray as Ba
 import qualified Network.Simple.TCP as Tcp
+import qualified Crypto.Noise as Noise
+import qualified Crypto.Noise.DH as Dh
+import Crypto.Noise.Cipher.AESGCM (AESGCM)
+import Crypto.Noise.Hash.SHA256 (SHA256)
+import Crypto.Noise.DH.Curve25519 (Curve25519)
+import qualified Data.Attoparsec.ByteString as P
 
 
 main :: IO ()
@@ -59,12 +65,29 @@ type NoiseKeys
     = Dh.KeyPair Curve25519
 
 
+type NoiseState
+    = Noise.NoiseState AESGCM Curve25519 SHA256
+
+
 data State
     = State
     { socketS :: Maybe Tcp.Socket
     , expectingSizeS :: Bool
-    , handshake :: Maybe Noise.HandshakeState
+    , handshakeS :: Maybe NoiseState
+    , kk1FromS :: Maybe (Kk1, PublicKey)
     }
+
+
+type PublicKey
+    = Dh.PublicKey Curve25519
+
+
+newtype Kk1
+    = Kk1 B.ByteString
+
+
+data FromServer
+    = NewKk1F Kk1 PublicKey
 
 
 data Out
@@ -72,6 +95,7 @@ data Out
     | ReadKeysFile
     | ReadConn Tcp.Socket Int
     | Print T.Text
+    | MakeKeyPair
 
 
 run :: Stm.TVar State -> Out -> IO ()
@@ -119,8 +143,44 @@ onMessageFromServer state raw =
 
 onBodyFromServer :: B.ByteString -> State -> (State, Out)
 onBodyFromServer encrypted state =
-    case 
-    Noise.readMessage encrypted (
+    case handshakeS state of
+    Nothing ->
+        badServer state
+
+    Just handshake ->
+        case Noise.readMessage encrypted handshake of
+        Noise.NoiseResultMessage plain handshake' ->
+            let
+            state' = state { handshakeS = Just handshake' }
+            in
+            onPlainFromServer plain state'
+
+
+parseFromServer :: B.ByteString -> Either T.Text FromServer
+parseFromServer raw =
+    case P.parseOnly fromServerP raw of
+    Left err ->
+        Left $ T.pack err
+
+    Right ok ->
+        Right ok
+
+
+onPlainFromServer :: B.ByteString -> State -> (State, Out)
+onPlainFromServer plain state =
+    case parseFromServer plain of
+    Left err ->
+        badServer state
+
+    Right fromServer ->
+        onGoodFromServer fromServer state
+
+
+onGoodFromServer :: FromServer -> State -> (State, Out)
+onGoodFromServer fromServer state =
+    case fromServer of
+    NewKk1F kk1 theirId ->
+        (state { kk1FromS = Just (kk1, theirId) }, MakeKeyPair)
 
 
 update :: State -> In -> (State, Out)
