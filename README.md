@@ -37,10 +37,12 @@ BigWebThing is for creating and publishing documents. Everything on the server i
 
 ## Client cache
 
-SQLITE database of KX states
+SQLITE database
     kxstates
         sessionid: 24-byte session ID
         kxstate: 80 bytes
+    contacts
+        publickey: 32-byte public key
 
 ## Hydro KX state encoding
 
@@ -83,13 +85,30 @@ transport
     32 bytes: sender 
     24 bytes: blob ID
     32 bytes: encryption key of blob
+contact
+    1 byte: 1
+    32 bytes: contact public key
+failed to send blob
+    1 byte: 2
+    4 bytes: sending reference
+    1 byte: error code
+        0 = bad server
+        1 = no crypto
 
 ### From frontend
 
-open transport
+add contact
     1 byte: 0
-    24 bytes: blob ID
-    32 bytes: encryption key of blob
+    32 bytes: contact ID
+delete contact
+    1 byte: 1
+    32 bytes: contact ID
+
+HTTP
+    /send/<4-byte ref>/<base64 recipient ID>
+        body contains the blob
+    /open/<base64 blob ID>/<base64 encryption key of blob>
+        response contains the blob
 
 ## Server API
 
