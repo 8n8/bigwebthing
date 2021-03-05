@@ -4,8 +4,6 @@ BigWebThing is a computer system for sending files over the internet.
 
 There is a program that runs on the user's computer, and one that runs on the server.
 
-The user interface is a pair of plain text files. One contains the whole client state, and the other is just a convenient generated view.
-
 ## Client state
 
 static keys
