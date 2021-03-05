@@ -44,6 +44,11 @@ static keys
     32 bytes: public key
     friendly name
 
+[]sent
+    32 bytes: hash of file
+    32 bytes: recipient
+    8 bytes: timestamp
+
 # KK transport encoding
 
 72 bytes
