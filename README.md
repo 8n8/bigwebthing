@@ -16,6 +16,7 @@ statickeys
 
 []sent
     24 bytes: session ID
+    32 bytes: recipient
     document
 
 # Server cache
@@ -177,6 +178,11 @@ state dump
     1 byte: 2
     4 bytes: size
     state dump
+sent
+    1 byte: 3
+    32 bytes: recipient
+    24 bytes: session ID
+    8 bytes: timestamp
 
 # HTTP API between frontend and backend
 
