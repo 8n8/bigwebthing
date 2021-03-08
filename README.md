@@ -2,7 +2,7 @@ BigWebThing is a computer system for creating and sharing documents over the int
 
 # Client cache
 
-static keys
+statickeys
     32 bytes: public key
     32 bytes: secret key
 
@@ -16,7 +16,7 @@ static keys
 
 []sent
     24 bytes: session ID
-    file
+    document
 
 # Server cache
 
@@ -160,3 +160,63 @@ payment auth key
     encrypted
         24 bytes: blob ID
         32 bytes: secret key for blob
+
+# Websockets messages from backend to frontend
+
+contact
+    1 byte: 0
+    32 bytes: public key
+    1 byte: friendly name length
+    friendly name
+file metadata
+    1 byte: 1
+    32 bytes: sender
+    32 bytes: document hash
+    8 bytes: timestamp
+state dump
+    1 byte: 2
+    4 bytes: size
+    state dump
+
+# HTTP API between frontend and backend
+
+/openblob/<hash of blob>
+    Response is blob
+
+/saveblob
+    Body is blob
+    Response is hash of blob
+
+# Websockets messages from frontend to backend
+
+add contact
+    1 byte: 0
+    32 bytes: public key
+    1 byte: friendly name length
+    friendly name
+delete contact
+    1 byte: 1
+    32 bytes: public key
+send document
+    1 byte: 2
+    32 bytes: recipient
+    32 bytes: hash of document
+dumpstate
+    1 byte: 3
+    4 bytes: size
+    blob of encoded state
+
+# Document format
+
+When documents are being exchanged between the frontend and backend, the binaries are replaced with their hashes. This is because it is a web frontend, and it is easier to show videos, photos and other binaries using HTTP.
+
+A document is an alternating sequence of elements:
+
+plain text
+    1 byte: 0
+    4 bytes: size
+    UTF8 string
+binary
+    1 byte: 1
+    8 bytes: size
+    binary blob
