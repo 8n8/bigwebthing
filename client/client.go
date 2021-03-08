@@ -40,9 +40,8 @@ var inCh chan In = make(chan In)
 
 func start() {
 	inCh <- Start{}
-	state := initState()
 	for {
-		(<-inCh).update(&state).run(&state)
+		(<-inCh).update().run()
 	}
 }
 
@@ -145,39 +144,47 @@ func (r ReadReader) run(*State) {
 	}
 }
 
+func onServerSeed(r ReaderResult, s *State) Out {
+	if r.err != nil {
+		return Panic("couldn't generate server random seed: " + r.err.Error())
+	}
+	if r.n != 2*dhlen {
+		return Panic(fmt.Sprintf("not enough random bytes for server seed: expecting %d, got %d", 2*dhlen, r.n))
+	}
+
+	shake, err := noise.NewHandshakeState(serverConfig(s.staticKeys, r.buf))
+	if err != nil {
+		return Panic("couldn't initialise server handshake: " + err.Error())
+	}
+
+	xk1, _, _, err := shake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return Panic("couldn't make XK1: " + err.Error())
+	}
+
+	return Outs([]Out{
+		SetServerShake(shake),
+		WriteWriter{
+			context: sendXk1Context,
+			writer: s.serverConn,
+			message: xk1,
+		},
+		ReadReader{
+			context: fromServerContext,
+			f: s.serverConn,
+			size: XK2Size,
+		},
+	})
+}
+
+type SetServerShake *noise.HandshakeState
+
 func (r ReaderResult) update(s *State) Out {
 	if r.context == serverSeedContext {
-		if r.err != nil {
-			return Panic("couldn't generate server random seed: " + r.err.Error())
-		}
-		if r.n != 2*dhlen {
-			return Panic(fmt.Sprintf("not enough random bytes for server seed: expecting %d, got %d", 2*dhlen, r.n))
-		}
-
-		shake, err := initServerShake(r.buf)
-		if err != nil {
-			return Panic("couldn't initialise server handshake: " + err.Error())
-		}
-
-		xk1, _, _, err := shake.WriteMessage([]byte{}, []byte{})
-		if err != nil {
-			return Panic("couldn't make XK1: " + err.Error())
-		}
-
-		return Outs([]Out{
-			SetServerShake(shake),
-			WriteWriter{
-				context: sendXk1Context,
-				writer: s.serverConn,
-				message: xk1,
-			},
-			ReadReader{
-				context: fromServerContext,
-				f: s.serverConn,
-				size: XK2Size,
-			},
-		})
+		return onServerSeed(r, s)
 	}
+
+	return Panic(fmt.Sprintf("bad ReaderResult context: %s", showContext(r.context)))
 }
 
 type WriteWriter struct {
@@ -204,6 +211,8 @@ type WriterResult struct {
 	err error
 	size int
 }
+
+const XK1Size = 48
 
 func (w WriterResult) update(state *State) Out {
 	if w.context == sendXk1Context {
