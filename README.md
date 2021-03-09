@@ -65,53 +65,43 @@ payment auth key
 
 48 bytes: XK1 
 
-<= 16KB XK3
-    2 bytes: size
-    48 bytes: encrypted static key
-    16 bytes: payload crypto overhead
-    <= 15934 bytes: encrypted payload
-        client to server payload
+64 bytes: XK3
 
-<= 15952 bytes: transport
+<= 16KB: transport
     2 bytes: size
     16 bytes: crypto overhead
-    <= 15934 bytes
-        client to server payload
-        
-# Client to server payload
-
-15934 bytes
-    81 bytes: KK1
-        1 byte: 0
-        32 bytes: recipient
-        48 bytes: KK1
-    105 bytes: KK2
-        1 byte: 1
-        32 bytes: recipient
-        48 bytes: KK2
-        24 bytes: session ID
-    129 bytes: KK transport
-        1 byte: 2
-        32 bytes: recipient
-        72 bytes: KK transport
-        24 bytes: session ID
-    <= 15934 bytes: blob
-        1 byte: 3
-        24 bytes: blob ID
-        <= 15909 bytes: the blob
-    37 bytes: payment
-        1 byte: 4
-        4 bytes: amount in pence
-        32 bytes: payer
+    <= 15982 bytes
+    	81 bytes: KK1
+    	    1 byte: 0
+    	    32 bytes: recipient
+    	    48 bytes: KK1
+    	105 bytes: KK2
+    	    1 byte: 1
+    	    32 bytes: recipient
+    	    48 bytes: KK2
+    	    24 bytes: session ID
+    	129 bytes: KK transport
+    	    1 byte: 2
+    	    32 bytes: recipient
+    	    72 bytes: KK transport
+    	    24 bytes: session ID
+    	<= 15982 bytes: blob
+    	    1 byte: 3
+    	    24 bytes: blob ID
+    	    <= 15957 bytes: the blob
+    	37 bytes: payment
+    	    1 byte: 4
+    	    4 bytes: amount in pence
+    	    32 bytes: payer
 
 # Server to client
 
 64 bytes: XK2
 
-<= 15942 bytes: transport
+<= 16KB: transport
     2 bytes: size
     16 bytes: crypto overhead
-    <= 15934 bytes: one of
+    <= 15982 bytes: one of
         81 bytes: KK1
             1 byte: 0
             32 bytes: sender
@@ -126,10 +116,10 @@ payment auth key
             32 bytes: sender
             72 bytes: KK transport
             24 bytes: session ID
-        <= 15934 bytes: blob
+        <= 15982 bytes: blob
             1 byte: 3
             24 bytes: blob ID
-            <= 15909 bytes: the blob
+            <= 15957 bytes: the blob
         13 bytes: payment
             1 byte: 4
             4 bytes: amount in pence
@@ -141,18 +131,18 @@ payment auth key
 
 # Blob encoding
 
-<= 15909 bytes
+<= 15957 bytes
     24 bytes: random nonce
     16 bytes: authentication tag
     encrypted: one of
-        15869 bytes: not the final chunk
+        15917 bytes: not the final chunk
             1 byte: 0
             24 bytes: ID of next blob in sequence
-            15844 bytes: the chunk
-        <= 15869 bytes: final chunk
+            15892 bytes: the chunk
+        <= 15917 bytes: final chunk
             1 byte: 1
             24 bytes: checksum of whole file
-            <= 15844 byts: the chunk
+            <= 15892 bytes: the chunk
 
 # KK transport encoding
 
