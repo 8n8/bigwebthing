@@ -8,16 +8,12 @@ statickeys
 
 []contact
     32 bytes: public key
-    Friendly name
 
 []session
     32 bytes: seed
+    32 bytes: their ID
     24 bytes: session ID
-
-[]sent
-    24 bytes: session ID
-    32 bytes: recipient
-    document
+    1 byte: 0 for TX, 1 for RX
 
 # Server cache
 
@@ -45,15 +41,15 @@ payment auth key
     72 bytes: KK transport
     32 bytes: sender
     32 bytes: recipient
-    8 bytes: upload timestamp
+    4 bytes: upload timestamp
 
 []payment
     4 bytes: amount in pence
-    8 bytes: timestamp
+    4 bytes: timestamp
     32 bytes: payer
 
 []blobupload
-    8 bytes: timestamp
+    4 bytes: timestamp
     24 bytes: blob ID
     32 bytes: uploader
 
@@ -93,6 +89,9 @@ payment auth key
     	    1 byte: 4
     	    4 bytes: amount in pence
     	    32 bytes: payer
+        25 bytes: request blob
+            1 byte: 5
+            24 bytes: blob ID
 
 # Server to client
 
@@ -106,28 +105,27 @@ payment auth key
             1 byte: 0
             32 bytes: sender
             48 bytes: KK1
-        105 bytes: KK2
+        73 bytes: KK2
             1 byte: 1
-            32 bytes: sender
             48 bytes: KK2
             24 bytes: session ID
-        129 bytes: KK transport
+        101 bytes: KK transport
             1 byte: 2
-            32 bytes: sender
             72 bytes: KK transport
             24 bytes: session ID
+            4 bytes: timestamp
         <= 15982 bytes: blob
             1 byte: 3
             24 bytes: blob ID
             <= 15957 bytes: the blob
-        13 bytes: payment
+        9 bytes: payment
             1 byte: 4
             4 bytes: amount in pence
-            8 bytes: timestamp
-        33 bytes: blob upload
+            4 bytes: timestamp
+        29 bytes: blob upload
             1 byte: 5
             24 bytes: blob ID
-            8 bytes: timestamp
+            4 bytes: timestamp
 
 # Blob encoding
 
@@ -159,52 +157,59 @@ contact
     32 bytes: public key
     1 byte: friendly name length
     friendly name
-file metadata
+93 bytes: file metadata
     1 byte: 1
     32 bytes: sender
-    32 bytes: document hash
-    8 bytes: timestamp
-state dump
-    1 byte: 2
-    4 bytes: size
-    state dump
-sent
+    24 bytes: blob ID
+    32 bytes: blob secret key
+    4 bytes: timestamp
+61 bytes: sent metadata
     1 byte: 3
     32 bytes: recipient
-    24 bytes: session ID
-    8 bytes: timestamp
+    24 bytes: blob ID
+    32 bytes: blob secret key
+    4 bytes: timestamp
+29 bytes: blob upload
+    1 byte: 4
+    24 bytes: blob ID
+    4 bytes: timestamp
+9 bytes: payment
+    1 byte: 5
+    4 bytes: amount in pence
+    4 bytes: timestamp
+document
+    1 byte: 6
+    24 bytes: blob ID
+    document
 
-# HTTP API between frontend and backend
+# HTTP API for accessing local key-value store
 
-/openblob/<hash of blob>
+/open/<hex-encoded 16-byte id>
     Response is blob
 
-/saveblob
+/save/<hex-encoded 16-byte id>
     Body is blob
-    Response is hash of blob
 
 # Websockets messages from frontend to backend
 
 add contact
     1 byte: 0
     32 bytes: public key
-    1 byte: friendly name length
-    friendly name
 delete contact
     1 byte: 1
     32 bytes: public key
 send document
     1 byte: 2
     32 bytes: recipient
-    32 bytes: hash of document
-dumpstate
+    document
+retrieve document
     1 byte: 3
-    4 bytes: size
-    blob of encoded state
+    24 bytes: blob ID
+    32 bytes: blob secret key
 
 # Document format
 
-When documents are being exchanged between the frontend and backend, the binaries are replaced with their hashes. This is because it is a web frontend, and it is easier to show videos, photos and other binaries using HTTP.
+When documents are being exchanged between the frontend and backend, the binaries are replaced with a unique 16-byte ID, and the binaries are put in the key-value store. This is because it is a web frontend, and it is easier to show videos, photos and other binaries using HTTP.
 
 A document is an alternating sequence of elements:
 
@@ -214,5 +219,5 @@ plain text
     UTF8 string
 binary
     1 byte: 1
-    8 bytes: size
+    6 bytes: size
     binary blob
