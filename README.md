@@ -6,9 +6,6 @@ statickeys
     32 bytes: public key
     32 bytes: secret key
 
-[]contact
-    32 bytes: public key
-
 []session
     32 bytes: seed
     32 bytes: their ID
@@ -23,6 +20,10 @@ static keys
 
 payment auth key
     32 bytes: public key of user allowed to upload payments
+
+[]contact
+    32 bytes: contacter
+    32 bytes: contactee
 
 []kk1
     24 bytes: first half of KK1 (session ID)
@@ -44,7 +45,7 @@ payment auth key
     4 bytes: upload timestamp
 
 []payment
-    4 bytes: amount in pence
+    4 bytes: amount
     4 bytes: timestamp
     32 bytes: payer
 
@@ -87,11 +88,14 @@ payment auth key
     	    <= 15957 bytes: the blob
     	37 bytes: payment
     	    1 byte: 4
-    	    4 bytes: amount in pence
+    	    4 bytes: amount
     	    32 bytes: payer
         25 bytes: request blob
             1 byte: 5
             24 bytes: blob ID
+        33 bytes: add contact
+            1 byte: 6
+            32 bytes: public key of contact
 
 # Server to client
 
@@ -120,12 +124,23 @@ payment auth key
             <= 15957 bytes: the blob
         9 bytes: payment
             1 byte: 4
-            4 bytes: amount in pence
+            4 bytes: amount
             4 bytes: timestamp
         29 bytes: blob upload
             1 byte: 5
             24 bytes: blob ID
             4 bytes: timestamp
+        33 bytes: contact
+            1 byte: 6
+            32 bytes: public key of contact
+
+# Time encoding
+
+uint32 (LE): seconds since POSIX epoch
+
+# Money encoding
+
+uint32 (LE): amount in pence
 
 # Blob encoding
 
@@ -175,7 +190,7 @@ contact
     4 bytes: timestamp
 9 bytes: payment
     1 byte: 5
-    4 bytes: amount in pence
+    4 bytes: amount
     4 bytes: timestamp
 document
     1 byte: 6
