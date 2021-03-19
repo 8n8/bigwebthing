@@ -386,37 +386,6 @@ func getNumContacts(db *sql.DB, theirId []byte) int {
 	return total
 }
 
-func getNumTransports(db *sql.DB, theirId []byte) int {
-	rows, err := db.Query(getNumTransportsSql, theirId)
-	if err != nil {
-		panic("couldn't run query to get number of transports: " + getNumTransportsSql + ": " + err.Error())
-	}
-
-	if !rows.Next() {
-		panic("no results on number of transports query")
-	}
-}
-
-func getKksCost(db *sql.DB, theirId []byte) int {
-	numKk1s := getNumKk1s(db, theirId)
-	numKk2s := getNumKk2s(db, theirId)
-	numTransports := getNumTransports(db, theirId)
-	numContacts := getNumContacts(db, theirId)
-	total := numKk1s + numKk2s + numTransports + numContacts
-	return pencePer1000Kks * total / 1000
-}
-
-func getBalance(theirId []byte) int {
-	db := getDb()
-	defer db.Close()
-
-	payments := getPayments(db, theirId)
-	blobsCost := getBlobsCost(db, theirId)
-	kksCost := getKksCost(db, theirId)
-
-	return payments - blobsCost - kksCost
-}
-
 const (
 	pencePerGbPerMonth = 100
 	pencePerGbUpload = 100
