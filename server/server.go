@@ -2,94 +2,348 @@ package main
 
 import (
 	"net"
-	"crypto/rand"
-	"github.com/flynn/noise"
-	"io/ioutil"
-	"fmt"
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
-	"encoding/hex"
-	"time"
+	"io"
+	"fmt"
+	"github.com/flynn/noise"
+	"crypto/rand"
 )
 
-const staticKeysPath = topPath + "/statickeys"
-
-const topPath = "bigwebthing"
-
-const dbPath = topPath + "/database.sqlite"
-
-func getStaticKeys() noise.DHKey {
-	raw, err := ioutil.ReadFile(staticKeysPath)
-	if err != nil {
-		return makeKeys()
-	}
-
-	if len(raw) != 2*dhlen {
-		panic(fmt.Sprintf("bad static keys file: expecting %d bytes, but got %d", 2*dhlen, len(raw)))
-	}
-
-	return noise.DHKey{
-		Private: raw[:dhlen],
-		Public:  raw[dhlen:],
-	}
-}
-
-func makeKeys() noise.DHKey {
-	keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
-	if err != nil {
-		panic("couldn't generate static keys: " + err.Error())
-	}
-
-	encoded := make([]byte, 2*dhlen)
-	copy(encoded, keys.Private)
-	copy(encoded[:dhlen], keys.Public)
-	err = ioutil.WriteFile(staticKeysPath, encoded, 0400)
-	if err != nil {
-		panic("couldn't write static keys file: " + err.Error())
-	}
-	return keys
-}
-
-const dhlen = 32
+var GO = make(chan func())
+var QUIT = make(chan struct{})
 
 func main() {
-	staticKeys := getStaticKeys()
-
-	setupDb()
-
-	ln, err := net.Listen("tcp", ":8080")
-	if err != nil {
-		panic("couldn't start TCP server: " + err.Error())
-	}
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			continue
+	GO <- main_
+	go func() {
+		for {
+			go (<-GO)()
 		}
-		go handleConnection(conn, staticKeys)
+	}()
+	<-QUIT
+}
+
+var IN = make(chan In)
+
+func main_() {
+	IN <- Start{}
+	for {
+		(<-IN).pure().io()
 	}
 }
 
-func getDb() *sql.DB {
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		panic("couldn't get database connection: " + err.Error())
-	}
-	return db
+type In interface {
+	pure() Out
 }
+
+type Out interface {
+	io()
+}
+
+type Start struct{}
+
+func (Start) pure() Out {
+	return sequence(
+		SetDbNotSetup{},
+		MakeDbHandle{},
+		InitCacher{},
+		MakeTcpListener{})
+}
+
+type Panic string
+
+func (msg Panic) io() {
+	panic(msg)
+}
+
+type MakeTcpListener struct{}
+
+func (MakeTcpListener) io() {
+	listener, err := net.Listen("tcp", "3001")
+	IN <- NewTcpListener{listener, err}
+}
+
+type NewTcpListener struct {
+	listener net.Listener
+	err error
+}
+
+func (t NewTcpListener) pure() Out {
+	if t.err != nil {
+		return Panic("couldn't start TCP server: " + t.err.Error())
+	}
+
+	return sequence(CacheListener{t.listener}, GetConn{t.listener})
+}
+
+type GetConn struct{
+	listener net.Listener
+}
+
+func (listener GetConn) io() {
+	conn, err := listener.listener.Accept()
+	IN <- TcpConn{conn, err}
+}
+
+type TcpConn struct {
+	conn net.Conn
+	err error
+}
+
+func (conn TcpConn) pure() Out {
+	return sequence(
+		Go{ReadConn{conn.conn, Xk1Size, ReadXk1Context}},
+		GetListener{})
+}
+
+type Go struct {
+	out Out
+}
+
+func (g Go) io() {
+	GO <- g.out.io
+}
+
+type ReadConn struct {
+	conn net.Conn
+	size int
+	context int
+}
+
+func (r ReadConn) io() {
+	buf := make([]byte, r.size)
+	n, err := r.conn.Read(buf)
+	return ConnMsg{n, err, buf, r.context, r.conn}
+}
+
+type ConnMsg struct {
+	n int
+	err error
+	buf []byte
+	context int
+	conn net.Conn
+}
+
+func (m ConnMsg) pure() Out {
+	if m.context == ReadXk1Context {
+		return handleXk1(m)
+	}
+}
+
+func handleXk1(m ConnMsg) Out {
+	if m.err != nil {
+		return CloseCloser{m.conn}
+	}
+
+	if m.n != Xk1Size {
+		return CloseCloser{m.conn}
+	}
+
+	return sequence(
+		SetXk1(Xk1AwaitingNoise{m.conn, m.buf}),
+		GetStaticKeysAndXk1{})
+}
+
+type GetStaticKeysAndXk1 struct{}
+
+func (GetStaticKeysAndXk1) io() {
+	GET <- func(c *Cache) In {
+		return StaticKeys(c.staticKeys)
+	}
+}
+
+type StaticKeys noise.DHKey
+
+func (s StaticKeys) pure() Out {
+	
+}
+
+type SetXk1 Xk1AwaitingNoise
+
+type Xk1AwaitingNoise struct {
+	conn net.Conn
+	xk1 []byte
+}
+
+func (s SetXk1) io() {
+	SET <- func(c *Cache) {
+		c.xk1Waiting = append(
+			c.xk1Waiting,
+			Xk1AwaitingNoise(s))
+	}
+}
+
+func noiseConfig(staticKeys noise.DHKey) noise.Config {
+	return noise.Config{
+		CipherSuite: noise.NewCipherSuite(
+			noise.DH25519,
+			noise.CipherChaChaPoly,
+			noise.HashBLAKE2s),
+		Random: rand.Reader,
+		Pattern: noise.HandshakeXK,
+		Initiator: false,
+		StaticKeypair: staticKeys,
+	}
+
+}
+
+type NewHandshakeState struct {
+	shake *noise.HandshakeState
+	err error
+}
+
+type CloseCloser struct {
+	closer io.Closer
+}
+
+func (c CloseCloser) io() {
+	c.closer.Close()
+}
+
+type GetListener struct{}
+
+var GET = make(chan func(*Cache) In)
+var SET = make(chan func(*Cache))
+
+func (GetListener) io() {
+	GET <- func(c *Cache) In {return Listener{c.listener}}
+}
+
+type Listener struct {
+	listener net.Listener
+}
+
+type Cache struct {
+	listener net.Listener
+	staticKeys noise.DHKey
+	db *sql.DB
+	dbSetup bool
+	xk1Waiting []Xk1AwaitingNoise
+}
+
+func (listener Listener) pure() Out {
+	return GetConn{listener.listener}
+}
+
+type Sequence []Out
+
+func (s Sequence) io() {
+	for _, out := range []Out(s) {
+		out.io()
+	}
+}
+
+type CacheListener struct {
+	listener net.Listener
+}
+
+func (listener CacheListener) io() {
+	SET <- func(c *Cache) {c.listener = listener.listener}
+}
+
+type InitCacher struct{}
+
+func (InitCacher) io() {
+	GO <- cacher
+}
+
+func cacher() {
+	var cache Cache
+	for {
+		select {
+		case lookup := <-GET:
+			IN <- lookup(&cache)
+		case set := <-SET:
+			set(&cache)
+		}
+	}
+}
+
+const (
+	topPath = "bigwebthing"
+	dbPath = topPath + "/database.sqlite"
+)
+
+type MakeDbHandle struct{}
+
+func (MakeDbHandle) io() {
+	db, err := sql.Open("sqlite3", dbPath)
+	IN <- Db{db, err}
+}
+
+type Db struct {
+	db *sql.DB
+	err error
+}
+
+func (db Db) pure() Out {
+	if db.err != nil {
+		return Panic("couldn't get DB handle: " + db.err.Error())
+	}
+
+	return sequence(SetDb{db.db}, GetDbAndSetup{})
+}
+
+type SetDb struct {
+	db *sql.DB
+}
+
+func (db SetDb) io() {
+	SET <- func(c *Cache) {c.db = db.db}
+}
+
+type SetDbNotSetup struct{}
+
+func (SetDbNotSetup) io() {
+	SET <- func(c *Cache) {c.dbSetup = false}
+}
+
+type GetDbAndSetup struct{}
+
+func (GetDbAndSetup) io() {
+	GET <- func(c *Cache) In {
+		return DbAndStatus{
+			db: c.db,
+			setup: c.dbSetup,
+		}
+	}
+}
+
+type DbAndStatus struct {
+	db *sql.DB
+	setup bool
+}
+
+func (d DbAndStatus) pure() Out {
+	if !d.setup {
+		return sequence(setupDb(d.db), afterDbSetup(d.db))
+	}
+
+	return afterDbSetup(d.db)
+}
+
+func afterDbSetup(db *sql.DB) Out {
+	return sequence(CloseCloser{db}, MakeTcpListener{})
+}
+
+const makeContactsTableSql = `
+CREATE TABLE IF NOT EXISTS contacts (
+	contacter BLOB NOT NULL,
+	contactee BLOB NOT NULL,
+	PRIMARY KEY (contacter, contactee));
+`
 
 const makeKk1sTableSql = `
 CREATE TABLE IF NOT EXISTS kk1s (
-	sessionid BLOB NOT NULL UNIQUE,
-	halfkk1 BLOB NOT NULL UNIQUE,
+	sessionid BLOB NOT NULL PRIMARY KEY,
+	kk12ndhalf BLOB NOT NULL UNIQUE,
 	sender BLOB NOT NULL,
 	recipient BLOB NOT NULL);
 `
 
 const makeKk2sTableSql = `
 CREATE TABLE IF NOT EXISTS kk2s (
-	sessionid BLOB NOT NULL UNIQUE,
+	sessionid BLOB NOT NULL PRIMARY KEY,
 	kk2 BLOB NOT NULL UNIQUE,
 	sender BLOB NOT NULL,
 	recipient BLOB NOT NULL);
@@ -97,7 +351,7 @@ CREATE TABLE IF NOT EXISTS kk2s (
 
 const makeKkTransportTableSql = `
 CREATE TABLE IF NOT EXISTS kktransports (
-	sessionid BLOB NOT NULL UNIQUE,
+	sessionid BLOB NOT NULL PRIMARY KEY,
 	kktransport BLOB NOT NULL UNIQUE,
 	sender BLOB NOT NULL,
 	recipient BLOB NOT NULL,
@@ -106,388 +360,59 @@ CREATE TABLE IF NOT EXISTS kktransports (
 
 const makePaymentsTableSql = `
 CREATE TABLE IF NOT EXISTS payments (
+	id INTEGER NOT NULL PRIMARY KEY,
 	amount INTEGER NOT NULL,
 	timestamp INTEGER NOT NULL,
 	payer BLOB NOT NULL);
 `
 
-const makeBlobUploadTableSql = `
+const makeBlobUploadsTableSql = `
 CREATE TABLE IF NOT EXISTS blobuploads (
 	timestamp INTEGER NOT NULL,
-	blobid BLOB UNIQUE NOT NULL,
+	blobid BLOB NOT NULL PRIMARY KEY,
 	uploader BLOB NOT NULL);
 `
 
-const makeContactsTableSql = `
-CREATE TABLE IF NOT EXISTS contacts (
-	contacter BLOB NOT NULL,
-	contactee BLOB NOT NULL,
-	timestamp INTEGER NOT NULL,
-	current INTEGER NOT NULL,
-	PRIMARY KEY (contacter, contactee));
-`
-
-var setupSqls = []string{
-	makeKk1sTableSql,
-	makeKk2sTableSql,
-	makeKkTransportTableSql,
-	makePaymentsTableSql,
-	makeBlobUploadTableSql,
+func setupDb(db *sql.DB) Out {
+	x := func(sql string) Out {
+		return DbExec_{db, sql}
+	}
+	return sequence(
+		x(makeContactsTableSql),
+		x(makeKk1sTableSql),
+		x(makeKk2sTableSql),
+		x(makeKkTransportTableSql),
+		x(makePaymentsTableSql),
+		x(makeBlobUploadsTableSql))
 }
 
-func setupDb() {
-	db := getDb()
-	defer db.Close()
-	for _, setupSql := range setupSqls {
-		_, err := db.Exec(setupSql)
-		if err != nil {
-			panic("couldn't make table: " + setupSql + ": " + err.Error())
-		}
-	}
+func sequence(outs ...Out) Out {
+	return Sequence(outs)
 }
 
-const xk1Size = 48
-
-func noiseConfig(staticKeys noise.DHKey) noise.Config {
-	return noise.Config{
-		CipherSuite: noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256),
-		Random: rand.Reader,
-		Initiator: false,
-		StaticKeypair: staticKeys,
-	}
+type DbExec_ struct {
+	db *sql.DB
+	sql string
 }
 
-func handleConnection(conn net.Conn, staticKeys noise.DHKey) {
-	xk1 := make([]byte, xk1Size)
-	n, err := conn.Read(xk1)
-	if n != xk1Size {
-		return
-	}
-	if err != nil {
-		return
-	}
-
-	shake, err := noise.NewHandshakeState(noiseConfig(staticKeys))
-	if err != nil {
-		panic("couldn't initiate handshake: " + err.Error())
-	}
-
-	_, _, _, err = shake.ReadMessage([]byte{}, xk1)
-	if err != nil {
-		return
-	}
-
-	xk2, _, _, err := shake.WriteMessage([]byte{}, []byte{})
-	if err != nil {
-		return
-	}
-
-	_, err = conn.Write(xk2)
-	if err != nil {
-		return
-	}
-
-	xk3 := make([]byte, xk3Size)
-	n, err = conn.Read(xk3)
-	if n != xk3Size {
-		return
-	}
-	if err != nil {
-		return
-	}
-
-	_, tx, rx, err := shake.ReadMessage([]byte{}, xk3)
-	if err != nil {
-		return
-	}
-
-	theirId := shake.PeerStatic()
-
-	for {
-		rawSize := make([]byte, 2)
-		n, err := conn.Read(rawSize)
-		if n != 2 {
-			return
-		}
-		if err != nil {
-			return
-		}
-
-		size := int(rawSize[0]) + (int(rawSize[1]) << 8)
-		if size > maxFromClientSize {
-			return
-		}
-		buf := make([]byte, size)
-		n, err = conn.Read(buf)
-		if n != size {
-			return
-		}
-		if err != nil {
-			return
-		}
-
-		plain, err := rx.Decrypt([]byte{}, serverAd, buf)
-		if err != nil {
-			return
-		}
-
-		if processFromClient(plain, theirId, conn, rx) {
-			return
-		}
-	}
+func (x DbExec_) io() {
+	_, err := x.db.Exec(x.sql)
+	IN <- DbExec_Result{err, x.sql}
 }
 
-func processFromClient(
-	message []byte,
-	theirId []byte,
-	conn net.Conn,
-	rx *noise.CipherState) bool {
-
-	if len(message) == 0 {
-		return false
-	}
-	indicator := message[0]
-	body := message[1:]
-	switch indicator {
-	case 0:
-		return processKk1(body, theirId, conn, rx)
-	case 1:
-		return processKk2(body, theirId, conn, rx)
-	case 2:
-		return processKkTransport(body, theirId, conn, rx)
-	case 3:
-		return processBlob(body, theirId, conn, rx)
-	case 4:
-		return processPayment(body, theirId, conn, rx)
-	case 5:
-		return processRequestBlob(body, theirId, conn, rx)
-	}
-	return false
+type DbExec_Result struct {
+	err error
+	sql string
 }
 
-const recordBlobUploadSql =`
-INSERT INTO blobuploads(timestamp, blobid, uploader) VALUES (?, ?, ?);
-`
-
-func recordBlobUpload(blobId, theirId []byte) bool {
-	db := getDb()
-	stmt, err := db.Prepare(recordBlobUploadSql)
-	if err != nil {
-		panic("couldn't make save blob upload statement: " + err.Error())
+func (err DbExec_Result) pure() Out {
+	if err.err != nil {
+		return Panic(fmt.Sprintf("couldn't execute SQL: %s: %s", err.sql, err.err))
 	}
-	defer stmt.Close()
-	_, err = stmt.Exec(time.Now().Unix(), blobId, theirId)
-	return err == nil
+	return DoNothing{}
 }
 
-func processBlob(
-	body []byte,
-	theirId []byte,
-	conn net.Conn,
-	rx *noise.CipherState) bool {
+type DoNothing struct{}
 
-	balance := getBalance(theirId)
-	if balance < blobUploadPrice {
-		return false
-	}
-
-	if len(body) < 1 + blobIdSize {
-		return false
-	}
-	blobId := body[:blobIdSize]
-	blob := body[blobIdSize:]
-	if len(blob) > 15957 {
-		return false
-	}
-
-	if !recordBlobUpload(blobId, theirId) {
-		return false
-	}
-
-	saveBlob(blobId, blob)
-	return true
+func (DoNothing) io() {
 }
-
-const getPaymentsSql = `
-SELECT (amount) FROM payments WHERE payer=?;
-`
-
-func getPayments(db *sql.DB, theirId []byte) int {
-	rows, err := db.Query(getPaymentsSql, theirId)
-	if err != nil {
-		panic("could not run query to get payments: " + getPaymentsSql + ": " + err.Error())
-	}
-
-	total := 0
-	for rows.Next() {
-		var amount int
-		rows.Scan(&amount)
-		total += amount
-	}
-
-	return total
-}
-
-const getBlobsSql = `
-SELECT (timestamp) FROM blobuploads WHERE uploader=?;
-`
-
-// There is an upload fee and a fee per unit size per unit time stored.
-func getBlobsCost(db *sql.DB, theirId []byte) int {
-	rows, err := db.Query(getBlobsSql, theirId)
-	if err != nil {
-		panic("could not run query to get blobuploads: " + getBlobsSql + ": " + err.Error())
-	}
-
-	numBlobs := 0
-	var seconds uint64 = 0
-
-	// OK to convert to unsigned, because the epoch is 1970, and
-	// there won't be any timestamps before then.
-	now := uint64(time.Now().Unix())
-
-	for rows.Next() {
-		var t uint64
-		rows.Scan(&t)
-		seconds += now - t
-		numBlobs++
-	}
-
-	const blobsInGb = 62500 // 1GB / 16KB
-	const secondsInMonth = 30*24*60*60
-	gbMonths := int(seconds / (secondsInMonth * blobsInGb))
-	return gbMonths * pencePerGbPerMonth + numBlobs * pencePerGbUpload
-}
-
-const getContactsSql = `
-SELECT (timestamp) FROM contacts WHERE contactee=?;
-`
-
-const getKk2sSql = `
-SELECT (timestamp) FROM kk2s WHERE sender=?;
-`
-
-const getNumContactsSql = `
-SELECT COUNT(*) FROM contacts WHERE contactee=?;
-`
-
-func getNumContacts(db *sql.DB, theirId []byte) int {
-	rows, err := db.Query(getNumContactsSql, theirId)
-	if err != nil {
-		panic("couldn't run query to get number of contacts: " + getNumContactsSql + ": " + err.Error())
-	}
-
-	if !rows.Next() {
-		panic("no result on number of contacts query")
-	}
-
-	var total int
-	rows.Scan(&total)
-	return total
-}
-
-const (
-	pencePerGbPerMonth = 100
-	pencePerGbUpload = 100
-	pencePer1000Kks = 100
-)
-
-func saveBlob(blobId []byte, blob []byte) {
-	path := makeBlobPath(blobId)
-	err := ioutil.WriteFile(path, blob, 0400)
-	if err != nil {
-		panic("couldn't write new blob to file: " + err.Error())
-	}
-}
-
-var payAuth = []byte{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
-
-const savePaymentSql = `
-INSERT INTO payments(amount, timestamp, payer) VALUES (?, ?, ?);
-`
-
-func bytesEqual(as []byte, bs []byte) bool {
-	for i, a := range as {
-		if a != bs[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func processPayment(
-	raw []byte,
-	theirId []byte,
-	conn net.Conn,
-	rx *noise.CipherState) bool {
-
-	if !bytesEqual(theirId, payAuth) {
-		return false
-	}
-	rawAmount := raw[:4]
-	amount := uint32P(rawAmount)
-	payer := raw[4:]
-
-	db := getDb()
-	defer db.Close()
-
-	stmt, err := db.Prepare(savePaymentSql)
-	if err != nil {
-		panic("couldn't make save payment statement: " + err.Error())
-	}
-	defer stmt.Close()
-
-	_, err = stmt.Exec(amount, getPosixSeconds(), theirId)
-	return err == nil
-}
-
-func getPosixSeconds() int {
-	return int(time.Now().Unix())
-}
-
-func uint32P(raw []byte) int {
-	n := 0
-	for i := 0; i < 4; i++ {
-		n += int(raw[i]) << (8 * i)
-	}
-	return n
-}
-
-var serverAd = []byte{235, 77, 23, 199, 11, 162, 118, 80, 65, 84, 165, 211, 116, 185, 150, 149}
-
-const blobIdSize = 24
-
-const blobsPath = topPath + "/blobs"
-
-func makeBlobPath(blobId []byte) string {
-	return blobsPath + "/" + hex.EncodeToString(blobId)
-}
-
-func processRequestBlob(
-	blobId []byte,
-	theirId []byte,
-	conn net.Conn,
-	rx *noise.CipherState) bool {
-
-	if len(blobId) != blobIdSize {
-		return false
-	}
-
-	blob, err := ioutil.ReadFile(makeBlobPath(blobId))
-	if err != nil {
-		return false
-	}
-
-	message := make([]byte, 1, 1 + blobIdSize + len(blob))
-	message[0] = 3
-	message = append(message, blobId...)
-	message = append(message, blob...)
-
-	encrypted := rx.Encrypt([]byte{}, serverAd, message)
-	_, err = conn.Write(encrypted)
-	return err == nil
-}
-
-const maxFromClientSize = 16000
-
-const xk3Size = 64
