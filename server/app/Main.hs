@@ -18,7 +18,8 @@ import Crypto.Noise.DH.Curve25519 (Curve25519)
 import qualified Data.ByteArray as Ba
 import GHC.IO.Handle (Handle)
 import qualified Database.SQLite.Simple as Sql
-import qualified Network.Simple.TCP as Tcp
+import qualified Network.Simple.TCP as T
+import Data.Map (Map, insert, empty)
 
 
 main :: IO ()
@@ -43,6 +44,11 @@ mainHelp stateTVar input =
 run :: TVar State -> Output -> IO ()
 run state output =
     case output of
+    TcpRecv address socket ->
+        do
+        message <- E.try $ T.recv socket xk1Size
+        mainHelp state $ TcpMessage address message
+
     Sequence outs ->
         mapM_ (run state) outs
         
@@ -71,7 +77,7 @@ run state output =
         mainHelp state (DbConn conn)
 
     StartTcpServer ->
-        Tcp.serve (Tcp.Host "127.0.0.1") "8000" $ \(conn, address) ->
+        T.serve (T.Host "127.0.0.1") "8000" $ \(conn, address) ->
         mainHelp state (NewTcpConn conn address)
 
 
@@ -79,6 +85,8 @@ initState =
     State
     { staticKeys = Nothing
     , db = Nothing
+    , connsAwaitingKeys = []
+    , connsAwaitingXk1 = empty
     }
 
 
@@ -86,18 +94,16 @@ data State
     = State
     { staticKeys :: !(Maybe KeyPair)
     , db :: !(Maybe Sql.Connection)
-    , conns :: !(Map Tcp.SockAddr TcpConn)
+    , connsAwaitingKeys :: [(T.SockAddr, T.Socket)]
+    , connsAwaitingXk1 :: Map T.SockAddr ConnAwaitingXk1
     }
 
 
-data TcpConn
-    = TcpConn
-    { conn :: !Tcp.Socket
-    , status :: TcpStatus
+data ConnAwaitingXk1
+    = ConnAwaitingXk1
+    { conn :: !T.Socket
+    , ephemeral :: KeyPair
     }
-
-
-data TcpStatus
 
 
 data Output
@@ -109,6 +115,7 @@ data Output
     | Put Handle (UArray Word8)
     | Sequence [Output]
     | StartTcpServer
+    | TcpRecv T.SockAddr T.Socket
 
 
 data Input
@@ -117,7 +124,7 @@ data Input
     | NewDhKeys KeyPair
     | WriteHandle FilePath Handle
     | DbConn Sql.Connection
-    | NewTcpConn Tcp.Socket Tcp.SockAddr
+    | NewTcpConn T.Socket T.SockAddr
 
 
 type KeyPair
@@ -163,9 +170,14 @@ update (FileContents path eitherContents) state =
 
 
 update (NewDhKeys keys) state =
-    ( state { staticKeys = Just keys }
-    , GetWriteHandle staticKeysPath
-    )
+    case staticKeys state of
+    Nothing ->
+        ( state { staticKeys = Just keys }
+        , GetWriteHandle staticKeysPath
+        )
+
+    Just _ ->
+        keysForConn keys state
 
 
 update (WriteHandle path handle) state =
@@ -186,7 +198,30 @@ update (DbConn conn) state =
 
 
 update (NewTcpConn conn address) state =
-    
+    ( state
+        { connsAwaitingKeys =
+            (address, conn) : connsAwaitingKeys state
+        }
+    , GenerateNoiseKeys
+    )
+
+
+keysForConn keys state =
+    case connsAwaitingKeys state of
+    [] ->
+        (state, Panic "got unwanted keys")
+
+    (address, conn):onns -> 
+        ( state
+            { connsAwaitingKeys = onns
+            , connsAwaitingXk1 =
+                insert
+                    address
+                    (ConnAwaitingXk1 conn keys)
+                    (connsAwaitingXk1 state)
+            }
+        , TcpRecv address conn
+        )
 
 
 encodeKeys :: KeyPair -> UArray Word8

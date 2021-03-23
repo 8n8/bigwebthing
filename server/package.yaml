@@ -8,6 +8,7 @@ dependencies:
 - memory
 - sqlite-simple
 - network-simple
+- containers
 
 executables:
   server-exe:
