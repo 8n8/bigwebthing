@@ -1,3 +1,4 @@
 *.sw*
-server/server.cabal
-server/.stack-work/
+hydrogen.h
+hydrogen.c
+impl/
