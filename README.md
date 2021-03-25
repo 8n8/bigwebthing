@@ -7,7 +7,7 @@ statickeys
     32 bytes: secret key
 
 []session
-    32 bytes: seed
+    32 bytes: secret ephemeral key
     32 bytes: their ID
     24 bytes: session ID
     1 byte: 0 for TX, 1 for RX
@@ -48,6 +48,7 @@ payment auth key
     4 bytes: amount
     4 bytes: timestamp
     32 bytes: payer
+    64 bytes: signature
 
 []blobupload
     4 bytes: timestamp
@@ -86,10 +87,11 @@ payment auth key
     	    1 byte: 3
     	    24 bytes: blob ID
     	    <= 15957 bytes: the blob
-    	37 bytes: payment
+    	73 bytes: payment
     	    1 byte: 4
+	    64 bytes: signature
     	    4 bytes: amount
-    	    32 bytes: payer
+	    4 bytes: timestamp
         25 bytes: request blob
             1 byte: 5
             24 bytes: blob ID
@@ -109,12 +111,14 @@ payment auth key
             1 byte: 0
             32 bytes: sender
             48 bytes: KK1
-        73 bytes: KK2
+        105 bytes: KK2
             1 byte: 1
+	    32 bytes: sender
             48 bytes: KK2
             24 bytes: session ID
-        101 bytes: KK transport
+        133 bytes: KK transport
             1 byte: 2
+	    32 bytes: sender
             72 bytes: KK transport
             24 bytes: session ID
             4 bytes: timestamp
@@ -122,8 +126,9 @@ payment auth key
             1 byte: 3
             24 bytes: blob ID
             <= 15957 bytes: the blob
-        9 bytes: payment
+        73 bytes: payment
             1 byte: 4
+	    64 bytes: signature
             4 bytes: amount
             4 bytes: timestamp
         29 bytes: blob upload
