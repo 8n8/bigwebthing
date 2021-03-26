@@ -9,6 +9,7 @@ dependencies:
 - sqlite-simple
 - network-simple
 - containers
+- bytestring
 
 executables:
   server-exe:

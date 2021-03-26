@@ -13,13 +13,18 @@ import Foundation.Collection
 import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
 import Control.Monad.STM (atomically)
 import qualified Control.Exception as E
+import qualified Crypto.Noise as N
 import qualified Crypto.Noise.DH as Dh
 import Crypto.Noise.DH.Curve25519 (Curve25519)
 import qualified Data.ByteArray as Ba
 import GHC.IO.Handle (Handle)
 import qualified Database.SQLite.Simple as Sql
 import qualified Network.Simple.TCP as T
-import Data.Map (Map, insert, empty)
+import qualified Data.Map as M
+import qualified Data.ByteString as B
+import Crypto.Noise.Cipher.ChaChaPoly1305 (ChaChaPoly1305)
+import Crypto.Noise.Hash.BLAKE2s (BLAKE2s)
+import Crypto.Noise.HandshakePatterns (noiseXK)
 
 
 main :: IO ()
@@ -39,6 +44,10 @@ mainHelp stateTVar input =
         writeTVar stateTVar state'
         return output
     run stateTVar output
+
+
+xk1Size =
+    48
 
 
 run :: TVar State -> Output -> IO ()
@@ -86,7 +95,7 @@ initState =
     { staticKeys = Nothing
     , db = Nothing
     , connsAwaitingKeys = []
-    , connsAwaitingXk1 = empty
+    , conns = M.empty
     }
 
 
@@ -95,15 +104,18 @@ data State
     { staticKeys :: !(Maybe KeyPair)
     , db :: !(Maybe Sql.Connection)
     , connsAwaitingKeys :: [(T.SockAddr, T.Socket)]
-    , connsAwaitingXk1 :: Map T.SockAddr ConnAwaitingXk1
+    , conns :: M.Map T.SockAddr ConnStatus
     }
 
 
-data ConnAwaitingXk1
-    = ConnAwaitingXk1
-    { conn :: !T.Socket
-    , ephemeral :: KeyPair
-    }
+data ConnStatus
+    = Xk1W T.Socket KeyPair
+    | Xk3W T.Socket NoiseState
+    | AnyW T.Socket NoiseState
+
+
+type NoiseState
+    = N.NoiseState ChaChaPoly1305 Curve25519 BLAKE2s
 
 
 data Output
@@ -116,6 +128,9 @@ data Output
     | Sequence [Output]
     | StartTcpServer
     | TcpRecv T.SockAddr T.Socket
+    | TcpSend T.SockAddr T.Socket B.ByteString
+    | DoNothing
+    | DbQuery T.SockAddr Sql.Query B.ByteString
 
 
 data Input
@@ -125,6 +140,7 @@ data Input
     | WriteHandle FilePath Handle
     | DbConn Sql.Connection
     | NewTcpConn T.Socket T.SockAddr
+    | TcpMessage T.SockAddr (Either IOException (Maybe B.ByteString))
 
 
 type KeyPair
@@ -141,6 +157,10 @@ staticKeysPath =
     topPath </> "statickeys"
 
 
+dbPathLegacy =
+    filePathToLString dbPath
+
+
 dbPath :: FilePath
 dbPath =
     topPath </> "database.sqlite"
@@ -149,6 +169,48 @@ dbPath =
 update :: Input -> State -> (State, Output)
 update Start state =
     (state, ReadFile staticKeysPath)
+
+
+update (TcpMessage address rawMessage) state =
+    (\f -> case staticKeys state of
+        Nothing ->
+            (state, Panic "got TCP message but no static keys")
+
+        Just keys ->
+            f keys) $ \staticKeys ->
+
+    (\f ->
+    let bad =
+            ( state { conns = M.delete address $ conns state }
+            , DoNothing
+            )
+    in
+    case rawMessage of
+        Left err ->
+            bad
+
+        Right Nothing ->
+            bad
+
+        Right (Just bytes) ->
+            f bytes) $ \bytes ->
+
+    case M.lookup address $ conns state of
+    Nothing ->
+        ( state
+        , Panic $ mconcat
+            [ "unexpected TCP message from "
+            , show address 
+            , ": "
+            , show rawMessage
+            ]
+        )
+
+    Just (Xk1W socket ephemeralKeys) ->
+        onXk1 bytes socket staticKeys ephemeralKeys address state
+
+    Just (Xk3W socket noise) ->
+        onXk3 bytes socket noise address state
 
 
 update (FileContents path eitherContents) state =
@@ -206,6 +268,150 @@ update (NewTcpConn conn address) state =
     )
 
 
+onXk3
+    :: B.ByteString
+    -> T.Socket
+    -> NoiseState
+    -> T.SockAddr
+    -> State
+    -> (State, Output)
+onXk3 raw socket noise address state =
+    case N.readMessage (Ba.convert raw) noise of
+    N.NoiseResultMessage "" noise' ->
+        ( state
+            { conns =
+                M.insert
+                    address
+                    (AnyW socket noise')
+                    (conns state)
+            }
+        , fetchFirstDataBatch address noise'
+        )
+
+    N.NoiseResultNeedPSK _ ->
+        (state, Panic "NoiseResultNeedPSK")
+
+    N.NoiseResultException _ ->
+        ( state { conns = M.delete address (conns state) }
+        , DoNothing
+        )
+
+
+fetchFirstDataBatch :: T.SockAddr -> NoiseState -> Output
+fetchFirstDataBatch address noise =
+    (\f -> case N.remoteStaticKey noise of
+        Nothing ->
+            Panic "No remote static key"
+
+        Just remoteKey ->
+            f remoteKey) $ \theirKey ->
+
+    let
+    q sql =
+        DbQuery address sql $
+        Ba.convert $
+        Dh.dhPubToBytes theirKey
+    in
+    Sequence
+        [ q getKk1sSql
+        , q getKk2sSql
+        , q getKkTransportsSql
+        , q getPaymentsSql
+        , q getBlobUploadsSql
+        ]
+
+
+getKk1sSql :: Sql.Query
+getKk1sSql =
+    "SELECT (kk1, sender) \
+    \FROM kk1s \
+    \WHERE sender=? OR recipient=?;"
+
+
+getKk2sSql :: Sql.Query
+getKk2sSql =
+    "SELECT (sessionid, kk2, sender) \
+    \FROM kk2s \
+    \WHERE sender=? OR recipient=?;"
+
+
+getKkTransportsSql :: Sql.Query
+getKkTransportsSql =
+    "SELECT (sessionid, kktransport, sender, timestamp) \
+    \FROM kktransports \
+    \WHERE sender=? OR recipient=?;"
+
+
+getBlobUploadsSql :: Sql.Query
+getBlobUploadsSql =
+    "SELECT (timestamp, blobid) \
+    \FROM blobuploads \
+    \WHERE uploader=?;"
+
+
+getPaymentsSql :: Sql.Query
+getPaymentsSql =
+    "SELECT (amount, timestamp, signature) \
+    \FROM payments \
+    \WHERE payer=?;"
+
+
+onXk1
+    :: B.ByteString
+    -> T.Socket
+    -> KeyPair
+    -> KeyPair
+    -> T.SockAddr
+    -> State
+    -> (State, Output)
+onXk1 raw socket static ephemeral address state =
+    let
+    options = noiseOptions static ephemeral
+    noise :: NoiseState
+    noise = N.noiseState options noiseXK
+    bad = (state {conns = M.delete address $ conns state}, DoNothing)
+    panic = (state, Panic "NoiseResultNeedPSK")
+    in
+    case N.readMessage (Ba.convert raw) noise of
+    N.NoiseResultMessage "" noise' ->
+        case N.writeMessage "" noise' of
+        N.NoiseResultMessage xk2 noise'' ->
+            ( state
+                { conns =
+                    M.insert
+                        address
+                        (Xk3W socket noise'')
+                        (conns state)
+                }
+            , Sequence
+                [ TcpSend address socket (Ba.convert xk2)
+                , TcpRecv address socket
+                ]
+            )
+
+        N.NoiseResultNeedPSK _ ->
+            panic
+
+        N.NoiseResultException _ ->
+            panic
+
+    N.NoiseResultMessage _ _ ->
+        bad
+
+    N.NoiseResultNeedPSK _ ->
+        panic
+
+    N.NoiseResultException _ ->
+        bad
+            
+
+noiseOptions :: KeyPair -> KeyPair -> N.HandshakeOpts Curve25519
+noiseOptions myStatic myEphemeral =
+    N.setLocalStatic (Just myStatic)
+    . N.setLocalEphemeral (Just myEphemeral)
+    $ N.defaultHandshakeOpts N.ResponderRole ""
+
+
 keysForConn keys state =
     case connsAwaitingKeys state of
     [] ->
@@ -214,11 +420,8 @@ keysForConn keys state =
     (address, conn):onns -> 
         ( state
             { connsAwaitingKeys = onns
-            , connsAwaitingXk1 =
-                insert
-                    address
-                    (ConnAwaitingXk1 conn keys)
-                    (connsAwaitingXk1 state)
+            , conns =
+                M.insert address (Xk1W conn keys) (conns state)
             }
         , TcpRecv address conn
         )

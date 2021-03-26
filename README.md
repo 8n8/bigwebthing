@@ -26,8 +26,7 @@ payment auth key
     32 bytes: contactee
 
 []kk1
-    24 bytes: first half of KK1 (session ID)
-    24 bytes: second half of KK1
+    48 bytes: KK1
     32 bytes: sender
     32 bytes: recipient
 
