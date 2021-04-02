@@ -9,6 +9,7 @@ import Foundation
 import Foundation.IO
 import Foundation.VFS.FilePath
 import Foundation.VFS.Path
+import Foundation.String
 import Foundation.Collection
 import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
 import Control.Monad.STM (atomically)
@@ -25,6 +26,13 @@ import qualified Data.ByteString as B
 import Crypto.Noise.Cipher.ChaChaPoly1305 (ChaChaPoly1305)
 import Crypto.Noise.Hash.BLAKE2s (BLAKE2s)
 import Crypto.Noise.HandshakePatterns (noiseXK)
+import qualified Crypto.PubKey.Ed25519 as Sig
+import Data.Bits ((.&.), shiftR, shiftL)
+import qualified Data.Attoparsec.ByteString as P
+import Control.Monad.Fail (fail)
+import Data.ByteString.Base64.URL (encodeBase64Unpadded')
+import qualified Data.Text as T
+import Data.Text.Encoding (decodeUtf8)
 
 
 main :: IO ()
@@ -53,9 +61,9 @@ xk1Size =
 run :: TVar State -> Output -> IO ()
 run state output =
     case output of
-    TcpRecv address socket ->
+    TcpRecv address socket size ->
         do
-        message <- E.try $ T.recv socket xk1Size
+        message <- E.try $ T.recv socket size
         mainHelp state $ TcpMessage address message
 
     Sequence outs ->
@@ -104,14 +112,17 @@ data State
     { staticKeys :: !(Maybe KeyPair)
     , db :: !(Maybe Sql.Connection)
     , connsAwaitingKeys :: [(T.SockAddr, T.Socket)]
-    , conns :: M.Map T.SockAddr ConnStatus
+    , conns :: M.Map T.SockAddr (ConnWait, T.Socket, NoiseState)
+    , gettingBalance :: M.Map T.SockAddr FromClient
+    , awaitingBlob :: M.Map BlobId T.SockAddr
     }
 
 
-data ConnStatus
-    = Xk1W T.Socket KeyPair
-    | Xk3W T.Socket NoiseState
-    | AnyW T.Socket NoiseState
+data ConnWait
+    = Xk1W
+    | Xk3W
+    | SizeW
+    | BodyW
 
 
 type NoiseState
@@ -127,10 +138,11 @@ data Output
     | Put Handle (UArray Word8)
     | Sequence [Output]
     | StartTcpServer
-    | TcpRecv T.SockAddr T.Socket
+    | TcpRecv T.SockAddr T.Socket Int
     | TcpSend T.SockAddr T.Socket B.ByteString
     | DoNothing
     | DbQuery T.SockAddr Sql.Query B.ByteString
+    | PutPaymentInDb Word32 Word32 B.ByteString
 
 
 data Input
@@ -206,11 +218,14 @@ update (TcpMessage address rawMessage) state =
             ]
         )
 
-    Just (Xk1W socket ephemeralKeys) ->
-        onXk1 bytes socket staticKeys ephemeralKeys address state
+    Just (Xk1W, socket, noise) ->
+        onXk1 bytes socket noise address state
 
-    Just (Xk3W socket noise) ->
+    Just (Xk3W, socket, noise) ->
         onXk3 bytes socket noise address state
+
+    Just (BodyW, socket, noise) ->
+        onBody bytes socket noise address state
 
 
 update (FileContents path eitherContents) state =
@@ -268,6 +283,326 @@ update (NewTcpConn conn address) state =
     )
 
 
+parseBody :: B.ByteString -> Maybe FromClient 
+parseBody raw =
+    case P.parseOnly bodyP raw of
+    Left _ ->
+        Nothing
+
+    Right ok ->
+        Just ok
+
+
+bodyP :: P.Parser FromClient
+bodyP =
+    do
+    body <- P.choice
+        [ kk1P
+        , kk2P
+        , kkTransportP
+        , blobP
+        , paymentP
+        , requestBlobP
+        , addContactP
+        , removeContactP
+        ]
+    P.endOfInput
+    return body
+
+
+kk1Size =
+    48
+
+
+kk1P :: P.Parser FromClient
+kk1P =
+    do
+    _ <- P.word8 0
+    recipient <- publicKeyP
+    kk1 <- P.take kk1Size
+    return $
+        PaidF $
+        Kk1P (Recipient recipient) (Kk1 $ Ba.convert kk1)
+
+
+kk2Size =
+    48
+
+
+kk2P :: P.Parser FromClient
+kk2P =
+    do
+    _ <- P.word8 1
+    recipient <- publicKeyP
+    kk2 <- P.take kk2Size
+    sessionId <- sessionIdP
+    return $
+        PaidF $
+        Kk2P
+        (Recipient recipient)
+        (Kk2 $ Ba.convert kk2)
+        sessionId
+
+
+transportSize =
+    72
+
+
+kkTransportP :: P.Parser FromClient
+kkTransportP =
+    do
+    _ <- P.word8 2
+    recipient <- publicKeyP
+    transport <- P.take transportSize
+    sessionId <- sessionIdP
+    return
+        $ PaidF
+        $ KkTransportP
+            (Recipient recipient)
+            (KkTransport $ Ba.convert transport)
+            sessionId
+
+
+sessionIdSize =
+    24
+
+
+sessionIdP :: P.Parser SessionId
+sessionIdP =
+    do
+    sessionId <- P.take sessionIdSize
+    return $ SessionId $ Ba.convert sessionId
+
+
+blobP :: P.Parser FromClient
+blobP =
+    do
+    _ <- P.word8 3
+    blobId <- blobIdP
+    blob <- P.takeByteString
+    return $ PaidF $ BlobP blobId (Blob $ Ba.convert blob)
+
+
+paymentP :: P.Parser FromClient
+paymentP =
+    do
+    _ <- P.word8 4
+    amount <- word32P
+    timestamp <- word32P
+    payer <- publicKeyP
+    return $
+        FreeF $
+        PaymentF
+        (Amount amount)
+        (Timestamp timestamp)
+        (Payer payer)
+
+
+word32P :: P.Parser Word32
+word32P =
+    do
+    raw <- P.take 4
+    return $
+        (fromIntegral $ B.index raw 0) +
+        (shiftL (fromIntegral $ B.index raw 1) 8) +
+        (shiftL (fromIntegral $ B.index raw 2) 16) +
+        (shiftL (fromIntegral $ B.index raw 3) 24)
+
+
+blobIdSize =
+    24
+
+
+blobIdP :: P.Parser BlobId
+blobIdP =
+    do
+    blobId <- P.take blobIdSize
+    return $ BlobId $ Ba.convert blobId
+
+
+requestBlobP :: P.Parser FromClient
+requestBlobP =
+    do
+    _ <- P.word8 5
+    blobId <- blobIdP
+    return $ FreeF $ RequestBlobF blobId
+
+
+addContactP :: P.Parser FromClient
+addContactP =
+    do
+    _ <- P.word8 6
+    contact <- publicKeyP
+    return $ PaidF $ AddContactP $ Contact contact
+
+
+dhlen =
+    32
+
+
+removeContactP :: P.Parser FromClient
+removeContactP =
+    do
+    _ <- P.word8 7
+    contact <- publicKeyP
+    return $ PaidF $ RemoveContactP $ Contact contact
+
+
+publicKeyP :: P.Parser PublicKey
+publicKeyP =
+    do
+    raw <- P.take dhlen
+    case Dh.dhBytesToPub (Ba.convert raw) of
+        Nothing ->
+            fail "couldn't parse public key"
+        
+        Just key ->
+            return key 
+
+
+onBody raw socket noise address state =
+    let
+    bad =
+        ( state { conns = M.delete address (conns state) }
+        , DoNothing
+        )
+    in
+    (\f -> case N.readMessage (Ba.convert raw) noise of
+    N.NoiseResultMessage plain noise' ->
+        f plain noise') $ \plain noise' ->
+
+    (\f -> case parseBody (Ba.convert plain) of
+    Nothing ->
+        bad
+
+    Just message ->
+        f message) $ \message ->
+
+    (\f -> case N.remoteStaticKey noise' of
+        Nothing ->
+            (state, Panic "no remote static key in handshake")
+
+        Just theirId ->
+            f theirId) $ \theirId ->
+
+    let
+    state' =
+        state
+            { conns =
+                M.insert address (SizeW, socket, noise') (conns state)
+            , gettingBalance =
+                M.insert address address message
+            }
+    in
+    ( state'
+    , Sequence
+        [ DbQuery address getBalanceSql theirId
+        , TcpRecv address socket 2
+        ]
+    )
+
+
+getBalanceSql = "\
+    \
+        
+        
+blobPath :: BlobId -> FilePath
+blobPath (BlobId blobId) =
+    "blobs" </> blobNameB64 blobId
+
+
+blobNameB64 :: UArray Word8 -> FileName
+blobNameB64 =
+    fromString .
+    T.unpack .
+    decodeUtf8 .
+    Ba.convert .
+    encodeBase64Unpadded' .
+    Ba.convert
+
+
+putPaymentInDb (Amount amount) (Timestamp time) (Payer theirId) =
+    PutPaymentInDb amount time (Ba.convert $ Dh.dhPubToBytes theirId)
+
+
+data FromClient
+    = RequestBlobF BlobId
+    | Kk1F Recipient Kk1
+    | Kk2F Recipient Kk2 SessionId
+    | KkTransportF Recipient KkTransport SessionId
+    | BlobF BlobId Blob
+    | AddContactF Contact
+    | RemoveContactF Contact
+
+
+paymentsKey :: PublicKey
+paymentsKey =
+    case Dh.dhBytesToPub $ Ba.convert $ B.pack paymentKeyBytes of
+    Nothing ->
+        error "couldn't construct hard-coded payments key"
+
+    Just key ->
+        key
+
+
+paymentKeyBytes :: [Word8]
+paymentKeyBytes =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+
+type Bytes
+    = UArray Word8
+
+
+newtype Payer
+    = Payer PublicKey
+
+
+newtype Recipient
+    = Recipient PublicKey
+
+
+newtype Kk1
+    = Kk1 Bytes
+
+
+newtype Kk2
+    = Kk2 Bytes
+
+
+newtype KkTransport
+    = KkTransport Bytes
+
+
+newtype SessionId
+    = SessionId Bytes
+
+
+newtype BlobId
+    = BlobId Bytes
+    deriving (Eq, Ord)
+
+
+newtype Blob
+    = Blob Bytes
+
+
+newtype Amount
+    = Amount Word32
+
+
+newtype Timestamp
+    = Timestamp Word32
+
+
+newtype Contact
+    = Contact PublicKey
+
+
+type PublicKey
+    = Dh.PublicKey Curve25519
+
+
 onXk3
     :: B.ByteString
     -> T.Socket
@@ -282,10 +617,18 @@ onXk3 raw socket noise address state =
             { conns =
                 M.insert
                     address
-                    (AnyW socket noise')
+                    (SizeW, socket, noise')
                     (conns state)
             }
-        , fetchFirstDataBatch address noise'
+        , Sequence
+            [ fetchFirstDataBatch address noise'
+            , TcpRecv address socket 2
+            ]
+        )
+
+    N.NoiseResultMessage _ _ ->
+        ( state { conns = M.delete address (conns state) }
+        , DoNothing
         )
 
     N.NoiseResultNeedPSK _ ->
@@ -359,16 +702,12 @@ getPaymentsSql =
 onXk1
     :: B.ByteString
     -> T.Socket
-    -> KeyPair
-    -> KeyPair
+    -> NoiseState
     -> T.SockAddr
     -> State
     -> (State, Output)
-onXk1 raw socket static ephemeral address state =
+onXk1 raw socket noise address state =
     let
-    options = noiseOptions static ephemeral
-    noise :: NoiseState
-    noise = N.noiseState options noiseXK
     bad = (state {conns = M.delete address $ conns state}, DoNothing)
     panic = (state, Panic "NoiseResultNeedPSK")
     in
@@ -380,12 +719,12 @@ onXk1 raw socket static ephemeral address state =
                 { conns =
                     M.insert
                         address
-                        (Xk3W socket noise'')
+                        (Xk3W, socket, noise'')
                         (conns state)
                 }
             , Sequence
                 [ TcpSend address socket (Ba.convert xk2)
-                , TcpRecv address socket
+                , TcpRecv address socket xk3Size
                 ]
             )
 
@@ -403,6 +742,11 @@ onXk1 raw socket static ephemeral address state =
 
     N.NoiseResultException _ ->
         bad
+
+
+xk3Size :: Int
+xk3Size =
+    64
             
 
 noiseOptions :: KeyPair -> KeyPair -> N.HandshakeOpts Curve25519
@@ -412,7 +756,19 @@ noiseOptions myStatic myEphemeral =
     $ N.defaultHandshakeOpts N.ResponderRole ""
 
 
-keysForConn keys state =
+keysForConn ephemeral state =
+    (\f -> case staticKeys state of
+        Nothing ->
+            (state, Panic "got ephemeral keys before static keys")
+
+        Just staticKeys ->
+            f staticKeys) $ \staticKeys ->
+
+    let
+    options = noiseOptions staticKeys ephemeral
+    noise :: NoiseState
+    noise = N.noiseState options noiseXK
+    in
     case connsAwaitingKeys state of
     [] ->
         (state, Panic "got unwanted keys")
@@ -421,9 +777,9 @@ keysForConn keys state =
         ( state
             { connsAwaitingKeys = onns
             , conns =
-                M.insert address (Xk1W conn keys) (conns state)
+                M.insert address (Xk1W, conn, noise) (conns state)
             }
-        , TcpRecv address conn
+        , TcpRecv address conn xk1Size
         )
 
 

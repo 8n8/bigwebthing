@@ -86,17 +86,16 @@ payment auth key
     	    1 byte: 3
     	    24 bytes: blob ID
     	    <= 15957 bytes: the blob
-    	73 bytes: payment
-    	    1 byte: 4
-	    64 bytes: signature
-    	    4 bytes: amount
-	    4 bytes: timestamp
         25 bytes: request blob
-            1 byte: 5
+            1 byte: 4
             24 bytes: blob ID
         33 bytes: add contact
+            1 byte: 5
+            32 bytes: public key of contact
+        33 bytes: remove contact
             1 byte: 6
             32 bytes: public key of contact
+
 
 # Server to client
 
