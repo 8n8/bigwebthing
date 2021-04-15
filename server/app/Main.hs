@@ -33,6 +33,7 @@ import Control.Monad.Fail (fail)
 import Data.ByteString.Base64.URL (encodeBase64Unpadded')
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
+import qualified Data.Set as S
 
 
 main :: IO ()
@@ -109,12 +110,41 @@ initState =
 
 data State
     = State
-    { staticKeys :: !(Maybe KeyPair)
-    , db :: !(Maybe Sql.Connection)
+    { staticKeys :: (Maybe KeyPair)
+    , db :: (Maybe Sql.Connection)
     , connsAwaitingKeys :: [(T.SockAddr, T.Socket)]
     , conns :: M.Map T.SockAddr (ConnWait, T.Socket, NoiseState)
     , gettingBalance :: M.Map T.SockAddr FromClient
     , awaitingBlob :: M.Map BlobId T.SockAddr
+    , contacts :: M.Map PublicKey (S.Set PublicKey)
+    , kk1s :: M.Map Recipient (Kk1, PublicKey)
+    , kk2s :: M.Map Recipient Kk2Store
+    , transports :: M.Map Sendient KkTransportStore
+    }
+
+
+data Sender
+    = Sender PublicKey
+
+
+data Sendient
+    = RecipientOnly Recipient
+    | SenderOnly Sender
+    | Sendient Recipient Sender
+
+
+data KkTransportStore
+    = KkTransportStore
+    { transport :: KkTransport
+    , sessionId :: SessionId
+    }
+
+
+data Kk2Store
+    = Kk2Store
+    { sessionId :: SessionId
+    , kk2 :: Kk2
+    , sender :: PublicKey
     }
 
 
@@ -502,10 +532,6 @@ onBody raw socket noise address state =
     )
 
 
-getBalanceSql = "\
-    \
-        
-        
 blobPath :: BlobId -> FilePath
 blobPath (BlobId blobId) =
     "blobs" </> blobNameB64 blobId
