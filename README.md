@@ -1,5 +1,56 @@
 BigWebThing is a computer system for creating and sharing documents over the internet.
 
+# Message format
+
+One of:
+    113 bytes: KK1
+        1 byte: 0
+        32 bytes: recipient
+        32 bytes: sender
+        48 bytes: KK1
+    137 bytes: KK2    
+        1 byte: 1
+        32 bytes: recipient
+        32 bytes: sender
+        48 bytes: KK2
+        24 bytes: first half of KK1
+    137 bytes: KK transport
+        1 byte: 2
+        32 bytes: recipient
+        32 bytes: sender
+        72 bytes: KK transport
+            16 bytes: crypto overhead
+            encrypted
+                24 bytes: blob ID
+                32 bytes: secret key for blob
+    65 bytes: add contact
+        1 byte: 3
+        32 bytes: contacter
+        32 bytes: contactee
+    65 bytse: remove contact
+        1 byte: 4
+        32 bytes: contacter
+        32 bytes: contactee
+    <= 15982 bytes: blob
+        1 byte: 5
+        24 bytes: blob ID
+        <= 15957 bytes:
+            24 bytes: random nonce
+            16 bytes: MAC
+            encrypted: one of
+                15917 bytes: not the final chunk
+                    1 byte: 0
+                    24 bytes: ID of next blob in sequence
+                    15892 bytes: the chunk
+                <= 15917 bytes: final chunk
+                    1 byte: 1
+                    24 bytes: checksum of whole file
+                    <=15892 bytes: the chunk
+    9 bytes: payment
+        1 byte: 6
+        4 bytes: amount
+        4 bytes: POSIX timestamp (seconds)
+
 # Client cache
 
 statickeys
