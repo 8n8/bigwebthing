@@ -1,3 +1,5 @@
 *.sw*
 server/server.cabal
 server/.stack-work/
+lang/node_modules/
+lang/elm-stuff/
