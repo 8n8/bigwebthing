@@ -1,6 +1,11 @@
 module Main exposing (main)
 
-import Html
+import Compiler
 
 main =
-    Html.text "truelang"
+    Browser.document
+    { init = init
+    , view = view
+    , update = update
+    , subscriptions = subscriptions
+    }
