@@ -20,10 +20,6 @@ type Msg
 type alias Model =
     { code : String
     , output : Result String String
-    , importResolver : Set.Set String
-    , files : Dict.Dict String Bytes.Bytes
-    , notInScope : Dict.Dict String Value
-    , inScope : Dict.Dict String Value
     }
 
 
@@ -34,7 +30,6 @@ emptyMessage =
 initModel =
     { code = ""
     , output = Err emptyMessage
-    , importResolver = Set.empty
     }
 
 
@@ -58,19 +53,22 @@ update msg model =
 
 
 type Value
-    = Function (Located String) (Located Value)
-    | FunctionCall (Located String) (Located Value)
-    | CaseOf (Located Value) (List ((Located Value), (Located Value)))
+    = FunctionV (Context Value, Value) (Context Value)
+    | FunctionCallV (Context Value) (Context Value)
+    | CaseOfV (Context Value) (List (Context Value, Context Value))
     | StringV String
-    | LetIn
-        (Dict.Dict String (Located (), Located Value))
-        (Located Value)
-    | Module
-        (Set.Set (Located String))
-        (Set.Set (Located String))
-        (Dict.Dict String (Located (), Located Value))
-    | ReadFile String
-    | All
+    | LetInV Scope (Context Value)
+    | AllV
+    | ListV (List (Context Value))
+    | AllIoV
+    | LookupV (Context Value)
+    | AllFunctions
+
+
+type alias Context a =
+    { located : Located a
+    , scope : Scope
+    }
 
 
 parse : String -> Result String (Located Value)
@@ -89,50 +87,255 @@ onNewCode code model =
             , Cmd.none
             )
 
-        Ok (Function params body) ->
-            evaluateFunctionCall
-                { params = params
-                , body = body
-                , args = [StringV "Start", All]
-                }
-                { model | code = code }
+        Ok parsed ->
+            case fillInScopes (Scope Dict.empty) (getValueL parsed) of
+                Err err ->
+                    ({ model | output = Err err }, Cmd.none)
+
+                Ok scoped ->
+                    case simplify scoped of
+                        Err err ->
+                            ({model | output = Err err}, Cmd.none)
+
+                        Ok simplified ->
+                            if validMainOutput simplified then
+                                case refineArgTypes scoped of
+                                    Err err ->
+                                        ({model | output = Err err}, Cmd.none)
+
+                                    Ok refined ->
+                                        ( { model | output = Ok (makeGo refined) }
+                                        , Cmd.none
+                                        )
+
+                            else
+                                badMainOutput simplified
 
 
-type alias FunctionCall =
-    { param : Located String
-    , body : Located Value
-    , args : Located Value
-    }
-    
+simplify : Context Value -> Result String (Context Value)
+simplify =
+    Debug.todo "simplify"
 
-evaluateFunctionCall : FunctionCall -> Model -> (Model, Cmd Msg)
-evaluateFunctionCall f model =
-    if List.length f.params /= List.length f.args then
-        ( { model
-            | output = Err <| String.concat
-                [ "wrong number of arguments to function: expecting "
-                , String.fromInt <| List.length f.params
-                , " but got "
-                , String.fromInt <| List.length f.args
+
+makeGo =
+    Debug.todo "makeGo"
+
+
+getValueL : Located a -> a
+getValueL l =
+    case l of
+        InCode i ->
+            i.value
+
+        InRuntime i ->
+            i
+
+
+badValue : Value -> Located Value -> String
+badValue expected got =
+    String.concat
+        [ "wrong value: expected "
+        , showValue expected
+        , " but got "
+        , showValue <| getValueL got
+        , prettyLocation got
+        ]
+
+
+prettyLocation : Located a -> String
+prettyLocation located =
+    case located of
+        InCode inCode ->
+            String.concat
+                [ "between "
+                , prettyPos inCode.start
+                , " and "
+                , prettyPos inCode.end
                 ]
-          }
-        , Cmd.none
-        )
 
-    else
-        
+        InRuntime _ ->
+            "runtime"
 
 
-type alias Located a =
-    { start : Location
-    , value : a
-    , end : Location
+prettyPos : (Int, Int) -> String
+prettyPos (row, col) =
+    String.concat
+        [ "("
+        , String.fromInt row
+        , ", "
+        , String.fromInt col
+        , ")"
+        ]
+
+
+insert : Context Value -> Context Value -> Scope -> Scope
+insert key value (Scope oldScope) =
+    case key.located of
+        InCode location ->
+            Scope <|
+            Dict.insert
+                (encodeValue (getValueC key))
+                { nameStart = location.start
+                , nameEnd = location.end
+                , value = value
+                }
+                oldScope
+
+        InRuntime _ ->
+            Scope oldScope
+
+
+encodeValue : Value -> String
+encodeValue value =
+    case value of
+        FunctionV param body ->
+            String.concat
+                [ "func"
+                , encodeValue <| getValueC <| Tuple.first param
+                , encodeValue <| getValueC body
+                ]
+
+
+getValueC : Context Value -> Value
+getValueC c =
+    case c.located of
+        InRuntime v ->
+            v
+
+        InCode i ->
+            i.value
+
+
+generateGo : Value -> String
+generateGo value =
+    case value of
+        FunctionV _ _ ->
+            ""
+
+
+startArg : Context Value
+startArg =
+    { located =
+        InRuntime <|
+        ListV
+            [ { located = InRuntime AllV
+              , scope = Scope Dict.empty
+              }
+            , { located = InRuntime AllIoV
+              , scope = Scope Dict.empty
+              }
+            ]
+    , scope = Scope Dict.empty
     }
 
 
-type Location
-    = RunTime
-    | Source Int Int
+refineArgTypes : Context Value -> Result String (Context Value)
+refineArgTypes =
+    Debug.todo "refineArgTypes"
+            
+
+validMainOutput out =
+            case getValueC out of
+                ListV [_, ioC] ->
+                    isSubType (getValueC ioC) AllIoV
+
+                _ ->
+                    False
+
+
+badMainOutput bad =
+    String.concat
+        [ "the output of the main function should be "
+        , showValue expectedMainOut
+        , " but is "
+        , showValue bad
+        ]
+
+
+expectedMainOut =
+    ListV
+        [ {located = InRuntime AllV, scope = Scope Dict.empty}
+        , {located = InRuntime AllIoV, scope = Scope Dict.empty}
+        ]
+
+
+mainOutputNotIo : Value -> String
+mainOutputNotIo notIo =
+    String.concat
+        [ "second element of output of main function should be "
+        , showValue AllIoV
+        , " but is "
+        , showValue notIo
+        ]
+
+
+isSubType : Value -> Value -> Bool
+isSubType sub super =
+    case (sub, super) of
+        (FunctionV _ _, FunctionV _ _) ->
+            sub == super
+
+        (FunctionV _ _, AllV) ->
+            True
+
+
+showValue : Value -> String
+showValue value =
+    case value of
+        FunctionV param body ->
+            "function"
+
+
+fillInScopes : Context Value -> Result String (Context Value) 
+fillInScopes value =
+    case getValueC value of
+        FunctionV param body ->
+            Ok
+                { located = 
+            FunctionV param body
+
+        FunctionCallV candidate arg ->
+            Ok <| FunctionCallV candidate arg
+            
+
+badEnd : Value -> String
+badEnd got =
+    String.concat
+        [ "first element of output of main function should be an "
+        , "io action, but it was: "
+        , showValue got
+        ]
+
+
+type Scope
+    = Scope (Dict.Dict String Scoped)
+
+
+type alias Scoped = 
+    { nameStart : (Int, Int)
+    , nameEnd : (Int, Int)
+    , value : Context Value
+    }
+
+
+showPosition : (Int, Int) -> String
+showPosition (row, col) =
+    String.concat
+    [ "("
+    , String.fromInt row
+    , ", "
+    , String.fromInt col
+    , ")"
+    ]
+
+
+type Located a
+    = InCode
+        { start : (Int, Int)
+        , value : a
+        , end : (Int, Int)
+        }
+    | InRuntime a
 
 
 subscriptions : Model -> Sub Msg
