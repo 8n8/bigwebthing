@@ -52,7 +52,7 @@ BigWebThing is a computer system for creating and sharing documents over the int
 
 # Client cache
 
-statickeys
+[]statickeys
     32 bytes: public key
     32 bytes: secret key
 
