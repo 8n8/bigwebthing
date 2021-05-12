@@ -1,6 +1,6 @@
 BigWebThing is a computer system for creating and sharing documents over the internet.
 
-# Message format
+# Encrypted message format
 
 <= 15982 bytes: one of
     117 bytes: KK1
@@ -41,14 +41,26 @@ BigWebThing is a computer system for creating and sharing documents over the int
         4 bytes: timestamp
         4 bytes: amount in pence
         32 bytes: payer
-    69 bytes: someone else's transport message
+    77 bytes: someone else's transport data
         1 byte: 6
         4 bytes: timestamp
         32 bytes: recipient
         32 bytes: sender
-    33 bytes: get contacts of
+	8 bytes: size
+    33 bytes: get public data of
         1 byte: 7
         32 bytes: their ID
+
+# Plain-text message format
+
+One of:
+    app
+        1 byte: 0
+        the app
+    data for app
+        1 byte: 1
+        32 bytes: hash of app
+        the data
 
 # Client cache
 
@@ -111,9 +123,9 @@ description of layout
 
 Events such as button clicks and typing in text boxes.
 
-# Document format
+# App format
 
-Documents are archives containing a bunch of at least one files, one of which must contain a definition of a pure function a compiled WASM module. This is used like the Elm 'update' function for the app. The other files are movies, images, PDFs etc.
+Apps are archives containing a bunch of at least one files, one of which must contain a definition of a pure function in a compiled WASM module. This is used like the Elm 'update' function for the app. The other files are movies, images, PDFs etc.
 
 A document is a sequence of parts. The first (required) part is:
 
