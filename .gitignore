@@ -3,4 +3,4 @@ server/server.cabal
 server/.stack-work/
 lang/node_modules/
 lang/elm-stuff/
-noiseTest/.stack-work/
+noiseTestHaskell/.stack-work/
