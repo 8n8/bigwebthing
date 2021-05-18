@@ -46,9 +46,10 @@ BigWebThing is a computer system for creating and sharing documents over the int
         4 bytes: timestamp
         32 bytes: recipient
         32 bytes: sender
-	8 bytes: size
-    33 bytes: get public data of
+	    8 bytes: size
+    37 bytes: get public data of
         1 byte: 7
+        4 bytes: timestamp
         32 bytes: their ID
 
 # Plain-text message format
@@ -74,14 +75,13 @@ One of:
     24 bytes: session ID
     1 byte: 0 for TX, 1 for RX
 
+[]blobkeys
+    24 bytes: blob ID
+    32 bytes: blob key
+
 []friendly names
     friendly name string
     32 bytes: public key
-
-[]app cache
-    32 bytes: hash of the tar archive containing the app
-    file name
-    file
 
 # Server cache
 
@@ -113,15 +113,16 @@ A database table for each type of message.
     <= 15982 bytes
         encrypted message
 
-# Websockets messages from backend to frontend
+# HTTP API between client backend and frontend
 
-description of layout
-    1 byte: 0
-    a serialized description of the layout of the app
+/app/
+    serves the app
 
-# Websockets messages from frontend to backend
+/cache/save/<filename>
+    The request body is the file.
 
-Events such as button clicks and typing in text boxes.
+/cache/get/<filename>
+    The response body is the file.
 
 # App format
 
