@@ -32,3 +32,5 @@ executables:
     - -Werror
     - -Wno-implicit-prelude
     - -Wno-missing-safe-haskell-mode
+    - -Wno-prepositive-qualified-module
+    - -Wno-safe

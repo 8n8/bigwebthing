@@ -42,8 +42,8 @@ main =
                             print ("handshake not finished" :: String)
                         else
                         case writeMessage plaintext me'' of
-                        NoiseResultMessage ciphertext me''' ->
-                            case readMessage ciphertext me''' of
+                        NoiseResultMessage ciphertext _ ->
+                            case readMessage ciphertext me'' of
                             NoiseResultMessage plaintext' _ ->
                                 print $ plaintext' == plaintext
 

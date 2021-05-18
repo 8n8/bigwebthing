@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 67d5797eb3e6e051e5d8a366900cf34e916f943c2e91716b025b362f00b85c5d
+-- hash: a3b04c0ec76bb396943b6ae27cfeac0059301bd68292a04586cb9470ec90bd84
 
 name:           noiseTest
 version:        0.1.0.0
@@ -26,7 +26,7 @@ executable noiseTest-exe
       Paths_noiseTest
   hs-source-dirs:
       app
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N -Weverything -Wno-unsafe -Wno-missing-import-lists -Werror -Wno-implicit-prelude -Wno-missing-safe-haskell-mode
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -Weverything -Wno-unsafe -Wno-missing-import-lists -Werror -Wno-implicit-prelude -Wno-missing-safe-haskell-mode -Wno-prepositive-qualified-module -Wno-safe
   build-depends:
       base >=4.7 && <5
     , cacophony
