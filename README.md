@@ -3,38 +3,53 @@ BigWebThing is a computer system for creating and sharing documents over the int
 # Encrypted message format
 
 <= 15982 bytes: one of
-    81 bytes: KK1
+    117 bytes: KK1
         1 byte: 0
         4 bytes: timestamp
+        32 bytes: recipient
         32 bytes: sender
         48 bytes: KK1
-    105 bytes: KK2    
+    141 bytes: KK2    
         1 byte: 1
         4 bytes: timestamp
+        32 bytes: recipient
         32 bytes: sender
         24 bytes: first half of KK1
         48 bytes: KK2
-    97 bytes: KK transport
+    <=15982 bytes: KK transport
         1 byte: 2
         4 bytes: timestamp
+        32 bytes: recipient
         32 bytes: sender
         24 bytes: first half of KK1
-        40 bytes: KK transport
+        <=15889 bytes: KK transport
             16 bytes: crypto overhead
-            40 bytes: encrypted
-	    	    32 bytes: symmetric key of blob
-                8 bytes: blob number
-    <= 15982 bytes: encrypted chunk
-        1 byte: 3
+            <=15873 bytes: encrypted
+                15873 bytes: not the final chunk
+                    1 byte: 0
+                    15872 bytes: the chunk
+                <= 15873 bytes: final chunk
+                    1 byte: 1
+                    <=15872 bytes: the chunk
+    69 bytes: add/remove contact
+        1 byte: 3/4
         4 bytes: timestamp
+        32 bytes: contacter
+        32 bytes: contactee
+    41 bytes: payment
+        1 byte: 5
+        4 bytes: timestamp
+        4 bytes: amount in pence
+        32 bytes: payer
+    77 bytes: someone else's transport data
+        1 byte: 6
+        4 bytes: timestamp
+        32 bytes: recipient
         32 bytes: sender
-        <= 15945 bytes: encrypted
-            15945 bytes: not the final chunk
-                1 byte: 0
-                15944 bytes: the chunk
-            <= 15945 bytes: final chunk
-                1 byte: 1
-                <=15944 bytes: the chunk
+	8 bytes: size
+    33 bytes: get public data of
+        1 byte: 7
+        32 bytes: their ID
 
 # Plain-text message format
 
