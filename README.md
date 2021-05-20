@@ -130,16 +130,11 @@ A database table for each type of message.
     <= 15982 bytes
         encrypted message
 
-# HTTP API between client backend and frontend
+# API between client backend and frontend
 
-/app/
-    serves the app
+The backend provides URLs for images, movies, and other files as needed, and sends a new UI description whenever it changes.
 
-/cache/save/<filename>
-    The request body is the file.
-
-/cache/get/<filename>
-    The response body is the file.
+The frontend sends UI events like clicks to the backend.
 
 # App format
 
