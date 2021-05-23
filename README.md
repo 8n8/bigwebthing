@@ -9,38 +9,40 @@ BigWebThing is a computer system for creating documents and sharing them over th
         32 bytes: recipient
         32 bytes: sender
         48 bytes: KK1
-    141 bytes: KK2    
+    149 bytes: KK2    
         1 byte: 1
         4 bytes: timestamp
         32 bytes: recipient
         32 bytes: sender
-        24 bytes: first half of KK1
+        32 bytes: first part of KK1
         48 bytes: KK2
-    165 bytes: KK transport
+    182 bytes: KK transport
         1 byte: 2
         4 bytes: timestamp
         32 bytes: recipient
         32 bytes: sender
-        24 bytes: first half of KK1
-        72 bytes: encrypted
+        32 bytes: first part of KK1
+        80 bytes: encrypted
             16 bytes: crypto overhead
-            24 bytes: blob ID
+            32 bytes: blob ID
             32 bytes: symmetric key for blob
     <= 15982 bytes: blob
         1 byte: 3
         4 bytes: timestamp
         32 bytes: author
-        24 bytes: blob ID
-        15921 bytes: encrypted
-            24 bytes: nonce
+        32 bytes: blob ID
+        15913 bytes: encrypted
+            8 bytes: nonce
             16 bytes: auth tag
-            15881 bytes: encrypted
-                15881 bytes: not the final chunk
+            15889 bytes: encrypted
+                15889 bytes: not the final chunk
                     1 byte: 0
-                    15880 bytes: the chunk
-                <= 15881 bytes: final chunk
+                    32 bytes: ID of next blob
+                    15856 bytes: the chunk
+                <= 15889 bytes: final chunk
                     1 byte: 1
-                    <=15880 bytes: the chunk
+                    32 bytes: hash of whole file
+                    <=15856 bytes: the chunk
     69 bytes: add/remove contact
         1 byte: 4/5 
         4 bytes: timestamp
@@ -60,14 +62,14 @@ BigWebThing is a computer system for creating documents and sharing them over th
         1 byte: 8
         4 bytes: timestamp
         32 bytes: their ID
-    25 bytes: get blob
+    37 bytes: get blob
         1 byte: 9
         4 bytes: timestamp
-        24 bytes: blob ID
-    29 bytes: get blob requests of
+        32 bytes: blob ID
+    37 bytes: get blob requests of
         1 byte: 10
         4 bytes: timestamp
-        24 bytes: blob ID
+        32 bytes: blob ID
 
 # Plain-text message format
 
@@ -89,11 +91,11 @@ One of:
 []session
     32 bytes: secret ephemeral key
     32 bytes: their ID
-    24 bytes: session ID
+    32 bytes: session ID
     1 byte: 0 for TX, 1 for RX
 
 []blobkeys
-    24 bytes: blob ID
+    32 bytes: blob ID
     32 bytes: blob key
 
 []friendly names
