@@ -3,24 +3,21 @@ BigWebThing is a computer system for creating documents and sharing them over th
 # Encrypted message format
 
 <= 15982 bytes: one of
-    117 bytes: KK1
+    85 bytes: KK1
         1 byte: 0
         4 bytes: timestamp
-        32 bytes: recipient
-        32 bytes: sender
+        32 bytes: payment ID
         48 bytes: KK1
-    149 bytes: KK2    
+    117 bytes: KK2    
         1 byte: 1
         4 bytes: timestamp
-        32 bytes: recipient
-        32 bytes: sender
+        32 bytes: payment ID
         32 bytes: first part of KK1
         48 bytes: KK2
-    182 bytes: KK transport
+    149 bytes: KK transport
         1 byte: 2
         4 bytes: timestamp
-        32 bytes: recipient
-        32 bytes: sender
+        32 bytes: payment ID
         32 bytes: first part of KK1
         80 bytes: encrypted
             16 bytes: crypto overhead
@@ -29,7 +26,7 @@ BigWebThing is a computer system for creating documents and sharing them over th
     <= 15982 bytes: blob
         1 byte: 3
         4 bytes: timestamp
-        32 bytes: author
+        32 bytes: payment ID
         32 bytes: blob ID
         15913 bytes: encrypted
             8 bytes: nonce
@@ -43,25 +40,20 @@ BigWebThing is a computer system for creating documents and sharing them over th
                     1 byte: 1
                     32 bytes: hash of whole file
                     <=15856 bytes: the chunk
-    69 bytes: add/remove contact
-        1 byte: 4/5 
-        4 bytes: timestamp
-        32 bytes: contacter
-        32 bytes: contactee
     41 bytes: payment
         1 byte: 6
         4 bytes: timestamp
         4 bytes: amount in pence
-        32 bytes: payer
+        32 bytes: payment ID
     41 bytes: someone else's blob
         1 byte: 7
         4 bytes: timestamp
-        32 bytes: author
+        32 bytes: payment ID
         4 bytes: size
     37 bytes: get public data of
         1 byte: 8
         4 bytes: timestamp
-        32 bytes: their ID
+        32 bytes: payment ID
     37 bytes: get blob
         1 byte: 9
         4 bytes: timestamp
