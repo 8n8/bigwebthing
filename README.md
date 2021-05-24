@@ -16,33 +16,32 @@ BigWebThing is a computer system for creating documents and sharing them over th
         32 bytes: sender
         32 bytes: first part of KK1
         48 bytes: KK2
-    182 bytes: KK transport
+    181 bytes: KK transport
         1 byte: 2
         4 bytes: timestamp
         32 bytes: recipient
         32 bytes: sender
         32 bytes: first part of KK1
-        80 bytes: encrypted
+        32 bytes: blob ID
+        48 bytes: encrypted
             16 bytes: crypto overhead
-            32 bytes: blob ID
             32 bytes: symmetric key for blob
     <= 15982 bytes: blob
         1 byte: 3
         4 bytes: timestamp
         32 bytes: author
         32 bytes: blob ID
-        15913 bytes: encrypted
-            8 bytes: nonce
+        4 bytes: blob counter
+        15909 bytes: encrypted
+            24 bytes: nonce
             16 bytes: auth tag
-            15889 bytes: encrypted
-                15889 bytes: not the final chunk
+            <= 15869 bytes: encrypted
+                15869 bytes: not the final chunk
                     1 byte: 0
-                    32 bytes: ID of next blob
-                    15856 bytes: the chunk
-                <= 15889 bytes: final chunk
+                    15868 bytes: the chunk
+                <= 15869 bytes: final chunk
                     1 byte: 1
-                    32 bytes: hash of whole file
-                    <=15856 bytes: the chunk
+                    <=15868 bytes: the chunk
     69 bytes: add/remove contact
         1 byte: 4/5 
         4 bytes: timestamp
@@ -62,10 +61,11 @@ BigWebThing is a computer system for creating documents and sharing them over th
         1 byte: 8
         4 bytes: timestamp
         32 bytes: their ID
-    37 bytes: get blob
+    41 bytes: get blob
         1 byte: 9
         4 bytes: timestamp
         32 bytes: blob ID
+        4 bytes: blob counter
     37 bytes: get blob requests of
         1 byte: 10
         4 bytes: timestamp
@@ -84,13 +84,12 @@ One of:
 
 # Client cache
 
-[]statickeys
+static keys
     32 bytes: public key
     32 bytes: secret key
 
 []session
-    32 bytes: secret ephemeral key
-    32 bytes: their ID
+    56 bytes: seed for random number generator
     32 bytes: session ID
     1 byte: 0 for TX, 1 for RX
 
