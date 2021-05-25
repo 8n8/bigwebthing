@@ -32,7 +32,7 @@ BigWebThing is a computer system for creating documents and sharing them over th
         32 bytes: author
         32 bytes: blob ID
         4 bytes: blob counter
-        15909 bytes: encrypted
+        <= 15909 bytes: encrypted
             24 bytes: nonce
             16 bytes: auth tag
             <= 15869 bytes: encrypted
@@ -57,18 +57,16 @@ BigWebThing is a computer system for creating documents and sharing them over th
         4 bytes: timestamp
         32 bytes: author
         4 bytes: size
-    37 bytes: get public data of
+    37 bytes: get data of
         1 byte: 8
         4 bytes: timestamp
         32 bytes: their ID
-    41 bytes: get blob
+    37 bytes: get blob
         1 byte: 9
         4 bytes: timestamp
         32 bytes: blob ID
-        4 bytes: blob counter
     37 bytes: get blob requests of
         1 byte: 10
-        4 bytes: timestamp
         32 bytes: blob ID
 
 # Plain-text message format
