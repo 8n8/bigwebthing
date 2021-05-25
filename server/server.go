@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"fmt"
 	"crypto/rand"
+	"net"
 )
 
 var go_ = make(chan func())
@@ -28,6 +29,8 @@ func initState() State {
 type State struct {
 	staticKeys MaybeStaticKeys
 	messages Messages
+	tcpListener net.Listener
+	conns map[net.Addr]Conn
 }
 
 type MaybeStaticKeys interface {
@@ -161,7 +164,69 @@ func (r RawMessagesFile) pure(state *State) Out {
 		return Panic("corrupted messages file: " + err.Error())
 	}
 
-	return MemCacheMessages(parsed)
+	return Outs([]Out{
+		MemCacheMessages(parsed),
+		StartTcpServer{},
+	})
+}
+
+type StartTcpServer struct{}
+
+func (StartTcpServer) io(*State) {
+	listener, err := net.Listen("tcp", ":4040")
+	in <- TcpListener{listener, err}
+}
+
+type TcpListener struct {
+	listener net.Listener
+	err error
+}
+
+func (t TcpListener) pure(state *State) Out {
+	if t.err != nil {
+		return Panic(t.err.Error())
+	}
+
+	return Outs([]Out{
+		ListenForConn{t.listener},
+		MemCacheListener{t.listener},
+	})
+}
+
+type MemCacheListener struct {
+	listener net.Listener
+}
+
+func (m MemCacheListener) io(state *State) {
+	state.tcpListener = m.listener
+}
+
+type ListenForConn struct {
+	listener net.Listener
+}
+
+func (l ListenForConn) io(*State) {
+	go_ <- func() {
+		conn, err := l.listener.Accept()
+		in <- TcpConn{conn, err, time.Now()}
+	}
+}
+
+type TcpConn struct {
+	conn net.Conn
+	err error
+	t time.Time
+}
+
+func (t TcpConn) pure(state *State) Out {
+	if t.err != nil {
+		return DoNothing{}
+	}
+
+	return Outs([]Out{
+		GetTimeForConn(t.conn.RemoteAddr()),
+		MemCacheConnAwaitingTime(t.conn),
+	})
 }
 
 const maxInt32 = 2147483647
