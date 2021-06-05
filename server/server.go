@@ -224,8 +224,8 @@ func (t TcpConn) pure(state *State) Out {
 	}
 
 	return Outs([]Out{
-		GetTimeForConn(t.conn.RemoteAddr()),
-		MemCacheConnAwaitingTime(t.conn),
+		MemCacheConnAwaitingXk1{t.conn},
+		ListenForConn{state.listener},
 	})
 }
 
