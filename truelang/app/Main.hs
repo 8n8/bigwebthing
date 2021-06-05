@@ -52,17 +52,12 @@ data Position
     deriving (Eq, Ord)
 
 
-data Access a
-    = Public a
-    | Private a
-    deriving (Eq, Ord)
-
-
 data V
-    = Map (M.Map W (Access W))
-    | MapLookupInner W W
-    | MapLookupOuter W W
+    = Map (M.Map W W)
+    | MapLookup W W
     | List [W]
+    | Function (Maybe Scope) W W
+    | FunctionCall W W
     | StringV T.Text
     | IntV Int
     | ReadFileV W
@@ -154,7 +149,7 @@ onCodeBytes state bytes =
             (state, Print $ pretty $ ParseErrorU err)
 
         Right w ->
-            case evaluate w of
+            case evaluate M.empty w of
             ErrorE err ->
                 (state, Print $ pretty $ SemanticErrorU err)
 
@@ -164,22 +159,16 @@ onCodeBytes state bytes =
 
 onFullyEvaluated state w =
     case valueW w of
-    Map _ ->
+    Function fscope param body ->
         let
-        key =
+        fcall =
             W
             { startW = RuntimeP
-            , valueW = StringV "action"
-            , endW = RuntimeP
-            }
-        lookup =
-            W
-            { startW = RuntimeP
-            , valueW = MapLookupOuter key w
+            , valueW = FunctionCall w testArg
             , endW = RuntimeP
             }
         in
-        case evaluate lookup of
+        case evaluate M.empty fcall of
             IoE ioe ->
                 (state, Print $ pretty $ BadInternal $ RemainingIo ioe)
 
@@ -206,64 +195,64 @@ testArg =
     }
 
 
-evaluate :: W -> Evaluated
-evaluate w =
+type Scope
+    = M.Map W W
+
+
+evaluate :: Scope -> W -> Evaluated
+evaluate scope w =
     case valueW w of
+
     Map m ->
-        evaluateMap w m
+        evaluateMap scope w m
+
+    MapLookup map_ key ->
+        evaluateMapLookup scope map_ key
 
     List ls ->
-        evaluateList w ls
+        evaluateList scope w ls
+
+    Function fscope param body ->
+        evaluateFunction w scope fscope param body
+
+    FunctionCall f arg ->
+        evaluateFunctionCall scope f arg
 
 
-evaluateMap :: W -> M.Map W (Access W) -> Evaluated
-evaluateMap context map_ =
-    evaluateMapHelp context (M.toList map_) M.empty
+evaluateFunction :: W -> Scope -> Maybe Scope -> W -> W -> Evaluated
+evaluateFunction context scope fscope param body =
+    case fscope of
+    Just _ ->
+        EvaluatedE context
+
+    Nothing ->
+        case evaluate scope param of
+        EvaluatedE paramE ->
+            EvaluatedE $
+            context { valueW = Function (Just scope) paramE body }
 
 
-evaluateMapHelp
-    :: W
-    -> [(W, Access W)]
-    -> M.Map W (Access W)
-    -> Evaluated
-evaluateMapHelp context old new =
+evaluateMap :: Scope -> W -> M.Map W W -> Evaluated
+evaluateMap scope mU map_ =
+    evaluateMapHelp scope mU (M.toList map_) M.empty
+
+
+evaluateMapHelp :: Scope -> W -> [(W, W)] -> M.Map W W -> Evaluated
+evaluateMapHelp scope mU old new =
     case old of
     [] ->
-        EvaluatedE $ context { valueW = Map new }
+        EvaluatedE $ mU { valueW = Map new }
 
-    (ku, Public vu):ld ->
-        case (evaluate ku, evaluate vu) of
-        (EvaluatedE ke, EvaluatedE ve) ->
-            evaluateMapHelp
-                context
-                ld
-                (M.insert ke (Public ve) new)
-
+    (ok, ov):ld ->
+        case (evaluate scope ok, evaluate scope ov) of
         (ErrorE err, _) ->
             ErrorE err
 
         (_, ErrorE err) ->
             ErrorE err
 
-        (IoE ioe, _) ->
-            IoE ioe
-
-        (_, IoE ioe) ->
-            IoE ioe
-
-    (ku, Private vu):ld ->
-        case (evaluate ku, evaluate vu) of
-        (EvaluatedE ke, EvaluatedE ve) ->
-            evaluateMapHelp
-                context
-                ld
-                (M.insert ke (Private ve) new)
-
-        (ErrorE err, _) ->
-            ErrorE err
-
-        (_, ErrorE err) ->
-            ErrorE err
+        (EvaluatedE okE, EvaluatedE okV) ->
+            evaluateMapHelp scope mU ld (M.insert okE okV new)
 
         (IoE ioe, _) ->
             IoE ioe
@@ -272,27 +261,84 @@ evaluateMapHelp context old new =
             IoE ioe
 
 
-evaluateList :: W -> [W] -> Evaluated
-evaluateList lsU ls =
-    evaluateListHelp lsU ls []
+evaluateList :: Scope -> W -> [W] -> Evaluated
+evaluateList scope lsU ls =
+    evaluateListHelp scope lsU ls []
 
 
-evaluateListHelp :: W -> [W] -> [W] -> Evaluated
-evaluateListHelp lsU old new =
+evaluateListHelp :: Scope -> W -> [W] -> [W] -> Evaluated
+evaluateListHelp scope lsU old new =
     case old of
     [] ->
         EvaluatedE $ lsU { valueW = List $ reverse new }
 
     o:ld ->
-        case evaluate o of
+        case evaluate scope o of
         EvaluatedE oE ->
-            evaluateListHelp lsU ld (oE : new)
+            evaluateListHelp scope lsU ld (oE : new)
 
         ErrorE err ->
             ErrorE err
 
         IoE ioe ->
             IoE ioe
+
+
+evaluateFunctionCall :: Scope -> W -> W -> Evaluated
+evaluateFunctionCall scope f argU =
+    case evaluate scope f of
+    EvaluatedE fE ->
+        case valueW fE of
+        Function (Just fscope) param body ->
+            case evaluate scope argU of
+            EvaluatedE argE ->
+                evaluate (M.insert param argE fscope) body
+
+            ErrorE err ->
+                ErrorE err
+
+            IoE ioe ->
+                IoE ioe
+
+        _ ->
+            ErrorE $ BadType fE AllFunctions
+
+    ErrorE err ->
+        ErrorE err
+
+    IoE ioe ->
+        IoE ioe
+
+
+evaluateMapLookup :: Scope -> W -> W -> Evaluated
+evaluateMapLookup scope map_ key =
+    case evaluate scope map_ of
+    ErrorE err ->
+        ErrorE err
+
+    IoE ioe ->
+        IoE ioe
+
+    EvaluatedE mapE ->
+        case evaluate scope key of
+        ErrorE err ->
+            ErrorE err
+
+        IoE ioe ->
+            IoE ioe
+
+        EvaluatedE keyE ->
+            case valueW mapE of
+            Map mapVal ->
+                case M.lookup keyE mapVal of
+                Nothing ->
+                    ErrorE $ NoSuchName keyE
+
+                Just value ->
+                    EvaluatedE value
+
+            _ ->
+                ErrorE $ NotAMap mapE
 
 
 data Evaluated
