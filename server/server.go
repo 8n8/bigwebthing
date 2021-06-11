@@ -7,12 +7,15 @@ import (
 	"net"
 	"sync"
 	"os"
-	"io"
+	"database/sql"
+	_ "github.com/mattn/go-sqlite3"
+	"time"
+	"errors"
 )
 
 func main() {
 	staticKeys := getStaticKeys()
-	messages := getMessagesFromDisk()
+	db := setupDb()
 	var lock sync.Mutex
 
 	listener, err := net.Listen("tcp", ":4040")
@@ -25,29 +28,308 @@ func main() {
 		if err != nil {
 			continue
 		}
-		go handleConnection(conn, &messages, &lock, &staticKeys)
+		go handleConnection(conn, db, &lock, staticKeys)
 	}
 }
 
-func getMessagesFromDisk() Messages {
-	var messages Messages
-	f, err := os.Open(messagesPath)
-	if os.IsNotExist(err) {
-		return messages
+func noiseConfig(staticKeys noise.DHKey) noise.Config {
+	return noise.Config{
+		CipherSuite: noise.NewCipherSuite(
+			noise.DH25519,
+			noise.CipherChaChaPoly,
+			noise.HashBLAKE2s),
+		Pattern: noise.HandshakeXK,
+		Initiator: false,
+		StaticKeypair: staticKeys,
 	}
+}
+
+func makeHandshakeState(
+	staticKeys noise.DHKey) *noise.HandshakeState {
+
+	config := noiseConfig(staticKeys)
+	handshake, err := noise.NewHandshakeState(config)
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
+	return handshake
+}
 
-	for parseMessageDisk(f, &messages) {}
+type CryptoState struct {
+	receive *noise.CipherState
+	send *noise.CipherState
+	theirId []byte
+}
 
-	return messages
+const tcpDeadline = 5 * time.Second
+
+func readXk1(conn net.Conn, handshake *noise.HandshakeState) error {
+	err := conn.SetDeadline(time.Now().Add(tcpDeadline))
+	if err != nil {
+		return err
+	}
+
+	xk1 := make([]byte, xk1len)
+	n, err := conn.Read(xk1)
+	if err != nil {
+		return err
+	}
+	if n != xk1len {
+		return errors.New("XK1 too short")
+	}
+
+	_, _, _, err = handshake.ReadMessage([]byte{}, xk1)
+	return err
+}
+
+func sendXk2(conn net.Conn, handshake *noise.HandshakeState) error {
+	err := conn.SetDeadline(time.Now().Add(tcpDeadline))
+	if err != nil {
+		return err
+	}
+
+	xk2, _, _, err := handshake.WriteMessage([]byte{}, []byte{})
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write(xk2)
+	return err
+}
+
+func readXk3(
+	conn net.Conn,
+	handshake *noise.HandshakeState) (CryptoState, error) {
+
+	var s CryptoState
+
+	err := conn.SetDeadline(time.Now().Add(tcpDeadline))
+	if err != nil {
+		return s, err
+	}
+
+	xk3 := make([]byte, xk3len)
+	n, err := conn.Read(xk3)
+	if err != nil {
+		return s, err
+	}
+	if n != xk3len {
+		return s, errors.New("XK3 too short")
+	}
+
+	_, s.send, s.receive, err = handshake.ReadMessage(
+		[]byte{},
+		xk3)
+	if err != nil {
+		return s, err
+	}
+
+	s.theirId = handshake.PeerStatic()
+	return s, nil
+}
+
+func doHandshake(
+	conn net.Conn,
+	staticKeys noise.DHKey) (CryptoState, error) {
+
+	handshake := makeHandshakeState(staticKeys)
+
+	var s CryptoState
+
+	err := readXk1(conn, handshake)
+	if err != nil {
+		return s, err
+	}
+
+	err = sendXk2(conn, handshake)
+	if err != nil {
+		return s, err
+	}
+
+	s, err = readXk3(conn, handshake)
+	if err != nil {
+		return s, err
+	}
+
+	return s, nil
+}
+
+const getKk1sFromOthersSql = `
+SELECT timestamp, recipient, sender, kk1
+FROM kk1
+WHERE recipient=?;
+`
+
+func sendThemKk1sFromOthers(
+	s CryptoState,
+	conn net.Conn,
+	db *sql.DB,
+	lock *sync.Mutex) error {
+
+	rows, err := db.Query(getKk1sFromOthersSql, s.theirId)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	lock.Lock()
+	defer lock.Unlock()
+	for rows.Next() {
+		var (
+			timestamp uint32
+			recipient []byte
+			sender []byte
+			kk1 []byte
+		)
+		err = rows.Scan(&timestamp, &recipient, &sender, &kk1)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func sendThemTheirStuff(
+	s CryptoState,
+	conn net.Conn,
+	db *sql.DB,
+	lock *sync.Mutex) error {
+
+	err := sendThemKk1sFromOthers(s, conn, db, lock)
+	if err != nil {
+		return err
+	}
+}
+
+func handleConnection(
+	conn net.Conn,
+	db *sql.DB,
+	lock *sync.Mutex,
+	staticKeys noise.DHKey) {
+
+	defer conn.Close()
+
+	s, err := doHandshake(conn, staticKeys)
+	if err != nil {
+		return
+	}
+
+	if sendThemTheirStuff(s, conn, db, lock) != nil {
+		return
+	}
+
+	for {
+		if respondToRequest(s, conn, db, lock) != nil {
+			return
+		}
+	}
+}
+
+const createKk1Table = `
+CREATE TABLE IF NOT EXISTS kk1 (
+	timestamp INTEGER NOT NULL,
+	recipient BLOB NOT NULL,
+	sender BLOB NOT NULL,
+	kk1 BLOB UNIQUE NOT NULL
+);
+`
+
+const createKk2Table = `
+CREATE TABLE IF NOT EXISTS kk2 (
+	timestamp INTEGER NOT NULL,
+	recipient BLOB NOT NULL,
+	sender BLOB NOT NULL,
+	sessionid BLOB UNIQUE NOT NULL,
+	kk2 BLOB UNIQUE NOT NULL
+);
+`
+
+const createKkTransportTable = `
+CREATE TABLE IF NOT EXISTS kktransport (
+	timestamp INTEGER NOT NULL,
+	recipient BLOB NOT NULL,
+	sender BLOB NOT NULL,
+	sessionid BLOB UNIQUE NOT NULL,
+	blobid BLOB NOT NULL,
+	kktransport BLOB UNIQUE NOT NULL
+);
+`
+
+const createBlobTable = `
+CREATE TABLE IF NOT EXISTS blob (
+	timestamp INTEGER NOT NULL,
+	author BLOB NOT NULL,
+	id BLOB NOT NULL,
+	counter INTEGER NOT NULL,
+	PRIMARY KEY (id, counter)
+);
+`
+
+const createAddContactTable = `
+CREATE TABLE IF NOT EXISTS addcontact (
+	timestamp INTEGER NOT NULL,
+	contacter BLOB NOT NULL,
+	contactee BLOB NOT NULL
+);
+`
+
+const createRemoveContactTable = `
+CREATE TABLE IF NOT EXISTS removecontact (
+	timestamp INTEGER NOT NULL,
+	contacter BLOB NOT NULL,
+	contactee BLOB NOT NULL
+);
+`
+
+const createPaymentTable = `
+CREATE TABLE IF NOT EXISTS payment (
+	timestamp INTEGER NOT NULL,
+	contacter BLOB NOT NULL,
+	contactee BLOB NOT NULL
+);
+`
+
+const createGetDataOfTable =`
+CREATE TABLE IF NOT EXISTS getdataof (
+	timestamp INTEGER NOT NULL,
+	theirid BLOB NOT NULL
+);
+`
+
+const createGetBlobTable = `
+CREATE TABLE IF NOT EXISTS getblob (
+	timestamp INTEGER NOT NULL,
+	id BLOB NOT NULL
+);
+`
+
+var createTables = []string{
+	createKk1Table,
+	createKk2Table,
+	createKkTransportTable,
+	createBlobTable,
+	createAddContactTable,
+	createRemoveContactTable,
+	createPaymentTable,
+	createGetDataOfTable,
+	createGetBlobTable,
+}
+
+func setupDb() *sql.DB {
+	db, err := sql.Open("sqlite3", "db.sqlite")
+	if err != nil {
+		panic(err)
+	}
+
+	for _, createTable := range createTables {
+		_, err = db.Exec(createTable)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return db
 }
 
 func getStaticKeys() noise.DHKey {
-	var keys noise.DHKey
-
 	raw, err := os.ReadFile(staticKeysPath)
 
 	if os.IsNotExist(err)  {
@@ -93,55 +375,6 @@ const messagesPath = "messages"
 
 const maxInt32 = 2147483647
 
-func initMessages() Messages {
-	return Messages {
-		kk1s: make(map[[idlen]byte]Kk1),
-		kk2s: make(map[[idlen]byte]Kk2),
-		kkTransports: make(map[[idlen]byte]KkTransport),
-		blobs: make(map[[idlen]byte]map[uint32]Blob),
-		addContact: make(map[Contact]uint32),
-		removeContact: make(map[Contact]uint32),
-		payment: make(map[[idlen]byte]Payment),
-		getDataOf: make(map[[idlen]byte]uint32),
-		getBlob: make(map[[idlen]byte]uint32),
-	}
-}
-
-func parseMessageDisk(f io.Reader, messages *Messages) bool {
-	return (
-		parseKk1Disk(f, messages) ||
-		parseKk2Disk(f, messages) ||
-		parseKkTransportDisk(f, messages) ||
-		parseBlobDisk(f, messages) ||
-		parseAddContactDisk(f, messages) ||
-		parseRemoveContactDisk(f, messages) ||
-		parseGetDataOfDisk(f, messages) ||
-		parseGetBlobDisk(f, messages))
-}
-
-func parseKk1Disk(f io.Reader, messages *Messages) bool {
-	indicator := make([]byte, 1)
-	n, err := f.Read(indicator)
-	if err != nil {
-		panic(err)
-	}
-	if n != 1 {
-		return false
-	}
-	if indicator[0] != 0 {
-		return false
-	}
-}
-
-func parseId(raw []byte, pos int) ([idlen]byte, int, error) {
-	var id [idlen]byte
-	if copy(id[:], raw[pos:]) < idlen {
-		return id, pos, fmt.Errorf("not enough bytes for user ID")
-	}
-	pos += idlen
-	return id, pos, nil
-}
-
 func intPow(base, power int) int {
 	result := 1
 	for p := 0; p < power; p++ {
@@ -167,15 +400,6 @@ func parseAmount(raw []byte, pos int) (uint32, int, error) {
 	return amount, pos+4, nil
 }
 
-func parseTimestamp(raw []byte, pos int) (uint32, int, error) {
-	if len(raw) < pos + 4 {
-		return 0, pos, fmt.Errorf("not enough bytes for timestamp")
-	}
-
-	timestamp := decodeUint32(raw[pos: pos+4])
-	return timestamp, pos+4, nil
-}
-
 func parseBlobCounter(raw []byte, pos int) (uint32, int, error) {
 	if len(raw) < pos + 4 {
 		return 0, pos, fmt.Errorf("not enough bytes for blob counter")
@@ -187,57 +411,10 @@ func parseBlobCounter(raw []byte, pos int) (uint32, int, error) {
 
 const (
 	idlen = 32
+	xk1len = 48
+	xk3len = 64
 	kk1len = 48
 	kk2len = 48
 	kktransportlen = 48
 	hashlen = 32
 )
-
-type Messages struct {
-	kk1s map[[idlen]byte]Kk1
-	kk2s map[[idlen]byte]Kk2
-	kkTransports map[[idlen]byte]KkTransport
-	blobs map[[idlen]byte]map[uint32]Blob
-	addContact map[Contact]uint32
-	removeContact map[Contact]uint32
-	payment map[[idlen]byte]Payment
-	getDataOf map[[idlen]byte]uint32
-	getBlob map[[idlen]byte]uint32
-}
-
-type Blob struct {
-	timestamp uint32
-	author [idlen]byte
-	hash [hashlen]byte
-}
-
-type Payment struct {
-	timestamp uint32
-	amount uint32
-}
-
-type Contact struct {
-	contacter [idlen]byte
-	contactee [idlen]byte
-}
-
-type KkTransport struct {
-	timestamp uint32
-	sender [idlen]byte
-	sessionId [idlen]byte
-	blobId [idlen]byte
-	kkTransport [kktransportlen]byte
-}
-
-type Kk2 struct {
-	timestamp uint32
-	sender [idlen]byte
-	sessionId [idlen]byte
-	kk2 [kk2len]byte
-}
-
-type Kk1 struct {
-	timestamp uint32
-	sender [idlen]byte
-	kk1 [kk1len]byte
-}
