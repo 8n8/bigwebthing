@@ -31,14 +31,14 @@ BigWebThing is a computer system for creating documents and sharing them over th
         4 bytes: timestamp
         32 bytes: blob ID
         1 byte: 1 for final chunk, 0 otherwise
-        8 bytes: blob counter, starting at 0
-        <= 15936 bytes: encrypted
+        4 bytes: blob counter, starting at 0
+        <= 15940 bytes: encrypted
             // the nonce is 24 bytes
             //      1 byte: 1 for final chunk, 0 otherwise
-            //      8 bytes: blob counter, starting at 0
+            //      4 bytes: blob counter, starting at 0
             //      19 bytes: zeros
             16 bytes: auth tag
-            <= 15920 bytes: chunk
+            <= 15924 bytes: chunk
     69 bytes: add/remove contact
         1 byte: 4/5 
         4 bytes: timestamp

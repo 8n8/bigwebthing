@@ -5,31 +5,214 @@ import (
 	"fmt"
 	"crypto/rand"
 	"net"
-	"sync"
 	"os"
-	"database/sql"
-	_ "github.com/mattn/go-sqlite3"
 	"time"
 	"errors"
+	"io/ioutil"
+	"database/sql"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
-	staticKeys := getStaticKeys()
+	keys := getStaticKeys()
 	db := setupDb()
-	var lock sync.Mutex
+	defer db.Close()
 
 	listener, err := net.Listen("tcp", ":4040")
 	if err != nil {
 		panic(err)
 	}
 
+	newSessions := make(chan Session)
+	go setupSessions(listener, keys, newSessions)
+
+	toSends := make(chan ToSend)
+	go sendOutMessages(toSends)
+
+	rawMessages := make(chan RawMessage)
+	sessions := make(map[string]Session)
+	for {
+		select {
+		case s := <-newSessions:
+			sessions[s.conn.RemoteAddr().String()] = s
+			go listenToConn(s.conn, rawMessages)
+			sendThemAllTheirStuff(s, db, toSends)
+
+		case raw := <-rawMessages:
+			respond(raw, sessions, db, toSends)
+		}
+	}
+}
+
+func sendOutMessages(toSends chan ToSend) {
+	for {
+		s <- toSends
+		go func() {
+			_, err := s.conn.Write(s.message)
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
+func respond(
+	raw []byte,
+	sessions map[string]Session,
+	db *sql.DB,
+	toSends chan ToSend) {
+
+
+}
+
+func setupSessions(
+	listener net.Listener,
+	keys noise.DHKey,
+	newSessions chan Session) {
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			continue
 		}
-		go handleConnection(conn, db, &lock, staticKeys)
+		go func() {
+			s, err := doHandshake(conn, keys)
+			if err != nil {
+				return
+			}
+			newSessions <- Session{
+				conn: conn,
+				receive: s.receive,
+				send: s.send,
+				theirId: s.theirId,
+			}
+		}()
 	}
+}
+
+func listenToConn(conn net.Conn, rawMessages chan RawMessage) {
+	for {
+		raw, err := readRaw(conn)
+		if err != nil {
+			return
+		}
+
+		rawMessages <- RawMessage{
+			conn: conn,
+			raw: raw,
+		}
+	}
+}
+
+type ToSend struct {
+	conn net.Conn
+	message []byte
+}
+
+const databasePath = "database.sqlite3"
+
+func setupDb() *sql.DB {
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, createTable := range createTables {
+		_, err = db.Exec(createTable)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return db
+}
+
+type Sender struct {
+	send *noise.CipherState
+	theirId []byte
+	conn net.Conn
+}
+
+func handleConn(
+	conn net.Conn,
+	keys noise.DHKey,
+	messages chan RawMessage,
+	senders chan Sender) {
+
+	s, err := doHandshake(conn, keys)
+	if err != nil {
+		return
+	}
+
+	senders <- Sender{
+		send: s.send,
+		theirId: s.theirId,
+		conn: conn,
+	}
+
+	for {
+		message, err := readRaw(conn)
+		if err != nil {
+			return
+		}
+
+		messages <- RawMessage{
+			conn: conn,
+			raw: message,
+		}
+	}
+}
+
+func readRaw(conn net.Conn) ([]byte, error) {
+	rawlen := make([]byte, 2)
+	n, err := conn.Read(rawlen)
+	if err != nil {
+		return []byte{}, err
+	}
+	if n != 2 {
+		return []byte{}, errors.New("not enough bytes for message length")
+	}
+
+	len_ := uint16(rawlen[0]) + uint16(rawlen[1]) * 256
+	if len_ > 15998 {
+		return []byte{}, errors.New("message length is greater than 15998 bytes")
+	}
+	message := make([]byte, len_)
+	n, err = conn.Read(message)
+	if err != nil {
+		return []byte{}, err
+	}
+	if n != int(len_) {
+		return []byte{}, errors.New("not enough bytes for message")
+	}
+
+	return message, nil
+}
+
+type RawMessage struct {
+	conn net.Conn
+	raw []byte
+}
+
+const messagesDir = "messages"
+
+func loadMessages() [][]byte {
+	fileInfos, err := ioutil.ReadDir(messagesDir)
+	if err != nil {
+		panic(err)
+	}
+
+	messages := make([][]byte, len(fileInfos))
+	for i, fileInfo := range fileInfos {
+		path := messagesDir + "/" + fileInfo.Name()
+		message, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		messages[i] = message
+	}
+
+	return messages
 }
 
 func noiseConfig(staticKeys noise.DHKey) noise.Config {
@@ -55,10 +238,18 @@ func makeHandshakeState(
 	return handshake
 }
 
-type CryptoState struct {
+type Session struct {
+	conn net.Conn
 	receive *noise.CipherState
 	send *noise.CipherState
 	theirId []byte
+}
+
+func send(s ToSend) {
+	_, err := s.conn.Write(s.message)
+	if err != nil {
+		s.conn.Close()
+	}
 }
 
 const tcpDeadline = 5 * time.Second
@@ -97,6 +288,12 @@ func sendXk2(conn net.Conn, handshake *noise.HandshakeState) error {
 	return err
 }
 
+type CryptoState struct {
+	send *noise.CipherState
+	receive *noise.CipherState
+	theirId []byte
+}
+
 func readXk3(
 	conn net.Conn,
 	handshake *noise.HandshakeState) (CryptoState, error) {
@@ -130,7 +327,9 @@ func readXk3(
 
 func doHandshake(
 	conn net.Conn,
-	staticKeys noise.DHKey) (CryptoState, error) {
+	staticKeys noise.DHKey) (
+	CryptoState,
+	error) {
 
 	handshake := makeHandshakeState(staticKeys)
 
@@ -159,70 +358,6 @@ SELECT timestamp, recipient, sender, kk1
 FROM kk1
 WHERE recipient=?;
 `
-
-func sendThemKk1sFromOthers(
-	s CryptoState,
-	conn net.Conn,
-	db *sql.DB,
-	lock *sync.Mutex) error {
-
-	rows, err := db.Query(getKk1sFromOthersSql, s.theirId)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	lock.Lock()
-	defer lock.Unlock()
-	for rows.Next() {
-		var (
-			timestamp uint32
-			recipient []byte
-			sender []byte
-			kk1 []byte
-		)
-		err = rows.Scan(&timestamp, &recipient, &sender, &kk1)
-		if err != nil {
-			return err
-		}
-	}
-}
-
-func sendThemTheirStuff(
-	s CryptoState,
-	conn net.Conn,
-	db *sql.DB,
-	lock *sync.Mutex) error {
-
-	err := sendThemKk1sFromOthers(s, conn, db, lock)
-	if err != nil {
-		return err
-	}
-}
-
-func handleConnection(
-	conn net.Conn,
-	db *sql.DB,
-	lock *sync.Mutex,
-	staticKeys noise.DHKey) {
-
-	defer conn.Close()
-
-	s, err := doHandshake(conn, staticKeys)
-	if err != nil {
-		return
-	}
-
-	if sendThemTheirStuff(s, conn, db, lock) != nil {
-		return
-	}
-
-	for {
-		if respondToRequest(s, conn, db, lock) != nil {
-			return
-		}
-	}
-}
 
 const createKk1Table = `
 CREATE TABLE IF NOT EXISTS kk1 (
@@ -314,43 +449,28 @@ var createTables = []string{
 	createGetBlobTable,
 }
 
-func setupDb() *sql.DB {
-	db, err := sql.Open("sqlite3", "db.sqlite")
-	if err != nil {
-		panic(err)
-	}
-
-	for _, createTable := range createTables {
-		_, err = db.Exec(createTable)
-		if err != nil {
-			panic(err)
-		}
-	}
-	return db
-}
-
 func getStaticKeys() noise.DHKey {
 	raw, err := os.ReadFile(staticKeysPath)
-
-	if os.IsNotExist(err)  {
-		keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
-		if err != nil {
-			panic(err)
+	if err == nil {
+		return noise.DHKey{
+			Public: raw[:dhlen],
+			Private: raw[dhlen: dhlen*2],
 		}
-		err = os.WriteFile(staticKeysPath, encodeKeys(keys), 0400)
-		if err != nil {
-			panic(err)
-		}
-		return keys
 	}
 
+	if !os.IsNotExist(err) {
+		panic(err)
+	}
+
+	keys, err := noise.DH25519.GenerateKeypair(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
-	return noise.DHKey{
-		Public: raw[:dhlen],
-		Private: raw[dhlen: dhlen*2],
+	err = os.WriteFile(staticKeysPath, encodeKeys(keys), 0400)
+	if err != nil {
+		panic(err)
 	}
+	return keys
 }
 
 func encodeKeys(keys noise.DHKey) []byte {
