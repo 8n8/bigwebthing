@@ -1,6 +1,6 @@
 BigWebThing is a computer system for creating documents and sharing them over the internet.
 
-# Encrypted message format
+# Message format
 
 <= 15982 bytes: one of
     117 bytes: KK1
@@ -49,20 +49,25 @@ BigWebThing is a computer system for creating documents and sharing them over th
         4 bytes: timestamp
         4 bytes: amount in pence
         32 bytes: payer
-    41 bytes: someone else's blob
+    78 bytes: someone else's blob
         1 byte: 7
         4 bytes: timestamp
         32 bytes: author
+	32 bytes: blob ID
+	1 byte: final chunk
+	4 bytes: counter
         4 bytes: size
-    37 bytes: get data of
+    69 bytes: get data of
         1 byte: 8
-        4 bytes: timestamp
+	4 bytes: timestamp
+	32 bytes: asker
         32 bytes: their ID
-    37 bytes: get blob
+    69 bytes: get blob
         1 byte: 9
         4 bytes: timestamp
+	32 bytes: asker ID
         32 bytes: blob ID
-    37 bytes: get blob requests of
+    33 bytes: get blob requests of
         1 byte: 10
         32 bytes: blob ID
 
