@@ -1,3 +1,4 @@
 *.sw*
 truelang/.stack-work/
 truelang/truelang.cabal
+client/frontend/elm-stuff/

@@ -131,7 +131,46 @@ A database table for each type of message.
     <= 15982 bytes
         encrypted message
 
-# API between client backend and frontend
+# JSON API between client backend and frontend
+
+WASM to compile
+    1 byte: 0
+    4 bytes: WASM cache ID
+    4 bytes: size of WASM
+    size bytes: WASM
+Input for WASM
+    1 byte: 1
+    4 bytes: WASM cache ID
+    4 bytes: size of input
+    size bytes: input
+Output from WASM
+    1 byte: 2
+    4 bytes: WASM cache ID
+    4 bytes: size of output
+    size bytes: output
+Bad WASM
+    1 byte: 3
+    4 bytes: WASM cache ID
+New GUI
+    1 byte: 4
+    4 bytes: box size
+    size bytes: UTF8 string
+    many of one of
+        text
+            1 byte: 0
+            4 bytes: size
+            size bytes: UTF8 string
+        image
+            1 byte: 1
+            4 bytes: image URL size
+            size bytes: image URL
+            4 bytes: alt size
+            size bytes: alt text
+New box
+    1 byte: 5
+    4 bytes: box size
+    size bytes: UTF8 string
+
 
 The backend provides URLs for images, movies, and other files as needed, and sends a new UI description whenever it changes.
 
