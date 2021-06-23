@@ -136,16 +136,16 @@ A database table for each type of message.
 WASM to compile
     1 byte: 0
     4 bytes: WASM cache ID
-    4 bytes: size of WASM
-    size bytes: WASM
+    WASM
 Input for WASM
     1 byte: 1
     4 bytes: WASM cache ID
-    4 bytes: size of input
     size bytes: input
 Output from WASM
     1 byte: 2
     4 bytes: WASM cache ID
+    4 bytes: size of input
+    size bytes: input
     4 bytes: size of output
     size bytes: output
 Bad WASM
@@ -162,9 +162,15 @@ New GUI
             size bytes: UTF8 string
         image
             1 byte: 1
-            4 bytes: image URL size
+            2 bytes: image URL size
             size bytes: image URL
-            4 bytes: alt size
+            2 bytes: alt size
+            size bytes: alt text
+        video
+            1 byte: 2
+            2 bytes: video URL size
+            size bytes: video URL
+            2 bytes: alt size
             size bytes: alt text
 New box
     1 byte: 5

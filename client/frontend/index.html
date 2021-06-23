@@ -1,12 +1,222 @@
-<!DOCTYPE HTML>
+<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <title>BigWebThing</title>
-  <script type="text/javascript" src="elm.js"></script>
+<title>BigWebThing</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href=/static/fonts/ptmono.css>
+<style>
+#mainbox {
+    display: flex;
+    flex-direction: column;
+}
+
+#searchbox {
+    resize: none;
+    white-space: pre;
+}
+</style>
 </head>
 <body>
-  <div id="elmapp"></div>
+<div id="mainbox">
+<label for=#searchbox>Type your commands in this box, using the instructions below</label>
+<textarea id="searchbox" rows=1></textarea>
+</div>
+<script>
+(function() {
+    const textarea = document.getElementById("searchbox")
+    textarea.oninput = function() {
+        textarea.rows = numRows(textarea.value)
+    }
+})()
+
+function numRows(s) {
+    let n = 1
+    for (let i = 0; i < s.length; i++) {
+        if (s[i] === "\n") {
+            n++
+        }
+    }
+    return n
+}
+
+const socketUrl =
+    "ws://localhost:3333" + window.location.pathname + "/websocket"
+const socket = new WebSocket(socketUrl)
+
+
+const wasms = {}
+
+
+socket.addEventListener("message", onWebsocketEvent)
+
+
+function onWebsocketEvent(event) {
+    switch (event.data[0]) {
+    case 0:
+        wasmToCompile(event.data.slice(1))
+        return
+
+    case 1:
+        inputForWasm(event.data.slice(1))
+        return
+
+    case 2:
+        newGui(event.data.slice(1))
+    }
+}
+
+
+function newGui(message) {
+    const g = parseGui(message)
+}
+
+
+function parseGui(message) {
+    const g = []    
+
+    for (let i = 0; i < message.length;) {
+        i = parseText(message, g, i)
+        i = parseImage(message, g, i)
+        i = parseVideo(message, g, i)
+    }
+
+    return g
+}
+
+
+function parseUrlAlt(message, i) {
+    const urlLen = decodeUint32(message.slice(i, i+4))
+    i += 4
+
+    const url = new TextDecoder().decode(message.slice(i, i+urlLen))
+    i += urlLen
+
+    const altLen = decodeUint32(message.slice(i, i+4))
+    i += 4
+
+    const alt = new TextDecoder().decode(message.slice(i, i+altLen))
+    i += altLen
+
+    return [i, {url: url, alt: alt}]
+}
+
+
+function parseImage(message, g, i) {
+    if (message[i] !== 1) {
+        return i
+    }
+    i++
+
+    let urlAlt
+    [i, urlAlt] = parseUrlAlt(message, i)
+
+    g.push({type_: "image", value_: urlAlt})
+
+    return i
+}
+
+
+function parseVideo(message, g, i) {
+    if (message[i] !== 2) {
+        return i
+    }
+    i++
+
+    let urlAlt
+    [i, urlAlt] = parseUrlAlt(message, i)
+
+    g.push({type_: "video", value_: urlAlt})
+
+    return i
+}
+
+
+function parseText(message, g, i) {
+    if (message[i] !== 0) {
+        return i
+    }
+    i++
+
+    const textLen = decodeUint32(message.slice(i, i+4))
+    i += 4
+
+    const s = new TextDecoder().decode(message.slice(i, i+textLen))
+    i += textLen
+
+    g.push({type_: "text", value_: s})
+    
+    return i
+}
+
+
+function inputForWasm(message) {
+    const i = parseInputForWasm(message)
+
+    const output = wasms[i.cacheId](w.input)
+
+    socket.send(wasmOutput(i.cacheId, i.input, output))
+}
+
+
+function wasmOutput(cacheId, input, output) {
+    const enc = Uint8Array(4 + 4 + input.length + 4 + output.length)
+
+    let i = 0
+
+    copy(enc, encodeUint32(cacheId), i)
+    i += 4
+
+    copy(enc, encodeUint32(input.length), i)
+    i += 4
+
+    copy(enc, input, i)
+    i += input.length
+
+    copy(enc, encodeUint32(output.length), i)
+    i += 4
+
+    copy(enc, output, i)
+
+    return enc
+}
+
+
+function copy(into, from, i) {
+    for (let j = 0; j < from.length; j++) {
+        into[i+j] = from[j]
+    }
+}
+
+
+function parseInputForWasm(message) {
+    return {
+        cacheId: decodeUint32(message.slice(0, 4)),
+        input: message.slice(4) }
+}
+
+
+function wasmToCompile(message) {
+    const w = parseWasmToCompile(message)
+    
+    Webassembly.instantiate(w.wasm, {})
+    .then(function(_, funs) {
+        if (funs.bigwebthing === null) {
+            socket.send(badWasm())
+        }
+        wasms[w.cacheId] = funs.bigwebthing
+    })
+    .catch(function(err) {
+        socket.send(badWasm())
+    })
+}
+
+
+function parseWasmToCompile(raw) {
+    return {
+        cacheId: decodeUint32(raw.slice(0, 4)),
+        wasm: raw.slice(4)}
+}
+</script>
 </body>
-  <script type="text/javascript" src="interop.js"></script>
 </html>
