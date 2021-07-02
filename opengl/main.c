@@ -7,19 +7,28 @@
 // Shader sources
 const GLchar* vertexSource = 
 "#version 150 core\n"
+"\n"
 "in vec2 position;\n"
+"in vec3 color;\n"
+"\n"
+"out vec3 Color;\n"
+"\n"
 "void main()\n"
 "{\n"
+"	Color = color;\n"
 "	gl_Position = vec4(position, 0.0, 1.0);\n"
 "}";
 
 const GLchar* fragmentSource = 
 "#version 150 core\n"
-"uniform vec3 triangleColor;"
+"\n"
+"in vec3 Color;\n"
+"\n"
 "out vec4 outColor;\n"
+"\n"
 "void main()\n"
 "{\n"
-"	outColor = vec4(triangleColor, 1.0);\n"
+"	outColor = vec4(Color, 1.0);\n"
 "}";
 
 int main() {
@@ -30,7 +39,7 @@ int main() {
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-	glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+	glfwWindowHint(GLFW_RESIZABLE, GL_TRUE);
 
 	GLFWwindow* window = glfwCreateWindow(800, 600, "OpenGL", NULL, NULL);
 
@@ -47,9 +56,9 @@ int main() {
 	glGenBuffers(1, &vbo);
 	
 	GLfloat vertices[] = {
-		0.0f, 0.5f,
-		0.5f, -0.5f,
-		-0.5f, -0.5f
+        0.0f, 0.5f, 1.0f, 0.0f, 0.0f,
+        0.5f, -0.5f, 0.0f, 1.0f, 0.0f,
+        -0.5f, -0.5f, 0.0f, 0.0f, 1.0f
 	};
 	
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -93,7 +102,13 @@ int main() {
 	// Specify the layout of the vertex data
 	GLint posAttrib = glGetAttribLocation(shaderProgram, "position");
 	glEnableVertexAttribArray(posAttrib);
-	glVertexAttribPointer(posAttrib, 2, GL_FLOAT, GL_FALSE, 0, 0);
+	glVertexAttribPointer(posAttrib, 2, GL_FLOAT, GL_FALSE, 5*sizeof(float), 0);
+
+	GLint colAttrib = glGetAttribLocation(shaderProgram, "color");
+	glEnableVertexAttribArray(colAttrib);
+	glVertexAttribPointer(
+		colAttrib, 3, GL_FLOAT, GL_FALSE, 5*sizeof(float),
+		(void*)(2*sizeof(float)));
 
 	err = glGetError();
 	if (err != GL_NO_ERROR) {
@@ -101,14 +116,7 @@ int main() {
 		return err;
 	}
 
-    GLint uniColor = glGetUniformLocation(shaderProgram, "triangleColor");
-    glUniform3f(uniColor, 1.0f, 0.0f, 0.0f);
-
-    int counter = 0;
-
 	while (!glfwWindowShouldClose(window)) {
-        glUniform3f(uniColor, (sin(counter / 20.0f) + 1.0f) / 2.0f, 0.0f, 0.0f);
-        counter++;
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glDrawArrays(GL_TRIANGLES, 0, 3);
