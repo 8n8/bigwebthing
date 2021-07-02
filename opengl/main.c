@@ -2,6 +2,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <stdio.h>
+#include <math.h>
 
 // Shader sources
 const GLchar* vertexSource = 
@@ -14,10 +15,11 @@ const GLchar* vertexSource =
 
 const GLchar* fragmentSource = 
 "#version 150 core\n"
+"uniform vec3 triangleColor;"
 "out vec4 outColor;\n"
 "void main()\n"
 "{\n"
-"	outColor = vec4(1.0, 1.0, 1.0, 1.0);\n"
+"	outColor = vec4(triangleColor, 1.0);\n"
 "}";
 
 int main() {
@@ -99,7 +101,14 @@ int main() {
 		return err;
 	}
 
+    GLint uniColor = glGetUniformLocation(shaderProgram, "triangleColor");
+    glUniform3f(uniColor, 1.0f, 0.0f, 0.0f);
+
+    int counter = 0;
+
 	while (!glfwWindowShouldClose(window)) {
+        glUniform3f(uniColor, (sin(counter / 20.0f) + 1.0f) / 2.0f, 0.0f, 0.0f);
+        counter++;
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glDrawArrays(GL_TRIANGLES, 0, 3);
