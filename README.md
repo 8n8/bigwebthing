@@ -1,75 +1,78 @@
 BigWebThing is a computer system for creating documents and sharing them over the internet.
 
-# Message format
+# Inner message format
 
 <= 15982 bytes: one of
-    117 bytes: KK1
-        1 byte: 0
-        4 bytes: timestamp
-        32 bytes: recipient
-        32 bytes: sender
-        48 bytes: KK1
-    149 bytes: KK2    
-        1 byte: 1
-        4 bytes: timestamp
-        32 bytes: recipient
-        32 bytes: sender
-        32 bytes: first part of KK1
-        48 bytes: KK2
-    181 bytes: KK transport
-        1 byte: 2
-        4 bytes: timestamp
-        32 bytes: recipient
-        32 bytes: sender
-        32 bytes: first part of KK1
-        32 bytes: blob ID
-        48 bytes: encrypted
-            16 bytes: crypto overhead
-            32 bytes: symmetric key for blob
-    <= 15982 bytes: blob
-        1 byte: 3
-        4 bytes: timestamp
-        32 bytes: blob ID
-        1 byte: 1 for final chunk, 0 otherwise
-        4 bytes: blob counter, starting at 0
-        <= 15940 bytes: encrypted
-            // the nonce is 24 bytes
-            //      1 byte: 1 for final chunk, 0 otherwise
-            //      4 bytes: blob counter, starting at 0
-            //      19 bytes: zeros
-            16 bytes: auth tag
-            <= 15924 bytes: chunk
-    69 bytes: add/remove contact
-        1 byte: 4/5 
-        4 bytes: timestamp
-        32 bytes: contacter
-        32 bytes: contactee
-    41 bytes: payment
-        1 byte: 6
-        4 bytes: timestamp
-        4 bytes: amount in pence
-        32 bytes: payer
-    78 bytes: someone else's blob
-        1 byte: 7
-        4 bytes: timestamp
-        32 bytes: author
-	32 bytes: blob ID
-	1 byte: final chunk
-	4 bytes: counter
-        4 bytes: size
-    69 bytes: get data of
-        1 byte: 8
-	4 bytes: timestamp
-	32 bytes: asker
-        32 bytes: their ID
-    69 bytes: get blob
-        1 byte: 9
-        4 bytes: timestamp
-	32 bytes: asker ID
-        32 bytes: blob ID
-    33 bytes: get blob requests of
-        1 byte: 10
-        32 bytes: blob ID
+    1 byte: 1 for final message, 0 otherwise
+    a sequence of:
+        117 bytes: KK1
+            1 byte: 0
+            4 bytes: timestamp
+            32 bytes: recipient
+            32 bytes: sender
+            48 bytes: KK1
+        149 bytes: KK2    
+            1 byte: 1
+            4 bytes: timestamp
+            32 bytes: recipient
+            32 bytes: sender
+            32 bytes: first part of KK1
+            48 bytes: KK2
+        181 bytes: KK transport
+            1 byte: 2
+            4 bytes: timestamp
+            32 bytes: recipient
+            32 bytes: sender
+            32 bytes: first part of KK1
+            32 bytes: blob ID
+            48 bytes: encrypted
+                16 bytes: crypto overhead
+                32 bytes: symmetric key for blob
+        <= 15981 bytes: blob
+            1 byte: 3
+            4 bytes: timestamp
+            32 bytes: blob ID
+            1 byte: 1 for final chunk, 0 otherwise
+            4 bytes: blob counter, starting at 0
+            2 bytes: size of encrypted, max 15937
+            <= 15937 bytes: encrypted
+                // the nonce is 24 bytes
+                //      1 byte: 1 for final chunk, 0 otherwise
+                //      4 bytes: blob counter, starting at 0
+                //      19 bytes: zeros
+                16 bytes: auth tag
+                <= 15921 bytes: chunk
+        69 bytes: add/remove contact
+            1 byte: 4/5 
+            4 bytes: timestamp
+            32 bytes: contacter
+            32 bytes: contactee
+        41 bytes: payment
+            1 byte: 6
+            4 bytes: timestamp
+            4 bytes: amount in pence
+            32 bytes: payer
+        78 bytes: someone else's blob
+            1 byte: 7
+            4 bytes: timestamp
+            32 bytes: author
+            32 bytes: blob ID
+            1 byte: final chunk
+            4 bytes: counter
+            4 bytes: size
+        69 bytes: get data of
+            1 byte: 8
+            4 bytes: timestamp
+            32 bytes: asker
+            32 bytes: their ID
+        69 bytes: get blob
+            1 byte: 9
+            4 bytes: timestamp
+	    32 bytes: asker ID
+            32 bytes: blob ID
+        33 bytes: get blob requests of
+            1 byte: 10
+            32 bytes: blob ID
 
 # Plain-text message format
 
