@@ -2362,8 +2362,8 @@ func getStaticKeys() noise.DHKey {
 	raw, err := os.ReadFile(staticKeysPath)
 	if err == nil {
 		return noise.DHKey{
-			Public:  raw[:dhlen],
-			Private: raw[dhlen : dhlen*2],
+			Private: raw[:dhlen],
+			Public:  raw[dhlen:],
 		}
 	}
 
@@ -2384,8 +2384,8 @@ func getStaticKeys() noise.DHKey {
 
 func encodeKeys(keys noise.DHKey) []byte {
 	encoded := make([]byte, 2*dhlen)
-	copy(encoded, keys.Public)
 	copy(encoded, keys.Private)
+	copy(encoded[dhlen:], keys.Public)
 	return encoded
 }
 
