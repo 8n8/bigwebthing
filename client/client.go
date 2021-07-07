@@ -204,6 +204,26 @@ func saveRemoveContact(localId string) error {
 const removeContactId = 5
 
 func Send(path string, recipient string) {
+	err := sendErr(path, recipient)
+	if err != nil {
+		fmt.Printf("%s", err)
+	}
+}
+
+func sendErr(path, recipient string) error {
+	staticKey := getStaticKey()
+
+	conn, err := net.Dial("tcp", serverUrl)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	var tx, rx *noise.CipherState
+	err = doHandshake(conn, staticKey, tx, rx)
+	if err != nil {
+		return err
+	}
 }
 
 func Open(messageId int) {
