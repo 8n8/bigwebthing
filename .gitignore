@@ -5,3 +5,4 @@ client/frontend/elm-stuff/
 a.out
 staticKeys
 *.sqlite3
+venv/
