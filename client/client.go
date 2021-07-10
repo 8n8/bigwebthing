@@ -1,16 +1,31 @@
 package main
 
 import (
-	"github.com/webview/webview"
+	"github.com/gotk3/gotk3/gtk"
 )
 
 func main() {
-	debug := true
-	w := webview.New(debug)
-	defer w.Destroy()
+	gtk.Init(nil)
+	win, err := gtk.WindowNew(gtk.WINDOW_TOPLEVEL)
+	if err != nil {
+		panic(err)
+	}
 
-	w.SetTitle("Does it bind any ports?")
-	w.SetSize(800, 600, webview.HintNone)
-	w.Navigate("https://bbc.co.uk")
-	w.Run()
+	win.SetTitle("Hello True")
+	win.Connect("destroy", func() {
+		gtk.MainQuit()
+	})
+
+	l, err := gtk.LabelNew("Hello there True!")
+	if err != nil {
+		panic(err)
+	}
+
+	win.Add(l)
+
+	win.SetDefaultSize(800, 600)
+
+	win.ShowAll()
+
+	gtk.Main()
 }
