@@ -78,7 +78,12 @@ These are the messages that flow around on the internet, through the server. The
 One of:
     app
         1 byte: 0
-        the app
+        4 bytes: size of WASM
+        sequence of zero or more files
+            1 byte: size of name of file
+            size bytes: UTF-8 name of file
+            5 bytes: size of file
+            size bytes: file
     data for app
         1 byte: 1
         32 bytes: hash of app
@@ -113,15 +118,22 @@ A database table for each type of message.
 
 # Client to server
 
-48 bytes: XK1 
+48 bytes: XX1 
 
-64 bytes: XK3
+64 bytes: XX3
 
 <=16KB: payload message
 
 # Server to client
 
-64 bytes: XK2
+148 bytes: XK2 and certificate
+    80 bytes: crypto overhead
+    4 bytes: expiry timestamp
+    64 bytes: signature of
+        4 bytes: expiry timestamp
+        32 bytes: server public static Noise key
+        16 bytes: additional data
+            2f 98 99 43 df 8b 74 e2 86 6b 62 19 40 03 4c cc 
 
 <=16KB: payload message
 
@@ -133,70 +145,3 @@ A database table for each type of message.
     <= 15982 bytes: encrypted
         1 byte: 1 for final chunk, 0 otherwise
         <= 15981 bytes: sequence of public messages
-
-# JSON API between client backend and frontend
-
-WASM to compile
-    1 byte: 0
-    4 bytes: WASM cache ID
-    WASM
-Input for WASM
-    1 byte: 1
-    4 bytes: WASM cache ID
-    size bytes: input
-Output from WASM
-    1 byte: 2
-    4 bytes: WASM cache ID
-    4 bytes: size of input
-    size bytes: input
-    4 bytes: size of output
-    size bytes: output
-Bad WASM
-    1 byte: 3
-    4 bytes: WASM cache ID
-New GUI
-    1 byte: 4
-    4 bytes: box size
-    size bytes: UTF8 string
-    many of one of
-        text
-            1 byte: 0
-            4 bytes: size
-            size bytes: UTF8 string
-        image
-            1 byte: 1
-            2 bytes: image URL size
-            size bytes: image URL
-            2 bytes: alt size
-            size bytes: alt text
-        video
-            1 byte: 2
-            2 bytes: video URL size
-            size bytes: video URL
-            2 bytes: alt size
-            size bytes: alt text
-New box
-    1 byte: 5
-    4 bytes: box size
-    size bytes: UTF8 string
-
-
-The backend provides URLs for images, movies, and other files as needed, and sends a new UI description whenever it changes.
-
-The frontend sends UI events like clicks to the backend.
-
-# App format
-
-Apps are archives containing a bunch of at least one files, one of which must contain a definition of a pure function in a compiled WASM module. This is used like the Elm 'update' function for the app. The other files are movies, images, PDFs etc.
-
-A document is a sequence of parts. The first (required) part is:
-
-    3 bytes: size of WASM
-    size bytes: WASM
-
-Subsequent (optional) parts are:
-
-    1 byte: size of name of part
-    size bytes: name of part
-    5 bytes: size of part
-    size bytes: part
