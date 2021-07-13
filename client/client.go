@@ -20,7 +20,7 @@ func initProgram() Program {
 		PublicKey: make([]PublicKey, 0),
 		FriendlyName: make([]FriendlyName, 0),
 		Path: make([]Path, 0),
-		String: make([]String, 0),
+		Text: make([]Text, 0),
 		Int: make([]Int, 0),
 		Custom: make([]CustomValue, 0),
 	}
@@ -91,8 +91,84 @@ func parseBind(program *Program, raw []byte, parser *Parser) error {
 	return nil
 }
 
-func parseToken(raw []byte, parser *Parser, token string) error {
-	
+func parseValue(program *Program, raw []byte, parser *Parser) error {
+	tmp := parser.pos
+	err := parseLookup(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseFunctionCall(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseModule(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseModuleLookup(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseSwitch(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseFunction(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parsePublicKey(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseFriendlyName(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parsePath(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+
+	err = parseText(program, raw, parser)
+	if err != nil || parser.pos > tmp {
+		return err
+	}
+}
+
+func parseToken(raw []byte, parser *Parser, token []byte) error {
+	start := parser.pos
+	for i, t := range token {
+		if raw[parser.pos] != t {
+			return BadTokenParse{
+				token: token,
+				tokenPos: i,
+				pos: parser.pos,
+				start: start,
+			}
+		}
+		parser.pos++
+	}
+	return nil
+}
+
+type BadTokenParse struct {
+	token []byte
+	tokenPos int
+	pos int
+	start int
+}
+
+func (b BadTokenParse) Error() string {
+	return "bad token parse"
 }
 
 func parseName(raw []byte, parser *Parser) ([]byte, error) {
@@ -206,6 +282,13 @@ type Module struct {
 	Sign bool
 }
 
+type ModuleLookup struct {
+	Value int
+	Module int
+	Name int
+	Sign bool
+}
+
 type Import struct {
 	Module int
 	Name string
@@ -253,9 +336,9 @@ type Branch struct {
 	Result int
 }
 
-type String struct {
+type Text struct {
 	Value int
-	String string
+	Text string
 	Sign bool
 }
 
@@ -294,6 +377,7 @@ type Program struct {
 	Lookup []Lookup
 	FunctionCall []FunctionCall
 	Module []Module
+	ModuleLookup []ModuleLookup
 	Import []Import
 	Export []Export
 	Scope []Scope
@@ -302,8 +386,9 @@ type Program struct {
 	PublicKey []PublicKey
 	FriendlyName []FriendlyName
 	Path []Path
-	String []String
+	Text []Text
 	Int []Int
 	Custom []CustomValue
 	Location []Location
+	Type []Type
 }
