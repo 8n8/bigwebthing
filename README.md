@@ -1,4 +1,4 @@
-BigWebThing is a computer system for creating documents and sharing them over the internet. It's a sort of social network. The contents of messages are private, but when you send them and who you send them to are public.
+BigWebThing is a computer system for creating documents and sharing them over the internet.
 
 # Public message format
 
@@ -36,9 +36,10 @@ These are the messages that flow around on the internet, through the server. The
         2 bytes: size of encrypted, max 15937
         <= 15941 bytes: encrypted
             // the nonce is random 24 bytes
-	    // authenticated data is:
+            // authenticated data is:
             //      1 byte: 1 for final chunk, 0 otherwise
             //      4 bytes: blob counter, starting at 0
+            //      UTF-8 "BigWebThing encrypted blob"
             16 bytes: auth tag
             <= 15925 bytes: chunk
     69 bytes: add/remove contact
@@ -72,6 +73,14 @@ These are the messages that flow around on the internet, through the server. The
     33 bytes: get blob requests of
         1 byte: 10
         32 bytes: blob ID
+    33 bytes: get username
+        1 byte: 11
+        32 bytes: public key
+    username
+        1 byte: 12
+        1 byte: size of username
+        size bytes: username
+        32 bytes: public key
 
 # Plain-text message format
 
