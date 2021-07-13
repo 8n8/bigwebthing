@@ -123,7 +123,7 @@ static keys
     32 bytes: public key
     32 bytes: secret key
 
-A database table for each type of message.
+A database table for each type of message that is worth keeping.
 
 # Client to server
 
