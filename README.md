@@ -18,7 +18,7 @@ These are the messages that flow around on the internet, through the server. The
         32 bytes: sender
         32 bytes: first part of KK1
         48 bytes: KK2
-    <=438 bytes: KK transport
+    <= 438 bytes: KK transport
         1 byte: 2
         4 bytes: timestamp
         32 bytes: recipient
