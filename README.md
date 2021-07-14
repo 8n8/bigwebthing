@@ -18,15 +18,17 @@ These are the messages that flow around on the internet, through the server. The
         32 bytes: sender
         32 bytes: first part of KK1
         48 bytes: KK2
-    181 bytes: KK transport
+    <=438 bytes: KK transport
         1 byte: 2
         4 bytes: timestamp
         32 bytes: recipient
         32 bytes: sender
         32 bytes: first part of KK1
         32 bytes: blob ID
-        48 bytes: encrypted
+        <=305 bytes: encrypted
             16 bytes: crypto overhead
+            1 byte: size of subject
+            <=256 bytes: UTF-8 subject
             32 bytes: symmetric key for blob
     <= 15981 bytes: blob
         1 byte: 3
