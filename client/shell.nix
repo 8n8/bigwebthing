@@ -12,5 +12,6 @@ pkgs.mkShell {
     pkgs.gtk3-x11
     pkgs.webkitgtk
     pkgs.nodePackages.uglify-js
+    pkgs.golangci-lint
   ];
 }
