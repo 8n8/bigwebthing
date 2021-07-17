@@ -20,13 +20,13 @@ func main() {
 }
 
 func build() error {
-	ok, err := run("elm-test")
+	ok, err := run("elm", "elm-test")
 	fmt.Println(string(ok))
 	if err != nil {
 		return err
 	}
 
-	_, err = run("elm-format", "--yes", "src", "tests")
+	_, err = run("elm", "elm-format", "--yes", "src", "tests")
 	if err != nil {
 		panic(err)
 	}
@@ -41,23 +41,23 @@ var Elm = %#v
 `
 
 func elmMake() error {
-	ok, err := run("elm", "make", "src/Main.elm", "--optimize", "--output=tmp.js")
+	ok, err := run("elm", "elm", "make", "src/Main.elm", "--optimize", "--output=tmp.js")
 	fmt.Println(string(ok))
 	if err != nil {
 		return err
 	}
 
-	elm, err := os.ReadFile("tmp.js")
+	elm, err := os.ReadFile("elm/tmp.js")
 	if err != nil {
 		panic(err)
 	}
 
-	err = os.Remove("tmp.js")
+	err = os.Remove("elm/tmp.js")
 	if err != nil {
 		panic(err)
 	}
 
-	err = os.WriteFile("../go/elm.go", []byte(fmt.Sprintf(goPreamble, elm)), 0644)
+	err = os.WriteFile("go/elm.go", []byte(fmt.Sprintf(goPreamble, elm)), 0644)
 	if err != nil {
 		panic(err)
 	}
@@ -65,7 +65,7 @@ func elmMake() error {
 	return nil
 }
 
-func run(name string, args ...string) ([]byte, error) {
+func run(dir string, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 
 	var stderr bytes.Buffer
@@ -73,6 +73,7 @@ func run(name string, args ...string) ([]byte, error) {
 
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stdout
+    cmd.Dir = dir
 
 	errRun := cmd.Run()
 
