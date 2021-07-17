@@ -2,12 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"time"
-	"errors"
 )
 
 func main() {
@@ -20,13 +20,13 @@ func main() {
 }
 
 func build() error {
-	ok, err := run("elm", "elm-test")
+	ok, err := run("elm-test")
 	fmt.Println(string(ok))
 	if err != nil {
 		return err
 	}
 
-	_, err = run("elm", "elm-format", "--yes", "src", "tests")
+	_, err = run("elm-format", "--yes", "src", "tests")
 	if err != nil {
 		panic(err)
 	}
@@ -41,31 +41,53 @@ var Elm = %#v
 `
 
 func elmMake() error {
-	ok, err := run("elm", "elm", "make", "src/Main.elm", "--optimize", "--output=tmp.js")
+	ok, err := run("elm", "make", "src/Main.elm", "--optimize", "--output=tmp.js")
 	fmt.Println(string(ok))
 	if err != nil {
 		return err
 	}
 
-	elm, err := os.ReadFile("elm/tmp.js")
-	if err != nil {
-		panic(err)
-	}
-
-	err = os.Remove("elm/tmp.js")
-	if err != nil {
-		panic(err)
-	}
-
-	err = os.WriteFile("go/elm.go", []byte(fmt.Sprintf(goPreamble, elm)), 0644)
-	if err != nil {
-		panic(err)
-	}
+	uglify()
 
 	return nil
 }
 
-func run(dir string, name string, args ...string) ([]byte, error) {
+func panicErr(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func uglify() {
+	uglify1Cmd := exec.Command(
+		"uglifyjs",
+		"tmp.js",
+		"--compress",
+		"pure_funcs=[F2,F3,F4,F5,F6,F7,F8,F9,A2,A3,A4,A5,A6,A7,A8,A9],pure_getters,keep_fargs=false,unsafe_comps,unsafe")
+	uglify1Cmd.Dir = "elm"
+	uglify1Out, err := uglify1Cmd.StdoutPipe()
+	panicErr(err)
+
+	uglify2Cmd := exec.Command("uglifyjs", "--mangle")
+
+	var uglify2Out bytes.Buffer
+	uglify2Cmd.Stdin = uglify1Out
+	uglify2Cmd.Stdout = &uglify2Out
+	uglify2Cmd.Dir = "elm"
+
+	panicErr(uglify1Cmd.Start())
+	panicErr(uglify2Cmd.Start())
+
+	panicErr(uglify1Cmd.Wait())
+	panicErr(uglify2Cmd.Wait())
+
+	ugly, err := ioutil.ReadAll(&uglify2Out)
+	panicErr(err)
+	panicErr(os.WriteFile("go/elm.go", []byte(fmt.Sprintf(goPreamble, ugly)), 0644))
+	panicErr(os.Remove("elm/tmp.js"))
+}
+
+func run(name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 
 	var stderr bytes.Buffer
@@ -73,7 +95,7 @@ func run(dir string, name string, args ...string) ([]byte, error) {
 
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stdout
-    cmd.Dir = dir
+	cmd.Dir = "elm"
 
 	errRun := cmd.Run()
 

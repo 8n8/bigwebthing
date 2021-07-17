@@ -11,5 +11,6 @@ pkgs.mkShell {
     pkgs.pkg-config
     pkgs.gtk3-x11
     pkgs.webkitgtk
+    pkgs.nodePackages.uglify-js
   ];
 }
