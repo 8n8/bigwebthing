@@ -6,3 +6,7 @@ a.out
 staticKeys
 *.sqlite3
 venv/
+client/elm/node_modules/
+client/elm/review/elm-stuff/
+client/elm/elm-stuff/
+secret
