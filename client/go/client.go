@@ -1,12 +1,14 @@
 package main
 
 import (
-	"github.com/webview/webview"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
+
+	"github.com/gorilla/websocket"
+	"github.com/webview/webview"
 )
 
 func main() {
@@ -21,7 +23,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/"+code, httpHandler)
-        http.HandleFunc("/"+code+"/websockets", websocketHandler)
+		http.HandleFunc("/"+code+"/websockets", websocketHandler)
 		panic(http.Serve(listener, nil))
 	}()
 
@@ -71,7 +73,7 @@ let app = rawApp.json()
 `
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize: 1024,
+	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 }
 
@@ -92,16 +94,127 @@ func websocketsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	toServer := make(chan []byte)
+	fromServer := make(chan []byte)
+	go handleServerConn(toServer, fromServer)
+
+
+	db, err := setupDb()
+	if err != nil {
+		panic("no database: " + err.Error())
+	}
+
+	for {
+		select {
+		case msg := <-fromGui:
+			parseFromGui(msg).processFromGui(db)
+		}
+}
+
+func handleServerConn(to chan []byte, from chan []byte) {
+	for {
+		conn, err := net.Dial("tcp", serverUrl)
+		if err == nil {
+			useOneConn(conn, to, from)
+		}
+		time.Sleep(serverRetry)
+	}
+}
+
+func useOneConn(conn net.Conn, to chan []byte, from chan []byte) {
+	go readConn(conn, from)
+	writeConn(conn, to)
+}
+
+func readConn(conn net.Conn, from chan []byte) {
+	for {
+		size := make([]byte, 2)
+		n, err := conn.Read(size)
+		if err != nil || n != 2 {
+			return
+		}
+
+		buf := make([]byte, size)
+		n, err = conn.Read(buf)
+		if err != nil || n != size {
+			return
+		}
+
+		from <- buf
+	}
+}
+
+func writeConn(conn net.Conn, to chan []byte) {
+}
+
+
+func useOneConn(conn net.Conn, to chan []byte, from chan []byte) {
+	go func() {
+		for {
+			live <- struct{}{}
+			time.Sleep(serverRetry)
+			<-dead
+		}
+	}()
+
+	go func() {
+		for {
+			<-live
+
+			size := make([]byte, 2)
+			n, err := serverConn.Read(size)
+			if err != nil || n != 2 {
+				dead <-struct{}{}
+				continue
+			}
+
+			buf := make([]byte, size)
+			n, err = serverConn.Read(buf)
+			if err != nil || n != size {
+				dead <-struct{}{}
+				continue
+			}
+
+			from <- buf
+		}
+	}()
+
+	for {
+		<-
+	}
+
 	serverConn, err := net.Dial("tcp", serverUrl)
 	if err != nil {
 		panic(err)
 	}
 
 	fromServer := make(chan []byte)
+	serverFail := make(chan error)
 	go func() {
-		size := make([]byte, 2)
 		for {
+			size := make([]byte, 2)
 			n, err := serverConn.Read(size)
+			if n == size & err == nil {
+				continue
+			}
+			if n != size {
+				serverFail <- ServerMessageTooShort{n, size}
+			}
+			if err != nil {
+				serverFail <- err
+			}
+			time.Sleep(serverRetry)
+		}
+	}()
+
+	toServer := make(chan []byte)
+	go func() {
+		for {
+			msg := <-toServer
+			n, err := serverConn.Write(msg)
+			if err != nil {
+				
+			}
 		}
 	}()
 }

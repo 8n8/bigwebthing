@@ -11,3 +11,4 @@ client/elm/review/elm-stuff/
 client/elm/elm-stuff/
 secret
 client/go/elm.go
+client/buildGo
