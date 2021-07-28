@@ -12,3 +12,4 @@ client/elm/elm-stuff/
 secret
 client/go/elm.go
 client/buildGo
+wasm/hello-wasm/target/
