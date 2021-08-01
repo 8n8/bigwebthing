@@ -12,3 +12,6 @@ secret
 server/database.sqlite3
 server/staticKeys
 wasm/hello-wasm/target/
+generated/
+nw000000
+nw000001
