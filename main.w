@@ -76,28 +76,32 @@ This data is constant and built into the system.
 
 \section{Technical specification}
 \subsection{Public data on single server}
-\subsubsection{Users}
-Each user has an ID number, a public static key, and a URL. Many users can share a URL.
+\subsubsection{User}
+Each user has a public static key, and a URL. Many users can share a URL.
 \begin{itemize}
-\item user ID (uint64)
 \item URL (UTF-8 string)
-\item public static Noise key
+\item user's public static Noise key
 \item created timestamp (uint32)
-\item account active (bool)
+\end{itemize}
+
+\subsubsection{Bad user}
+These are users who shouldn't be contacted, probably because their account is compromised and their secret key has leaked.
+\begin{itemize}
+\item user's public static Noise key
 \end{itemize}
 
 \subsection{Public data on each user's server}
 \subsubsection{Unread message}
 \begin{itemize}
-\item sender ID (uint64)
-\item recipient ID (uint64)
+\item sender public static Noise key (bytes)
+\item recipient public static Noise key (bytes)
 \item message (bytes)
 \item timestamp when sent (uint32)
 \end{itemize}
 \subsubsection{Read message}
 \begin{itemize}
-\item sender ID (uint64)
-\item recipient ID (uint64)
+\item sender public static Noise key (bytes)
+\item recipient public static Noise key (bytes)
 \item message size (uint32)
 \item timestamp when sent (uint32)
 \item timestamp when read (uint32)
@@ -106,9 +110,15 @@ Each user has an ID number, a public static key, and a URL. Many users can share
 \subsubsection{Payment}
 A payment to me.
 \begin{itemize}
-\item payer ID (uint64)
+\item payer public static Noise key (bytes)
 \item amount in GBP (uint32)
 \item timestamp (uint32)
+\end{itemize}
+
+\subsubsection{Contact}
+\begin{itemize}
+\item contacter public static Noise key (bytes)
+\item contactee public static Noise key (bytes)
 \end{itemize}
 
 \subsection{Data on each user's computer}
@@ -118,6 +128,9 @@ A payment to me.
 \item secret key (bytes)
 \item public key (bytes)
 \end{itemize}
+
+\subsection{Public root sigining key for BigWebThing}
+This is the public key that is used to create server certificates. It is embedded in the program.
 
 \subsubsection{Noise session seed}
 \begin{itemize}
@@ -153,7 +166,7 @@ A payment to me.
 \subsubsection{File author}
 \begin{itemize}
 \item file hash (bytes)
-\item author ID (uint64)
+\item author public static Noise key (bytes)
 \end{itemize}
 
 \subsubsection{Permission for app to view a file}
@@ -167,13 +180,19 @@ A payment to me.
 \item sending ID (uint32)
 \item timestamp (uint32)
 \item file hash (bytes)
-\item recipient ID (uint64)
+\item recipient public static Noise key (bytes)
 \end{itemize}
 
 \subsubsection{Error sending file}
 \begin{itemize}
 \item sending ID (uint32)
 \item UTF-8 error message (string)
+\end{itemize}
+
+\subsubsection{Contact}
+\begin{itemize}
+\item their public static Noise key (bytes)
+\item a friendly name
 \end{itemize}
 
 \end{document}
