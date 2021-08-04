@@ -15,3 +15,4 @@ wasm/hello-wasm/target/
 generated/
 nw000000
 nw000001
+main.toc
