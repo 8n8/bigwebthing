@@ -10,6 +10,7 @@
 \maketitle
 \tableofcontents
 
+\section{Introduction}
 BigWebThing is a social network for sharing apps. This document contains a user specification and a technical specification.
 
 The user specification just defines what is essential from a user point of view, but doesn't bother about technical issues that the user doesn't care or know about. With regard to performance, this section just assumes that the hardware is so good that performance issues do not exist.
@@ -328,12 +329,12 @@ Ideally, output execution functions should be so short that they are obviously c
 var goCh = make(chan func())
 
 func main() {
-	goCh <- func() {
+	go func() {
 		in <- Start{}
 		for {
 			(<-in).pure().io()
 		}
-	}
+	}()
 	for {
 		go (<-goCh)()
 	}
@@ -359,6 +360,7 @@ import (
 	"os"
 	"github.com/flynn/noise"
 	"fmt"
+	"net"
 )
 
 // MAIN
@@ -376,6 +378,18 @@ import (
 \subsection{Inputs}
 
 @d serverInputs @{
+type ConnInfo struct {
+    address string
+    result Cache
+}
+
+type ConnReadResult struct {
+	address string
+	buf []byte
+	n int
+	err error
+}
+
 type Start struct{}
 
 type NewDbHandle struct {
@@ -393,11 +407,47 @@ type FileContents struct {
 	contents []byte
 	err error
 }
+
+type NewTcpListener struct {
+	listener net.Listener
+	err error
+}
+
+type NewConn struct {
+	conn net.Conn
+	err error
+}
 @}
 
 \subsection{Outputs}
 
 @d serverOutputs @{
+type CacheReading struct {
+	conn net.Conn
+	size int
+}
+
+type CloseConn struct {
+    conn net.Conn
+}
+
+type RemoveConnFromCache string
+
+type FetchConnInfo string
+
+type CacheReadingSize struct {
+    conn net.Conn
+}
+
+type ReadConn struct {
+	conn net.Conn
+	size int
+}
+
+type WaitForConn struct {
+	listener net.Listener
+}
+
 type GetDbHandle struct{}
 
 type InitCache struct{}
@@ -422,6 +472,16 @@ type ReadFile string
 type CacheCertificate []byte
 
 type CacheStaticKeys noise.DHKey
+
+type StartTcpServer struct{}
+
+type CacheListener struct {
+	listener net.Listener
+}
+
+type Go struct {
+	output O
+}
 @}
 
 \subsection{IO}
@@ -438,6 +498,118 @@ type CacheStaticKeys noise.DHKey
 @<serverReadFile@>
 @<serverCacheCertificate@>
 @<serverCacheStaticKeys@>
+@<serverStartTcpServer@>
+@<serverCacheListener@>
+@<serverWaitForConn@>
+@<serverReadConn@>
+@<serverGo@>
+@<serverFetchConnInfo@>
+@<serverCloseConn@>
+@<serverRemoveConnFromCache@>
+@}
+
+@d serverRemoveConnFromCache @{
+func (r RemoveConnFromCache) io() {
+    toCache <- r
+}
+
+func (r RemoveConnFromCache) update(c *Cache) {
+    address := string(r)
+    for i, old := range c.readingSize {
+        if old.RemoteAddr().String() == address {
+            c.readingSize[i] = c.readingSize[len(c.readingSize) - 1]
+            c.readingSize = c.readingSize[:len(c.readingSize) - 1]
+        }
+    }
+
+    for i, old := range c.readResult {
+        if old.address == address {
+            c.readResult[i] = c.readResult[len(c.readResult) - 1]
+            c.readResult = c.readResult[:len(c.readResult) - 1]
+        }
+    }
+}
+@}
+
+@d serverCloseConn @{
+func (c CloseConn) io() {
+    c.conn.Close()
+}
+@}
+
+@d serverFetchConnInfo @{
+func (f FetchConnInfo) io() {
+    toCache <- f
+}
+
+func emptyCache() Cache {
+    return Cache {
+        db: make([]*sql.DB, 0),
+        staticKeys: make([]noise.DHKey, 0),
+        certificate: make([]byte, 0),
+        listener: make([]net.Listener, 0),
+    }
+}
+
+func (f FetchConnInfo) update(cache *Cache) {
+    address := string(f)
+
+    result := emptyCache()
+
+    for _, candidate := range cache.readingSize {
+        if candidate.RemoteAddr().String() == address {
+            result.readingSize = append(result.readingSize, candidate)
+        }
+    }
+
+    for _, candidate := range cache.readResult {
+        if candidate.address == address {
+            result.readResult = append(result.readResult, candidate)
+        }
+    }
+
+    in <- ConnInfo{address, result}
+}
+@}
+
+@d serverGo @{
+func (g Go) io() {
+	goCh <- func() {
+		g.io()
+	}
+}
+@}
+
+@d serverReadConn @{
+func (r ReadConn) io() {
+	buf := make([]byte, r.size)
+	n, err := r.conn.Read(buf)
+	in <- ConnReadResult{r.conn.RemoteAddr().String(), buf, n, err}
+}
+@}
+
+@d serverWaitForConn @{
+func (w WaitForConn) io() {
+	conn, err := w.listener.Accept()
+	in <- NewConn{conn, err}
+}
+@}
+
+@d serverCacheListener @{
+func (c CacheListener) io() {
+	toCache <- c
+}
+
+func (c CacheListener) update(cache *Cache) {
+	cache.listener = []net.Listener{c.listener}
+}
+@}
+
+@d serverStartTcpServer @{
+func (StartTcpServer) io() {
+	listener, err := net.Listen("tcp", ":8080")
+	in <- NewTcpListener{listener, err}
+}
 @}
 
 @d serverCacheStaticKeys @{
@@ -446,7 +618,7 @@ func (c CacheStaticKeys) io() {
 }
 
 func (c CacheStaticKeys) update(cache *Cache) {
-	cache.staticKeys = noise.DHKey(c)
+	cache.staticKeys = []noise.DHKey{noise.DHKey(c)}
 }
 @}
 
@@ -479,8 +651,10 @@ var toCache = make(chan ToCache)
 
 type Cache struct {
 	db []*sql.DB
-	staticKeys noise.DHKey
+	staticKeys []noise.DHKey
 	certificate []byte
+	listener []net.Listener
+	readingKx1 []Conn
 }
 
 type ToCache interface {
@@ -544,6 +718,9 @@ func (s SaveDbHandle) io() {
 @<serverSetUpDb@>
 @<serverHandleDbError@>
 @<serverOnFileContents@>
+@<serverOnTcpListener@>
+@<serverOnNewConn@>
+@<serverOnConnRead@>
 @}
 
 @d serverOnStart @{
@@ -553,10 +730,12 @@ const keysPath = "secretKeys"
 const certificatePath = "certificate"
 
 func (Start) pure() O {
-	return Os([]O{
+	return sequence(
 		GetDbHandle{},
+		InitCache{},
 		ReadFile(certificatePath),
-		ReadFile(keysPath)})
+		ReadFile(keysPath),
+		StartTcpServer{})
 }
 @}
 
@@ -602,16 +781,14 @@ func (n NewDbHandle) pure() O {
 		return DbExecPlain{n.db, makeSql}
 	}
 
-	return Os([]O{
+	return sequence(
 		makeTable(createUsersTable),
 		makeTable(createBadUsersTable),
 		makeTable(createUnreadTable),
 		makeTable(createReadTable),
 		makeTable(createPaymentTable),
 		makeTable(createContactTable),
-		InitCache{},
-		SaveDbHandle{n.db},
-	})
+		SaveDbHandle{n.db})
 }
 @}
 
@@ -625,6 +802,70 @@ func (d DbExecErr) pure() O {
 	}
 
 	return DoNothing{}
+}
+@}
+
+@d serverOnTcpListener @{
+func sequence(outputs ...O) O {
+	return Os(outputs)
+}
+
+func (t NewTcpListener) pure() O {
+	if t.err != nil {
+		return Panic("couldn't start TCP listener: " + t.err.Error())
+	}
+
+	return sequence(
+		CacheListener{t.listener},
+		WaitForConn{t.listener})
+}
+@}
+
+@d serverOnNewConn @{
+func (n NewConn) pure() O {
+	if n.err != nil {
+		return DoNothing{}
+	}
+
+	return sequence(
+		Go{ReadConn{n.conn, 2}},
+		CacheReadingSize{n.conn})
+}
+@}
+
+@d serverOnConnRead @{
+func (c ConnReadResult) pure() O {
+	return sequence(
+		CacheConnReadResult(c),
+		FetchConnInfo(c.address))
+}
+@}
+
+const maxMessageSize = 16000
+
+func afterReadingSize(conn net.Conn, result ConnReadResult) O {
+    bad := sequence(
+            CloseConn{conn},
+            RemoveConnFromCache(result.address))
+    if result.err != nil || result.n != 2 {
+        return bad
+    }
+
+    size := parseUint16(result.buf)
+    if size > maxMessageSize {
+        return bad
+    }
+
+    return sequence(
+		ReadConn{conn, size},
+		CacheReadingBody{conn, size})
+}
+
+func parseUint16(raw []byte) int {
+	result := 0
+	result += int(raw[0])
+	result += int(raw[1]) * 256
+	return result
 }
 @}
 
