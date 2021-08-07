@@ -1,4 +1,4 @@
 go test &&
 go install &&
-gofmt -w *.go &&
-golangci-lint run
+golangci-lint run &&
+gofmt -w *.go

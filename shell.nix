@@ -3,8 +3,6 @@
 
 pkgs.mkShell {
   buildInputs = [
-    pkgs.nuweb
-    pkgs.texlive.combined.scheme-small
     pkgs.go
     pkgs.golangci-lint
   ];
