@@ -2,10 +2,7 @@
 
 pkgs.mkShell {
   buildInputs = [
-    pkgs.python39
-    pkgs.python39Packages.flake8
-    pkgs.python39Packages.pytest
-    pkgs.python39Packages.noiseprotocol
-    pkgs.python39Packages.black
+    pkgs.go
+    pkgs.golangci-lint
   ];
 }
