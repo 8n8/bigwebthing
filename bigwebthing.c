@@ -281,7 +281,7 @@ int check_certificate(
 		raw + 8,
 		sign_msg,
 		SERVER_SIGNED_BYTES,
-		"servcert",
+		"cert_sig",
  		SERVER_PUBLIC_SIGN); 
 	if (result) {
 		return BAD_CERTIFICATE_SIGNATURE;
@@ -375,7 +375,7 @@ int get_certificate(
 		encrypted_certificate,
 		ENCRYPTED_CERTIFICATE_BYTES,
 		0,
-		"ser->cli",
+		"cert_msg",
 		session_keys->rx);
 	if (result) {
 		return BAD_CERTIFICATE_DECRYPT;
@@ -424,6 +424,8 @@ int new_friend(int argc, char *argv[]) {
 	if (result) {
 		return result;
 	}
+
+
 }
 
 int main_error(int argc, char *argv[]) {
