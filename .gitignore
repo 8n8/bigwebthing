@@ -1,1 +1,4 @@
 *.sw*
+server_secret
+hydrogen.o
+a.out
