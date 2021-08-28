@@ -24,6 +24,19 @@
 // This is the expiry plus the Noise public key = 8 + 32 = 40
 #define SERVER_SIGNED_BYTES 40
 
+// - hydro_secrebox_HEADERBYTES (36) bytes: auth tag
+// - 1 byte: 0
+// - 8 bytes: their user ID
+//
+// total = 36 + 1 + 8 = 45
+#define ENCRYPTED_PUBLIC_KEY_REQUEST 45
+// 1 + 8 = 9
+#define PUBLIC_KEY_REQUEST 9
+
+// 36 + 1 + 32 = 68
+#define ENCRYPTED_PUBLIC_KEY 68
+#define PLAIN_PUBLIC_KEY 33
+
 struct new_friend {
 	char* nickname;
 	uint8_t fingerprint[FINGERPRINT_LEN];
@@ -384,14 +397,13 @@ int get_certificate(
 	return check_certificate(raw_certificate, server_public_key);
 }
 
-int authenticate(int sock) {
+int authenticate(int sock, hydro_kx_keypair* session_keys) {
 	hydro_kx_state kx_state;
 	int result = send_packet_1(sock, &kx_state);
 	if (result) {
 		return result;
 	}
 
-	hydro_kx_session_keypair session_keys;
 	uint8_t server_public_key[hydro_kx_PUBLICKEYBYTES];
 	result = send_packet_3(
 		sock,
@@ -408,6 +420,73 @@ int authenticate(int sock) {
 		server_public_key);
 }
 
+int make_public_key_request(
+	uint8_t request[ENCRYPTED_PUBLIC_KEY_REQUEST],
+	uint64_t their_id,
+	uint8_t key[hydro_kx_SESSION_KEY_BYTES]) {
+
+	uint8_t plain[PUBLIC_KEY_REQUEST];
+	plain[0] = 0;
+	for (int i = 0; i < 8; ++i) {
+		plain[i+1] = (uint8_t)((their_id >> i) & 0xFF)
+	}
+
+	int result = hydro_secretbox_encrypt(
+		request,
+		plain,
+		PUBLIC_KEY_REQUEST,
+		1,
+		"get_key_",
+		key);
+	if (result) {
+		return BAD_ENCRYPT_GET_KEY;
+	}
+
+	return OK;
+}
+
+int request_public_key(
+	const int sock,
+	const uint64_t user_id,
+	const uint8_t key[hydro_kx_SESSION_KEY_BYTES]) {
+
+	uint8_t request[ENCRYPTED_PUBLIC_KEY_REQUEST];
+	result = make_public_key_request(
+		request,
+		cmd.user_id,
+		session_keys.tx);
+	if (result) {
+		return result;
+	}
+
+	int n = send(sock, request, ENCRYPTED_PUBLIC_KEY_REQUEST, 0);
+	if (n != ENCRYPTED_PUBLIC_KEY_REQUEST) {
+		return BAD_SEND_KEY_REQUEST;
+	}
+
+	return OK;
+}
+
+int fetch_public_key(
+	const int sock,
+	uint8_t public_key[hydro_kx_PUBLICKEYBYTES],
+	const uint8_t key[hydro_kx_SESSIONKEYBYTES]) {
+
+	uint8_t encrypted[ENCRYPTED_PUBLIC_KEY];
+	int n = recv(sock, encrypted, ENCRYPTED_PUBLIC_KEY, 0);
+	if (n != ENCRYPTED_PUBLIC_KEY) {
+		return BAD_RECEIVE_PUBLIC_KEY;
+	}
+	
+	uint8_t plain[PLAIN_PUBLIC_KEY];
+	int result = hydro_secretbox_decrypt(
+		plain,
+		encrypted,
+		ENCRYPTED_PUBLIC_KEY,
+		
+
+}
+
 int new_friend(int argc, char *argv[]) {
 	struct new_friend cmd;
 	int result = parse_new_friend(&cmd, argc, argv);
@@ -420,12 +499,26 @@ int new_friend(int argc, char *argv[]) {
 	if (result) {
 		return result;
 	}
-	result = authenticate(sock);
+
+	hydro_kx_session_keypair session_keys;
+	result = authenticate(sock, &session_keys);
 	if (result) {
 		return result;
 	}
 
+	result = request_public_key(
+		sock,
+		cmd.user_id,
+		session_keys.tx);
+	if (result) {
+		return result;
+	}
 
+	uint8_t public_key[hydro_kx_PUBLICKEYBYTES];
+	result = fetch_public_key(sock, public_key, session_keys.rx);
+	if (result) {
+		return result;
+	}
 }
 
 int main_error(int argc, char *argv[]) {
