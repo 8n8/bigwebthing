@@ -11,6 +11,7 @@
 #define MAX_NICKNAME 20
 #define FINGERPRINT_LEN 10
 #define SECRET_FILE "secret"
+#define FRIEND_FILE "friend"
 
 // - hydro_secretbox_HEADERBYTES (36) bytes: auth tag
 // - 8 bytes: Little-Endian Posix seconds of expiry date
@@ -25,22 +26,30 @@
 #define SERVER_SIGNED_BYTES 40
 
 // - hydro_secrebox_HEADERBYTES (36) bytes: auth tag
-// - 1 byte: 0
 // - 8 bytes: their user ID
 //
-// total = 36 + 1 + 8 = 45
-#define ENCRYPTED_PUBLIC_KEY_REQUEST 45
-// 1 + 8 = 9
+// total = 36 + 8 = 44
+#define ENCRYPTED_PUBLIC_KEY_REQUEST 44
+
+// Indicator length = 1
+// User ID length = 8
 #define PUBLIC_KEY_REQUEST 9
 
-// 36 + 1 + 32 = 68
+// 36 + 32 = 68
 #define ENCRYPTED_PUBLIC_KEY 68
-#define PLAIN_PUBLIC_KEY 33
+
+#define KEY_AND_USER_ID_LEN 40
 
 struct new_friend {
 	char* nickname;
 	uint8_t fingerprint[FINGERPRINT_LEN];
 	uint64_t user_id;
+};
+
+enum msg_id_server {
+	SERVER_CERTIFICATE_ID,
+	THEIR_PUBLIC_KEY_ID,
+	REQUEST_THEIR_PUBLIC_KEY_ID,
 };
 
 enum result {
@@ -77,13 +86,51 @@ enum result {
 	BAD_RECV_XX2,
 	BAD_SEND_XX1,
 	BAD_HYDRO_KX_XX1,
+	BAD_RECEIVE_PUBLIC_KEY,
+	BAD_SEND_KEY_REQUEST,
+	BAD_ENCRYPT_GET_KEY,
+	BAD_FINGERPRINT,
+	BAD_WRITE_FRIENDS_FILE,
+	BAD_MAKE_FRIEND_FILE,
 };
 
-char* pretty_result(enum result error) {
+int encrypt_server(
+	uint8_t *c,
+	const void *m_,
+	size_t mlen,
+	uint64_t msg_id,
+	const uint8_t key[hydro_secretbox_KEYBYTES]) {
+
+	return hydro_secretbox_encrypt(
+		c,
+		m_,
+		mlen,
+		msg_id,
+		"bwttoser",
+		key);
+}
+
+int decrypt_server(
+	void *m_,
+	const uint8_t *c,
+	size_t clen,
+	uint64_t msg_id,
+	const uint8_t key[hydro_secretbox_KEYBYTES]) {
+
+	return hydro_secretbox_decrypt(
+		m_,
+		c,
+		clen,
+		msg_id,
+		"bwtfroms",
+		key);
+}
+
+char* pretty_result(const enum result error) {
 	return "something went wrong";
 }
 
-int parse_userid(uint64_t* user_id, char* raw) {
+int parse_userid(uint64_t* user_id, const char* raw) {
 	size_t len = strlen(raw);
 	if (len > 8) {
 		return USERID_TOO_LONG;
@@ -107,7 +154,7 @@ int parse_userid(uint64_t* user_id, char* raw) {
 
 int parse_fingerprint(
 	uint8_t fingerprint[FINGERPRINT_LEN],
-	char* raw) {
+	const char* const raw) {
 
 	size_t len = strlen(raw);
 	if (len != FINGERPRINT_LEN) {
@@ -128,11 +175,11 @@ int parse_fingerprint(
 	return 0;
 }
 
-int good_nick_char(char c) {
+int good_nick_char(const char c) {
 	return ((c > 47) && (c < 58)) || ((c > 96) && (c < 123));
 }
 
-int check_nickname(char* nickname) {
+int check_nickname(const char* const nickname) {
 	int len = strlen(nickname);
 	if (len == 0) {
 		return EMPTY_NICKNAME;
@@ -154,7 +201,7 @@ int check_nickname(char* nickname) {
 int parse_new_friend(
 	struct new_friend* args,
 	int argc,
-	char *argv[]) {
+	char* argv[]) {
 
 	// To add a new friend, the command is like:
 	//
@@ -244,7 +291,7 @@ int get_my_static(hydro_kx_keypair* my_static) {
 	return OK;
 }
 
-int get_server_sock(int* sock) {
+int get_server_sock(int* const sock) {
 	struct addrinfo hints, *server_info;
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
@@ -283,8 +330,8 @@ const uint8_t SERVER_PUBLIC_SIGN[32] = {129, 184, 154, 153, 228, 28, 158, 110, 2
 
 
 int check_certificate(
-	uint8_t raw[RAW_CERTIFICATE_BYTES],
-	uint8_t untrusted[hydro_kx_PUBLICKEYBYTES]) {
+	const uint8_t raw[RAW_CERTIFICATE_BYTES],
+	const uint8_t untrusted[hydro_kx_PUBLICKEYBYTES]) {
 
 	uint8_t sign_msg[SERVER_SIGNED_BYTES];
 	memcpy(sign_msg, raw, 8); // the expiry date
@@ -300,7 +347,7 @@ int check_certificate(
 		return BAD_CERTIFICATE_SIGNATURE;
 	}
 
-	uint8_t expiry;
+	uint8_t expiry = 0;
 	for (int i = 0; i < 8; i++) {
 		expiry |= ((uint8_t)raw[i]) << i;
 	}
@@ -314,7 +361,7 @@ int check_certificate(
 	return OK;
 }
 
-int send_packet_1(int sock, hydro_kx_state* kx_state) {
+int send_packet_1(const int sock, hydro_kx_state* kx_state) {
 	uint8_t packet1[hydro_kx_XX_PACKET1BYTES];
 	int result = hydro_kx_xx_1(kx_state, packet1, NULL);
 	if (result) {
@@ -330,7 +377,7 @@ int send_packet_1(int sock, hydro_kx_state* kx_state) {
 }
 
 int send_packet_3(
-	int sock,
+	const int sock,
 	hydro_kx_state* kx_state,
 	hydro_kx_session_keypair* session_keys,
 	uint8_t server_public_key[hydro_kx_PUBLICKEYBYTES]) {
@@ -369,9 +416,10 @@ int send_packet_3(
 }
 
 int get_certificate(
-	int sock,
-	hydro_kx_session_keypair* session_keys,
-	uint8_t server_public_key[hydro_kx_PUBLICKEYBYTES]) {
+	const int sock,
+	const hydro_kx_session_keypair* const session_keys,
+	const uint8_t server_public_key[hydro_kx_PUBLICKEYBYTES]) {
+
 	uint8_t encrypted_certificate[ENCRYPTED_CERTIFICATE_BYTES];
 	int n = recv(
 		sock,
@@ -383,12 +431,11 @@ int get_certificate(
 	}
 
 	uint8_t raw_certificate[RAW_CERTIFICATE_BYTES];
-	int result = hydro_secretbox_decrypt(
+	int result = decrypt_server(
 		raw_certificate,
 		encrypted_certificate,
 		ENCRYPTED_CERTIFICATE_BYTES,
-		0,
-		"cert_msg",
+		SERVER_CERTIFICATE_ID,
 		session_keys->rx);
 	if (result) {
 		return BAD_CERTIFICATE_DECRYPT;
@@ -397,7 +444,10 @@ int get_certificate(
 	return check_certificate(raw_certificate, server_public_key);
 }
 
-int authenticate(int sock, hydro_kx_keypair* session_keys) {
+int authenticate(
+	const int sock,
+	hydro_kx_session_keypair* session_keys) {
+
 	hydro_kx_state kx_state;
 	int result = send_packet_1(sock, &kx_state);
 	if (result) {
@@ -408,7 +458,7 @@ int authenticate(int sock, hydro_kx_keypair* session_keys) {
 	result = send_packet_3(
 		sock,
 		&kx_state,
-		&session_keys,
+		session_keys,
 		server_public_key);
 	if (result) {
 		return result;
@@ -416,27 +466,26 @@ int authenticate(int sock, hydro_kx_keypair* session_keys) {
 
 	return get_certificate(
 		sock,
-		&session_keys,
+		session_keys,
 		server_public_key);
 }
 
 int make_public_key_request(
 	uint8_t request[ENCRYPTED_PUBLIC_KEY_REQUEST],
-	uint64_t their_id,
-	uint8_t key[hydro_kx_SESSION_KEY_BYTES]) {
+	const uint64_t their_id,
+	const uint8_t key[hydro_kx_SESSIONKEYBYTES]) {
 
 	uint8_t plain[PUBLIC_KEY_REQUEST];
 	plain[0] = 0;
 	for (int i = 0; i < 8; ++i) {
-		plain[i+1] = (uint8_t)((their_id >> i) & 0xFF)
+		plain[i+1] = (uint8_t)((their_id >> i) & 0xFF);
 	}
 
-	int result = hydro_secretbox_encrypt(
+	int result = encrypt_server(
 		request,
 		plain,
 		PUBLIC_KEY_REQUEST,
-		1,
-		"get_key_",
+		REQUEST_THEIR_PUBLIC_KEY_ID,
 		key);
 	if (result) {
 		return BAD_ENCRYPT_GET_KEY;
@@ -448,13 +497,13 @@ int make_public_key_request(
 int request_public_key(
 	const int sock,
 	const uint64_t user_id,
-	const uint8_t key[hydro_kx_SESSION_KEY_BYTES]) {
+	const uint8_t key[hydro_kx_SESSIONKEYBYTES]) {
 
 	uint8_t request[ENCRYPTED_PUBLIC_KEY_REQUEST];
-	result = make_public_key_request(
+	int result = make_public_key_request(
 		request,
-		cmd.user_id,
-		session_keys.tx);
+		user_id,
+		key);
 	if (result) {
 		return result;
 	}
@@ -478,16 +527,131 @@ int fetch_public_key(
 		return BAD_RECEIVE_PUBLIC_KEY;
 	}
 	
-	uint8_t plain[PLAIN_PUBLIC_KEY];
-	int result = hydro_secretbox_decrypt(
+	uint8_t plain[hydro_kx_PUBLICKEYBYTES];
+	int result = decrypt_server(
 		plain,
 		encrypted,
 		ENCRYPTED_PUBLIC_KEY,
-		
+		THEIR_PUBLIC_KEY_ID,
+		key);
+	if (result) {
+		return result;
+	}
 
+	return OK;
 }
 
-int new_friend(int argc, char *argv[]) {
+const uint8_t finger_key[hydro_pwhash_MASTERKEYBYTES] = {94, 54, 200, 248, 175, 85, 145, 186, 246, 162, 9, 109, 240, 136, 137, 204, 82, 43, 223, 239, 253, 247, 67, 163, 193, 23, 149, 240, 249, 183, 241, 10};	
+
+int make_fingerprint(
+	uint8_t fingerprint[FINGERPRINT_LEN],
+	const uint8_t public_key[hydro_kx_PUBLICKEYBYTES],
+	const uint64_t user_id) {
+
+	char input [KEY_AND_USER_ID_LEN];
+	memcpy(input, public_key, hydro_kx_PUBLICKEYBYTES);
+	for (int i = 0; i < 8; i++) {
+		input[hydro_kx_PUBLICKEYBYTES + i] =
+			(user_id >> i) & 0xFF;
+	}
+
+	return hydro_pwhash_deterministic(
+		fingerprint,
+		FINGERPRINT_LEN,
+		input,
+		KEY_AND_USER_ID_LEN,
+		"makefing",
+		finger_key,
+		10000,
+		0,
+		1);
+}
+
+void encode_uint32(uint8_t* buf, uint32_t u) {
+	for (int i = 0; i < 4; ++i) {
+		buf[i] = (u >> i) & 0xFF;
+	}
+}
+
+int store_my_first_friend(
+	const uint8_t public_key [hydro_kx_PUBLICKEYBYTES],
+	const char * nickname) {
+
+	FILE* f = fopen(FRIEND_FILE, "wb");
+	if (!f) {
+		return BAD_MAKE_FRIEND_FILE;
+	}
+
+	size_t nick_len = strlen(nickname);
+	uint32_t encoded_len =
+		4 + 4 + 1 + nick_len + hydro_kx_PUBLICKEYBYTES;
+	uint8_t encoded[encoded_len];
+	encode_uint32(encoded, encoded_len);
+	encode_uint32(encoded+4, 1);
+
+	encoded[4+4] = nick_len;
+	for (int i = 0; i < nick_len; ++i) {
+		encoded[4+4+1+i] = nickname[i];
+	}
+	for (int i = 0; i < hydro_kx_PUBLICKEYBYTES; ++i) {
+		encoded[4+4+1+nick_len+i] = public_key[i];
+	}
+
+	size_t n = fwrite(encoded, 1, encoded_len, f);
+	if (n != encoded_len) {
+		return BAD_WRITE_FRIENDS_FILE;
+	}
+
+	return OK;
+}
+
+uint32_t decode_uint32(uint8_t raw[]) {
+	uint32_t u = 0;
+	for (int i = 0; i < 4; ++i) {
+		u |= raw[i] << i;
+	}
+	return u;
+}
+
+struct friend {
+	uint8_t public_key[hydro_kx_PUBLICKEYBYTES];
+	char* nickname;
+};
+
+int store_new_friend(
+	const uint8_t public_key[hydro_kx_PUBLICKEYBYTES],
+	const char* nickname) {
+
+	FILE* f = fopen(FRIEND_FILE, "rb");
+	if (!f) {
+		return store_my_first_friend(public_key, nickname);
+	}
+
+	uint8_t raw_size[4];
+	size_t n = fread(raw_size, 1, 4, f);
+	if (n != 4) {
+		return NO_SIZE_IN_FRIEND_FILE;
+	}
+
+	size_t buf_size = decode_uint32(raw_size);
+	uint8_t* buf = malloc(buf_size);
+	n = fread(buf, 1, buf_size, f);
+	if (n != buf_size) {
+		return COULDNT_READ_FRIENDS_FILE;
+	}
+	close(f);
+
+	int num_friends = decode_uint32(buf);
+
+	struct friends* parsed = malloc(
+		num_friends * sizeof struct friend);
+	
+
+
+	return result;
+}
+
+int new_friend(int argc, char* argv[]) {
 	struct new_friend cmd;
 	int result = parse_new_friend(&cmd, argc, argv);
 	if (result) {
@@ -519,9 +683,25 @@ int new_friend(int argc, char *argv[]) {
 	if (result) {
 		return result;
 	}
+
+	uint8_t fingerprint[FINGERPRINT_LEN];
+	result = make_fingerprint(
+		fingerprint,
+		public_key,
+		cmd.user_id);
+	if (result) {
+		return result;
+	}
+	for (int i = 0; i < FINGERPRINT_LEN; ++i) {
+		if (fingerprint[i] != cmd.fingerprint[i]) {
+			return BAD_FINGERPRINT;
+		}
+	}
+
+	return store_new_friend(public_key, cmd.nickname);
 }
 
-int main_error(int argc, char *argv[]) {
+int main_error(int argc, char* argv[]) {
 	if (hydro_init()) {
 		return BAD_LIBHYDROGEN_INIT;
 	}
