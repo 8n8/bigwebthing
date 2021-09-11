@@ -893,6 +893,10 @@ int step(struct model* model) {
 	
 }
 
+struct struct_field {
+	
+}
+
 struct branch {
 	uint_fast32_t value_id;
 	uint_fast32_t from;
