@@ -2,6 +2,8 @@
 
 pkgs.mkShell {
   buildInputs = [
+    pkgs.gmp
+    pkgs.haskellPackages.stack
     pkgs.python39
     pkgs.python39Packages.flake8
     pkgs.python39Packages.pytest
