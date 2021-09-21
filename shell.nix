@@ -6,8 +6,8 @@ pkgs.mkShell {
     pkgs.haskellPackages.stack
     pkgs.python39
     pkgs.python39Packages.flake8
+    pkgs.python39Packages.cryptography
     pkgs.python39Packages.pytest
-    pkgs.python39Packages.noiseprotocol
     pkgs.python39Packages.black
   ];
 }

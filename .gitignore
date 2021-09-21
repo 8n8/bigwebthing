@@ -3,3 +3,4 @@ server_secret
 hydrogen.o
 a.out
 noisetestgen/tests
+__pycache__/
