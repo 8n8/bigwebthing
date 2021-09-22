@@ -11,8 +11,17 @@ def read_kk2(my_static, my_ephemeral, their_public, kk2):
     rs = x25519.X25519PublicKey.from_public_bytes(their_public)
     hs = _initialize(True, s, e, rs)
     kk1 = bytearray()
-    _write_message(hs, b'', kk1)
-    tx, rx = _read_message(hs, kk2, b'')
+
+    e_es_ss_initiator(hs)
+
+    _encrypt_and_hash(hs['symmetric_state'], b'')
+
+    hs['re'] = from_public_bytes(bytes(kk2[:DHLEN]))
+    e_ee_se_initiator(hs)
+
+    _decrypt_and_hash(hs['symmetric_state'], bytes(kk2[DHLEN:]))
+
+    tx, rx = _split(hs['symmetric_state'])
     return {'tx': tx, 'rx': rx}
 
 
@@ -21,9 +30,26 @@ def make_kk2(my_static, my_ephemeral, their_public, kk1):
     e = make_secret(my_ephemeral)
     rs = x25519.X25519PublicKey.from_public_bytes(their_public)
     hs = _initialize(False, s, e, rs)
-    _read_message(hs, kk1, b'')
+
+    hs['re'] = from_public_bytes(bytes(kk1[:DHLEN]))
+    _mix_hash(hs['symmetric_state'], _get_public(hs['re']))
+
+    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['re']))
+
+    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['rs']))
+
+    _decrypt_and_hash(hs['symmetric_state'], bytes(kk1[DHLEN:]))
+
     kk2 = bytearray()
-    rx, tx = _write_message(hs, b'', kk2)
+    kk2 += _get_public(hs['e'])
+    _mix_hash(hs['symmetric_state'], _get_public(hs['e']))
+
+    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['re']))
+
+    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['rs']))
+
+    kk2 += _encrypt_and_hash(hs['symmetric_state'], b'')
+    rx, tx = _split(hs['symmetric_state']) 
     return kk2, {'tx': tx, 'rx': rx}
 
 
@@ -33,8 +59,26 @@ def make_kk1(my_static, my_ephemeral, their_public):
     rs = x25519.X25519PublicKey.from_public_bytes(their_public)
     hs = _initialize(True, s, e, rs)
     kk1 = bytearray()
-    _write_message(hs, b'', kk1)
+
+    kk1 += _get_public(hs['e'])
+
+    e_es_ss_initiator(hs)
+
+    kk1 += _encrypt_and_hash(hs['symmetric_state'], b'')
+
     return kk1
+
+
+def e_ee_se_initiator(hs):
+    _mix_hash(hs['symmetric_state'], _get_public(hs['re']))
+    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['re']))
+    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['re']))
+
+
+def e_es_ss_initiator(hs):
+    _mix_hash(hs['symmetric_state'], _get_public(hs['e']))
+    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['rs']))
+    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['rs']))
 
 
 MAX_NONCE = 2 ** 64 - 1
