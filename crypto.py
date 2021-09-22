@@ -10,19 +10,18 @@ def read_kk2(my_static, my_ephemeral, their_public, kk2):
     e = make_secret(my_ephemeral)
     rs = x25519.X25519PublicKey.from_public_bytes(their_public)
     hs = _initialize(True, s, e, rs)
-    kk1 = bytearray()
 
-    e_es_ss_initiator(hs)
+    e_es_ss(hs)
 
-    _encrypt_and_hash(hs['symmetric_state'], b'')
+    _encrypt_and_hash(hs["symmetric_state"], b"")
 
-    hs['re'] = from_public_bytes(bytes(kk2[:DHLEN]))
-    e_ee_se_initiator(hs)
+    hs["re"] = _from_public_bytes(bytes(kk2[:DHLEN]))
+    e_ee_se(hs)
 
-    _decrypt_and_hash(hs['symmetric_state'], bytes(kk2[DHLEN:]))
+    _decrypt_and_hash(hs["symmetric_state"], bytes(kk2[DHLEN:]))
 
-    tx, rx = _split(hs['symmetric_state'])
-    return {'tx': tx, 'rx': rx}
+    tx, rx = _split(hs["symmetric_state"])
+    return {"tx": tx, "rx": rx}
 
 
 def make_kk2(my_static, my_ephemeral, their_public, kk1):
@@ -31,26 +30,26 @@ def make_kk2(my_static, my_ephemeral, their_public, kk1):
     rs = x25519.X25519PublicKey.from_public_bytes(their_public)
     hs = _initialize(False, s, e, rs)
 
-    hs['re'] = from_public_bytes(bytes(kk1[:DHLEN]))
-    _mix_hash(hs['symmetric_state'], _get_public(hs['re']))
+    hs["re"] = _from_public_bytes(bytes(kk1[:DHLEN]))
+    _mix_hash(hs["symmetric_state"], _get_public(hs["re"]))
 
-    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['re']))
+    _mix_key(hs["symmetric_state"], hs["s"].exchange(hs["re"]))
 
-    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['rs']))
+    _mix_key(hs["symmetric_state"], hs["s"].exchange(hs["rs"]))
 
-    _decrypt_and_hash(hs['symmetric_state'], bytes(kk1[DHLEN:]))
+    _decrypt_and_hash(hs["symmetric_state"], bytes(kk1[DHLEN:]))
 
     kk2 = bytearray()
-    kk2 += _get_public(hs['e'])
-    _mix_hash(hs['symmetric_state'], _get_public(hs['e']))
+    kk2 += _get_public(hs["e"])
+    _mix_hash(hs["symmetric_state"], _get_public(hs["e"]))
 
-    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['re']))
+    _mix_key(hs["symmetric_state"], hs["e"].exchange(hs["re"]))
 
-    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['rs']))
+    _mix_key(hs["symmetric_state"], hs["e"].exchange(hs["rs"]))
 
-    kk2 += _encrypt_and_hash(hs['symmetric_state'], b'')
-    rx, tx = _split(hs['symmetric_state']) 
-    return kk2, {'tx': tx, 'rx': rx}
+    kk2 += _encrypt_and_hash(hs["symmetric_state"], b"")
+    rx, tx = _split(hs["symmetric_state"])
+    return kk2, {"tx": tx, "rx": rx}
 
 
 def make_kk1(my_static, my_ephemeral, their_public):
@@ -60,25 +59,25 @@ def make_kk1(my_static, my_ephemeral, their_public):
     hs = _initialize(True, s, e, rs)
     kk1 = bytearray()
 
-    kk1 += _get_public(hs['e'])
+    kk1 += _get_public(hs["e"])
 
-    e_es_ss_initiator(hs)
+    e_es_ss(hs)
 
-    kk1 += _encrypt_and_hash(hs['symmetric_state'], b'')
+    kk1 += _encrypt_and_hash(hs["symmetric_state"], b"")
 
     return kk1
 
 
-def e_ee_se_initiator(hs):
-    _mix_hash(hs['symmetric_state'], _get_public(hs['re']))
-    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['re']))
-    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['re']))
+def e_ee_se(hs):
+    _mix_hash(hs["symmetric_state"], _get_public(hs["re"]))
+    _mix_key(hs["symmetric_state"], hs["e"].exchange(hs["re"]))
+    _mix_key(hs["symmetric_state"], hs["s"].exchange(hs["re"]))
 
 
-def e_es_ss_initiator(hs):
-    _mix_hash(hs['symmetric_state'], _get_public(hs['e']))
-    _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['rs']))
-    _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['rs']))
+def e_es_ss(hs):
+    _mix_hash(hs["symmetric_state"], _get_public(hs["e"]))
+    _mix_key(hs["symmetric_state"], hs["e"].exchange(hs["rs"]))
+    _mix_key(hs["symmetric_state"], hs["s"].exchange(hs["rs"]))
 
 
 MAX_NONCE = 2 ** 64 - 1
@@ -137,57 +136,49 @@ def _HKDF(chaining_key, input_key_material, num_outputs):
 
 # CipherState functions
 
+
 def _initialize_key(cs, key):
-    cs['k'] = key
-    cs['n'] = 0
+    cs["k"] = key
+    cs["n"] = 0
 
 
 def _has_key(cs):
-    return cs['k'] is not None
+    return cs["k"] is not None
 
 
 def _set_nonce(cs, n):
-    cs['n'] = n
+    cs["n"] = n
 
 
 def _format_nonce(n):
-    return (
-        b"\x00\x00\x00\x00" + n.to_bytes(length=8, byteorder="little"))
+    return b"\x00\x00\x00\x00" + n.to_bytes(length=8, byteorder="little")
 
 
 def encrypt_with_ad(cs, ad, plaintext):
-    if cs['n'] == MAX_NONCE:
+    if cs["n"] == MAX_NONCE:
         raise RuntimeError("Nonce has reached maximum")
 
-    if cs['k'] is None:
+    if cs["k"] is None:
         return plaintext
 
-    encrypted = _ENCRYPT(cs['k'], cs['n'], ad, plaintext)
-    cs['n'] += 1
+    encrypted = _ENCRYPT(cs["k"], cs["n"], ad, plaintext)
+    cs["n"] += 1
     return encrypted
 
 
 def decrypt_with_ad(cs, ad, ciphertext):
-    if cs['n'] == MAX_NONCE:
+    if cs["n"] == MAX_NONCE:
         return RuntimeError("Nonce has reached maximum")
 
-    if cs['k'] is None:
+    if cs["k"] is None:
         return ciphertext
 
-    decrypted = _DECRYPT(cs['k'], cs['n'], ad, ciphertext)
-    cs['n'] += 1
+    decrypted = _DECRYPT(cs["k"], cs["n"], ad, ciphertext)
+    cs["n"] += 1
     return decrypted
 
 
 # Symmetric state functions
-
-
-def _initialize_symmetric():
-    return {
-        "cipher_state": {'k': None, 'n': 0},
-        "h": _HASH(b"Noise_KK_25519_ChaChaPoly_BLAKE2s"),
-        "ck": _HASH(b"Noise_KK_25519_ChaChaPoly_BLAKE2s"),
-    }
 
 
 def _mix_key(s, input_key_material: bytes):
@@ -199,7 +190,7 @@ def _mix_key(s, input_key_material: bytes):
     s["ck"], temp_k = _HKDF(s["ck"], input_key_material, 2)
 
     # Calls InitializeKey(temp_k).
-    _initialize_key(s['cipher_state'], temp_k)
+    _initialize_key(s["cipher_state"], temp_k)
 
 
 def _mix_hash(s, data: bytes):
@@ -207,7 +198,7 @@ def _mix_hash(s, data: bytes):
 
 
 def _encrypt_and_hash(s, plaintext: bytes) -> bytes:
-    ciphertext = encrypt_with_ad(s["cipher_state"], s['h'], plaintext)
+    ciphertext = encrypt_with_ad(s["cipher_state"], s["h"], plaintext)
     _mix_hash(s, ciphertext)
     return ciphertext
 
@@ -223,7 +214,7 @@ def _decrypt_and_hash(s, ciphertext: bytes) -> bytes:
 
 
 def _split(s):
-    temp_k1, temp_k2 = _HKDF(s['ck'], b'', 2)
+    temp_k1, temp_k2 = _HKDF(s["ck"], b"", 2)
     c1 = {"k": temp_k1, "n": 0}
     c2 = {"k": temp_k2, "n": 0}
 
@@ -247,126 +238,38 @@ def _get_public(key):
 
     return key.public_bytes(
         encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw
+        format=serialization.PublicFormat.Raw,
     )
 
 
 # HandshakeState functions
 
+
 def _initialize(initiator, s, e, rs):
     hs = {
-        'symmetric_state': _initialize_symmetric(),
-        'cipher_state': {'k': None, 'n': 0},
-        's': s,
-        'e': e,
-        'rs': rs,
-        're': None,
-        'initiator': initiator,
-        'message_patterns': [['e', 'es', 'ss'], ['e', 'ee', 'se']]
+        "symmetric_state": {
+            "cipher_state": {"k": None, "n": 0},
+            "h": _HASH(b"Noise_KK_25519_ChaChaPoly_BLAKE2s"),
+            "ck": _HASH(b"Noise_KK_25519_ChaChaPoly_BLAKE2s"),
+        },
+        "s": s,
+        "e": e,
+        "rs": rs,
     }
 
-    _mix_hash(hs['symmetric_state'], b'')
-
+    _mix_hash(hs["symmetric_state"], b"")
     _mix_hash(
-        hs['symmetric_state'],
-        _get_public(s if initiator else rs))
+        hs["symmetric_state"],
+        _get_public(s if initiator else rs),
+    )
     _mix_hash(
-        hs['symmetric_state'],
-        _get_public(rs if initiator else s))
-
+        hs["symmetric_state"],
+        _get_public(rs if initiator else s),
+    )
     return hs
 
 
-def _write_message(hs, payload, message_buffer):
-    message_pattern = hs['message_patterns'].pop(0)
-    for token in message_pattern:
-        if token == 'e':
-            message_buffer += _get_public(hs['e'])
-            _mix_hash(hs['symmetric_state'], _get_public(hs['e']))
-
-        elif token == 'ee':
-            _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['re']))
-
-        elif token == 'es':
-            if hs['initiator']:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['e'].exchange(hs['rs']))
-
-            else:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['s'].exchange(hs['re']))
-
-        elif token == 'se':
-            if hs['initiator']:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['s'].exchange(hs['re']))
-
-            else:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['e'].exchange(hs['rs']))
-
-        elif token == 'ss':
-            _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['rs']))
-
-        else:
-            raise NotImplementedError(f'Pattern token: {token}')
-
-    message_buffer += _encrypt_and_hash(hs['symmetric_state'], payload)
-
-    if len(hs['message_patterns']) == 0:
-        return _split(hs['symmetric_state'])
-
-
-def from_public_bytes(public_bytes):
+def _from_public_bytes(public_bytes):
     if len(public_bytes) != 32:
         raise ValueError("Invalid length of public_bytes! Should be 32")
     return x25519.X25519PublicKey.from_public_bytes(public_bytes)
-
-
-def _read_message(hs, message, payload_buffer):
-    message_pattern = hs['message_patterns'].pop(0)
-    for token in message_pattern:
-        if token == 'e':
-            hs['re'] = from_public_bytes(bytes(message[:DHLEN]))
-            message = message[DHLEN:]
-            _mix_hash(hs['symmetric_state'], _get_public(hs['re']))
-
-        elif token == 'ee':
-            _mix_key(hs['symmetric_state'], hs['e'].exchange(hs['re']))
-
-        elif token == 'es':
-            if hs['initiator']:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['e'].exchange(hs['rs']))
-            else:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['s'].exchange(hs['re']))
-
-        elif token == 'se':
-            if hs['initiator']:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['s'].exchange(hs['re']))
-            else:
-                _mix_key(
-                    hs['symmetric_state'],
-                    hs['e'].exchange(hs['rs']))
-
-        elif token == 'ss':
-            _mix_key(hs['symmetric_state'], hs['s'].exchange(hs['rs']))
-
-        else:
-            raise NotImplementedError(f"Pattern token: {token}")
-
-    payload_buffer += _decrypt_and_hash(
-        hs['symmetric_state'],
-        bytes(message))
-
-    if len(hs['message_patterns']) == 0:
-        return _split(hs['symmetric_state'])

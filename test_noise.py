@@ -49,13 +49,13 @@ def one_cacophony_test(t):
         crypto.make_public(t["serverStatic"]),
         kk2,
     )
-    cipher1 = crypto.encrypt_with_ad(cx['tx'], b'', t["plain1"])
+    cipher1 = crypto.encrypt_with_ad(cx["tx"], b"", t["plain1"])
     assert cipher1 == t["cipher1"]
-    plain1 = crypto.decrypt_with_ad(sx['rx'], b'', cipher1)
+    plain1 = crypto.decrypt_with_ad(sx["rx"], b"", cipher1)
     assert plain1 == t["plain1"]
-    cipher2 = crypto.encrypt_with_ad(sx['tx'], b'', t["plain2"])
+    cipher2 = crypto.encrypt_with_ad(sx["tx"], b"", t["plain2"])
     assert cipher2 == t["cipher2"]
-    plain2 = crypto.decrypt_with_ad(cx['rx'], b'', cipher2)
+    plain2 = crypto.decrypt_with_ad(cx["rx"], b"", cipher2)
     assert plain2 == t["plain2"]
 
 
